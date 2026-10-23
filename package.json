@@ -2,30 +2,18 @@
   "name": "workspace",
   "version": "0.0.0",
   "license": "MIT",
-  "private": true,
-  "workspaces": [
-    "artifacts/iic-study-app-replit",
-    "artifacts/api-server",
-    "artifacts/mockup-sandbox",
-    "lib/*",
-    "scripts"
-  ],
   "scripts": {
-    "dev": "vite artifacts/iic-study-app-replit --config artifacts/iic-study-app-replit/vite.config.ts --host 0.0.0.0 --port 3000",
-    "build": "NODE_OPTIONS=--max-old-space-size=4096 vite build artifacts/iic-study-app-replit --config artifacts/iic-study-app-replit/vite.config.ts && node scripts/sync-dist.cjs",
+    "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
+    "build": "pnpm run typecheck && pnpm -r --if-present run build",
     "typecheck:libs": "tsc --build",
-    "typecheck": "npm run typecheck:libs && tsc -p artifacts/iic-study-app-replit/tsconfig.json --noEmit",
-    "lint": "tsc --build"
+    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
+  },
+  "private": true,
+  "dependencies": {
+    "@replit/connectors-sdk": "^0.4.3"
   },
   "devDependencies": {
-    "katex": "^0.16.22",
-    "prettier": "^3.9.6",
-    "tsx": "^4.21.0",
-    "typescript": "~5.9.3",
-    "vite": "^7.3.2"
-  },
-  "dependencies": {
-    "html5-qrcode": "^2.3.8",
-    "jsqr": "^1.4.0"
+    "prettier": "^3.9.10",
+    "typescript": "~5.9.3"
   }
 }
