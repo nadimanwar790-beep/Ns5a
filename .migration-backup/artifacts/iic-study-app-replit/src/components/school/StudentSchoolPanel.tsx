@@ -1031,13 +1031,9 @@ export const StudentSchoolPanel: React.FC<Props> = ({
               <div className="flex items-center gap-3 w-full bg-indigo-50/60 dark:bg-indigo-950/40 p-3 rounded-2xl border border-indigo-100 dark:border-indigo-900/50">
                 <div className="bg-white p-1.5 rounded-xl shadow-sm flex-shrink-0">
                   <QRCode
-                    value={
-                      typeof window !== "undefined"
-                        ? `${window.location.origin}/?verify=doc&type=idcard&schoolId=${encodeURIComponent(schoolId)}&studentId=${encodeURIComponent(studentId)}&roll=${encodeURIComponent(studentData?.rollNo || '')}&name=${encodeURIComponent(studentData?.name || studentName)}&schoolName=${encodeURIComponent(school?.name || '')}#NSTA-SCHOOL:${schoolId}:${studentId}:${studentData?.rollNo || ''}`
-                        : `NSTA-SCHOOL:${schoolId}:${studentId}:${studentData?.rollNo || ''}`
-                    }
-                    size={56}
-                    style={{ height: "auto", maxWidth: "100%", width: "100%" }}
+                    value={`NSTA-SCHOOL:${[schoolId, studentId, studentData?.rollNo || "", classId].map(encodeURIComponent).join(":")}`}
+                    size={84}
+                    style={{ height: 84, maxWidth: "100%", width: 84 }}
                   />
                 </div>
                 <div className="flex-1 min-w-0">

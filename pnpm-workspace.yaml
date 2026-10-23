@@ -36,6 +36,7 @@ minimumReleaseAgeExclude:
 
 packages:
   - artifacts/*
+  - .migration-backup/artifacts/iic-study-app-replit
   - lib/*
   - lib/integrations/*
   - scripts

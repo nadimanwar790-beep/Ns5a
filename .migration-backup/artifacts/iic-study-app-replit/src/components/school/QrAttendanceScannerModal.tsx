@@ -61,6 +61,13 @@ function parseDecodedAttendanceString(
   let className = defaultClassName || "";
   let qrDate = today;
   let isClassQr = false;
+  const decodeTokenPart = (value: string) => {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  };
 
   // Case 1: URL with query parameters or hash
   if (
@@ -123,10 +130,10 @@ function parseDecodedAttendanceString(
       if (url.hash && url.hash.includes("NSTA-SCHOOL:")) {
         const token = url.hash.split("NSTA-SCHOOL:")[1];
         const parts = token.split(":");
-        if (parts[0] && !schoolId) schoolId = parts[0];
-        if (parts[1] && !studentId) studentId = parts[1];
-        if (parts[2] && !rollNo) rollNo = parts[2];
-        if (parts[3] && !classId) classId = parts[3];
+        if (parts[0] && !schoolId) schoolId = decodeTokenPart(parts[0]);
+        if (parts[1] && !studentId) studentId = decodeTokenPart(parts[1]);
+        if (parts[2] && !rollNo) rollNo = decodeTokenPart(parts[2]);
+        if (parts[3] && !classId) classId = decodeTokenPart(parts[3]);
       }
 
       // 1D. Hash token #NSTA-ATTENDANCE:schoolId:classId:date
@@ -145,10 +152,10 @@ function parseDecodedAttendanceString(
   if (!studentId && text.includes("NSTA-SCHOOL:")) {
     const token = text.split("NSTA-SCHOOL:")[1];
     const parts = token.split(":");
-    if (parts[0] && !schoolId) schoolId = parts[0];
-    if (parts[1] && !studentId) studentId = parts[1];
-    if (parts[2] && !rollNo) rollNo = parts[2];
-    if (parts[3] && !classId) classId = parts[3];
+    if (parts[0] && !schoolId) schoolId = decodeTokenPart(parts[0]);
+    if (parts[1] && !studentId) studentId = decodeTokenPart(parts[1]);
+    if (parts[2] && !rollNo) rollNo = decodeTokenPart(parts[2]);
+    if (parts[3] && !classId) classId = decodeTokenPart(parts[3]);
   }
 
   // Case 3: Standalone NSTA-ATTENDANCE token
@@ -244,17 +251,15 @@ function renderImageToCanvas(img: HTMLImageElement, maxDimension: number): HTMLC
 }
 
 /**
- * High-Speed Universal Media File QR Decoder
- * Multi-layer decoding: Native BarcodeDetector -> jsQR (standard) -> jsQR (binarized) -> Html5Qrcode
- * Guarantees completion within 4 seconds max (never hangs).
+ * Multi-pass media decoder for full-size phone photos and compressed screenshots.
  */
 async function decodeQrFromImageFile(file: File): Promise<string> {
   const decodeTask = async (): Promise<string> => {
     // Stage 1: Load image in memory
     const img = await loadImageFromFile(file);
 
-    // Stage 2: Create normalized canvas (max 960px for blazing fast processing without CPU freezing)
-    const primaryCanvas = renderImageToCanvas(img, 960);
+    // Preserve enough detail for a QR occupying only a small part of a phone photo.
+    const primaryCanvas = renderImageToCanvas(img, 1800);
     const primaryCtx = primaryCanvas.getContext("2d", { willReadFrequently: true });
 
     // Method 1: Hardware BarcodeDetector on Android / Chrome if available
@@ -285,19 +290,56 @@ async function decodeQrFromImageFile(file: File): Promise<string> {
       }
     }
 
-    // Method 3: jsQR with High-Contrast Adaptive Binarization (Great for camera glare / ID card shadows)
+    // Method 3: Otsu thresholding adapts to the brightness and contrast of each photo.
     if (primaryCtx) {
       try {
         const imgData = primaryCtx.getImageData(0, 0, primaryCanvas.width, primaryCanvas.height);
-        const data = imgData.data;
-        for (let i = 0; i < data.length; i += 4) {
-          const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
-          const val = gray > 120 ? 255 : 0;
-          data[i] = val;
-          data[i + 1] = val;
-          data[i + 2] = val;
+        const pixelCount = imgData.width * imgData.height;
+        const grayscale = new Uint8Array(pixelCount);
+        const histogram = new Uint32Array(256);
+        for (let pixel = 0, offset = 0; pixel < pixelCount; pixel++, offset += 4) {
+          const value = Math.round(
+            imgData.data[offset] * 0.299 +
+            imgData.data[offset + 1] * 0.587 +
+            imgData.data[offset + 2] * 0.114
+          );
+          grayscale[pixel] = value;
+          histogram[value]++;
         }
-        const code = jsQR(data, primaryCanvas.width, primaryCanvas.height, {
+
+        let weightedTotal = 0;
+        for (let value = 0; value < histogram.length; value++) {
+          weightedTotal += value * histogram[value];
+        }
+        let backgroundWeight = 0;
+        let backgroundSum = 0;
+        let bestVariance = -1;
+        let threshold = 127;
+        for (let value = 0; value < histogram.length; value++) {
+          backgroundWeight += histogram[value];
+          if (backgroundWeight === 0) continue;
+          const foregroundWeight = pixelCount - backgroundWeight;
+          if (foregroundWeight === 0) break;
+          backgroundSum += value * histogram[value];
+          const backgroundMean = backgroundSum / backgroundWeight;
+          const foregroundMean = (weightedTotal - backgroundSum) / foregroundWeight;
+          const variance = backgroundWeight * foregroundWeight *
+            (backgroundMean - foregroundMean) ** 2;
+          if (variance > bestVariance) {
+            bestVariance = variance;
+            threshold = value;
+          }
+        }
+
+        const binaryPixels = new Uint8ClampedArray(pixelCount * 4);
+        for (let pixel = 0, offset = 0; pixel < pixelCount; pixel++, offset += 4) {
+          const value = grayscale[pixel] > threshold ? 255 : 0;
+          binaryPixels[offset] = value;
+          binaryPixels[offset + 1] = value;
+          binaryPixels[offset + 2] = value;
+          binaryPixels[offset + 3] = 255;
+        }
+        const code = jsQR(binaryPixels, primaryCanvas.width, primaryCanvas.height, {
           inversionAttempts: "attemptBoth",
         });
         if (code && code.data && code.data.trim().length > 0) {
@@ -308,9 +350,9 @@ async function decodeQrFromImageFile(file: File): Promise<string> {
       }
     }
 
-    // Method 4: Alternative scale (Downscale to 550px for heavy optical noise)
+    // Method 4: Try a smaller image scale as a fallback for noisy/compressed photos.
     try {
-      const altCanvas = renderImageToCanvas(img, 550);
+      const altCanvas = renderImageToCanvas(img, 960);
       const altCtx = altCanvas.getContext("2d", { willReadFrequently: true });
       if (altCtx) {
         const altData = altCtx.getImageData(0, 0, altCanvas.width, altCanvas.height);
@@ -345,24 +387,36 @@ async function decodeQrFromImageFile(file: File): Promise<string> {
         verbose: false,
       });
 
-      // Pass showImage = false so it never touches DOM rendering!
+      // Pass showImage = false so it never touches DOM rendering.
       const scanPromise = html5Qr.scanFile(file, false);
-      const timeoutSub = new Promise<never>((_, rej) => setTimeout(() => rej(new Error("Timeout")), 1800));
-      const res = await Promise.race([scanPromise, timeoutSub]);
-      try { await html5Qr.clear(); } catch {}
+      let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+      const timeoutSub = new Promise<never>((_, reject) => {
+        fallbackTimer = setTimeout(() => reject(new Error("QR fallback timeout")), 3000);
+      });
+      let res: string;
+      try {
+        res = await Promise.race([scanPromise, timeoutSub]);
+      } finally {
+        if (fallbackTimer) clearTimeout(fallbackTimer);
+        try { await html5Qr.clear(); } catch {}
+      }
       if (res && res.trim()) return res.trim();
     } catch {}
 
     throw new Error("Is photo me saaf QR code nahi mila. Kripya QR code ko thoda seedha aur paas se khinch kar photo upload karein.");
   };
 
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => {
-      reject(new Error("Scan timeout: Is image me valid QR code detect nahi ho saka. Kripya doosri photo chunein."));
-    }, 4500);
+    timeoutId = setTimeout(() => {
+      reject(new Error("Scan timeout: Photo process hone mein zyada waqt laga. QR code ko crop karke dobara upload karein."));
+    }, 10000);
   });
-
-  return Promise.race([decodeTask(), timeoutPromise]);
+  try {
+    return await Promise.race([decodeTask(), timeoutPromise]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
 }
 
 export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> = ({
@@ -380,6 +434,9 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
   const containerId = useRef(`qr-reader-${Math.random().toString(36).substring(2, 9)}`);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaTabFileInputRef = useRef<HTMLInputElement>(null);
+  const processingRef = useRef(false);
+  const lastCameraDecodedTextRef = useRef<string | null>(null);
+  const cameraDecodeReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Active Scan Mode: Live Camera vs Media / Gallery
   const [activeTab, setActiveTab] = useState<"camera" | "media">("camera");
@@ -448,6 +505,11 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
 
   // Stop camera stream safely
   const stopScanner = useCallback(async () => {
+    if (cameraDecodeReleaseTimerRef.current) {
+      clearTimeout(cameraDecodeReleaseTimerRef.current);
+      cameraDecodeReleaseTimerRef.current = null;
+    }
+    lastCameraDecodedTextRef.current = null;
     if (scannerRef.current) {
       try {
         if (scannerRef.current.isScanning) {
@@ -464,7 +526,10 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
 
   // Handle scanned raw string (works for both Camera and Media Gallery)
   const processAttendanceData = useCallback(async (rawText: string, source: "camera" | "media" = "camera") => {
-    if (processing) return;
+    // QR callbacks can fire several times before React has rendered the updated state.
+    // Use a ref so only one attendance write can be in flight at a time.
+    if (processingRef.current) return;
+    processingRef.current = true;
     setProcessing(true);
 
     try {
@@ -646,10 +711,11 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
         setMediaError(err?.message || "Is image me valid QR code nahi mila.");
       }
     } finally {
+      processingRef.current = false;
       setProcessing(false);
       setMediaScanning(false);
     }
-  }, [processing, isTeacherMode, targetSchoolId, targetClassId, targetClassName, teacherId, currentStudent, scanMode, cutoffTime, onStudentMarked]);
+  }, [isTeacherMode, targetSchoolId, targetClassId, targetClassName, teacherId, currentStudent, scanMode, cutoffTime, onStudentMarked]);
 
   // Start the camera scanner with optimized autofocus and hardware acceleration
   const startScanner = useCallback(async (facing: "environment" | "user") => {
@@ -694,10 +760,28 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
           disableFlip: false,
         },
         (decodedText) => {
+          if (cameraDecodeReleaseTimerRef.current) {
+            clearTimeout(cameraDecodeReleaseTimerRef.current);
+            cameraDecodeReleaseTimerRef.current = null;
+          }
+          if (processingRef.current) return;
+          // A code remains in front of the camera for multiple frames. Process it
+          // once until it has been absent for a short period, preventing an
+          // accidental immediate punch-out after a successful punch-in.
+          if (lastCameraDecodedTextRef.current === decodedText) return;
+          lastCameraDecodedTextRef.current = decodedText;
           processAttendanceData(decodedText, "camera");
         },
         () => {
-          // Normal frame pass
+          if (lastCameraDecodedTextRef.current) {
+            if (cameraDecodeReleaseTimerRef.current) {
+              clearTimeout(cameraDecodeReleaseTimerRef.current);
+            }
+            cameraDecodeReleaseTimerRef.current = setTimeout(() => {
+              lastCameraDecodedTextRef.current = null;
+              cameraDecodeReleaseTimerRef.current = null;
+            }, 1800);
+          }
         }
       );
 
@@ -775,13 +859,13 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
     const objectUrl = URL.createObjectURL(file);
     setMediaPreviewUrl(objectUrl);
 
-    // Watchdog timer: Guarantee the UI spinner can never be stuck for more than 6 seconds under any circumstance
+    // Keep the UI responsive while higher-resolution photos are being decoded.
     const watchdogTimer = setTimeout(() => {
       setMediaScanning(false);
-    }, 6000);
+    }, 12000);
 
     try {
-      // Decode QR from chosen media file (guaranteed to settle within 4.5s)
+      // Decode QR from the selected photo, allowing slower phones enough time.
       const decodedText = await decodeQrFromImageFile(file);
       if (decodedText) {
         await processAttendanceData(decodedText, "media");

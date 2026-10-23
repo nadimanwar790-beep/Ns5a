@@ -184,8 +184,8 @@ export const IdCardManager: React.FC<Props> = ({
     const cleanRollNo = item.rollNo || item.employeeId || "";
     const cleanClassId = item.classId || "";
 
-    // Ultra-compact QR code (~75-90 chars) for instant, blur-free camera scanning
-    const qrVerifyUrl = `${window.location.origin}/?v=id&s=${cleanSchoolId}&u=${cleanStudentId}&r=${encodeURIComponent(cleanRollNo)}&c=${cleanClassId}&n=${encodeURIComponent(cleanStudentName)}#NSTA-SCHOOL:${cleanSchoolId}:${cleanStudentId}:${cleanRollNo}:${cleanClassId}`;
+    // Keep the printed QR payload compact; the scanner also supports older URL-based cards.
+    const qrVerifyUrl = `NSTA-SCHOOL:${[cleanSchoolId, cleanStudentId, cleanRollNo, cleanClassId].map(encodeURIComponent).join(":")}`;
     const isLandscape = cardOrientation === "landscape";
 
     if (isLandscape) {
@@ -232,9 +232,9 @@ export const IdCardManager: React.FC<Props> = ({
           {/* Body: 3-Column Safe Layout (QR Left, Info Center, Pic Right) */}
           <div className="px-2.5 py-1.5 flex-1 flex items-center justify-between gap-2 bg-white">
             {/* 1. LEFT COLUMN: QR Code (Never cut off during print) */}
-            <div className="flex flex-col items-center justify-center shrink-0 w-[62px]">
+            <div className="flex flex-col items-center justify-center shrink-0 w-[96px]">
               <div className="p-1 bg-white border border-slate-300 rounded-lg shadow-2xs flex items-center justify-center">
-                <QRCode value={qrVerifyUrl} size={50} level="M" />
+                <QRCode value={qrVerifyUrl} size={84} level="M" />
               </div>
               <span className="text-[6.5px] font-black text-slate-600 uppercase tracking-tighter mt-0.5 flex items-center gap-0.5">
                 <ShieldCheck className="w-2.5 h-2.5 text-emerald-600 inline" /> Scan Verify
@@ -379,9 +379,9 @@ export const IdCardManager: React.FC<Props> = ({
         {/* Identity Row: QR on the LEFT and Photo on the RIGHT */}
         <div className="px-3 pt-2 pb-1 flex items-center justify-between gap-2 shrink-0 bg-white">
           {/* QR Code on LEFT */}
-          <div className="flex flex-col items-center justify-center shrink-0 w-[68px]">
+          <div className="flex flex-col items-center justify-center shrink-0 w-[80px]">
             <div className="p-1 bg-white border border-slate-300 rounded-lg shadow-2xs flex items-center justify-center">
-              <QRCode value={qrVerifyUrl} size={56} level="M" />
+              <QRCode value={qrVerifyUrl} size={68} level="M" />
             </div>
             <span className="text-[7px] text-slate-600 font-black uppercase tracking-tighter mt-0.5">
               Scan Verify
