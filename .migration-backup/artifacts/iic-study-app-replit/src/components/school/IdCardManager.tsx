@@ -30,11 +30,14 @@ export const IdCardManager: React.FC<Props> = ({
   staff = [],
   onBack,
 }) => {
-  const [studentList, setStudentList] = useState<SchoolStudent[]>(initialStudents || []);
+  const safeInitialStudents = Array.isArray(initialStudents)
+    ? initialStudents.filter((student): student is SchoolStudent => Boolean(student && typeof student === "object"))
+    : [];
+  const [students, setStudents] = useState<SchoolStudent[]>(safeInitialStudents);
   const [activeTab, setActiveTab] = useState<"students" | "staff">("students");
   const [selectedClassId, setSelectedClassId] = useState<string>("all");
   const [search, setSearch] = useState("");
-  const [selectedStudent, setSelectedStudent] = useState<SchoolStudent | null>(initialStudents[0] || null);
+  const [selectedStudent, setSelectedStudent] = useState<SchoolStudent | null>(safeInitialStudents[0] || null);
   const [selectedStaff, setSelectedStaff] = useState<StaffEmployee | null>(staff[0] || null);
   const [theme, setTheme] = useState<CardTheme>("modern_indigo");
   const [bulkMode, setBulkMode] = useState(false);
@@ -78,7 +81,7 @@ export const IdCardManager: React.FC<Props> = ({
   });
 
   // Filtered lists
-  const filteredStudents = studentList.filter(s => {
+  const filteredStudents = students.filter(s => {
     const classMatch = selectedClassId === "all" || s.classId === selectedClassId;
     const searchMatch = !search.trim() ||
       s.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -824,7 +827,7 @@ export const IdCardManager: React.FC<Props> = ({
                   activeTab === "students" ? "bg-indigo-600 text-white shadow" : "text-slate-600 dark:text-slate-300"
                 }`}
               >
-                🎓 Students ({studentList.length})
+                🎓 Students ({students.length})
               </button>
               <button
                 onClick={() => { setActiveTab("staff"); setSelectedIds([]); }}
@@ -1064,7 +1067,7 @@ export const IdCardManager: React.FC<Props> = ({
           defaultClassId={selectedClassId === "all" ? classes[0]?.id : selectedClassId}
           onClose={() => setShowAddStudentModal(false)}
           onStudentAdded={(newStu) => {
-            setStudentList(prev => [newStu, ...prev]);
+            setStudents(prev => [newStu, ...prev]);
             setSelectedStudent(newStu);
           }}
         />

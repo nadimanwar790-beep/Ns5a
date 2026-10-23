@@ -71,6 +71,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
     principalTitle: "Principal / Headmaster",
     code: school?.code || "SCH-001",
   });
+  const principalName = schoolDetails.principalName || "Principal";
 
   // Exam Meta
   const [examTitle, setExamTitle] = useState("ANNUAL EXAMINATION 2026-27");
@@ -677,7 +678,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
 
           <div>
             <div className="h-8 border-b border-slate-400 mb-1 flex items-end justify-center">
-              <span className="italic font-serif font-black text-indigo-900 text-xs">{schoolDetails.principalName}</span>
+              <span className="italic font-serif font-black text-indigo-900 text-xs">{principalName}</span>
             </div>
             <p className="font-black text-slate-950 uppercase tracking-tight text-[10.5px]">{schoolDetails.principalTitle}</p>
             <p className="text-[8px] text-slate-500">{schoolDetails.schoolName}</p>
@@ -875,7 +876,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
               <label className="text-xs font-bold text-slate-500 block mb-1">Principal / Head Name:</label>
               <input
                 type="text"
-                value={schoolDetails.principalName}
+                value={principalName}
                 onChange={e => setSchoolDetails(p => ({ ...p, principalName: e.target.value }))}
                 className="w-full px-3 py-1.5 text-xs font-bold bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-white rounded-xl border-0"
               />

@@ -63,6 +63,7 @@ type AdminView =
 
 export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }) => {
   const [school, setSchool] = useState<School | null>(null);
+  const [schoolLoading, setSchoolLoading] = useState(true);
   const [sessions, setSessions] = useState<SchoolSession[]>([]);
   const [classes, setClasses] = useState<SchoolClass[]>([]);
   const [subjects, setSubjects] = useState<SchoolSubject[]>([]);
@@ -153,12 +154,17 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
   }, [school]);
 
   useEffect(() => {
+    setSchoolLoading(true);
     getSchool(schoolId).then(s => {
       setSchool(s);
       if (s) {
         setLockCodeInput(s.lockCode || '');
         setLockCodeActive(s.lockCodeActive ?? false);
       }
+    }).catch(() => {
+      setSchool(null);
+    }).finally(() => {
+      setSchoolLoading(false);
     });
     loadSubAdmins();
     getStaffEmployees(schoolId).then(setStaffList).catch(() => {});
@@ -415,6 +421,30 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
   const canManageContent  = subscriptionActive && (subTier === "full" || subTier === undefined);
   // Both lite and full need an active (non-expired) subscription for data management
   const canManageStudents = subscriptionActive;
+
+  if (view !== "dashboard" && !school) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex flex-col items-center justify-center gap-3 p-6 text-center">
+        {schoolLoading ? (
+          <>
+            <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+            <p className="text-sm text-slate-500">Loading school details...</p>
+          </>
+        ) : (
+          <>
+            <AlertCircle className="w-8 h-8 text-amber-500" />
+            <p className="text-sm text-slate-600 dark:text-slate-300">School details could not be loaded.</p>
+            <button
+              onClick={() => setView("dashboard")}
+              className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold"
+            >
+              Back to dashboard
+            </button>
+          </>
+        )}
+      </div>
+    );
+  }
 
   // ── Store view ─────────────────────────────────────────────────────────
   if (view === "store" && school) {
