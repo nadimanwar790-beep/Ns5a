@@ -262,7 +262,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
           {/* School Header */}
           <div className="px-6 pt-5 pb-4 border-b-2 border-indigo-100 flex items-center gap-4">
             {school?.logoUrl ? (
-              <img src={school.logoUrl} alt={school.name} className="w-16 h-16 rounded-xl object-cover border border-slate-200 flex-shrink-0" />
+              <img src={school.logoUrl} alt={school?.name || "School"} className="w-16 h-16 rounded-xl object-cover border border-slate-200 flex-shrink-0" />
             ) : (
               <div className="w-16 h-16 rounded-xl bg-indigo-100 flex items-center justify-center flex-shrink-0">
                 <GraduationCap className="w-8 h-8 text-indigo-600" />
@@ -975,7 +975,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
               <div className="absolute top-0 right-0 w-24 h-24 bg-white/10 rounded-full blur-xl pointer-events-none" />
               <div className="flex items-center justify-center gap-2 mb-1">
                 {school?.logoUrl ? (
-                  <img src={school.logoUrl} alt={school.name} className="w-8 h-8 rounded-lg object-cover bg-white p-0.5" />
+                  <img src={school.logoUrl} alt={school?.name || "School"} className="w-8 h-8 rounded-lg object-cover bg-white p-0.5" />
                 ) : (
                   <GraduationCap className="w-6 h-6 text-white" />
                 )}
@@ -1105,7 +1105,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                 <div className="flex items-center justify-between border-b-2 border-slate-900 pb-4 mb-4">
                   <div className="flex items-center gap-3">
                     {school?.logoUrl ? (
-                      <img src={school.logoUrl} alt={school.name} className="w-14 h-14 rounded-xl object-cover border" />
+                      <img src={school.logoUrl} alt={school?.name || "School"} className="w-14 h-14 rounded-xl object-cover border" />
                     ) : (
                       <div className="w-14 h-14 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold text-xl">
                         {school?.name?.[0] || 'S'}
@@ -1321,17 +1321,9 @@ export const StudentSchoolPanel: React.FC<Props> = ({
             </div>
             <div className="p-3 bg-white rounded-2xl border-2 border-indigo-500/20 shadow-md inline-block">
               <QRCode
-                value={JSON.stringify({
-                  id: studentId,
-                  studentId,
-                  name: studentName,
-                  rollNo: studentData?.rollNo || "",
-                  classId,
-                  schoolId,
-                  schoolName: school?.name || "",
-                  role: "STUDENT"
-                })}
+                value={`${typeof window !== 'undefined' ? window.location.origin : ''}/?v=id&s=${schoolId}&u=${studentId}&r=${encodeURIComponent(studentData?.rollNo || '')}&c=${classId}&n=${encodeURIComponent(studentName)}#NSTA-SCHOOL:${schoolId}:${studentId}:${studentData?.rollNo || ''}:${classId}`}
                 size={180}
+                level="M"
               />
             </div>
             <div>

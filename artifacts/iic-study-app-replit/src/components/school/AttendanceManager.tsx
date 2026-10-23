@@ -209,7 +209,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
               className="py-2.5 px-3 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/20 transition cursor-pointer"
             >
               <Camera size={15} />
-              <span>📷 Scan Entry & Exit QR</span>
+              <span>📷 Camera / 🖼️ Media QR Scan</span>
             </button>
             <button
               type="button"

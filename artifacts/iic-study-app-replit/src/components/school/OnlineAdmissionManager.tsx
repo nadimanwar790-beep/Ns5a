@@ -22,12 +22,25 @@ interface Props {
 
 export const OnlineAdmissionManager: React.FC<Props> = ({
   school,
-  classes,
-  sessions,
+  classes = [],
+  sessions = [],
   activeSession,
   isAdmin = true,
   onBack,
 }) => {
+  if (!school) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-white">
+        <p className="text-sm font-bold text-slate-300">School Profile Loading...</p>
+        {onBack && (
+          <button onClick={onBack} className="mt-4 px-4 py-1.5 rounded-lg bg-white/10 text-xs font-bold hover:bg-white/20">
+            Back
+          </button>
+        )}
+      </div>
+    );
+  }
+
   const [tab, setTab] = useState<"admin_list" | "apply_form">("admin_list");
   const [applications, setApplications] = useState<AdmissionApplication[]>([]);
   const [loading, setLoading] = useState(true);

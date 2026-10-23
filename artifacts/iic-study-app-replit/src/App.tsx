@@ -140,9 +140,9 @@ const App: React.FC = () => {
   const [docVerificationParams, setDocVerificationParams] = useState<{ verifyType: string; dataParam?: string } | null>(() => {
     if (typeof window === 'undefined') return null;
     const p = new URLSearchParams(window.location.search);
-    if (p.get('verify') === 'doc' || p.get('verify') === '1') {
+    if (p.get('verify') === 'doc' || p.get('verify') === '1' || p.get('v') === 'id') {
       return {
-        verifyType: p.get('type') || 'marksheet',
+        verifyType: p.get('type') || (p.get('v') === 'id' ? 'idcard' : 'marksheet'),
         dataParam: p.get('data') || undefined,
       };
     }

@@ -39,10 +39,12 @@ import {
   MapPin, Phone, User, ChevronDown, ChevronUp, Save, Building2,
   Lock, Eye, EyeOff, Shield, ArrowLeft, ShoppingBag, AlertTriangle, Crown,
   CreditCard, Megaphone, TrendingUp, Briefcase, FileSpreadsheet,
-  ClipboardList, Globe, UserPlus
+  ClipboardList, Globe, UserPlus, QrCode, GraduationCap, CheckCircle2,
+  Printer, Search, Sparkles
 } from "lucide-react";
 import { SchoolStore } from "./SchoolStore";
 import { SchoolPlanView } from "./SchoolPlanView";
+import { ClassQrCodeModal } from "./ClassQrCodeModal";
 
 interface Props {
   schoolId: string;
@@ -126,6 +128,11 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
   const [feeSummaryLoading, setFeeSummaryLoading] = useState(false);
   const [feeClassSelected, setFeeClassSelected] = useState<SchoolClass | null>(null);
 
+  // Advanced Class Card states
+  const [expandedToolsClassId, setExpandedToolsClassId] = useState<string | null>(null);
+  const [classSearchQuery, setClassSearchQuery] = useState("");
+  const [qrModalClass, setQrModalClass] = useState<SchoolClass | null>(null);
+
   // Class preset names
   const CLASS_PRESETS = ["Play", "Nursery", "KG-1", "KG-2", "Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6", "Class 7", "Class 8", "Class 9", "Class 10", "Class 11", "Class 12"];
 
@@ -198,6 +205,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
     await saveClass({
       id, schoolId, sessionId: activeSession.id,
       name: classForm.name, section: classForm.section,
+      defaultFee: Number((classForm as any).defaultFee) || 0,
       createdAt: new Date().toISOString()
     });
     setClassForm({ name: "", section: "" });
@@ -776,114 +784,616 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
     }
 
     if (view === "classes") {
+      const sortedClasses = [...classes].sort((a, b) => {
+        const na = parseInt(a.name.replace(/\D+/g, '')) || 0;
+        const nb = parseInt(b.name.replace(/\D+/g, '')) || 0;
+        return na !== nb ? na - nb : a.name.localeCompare(b.name);
+      });
+
+      const filteredClasses = sortedClasses.filter(cls => {
+        if (!classSearchQuery.trim()) return true;
+        const q = classSearchQuery.toLowerCase();
+        return (
+          cls.name.toLowerCase().includes(q) ||
+          (cls.section && cls.section.toLowerCase().includes(q))
+        );
+      });
+
       return (
-        <div className="p-4 space-y-3 max-w-2xl mx-auto">
-          {!activeSession && <div className="text-center py-6 text-slate-400 text-sm">Please create a session first</div>}
+        <div className="p-4 sm:p-6 space-y-4 max-w-4xl mx-auto">
+          {!activeSession && (
+            <div className="text-center py-10 text-slate-400 text-sm bg-white dark:bg-slate-800 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 p-6">
+              <p className="font-bold text-slate-600 dark:text-slate-300 text-base mb-1">Session Not Selected</p>
+              <p className="text-xs">Classes create karne se pehle kripya ek Academic Session select ya create karein.</p>
+            </div>
+          )}
+
           {activeSession && (
             <>
-              <button onClick={() => { setShowForm("class"); setEditingClassId(null); }}
-                className="w-full py-3 bg-blue-600 text-white rounded-xl font-medium flex items-center justify-center gap-2">
-                <Plus className="w-4 h-4" /> Add Class
-              </button>
-              {showForm === "class" && !editingClassId && (
-                <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm space-y-3">
-                  <p className="text-xs text-slate-500 font-medium">Quick Select:</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {CLASS_PRESETS.map(preset => (
-                      <button key={preset} onClick={() => setClassForm(p => ({ ...p, name: preset }))}
-                        className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${classForm.name === preset ? 'bg-blue-600 text-white border-blue-600' : 'bg-slate-50 dark:bg-slate-700 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-600 hover:border-blue-400'}`}>
-                        {preset}
-                      </button>
-                    ))}
-                  </div>
-                  <input value={classForm.name} onChange={e => setClassForm(p => ({ ...p, name: e.target.value }))}
-                    placeholder="Ya khud likhiye — Class Name" className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
-                  <input value={classForm.section} onChange={e => setClassForm(p => ({ ...p, section: e.target.value }))}
-                    placeholder="Section (optional, e.g. A)" className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
+              {/* Header Banner & Global Actions */}
+              <div className="bg-white dark:bg-slate-800 rounded-2xl p-4 sm:p-5 border border-slate-200/90 dark:border-slate-700/80 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
                   <div className="flex items-center gap-2">
-                    <label className="text-xs text-slate-500 whitespace-nowrap">Default Fee (₹/month):</label>
-                    <input type="number" value={(classForm as any).defaultFee || ""} placeholder="0"
-                      onChange={e => setClassForm(p => ({ ...p, defaultFee: Number(e.target.value) } as any))}
-                      className="flex-1 px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
+                    <h2 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white flex items-center gap-2">
+                      <GraduationCap className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                      <span>Class Management</span>
+                    </h2>
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-500/30">
+                      {activeSession.name}
+                    </span>
                   </div>
-                  <div className="flex gap-2">
-                    <button onClick={addClass} disabled={saving} className="flex-1 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-60">Save</button>
-                    <button onClick={() => setShowForm(null)} className="flex-1 py-2 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg text-sm">Cancel</button>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex items-center gap-2 flex-wrap">
+                    <span>{classes.length} Total Classes</span>
+                    <span>•</span>
+                    <span>{students.length} Enrolled Students</span>
+                    <span>•</span>
+                    <span>{subjects.length} Subjects</span>
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { setShowForm(showForm === "class" ? null : "class"); setEditingClassId(null); }}
+                    className="flex-1 sm:flex-none px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-2 shadow-md shadow-blue-500/20 active:scale-95 transition-all cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Add New Class</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Class Search Bar */}
+              {classes.length > 0 && (
+                <div className="relative">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={classSearchQuery}
+                    onChange={e => setClassSearchQuery(e.target.value)}
+                    placeholder="Search class by name or section (e.g. Class 10, Nursery, A)..."
+                    className="w-full pl-9 pr-8 py-2.5 text-xs sm:text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 transition shadow-2xs"
+                  />
+                  {classSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setClassSearchQuery("")}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs p-1"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Add Class Form Modal / Collapsible */}
+              {showForm === "class" && !editingClassId && (
+                <div className="bg-white dark:bg-slate-800 rounded-2xl p-5 border-2 border-blue-500/30 shadow-lg space-y-4 animate-in fade-in duration-150">
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-700">
+                    <p className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-1.5">
+                      <Plus className="w-4 h-4 text-blue-600" />
+                      <span>Create New Class</span>
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setShowForm(null)}
+                      className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-slate-500 font-bold mb-1.5">Quick Grade Presets:</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {CLASS_PRESETS.map(preset => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => setClassForm(p => ({ ...p, name: preset }))}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all ${
+                            classForm.name === preset
+                              ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                              : 'bg-slate-50 dark:bg-slate-700 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-600 hover:border-blue-400'
+                          }`}
+                        >
+                          {preset}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-bold text-slate-600 dark:text-slate-300 block mb-1">
+                        Class Name *
+                      </label>
+                      <input
+                        value={classForm.name}
+                        onChange={e => setClassForm(p => ({ ...p, name: e.target.value }))}
+                        placeholder="e.g. Class 10"
+                        className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold text-slate-600 dark:text-slate-300 block mb-1">
+                        Section (Optional)
+                      </label>
+                      <input
+                        value={classForm.section}
+                        onChange={e => setClassForm(p => ({ ...p, section: e.target.value }))}
+                        placeholder="e.g. A, B, Science"
+                        className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <label className="text-xs font-bold text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                      Default Monthly Fee (₹):
+                    </label>
+                    <input
+                      type="number"
+                      value={(classForm as any).defaultFee || ""}
+                      placeholder="0"
+                      onChange={e => setClassForm(p => ({ ...p, defaultFee: Number(e.target.value) } as any))}
+                      className="flex-1 max-w-[200px] px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm font-bold"
+                    />
+                  </div>
+
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={addClass}
+                      disabled={saving}
+                      className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-black disabled:opacity-60 shadow-md active:scale-95 transition"
+                    >
+                      {saving ? "Saving Class..." : "Create Class"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowForm(null)}
+                      className="px-5 py-2.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl text-sm font-bold"
+                    >
+                      Cancel
+                    </button>
                   </div>
                 </div>
               )}
-              {[...classes].sort((a, b) => {
-                const na = parseInt(a.name.replace(/\D+/g, '')) || 0;
-                const nb = parseInt(b.name.replace(/\D+/g, '')) || 0;
-                return na !== nb ? na - nb : a.name.localeCompare(b.name);
-              }).map(cls => (
-                <div key={cls.id} className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm">
-                  {editingClassId === cls.id ? (
-                    <div className="space-y-3">
-                      <p className="text-xs font-semibold text-blue-500 uppercase tracking-wider">Edit Class</p>
-                      <div className="flex flex-wrap gap-1.5">
-                        {CLASS_PRESETS.map(preset => (
-                          <button key={preset} onClick={() => setEditClassForm(p => ({ ...p, name: preset }))}
-                            className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${editClassForm.name === preset ? 'bg-blue-600 text-white border-blue-600' : 'bg-slate-50 dark:bg-slate-700 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-600'}`}>
-                            {preset}
-                          </button>
-                        ))}
-                      </div>
-                      <input value={editClassForm.name} onChange={e => setEditClassForm(p => ({ ...p, name: e.target.value }))}
-                        placeholder="Class Name" className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
-                      <input value={editClassForm.section} onChange={e => setEditClassForm(p => ({ ...p, section: e.target.value }))}
-                        placeholder="Section (optional)" className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
-                      <div className="flex items-center gap-2">
-                        <label className="text-xs text-slate-500 whitespace-nowrap">Default Fee (₹/mo):</label>
-                        <input type="number" value={editClassForm.defaultFee || ""}
-                          onChange={e => setEditClassForm(p => ({ ...p, defaultFee: Number(e.target.value) }))}
-                          className="flex-1 px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
-                      </div>
-                      <div className="flex gap-2">
-                        <button onClick={saveEditClass} disabled={saving} className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-60">
-                          <Save className="w-3.5 h-3.5" /> {saving ? "Saving..." : "Save"}
-                        </button>
-                        <button onClick={() => setEditingClassId(null)} className="flex-1 py-2 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg text-sm">Cancel</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="flex items-center gap-2 mb-2">
-                        <div className="flex-1">
-                          <p className="font-bold text-slate-800 dark:text-white">{cls.name} {cls.section ? `(${cls.section})` : ""}</p>
-                          <p className="text-xs text-slate-400">
-                            {students.filter(s => s.classId === cls.id).length} students
-                            {(cls as any).defaultFee ? ` • Fee: ₹${(cls as any).defaultFee}/mo` : ""}
-                          </p>
-                        </div>
-                        <button onClick={() => { setEditingClassId(cls.id); setEditClassForm({ name: cls.name, section: cls.section || "", defaultFee: (cls as any).defaultFee || 0 }); setShowForm(null); }}
-                          className="p-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-500">
-                          <Edit3 className="w-4 h-4" />
-                        </button>
-                        <button onClick={() => deleteClass(schoolId, cls.id)} className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-red-400">
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                      <div className="flex flex-wrap gap-1.5">
-                        <button onClick={() => { setSelectedClass(cls); setView("students"); }}
-                          className="px-2.5 py-1.5 text-xs bg-blue-50 text-blue-600 dark:bg-blue-900/30 rounded-lg font-medium">👥 Students</button>
-                        <button onClick={() => { setSelectedClass(cls); setView("subjects"); }}
-                          className="px-2.5 py-1.5 text-xs bg-purple-50 text-purple-600 dark:bg-purple-900/30 rounded-lg font-medium">📚 Subjects</button>
-                        <button onClick={() => { setSelectedClass(cls); setView("attendance"); }}
-                          className="px-2.5 py-1.5 text-xs bg-green-50 text-green-600 dark:bg-green-900/30 rounded-lg font-medium">✅ Attendance</button>
-                        <button onClick={() => { setSelectedClass(cls); setView("marks"); }}
-                          className="px-2.5 py-1.5 text-xs bg-orange-50 text-orange-600 dark:bg-orange-900/30 rounded-lg font-medium">📝 Marks</button>
-                        <button onClick={() => { setSelectedClass(cls); setView("report_card"); }}
-                          className="px-2.5 py-1.5 text-xs bg-slate-100 text-slate-600 dark:bg-slate-700 rounded-lg font-medium">📋 Report</button>
-                        <button onClick={() => { setSelectedClass(cls); setView("results"); }}
-                          className="px-2.5 py-1.5 text-xs bg-amber-50 text-amber-600 dark:bg-amber-900/30 rounded-lg font-medium">🏆 Results</button>
-                        <button onClick={() => { setFeeClassSelected(cls); setView("fee_class"); }}
-                          className="px-2.5 py-1.5 text-xs bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 rounded-lg font-medium">💰 Fees</button>
-                      </div>
-                    </>
-                  )}
+
+              {/* Class Cards List */}
+              {filteredClasses.length === 0 ? (
+                <div className="text-center py-12 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-6">
+                  <p className="text-base font-bold text-slate-700 dark:text-slate-300">
+                    {classSearchQuery ? "Koi class match nahi hui" : "Abhi koi class nahi bani"}
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    {classSearchQuery ? `"${classSearchQuery}" se match hone wali koi class nahi hai.` : "Upar diye '+ Add New Class' button se apni pehli class banayein."}
+                  </p>
                 </div>
-              ))}
+              ) : (
+                filteredClasses.map(cls => {
+                  const classStudents = students.filter(s => s.classId === cls.id);
+                  const classSubjects = subjects.filter(s => s.classId === cls.id);
+                  const defaultFee = Number((cls as any).defaultFee) || 0;
+                  const isToolsExpanded = expandedToolsClassId === cls.id;
+
+                  // Grade badge text: e.g. "10", "9", "KG", "NUR", "PL"
+                  const cleanName = cls.name.trim();
+                  const numMatch = cleanName.match(/\d+/);
+                  const badgeNumber = numMatch ? numMatch[0] : cleanName.slice(0, 3).toUpperCase();
+
+                  return (
+                    <div
+                      key={cls.id}
+                      className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200/90 dark:border-slate-700/80 shadow-xs hover:shadow-md transition-all overflow-hidden"
+                    >
+                      {editingClassId === cls.id ? (
+                        <div className="p-5 space-y-3.5 bg-slate-50/50 dark:bg-slate-800/80">
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs font-black text-blue-600 uppercase tracking-wider flex items-center gap-1.5">
+                              <Edit3 className="w-3.5 h-3.5" />
+                              <span>Edit Class Settings</span>
+                            </p>
+                            <span className="text-[10px] text-slate-400 font-bold">ID: #{cls.id.slice(0, 6)}</span>
+                          </div>
+
+                          <div className="flex flex-wrap gap-1.5">
+                            {CLASS_PRESETS.map(preset => (
+                              <button
+                                key={preset}
+                                type="button"
+                                onClick={() => setEditClassForm(p => ({ ...p, name: preset }))}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-colors ${
+                                  editClassForm.name === preset
+                                    ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                                    : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-600'
+                                }`}
+                              >
+                                {preset}
+                              </button>
+                            ))}
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <input
+                              value={editClassForm.name}
+                              onChange={e => setEditClassForm(p => ({ ...p, name: e.target.value }))}
+                              placeholder="Class Name"
+                              className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm"
+                            />
+                            <input
+                              value={editClassForm.section}
+                              onChange={e => setEditClassForm(p => ({ ...p, section: e.target.value }))}
+                              placeholder="Section (optional)"
+                              className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm"
+                            />
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <label className="text-xs font-bold text-slate-500 whitespace-nowrap">Default Fee (₹/mo):</label>
+                            <input
+                              type="number"
+                              value={editClassForm.defaultFee || ""}
+                              onChange={e => setEditClassForm(p => ({ ...p, defaultFee: Number(e.target.value) }))}
+                              className="flex-1 max-w-[200px] px-3 py-2 border dark:border-slate-600 rounded-xl bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm font-bold"
+                            />
+                          </div>
+
+                          <div className="flex gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={saveEditClass}
+                              disabled={saving}
+                              className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-black disabled:opacity-60 shadow-md transition active:scale-95"
+                            >
+                              <Save className="w-3.5 h-3.5" />
+                              <span>{saving ? "Saving..." : "Save Changes"}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingClassId(null)}
+                              className="px-5 py-2.5 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-sm font-bold"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          {/* Card Header & Identity */}
+                          <div className="flex items-start justify-between gap-3 p-4 sm:p-5 pb-3">
+                            <div className="flex items-center gap-3.5 min-w-0">
+                              <div className="w-13 h-13 rounded-2xl bg-gradient-to-br from-indigo-600 via-indigo-700 to-blue-700 text-white flex flex-col items-center justify-center shadow-md shadow-indigo-500/25 shrink-0 border border-white/20 select-none">
+                                <span className="text-base font-black tracking-tight leading-none">{badgeNumber}</span>
+                                <span className="text-[9px] font-bold text-indigo-200 uppercase tracking-widest leading-none mt-1">Grade</span>
+                              </div>
+
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <h3 className="text-base sm:text-lg font-black text-slate-900 dark:text-white leading-tight">
+                                    {cls.name}
+                                  </h3>
+                                  {cls.section && (
+                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60">
+                                      Section {cls.section}
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center gap-2 mt-1 flex-wrap text-[11px] font-bold text-slate-500 dark:text-slate-400">
+                                  <span className="flex items-center gap-1 text-blue-600 dark:text-blue-400">
+                                    <Users className="w-3.5 h-3.5" />
+                                    <span>{classStudents.length} Students</span>
+                                  </span>
+                                  <span>•</span>
+                                  <span className="flex items-center gap-1 text-purple-600 dark:text-purple-400">
+                                    <BookOpen className="w-3.5 h-3.5" />
+                                    <span>{classSubjects.length} Subjects</span>
+                                  </span>
+                                  {defaultFee > 0 && (
+                                    <>
+                                      <span>•</span>
+                                      <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                                        <IndianRupee className="w-3.5 h-3.5" />
+                                        <span>₹{defaultFee}/mo</span>
+                                      </span>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => setQrModalClass(cls)}
+                                title="Class Attendance QR Code"
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300 border border-emerald-500/30 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition active:scale-95 shadow-2xs cursor-pointer"
+                              >
+                                <QrCode className="w-3.5 h-3.5" />
+                                <span className="hidden sm:inline">QR Code</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedClass(cls);
+                                  setShowForm("student");
+                                  setEditingStudentId(null);
+                                  setStudentForm({
+                                    name: "", rollNo: "", admissionNo: "", fatherName: "", motherName: "",
+                                    phone: "", dateOfBirth: "", monthlyFee: defaultFee
+                                  });
+                                  setView("students");
+                                }}
+                                title="Add Student directly to this class"
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black bg-blue-50 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300 border border-blue-500/30 hover:bg-blue-100 dark:hover:bg-blue-900/40 transition active:scale-95 shadow-2xs cursor-pointer"
+                              >
+                                <UserPlus className="w-3.5 h-3.5" />
+                                <span className="hidden sm:inline">+ Student</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingClassId(cls.id);
+                                  setEditClassForm({ name: cls.name, section: cls.section || "", defaultFee });
+                                  setShowForm(null);
+                                }}
+                                title="Edit Class Name & Fees"
+                                className="p-2 rounded-xl text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 transition cursor-pointer"
+                              >
+                                <Edit3 className="w-4 h-4" />
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (confirm(`Kya aap "${cls.name}" ko sachme delete karna chahte hain? Is class ke sabhi records par asar pad sakta hai.`)) {
+                                    deleteClass(schoolId, cls.id);
+                                  }
+                                }}
+                                title="Delete Class"
+                                className="p-2 rounded-xl text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 border border-slate-200 dark:border-slate-700 transition cursor-pointer"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Upgraded 8-Tile Academic Action Grid */}
+                          <div className="px-4 sm:px-5 pb-3">
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                              {/* 1. Students */}
+                              <button
+                                type="button"
+                                onClick={() => { setSelectedClass(cls); setView("students"); }}
+                                className="group p-2.5 sm:p-3 rounded-xl border border-blue-500/20 bg-blue-50/40 dark:bg-blue-950/20 hover:bg-blue-50 dark:hover:bg-blue-900/30 text-left transition-all active:scale-[0.98] flex items-center gap-2.5 cursor-pointer"
+                              >
+                                <div className="w-8 h-8 rounded-lg bg-blue-500 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform">
+                                  <Users className="w-4 h-4" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-xs font-black text-slate-900 dark:text-white leading-tight">Students</p>
+                                  <p className="text-[10px] font-bold text-blue-600 dark:text-blue-400 truncate mt-0.5">
+                                    {classStudents.length} Enrolled
+                                  </p>
+                                </div>
+                              </button>
+
+                              {/* 2. Subjects */}
+                              <button
+                                type="button"
+                                onClick={() => { setSelectedClass(cls); setView("subjects"); }}
+                                className="group p-2.5 sm:p-3 rounded-xl border border-purple-500/20 bg-purple-50/40 dark:bg-purple-950/20 hover:bg-purple-50 dark:hover:bg-purple-900/30 text-left transition-all active:scale-[0.98] flex items-center gap-2.5 cursor-pointer"
+                              >
+                                <div className="w-8 h-8 rounded-lg bg-purple-600 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform">
+                                  <BookOpen className="w-4 h-4" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-xs font-black text-slate-900 dark:text-white leading-tight">Subjects</p>
+                                  <p className="text-[10px] font-bold text-purple-600 dark:text-purple-400 truncate mt-0.5">
+                                    {classSubjects.length} Courses
+                                  </p>
+                                </div>
+                              </button>
+
+                              {/* 3. Attendance */}
+                              <button
+                                type="button"
+                                onClick={() => { setSelectedClass(cls); setView("attendance"); }}
+                                className="group p-2.5 sm:p-3 rounded-xl border border-emerald-500/20 bg-emerald-50/40 dark:bg-emerald-950/20 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 text-left transition-all active:scale-[0.98] flex items-center gap-2.5 cursor-pointer"
+                              >
+                                <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform">
+                                  <CheckCircle2 className="w-4 h-4" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-xs font-black text-slate-900 dark:text-white leading-tight">Attendance</p>
+                                  <p className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 truncate mt-0.5">
+                                    Daily Haziri & QR
+                                  </p>
+                                </div>
+                              </button>
+
+                              {/* 4. Marks */}
+                              <button
+                                type="button"
+                                onClick={() => { setSelectedClass(cls); setView("marks"); }}
+                                className="group p-2.5 sm:p-3 rounded-xl border border-amber-500/20 bg-amber-50/40 dark:bg-amber-950/20 hover:bg-amber-50 dark:hover:bg-amber-900/30 text-left transition-all active:scale-[0.98] flex items-center gap-2.5 cursor-pointer"
+                              >
+                                <div className="w-8 h-8 rounded-lg bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform">
+                                  <Edit3 className="w-4 h-4" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-xs font-black text-slate-900 dark:text-white leading-tight">Marks</p>
+                                  <p className="text-[10px] font-bold text-amber-600 dark:text-amber-400 truncate mt-0.5">
+                                    Exam Grades Entry
+                                  </p>
+                                </div>
+                              </button>
+
+                              {/* 5. Report Cards */}
+                              <button
+                                type="button"
+                                onClick={() => { setSelectedClass(cls); setView("report_card"); }}
+                                className="group p-2.5 sm:p-3 rounded-xl border border-indigo-500/20 bg-indigo-50/40 dark:bg-indigo-950/20 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 text-left transition-all active:scale-[0.98] flex items-center gap-2.5 cursor-pointer"
+                              >
+                                <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform">
+                                  <FileText className="w-4 h-4" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-xs font-black text-slate-900 dark:text-white leading-tight">Report</p>
+                                  <p className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 truncate mt-0.5">
+                                    Marksheets PDF
+                                  </p>
+                                </div>
+                              </button>
+
+                              {/* 6. Results */}
+                              <button
+                                type="button"
+                                onClick={() => { setSelectedClass(cls); setView("results"); }}
+                                className="group p-2.5 sm:p-3 rounded-xl border border-amber-500/20 bg-amber-50/40 dark:bg-amber-950/20 hover:bg-amber-50 dark:hover:bg-amber-900/30 text-left transition-all active:scale-[0.98] flex items-center gap-2.5 cursor-pointer"
+                              >
+                                <div className="w-8 h-8 rounded-lg bg-amber-600 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform">
+                                  <Award className="w-4 h-4" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-xs font-black text-slate-900 dark:text-white leading-tight">Results</p>
+                                  <p className="text-[10px] font-bold text-amber-600 dark:text-amber-400 truncate mt-0.5">
+                                    Merit & Toppers
+                                  </p>
+                                </div>
+                              </button>
+
+                              {/* 7. Fees */}
+                              <button
+                                type="button"
+                                onClick={() => { setFeeClassSelected(cls); setView("fee_class"); }}
+                                className="group p-2.5 sm:p-3 rounded-xl border border-teal-500/20 bg-teal-50/40 dark:bg-teal-950/20 hover:bg-teal-50 dark:hover:bg-teal-900/30 text-left transition-all active:scale-[0.98] flex items-center gap-2.5 cursor-pointer"
+                              >
+                                <div className="w-8 h-8 rounded-lg bg-teal-600 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform">
+                                  <IndianRupee className="w-4 h-4" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-xs font-black text-slate-900 dark:text-white leading-tight">Fees</p>
+                                  <p className="text-[10px] font-bold text-teal-600 dark:text-teal-400 truncate mt-0.5">
+                                    ₹{defaultFee}/mo Ledger
+                                  </p>
+                                </div>
+                              </button>
+
+                              {/* 8. Class QR */}
+                              <button
+                                type="button"
+                                onClick={() => setQrModalClass(cls)}
+                                className="group p-2.5 sm:p-3 rounded-xl border border-rose-500/20 bg-rose-50/40 dark:bg-rose-950/20 hover:bg-rose-50 dark:hover:bg-rose-900/30 text-left transition-all active:scale-[0.98] flex items-center gap-2.5 cursor-pointer"
+                              >
+                                <div className="w-8 h-8 rounded-lg bg-rose-500 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform">
+                                  <QrCode className="w-4 h-4" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-xs font-black text-slate-900 dark:text-white leading-tight">QR Code</p>
+                                  <p className="text-[10px] font-bold text-rose-600 dark:text-rose-400 truncate mt-0.5">
+                                    Project & Print
+                                  </p>
+                                </div>
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* More Advanced Academic Tools Accordion */}
+                          <div className="border-t border-slate-100 dark:border-slate-700/60 bg-slate-50/50 dark:bg-slate-900/30 px-4 sm:px-5 py-2 flex flex-col">
+                            <button
+                              type="button"
+                              onClick={() => setExpandedToolsClassId(isToolsExpanded ? null : cls.id)}
+                              className="flex items-center justify-between text-xs font-black text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors py-1 cursor-pointer"
+                            >
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <Sparkles className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                                <span>Advanced Tools & Printouts</span>
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300">
+                                  ID Cards • Admit Cards • Promotion
+                                </span>
+                              </div>
+                              {isToolsExpanded ? (
+                                <ChevronUp className="w-4 h-4 text-slate-400 shrink-0" />
+                              ) : (
+                                <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+                              )}
+                            </button>
+
+                            {isToolsExpanded && (
+                              <div className="pt-2.5 pb-1 grid grid-cols-2 sm:grid-cols-4 gap-2 animate-in fade-in duration-150">
+                                {/* ID Cards */}
+                                <button
+                                  type="button"
+                                  onClick={() => { setSelectedClass(cls); setView("id_cards"); }}
+                                  className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-indigo-400 dark:hover:border-indigo-500 transition text-left flex items-center gap-2.5 group cursor-pointer"
+                                >
+                                  <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                                    <CreditCard className="w-4 h-4" />
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-xs font-black text-slate-800 dark:text-white leading-tight">ID Cards</p>
+                                    <p className="text-[10px] text-slate-400 truncate">Print Badges</p>
+                                  </div>
+                                </button>
+
+                                {/* Admit Cards */}
+                                <button
+                                  type="button"
+                                  onClick={() => { setSelectedClass(cls); setView("admit_cards"); }}
+                                  className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-amber-400 dark:hover:border-amber-500 transition text-left flex items-center gap-2.5 group cursor-pointer"
+                                >
+                                  <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-950 dark:text-amber-400 flex items-center justify-center shrink-0">
+                                    <FileSpreadsheet className="w-4 h-4" />
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-xs font-black text-slate-800 dark:text-white leading-tight">Admit Cards</p>
+                                    <p className="text-[10px] text-slate-400 truncate">Exam Tickets</p>
+                                  </div>
+                                </button>
+
+                                {/* Student Promotion */}
+                                <button
+                                  type="button"
+                                  onClick={() => { setSelectedClass(cls); setView("promotion"); }}
+                                  className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-emerald-400 dark:hover:border-emerald-500 transition text-left flex items-center gap-2.5 group cursor-pointer"
+                                >
+                                  <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                                    <GraduationCap className="w-4 h-4" />
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-xs font-black text-slate-800 dark:text-white leading-tight">Promotion</p>
+                                    <p className="text-[10px] text-slate-400 truncate">Next Session</p>
+                                  </div>
+                                </button>
+
+                                {/* Certificates */}
+                                <button
+                                  type="button"
+                                  onClick={() => { setSelectedClass(cls); setView("certificates"); }}
+                                  className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-purple-400 dark:hover:border-purple-500 transition text-left flex items-center gap-2.5 group cursor-pointer"
+                                >
+                                  <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-600 dark:bg-purple-950 dark:text-purple-400 flex items-center justify-center shrink-0">
+                                    <Award className="w-4 h-4" />
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-xs font-black text-slate-800 dark:text-white leading-tight">Certificates</p>
+                                    <p className="text-[10px] text-slate-400 truncate">Character/Transfer</p>
+                                  </div>
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })
+              )}
             </>
           )}
         </div>
@@ -1262,10 +1772,10 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                   <Building2 className="w-6 h-6 text-white" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-bold text-slate-800 dark:text-white text-base leading-tight truncate">{school.name}</p>
+                  <p className="font-bold text-slate-800 dark:text-white text-base leading-tight truncate">{school?.name || "School"}</p>
                   {activeSession && (
                     <span className="inline-flex items-center gap-1 mt-1 text-xs bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300 px-2.5 py-0.5 rounded-full font-medium">
-                      📅 Session: {activeSession.name}
+                      📅 Session: {activeSession?.name}
                     </span>
                   )}
                 </div>
@@ -1278,10 +1788,10 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
               {schoolCardExpanded && !editingSchoolInfo && (
                 <div className="border-t dark:border-slate-700 px-4 pb-4 pt-3 space-y-3">
                   {[
-                    { icon: <User className="w-4 h-4 text-blue-500" />, label: "Principal", value: school.principalName },
-                    { icon: <User className="w-4 h-4 text-purple-500" />, label: "Director", value: school.directorName },
-                    { icon: <Phone className="w-4 h-4 text-green-500" />, label: "Mobile", value: school.mobile || school.phone },
-                    { icon: <MapPin className="w-4 h-4 text-orange-500" />, label: "Address", value: school.address },
+                    { icon: <User className="w-4 h-4 text-blue-500" />, label: "Principal", value: school?.principalName },
+                    { icon: <User className="w-4 h-4 text-purple-500" />, label: "Director", value: school?.directorName },
+                    { icon: <Phone className="w-4 h-4 text-green-500" />, label: "Mobile", value: school?.mobile || school?.phone },
+                    { icon: <MapPin className="w-4 h-4 text-orange-500" />, label: "Address", value: school?.address },
                   ].map(row => (
                     <div key={row.label} className="flex items-start gap-3">
                       <div className="mt-0.5 flex-shrink-0">{row.icon}</div>
@@ -1664,6 +2174,19 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
           </div>
         );
       })()}
+
+      {/* Class QR Attendance Modal */}
+      {qrModalClass && (
+        <ClassQrCodeModal
+          isOpen={!!qrModalClass}
+          onClose={() => setQrModalClass(null)}
+          schoolId={schoolId}
+          schoolName={school?.name || "School"}
+          classId={qrModalClass.id}
+          className={qrModalClass.name}
+          totalStudents={students.filter(s => s.classId === qrModalClass.id).length}
+        />
+      )}
     </div>
   );
 };

@@ -1,11 +1,15 @@
 // @ts-nocheck
 import React, { useState, useEffect } from "react";
 import QRCode from "react-qr-code";
-import type { School, SchoolClass, SchoolStudent, SchoolSession } from "../../school-types";
+import type { School, SchoolClass, SchoolStudent, SchoolSession, ExamEntry } from "../../school-types";
+import { getExams } from "../../school-firebase";
 import {
   FileSpreadsheet, Printer, ChevronLeft, Plus, Trash2, Award, Calendar,
-  CheckCircle2, Sparkles, RefreshCw, User, BookOpen, Layers, Edit3, Shield
+  CheckCircle2, Sparkles, RefreshCw, User, BookOpen, Layers, Edit3, Shield,
+  Building2, UserPlus, Zap
 } from "lucide-react";
+import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeaderEditorModal";
+import { QuickAddStudentModal } from "./QuickAddStudentModal";
 
 interface Props {
   school: School;
@@ -40,13 +44,33 @@ const DEFAULT_SUBJECTS: MarksheetSubjectRow[] = [
 export const MarksheetGenerator: React.FC<Props> = ({
   school,
   classes,
-  students,
+  students: initialStudents,
   activeSession,
   onBack,
 }) => {
+  const [studentList, setStudentList] = useState<SchoolStudent[]>(initialStudents);
   const [selectedClassId, setSelectedClassId] = useState<string>(classes[0]?.id || "");
-  const classStudents = students.filter(s => s.classId === selectedClassId);
-  const [selectedStudentId, setSelectedStudentId] = useState<string>(classStudents[0]?.id || "");
+  const classStudents = studentList.filter(s => !selectedClassId || s.classId === selectedClassId);
+  const [selectedStudentId, setSelectedStudentId] = useState<string>(classStudents[0]?.id || studentList[0]?.id || "");
+
+  // School Header Customization State (can be edited on the fly)
+  const [showSchoolHeaderModal, setShowSchoolHeaderModal] = useState(false);
+  const [showAddStudentModal, setShowAddStudentModal] = useState(false);
+  const [isAutoGeneratingMarks, setIsAutoGeneratingMarks] = useState(false);
+  const [autoGenNotice, setAutoGenNotice] = useState<string | null>(null);
+
+  const [schoolDetails, setSchoolDetails] = useState<SchoolHeaderDetails>({
+    schoolName: school?.name || "National Academy",
+    tagline: school?.tagline || "Learn • Grow • Lead",
+    affiliation: "Affiliated to State / Central Board of Secondary Education",
+    address: school?.address || "Main Campus Examination Center",
+    phone: school?.mobile || school?.phone || "+91 98765 43210",
+    email: school?.email || "info@school.org",
+    logoUrl: school?.logoUrl || "",
+    principalName: school?.principalName || "Dr. Rajeshwar Sharma",
+    principalTitle: "Principal / Headmaster",
+    code: school?.code || "SCH-001",
+  });
 
   // Exam Meta
   const [examTitle, setExamTitle] = useState("ANNUAL EXAMINATION 2026-27");
@@ -73,8 +97,6 @@ export const MarksheetGenerator: React.FC<Props> = ({
   const [layoutMode, setLayoutMode] = useState<"portrait_compact" | "two_pages" | "landscape_wide">("portrait_compact");
 
   // Signatures
-  const [principalTitle, setPrincipalTitle] = useState("Principal / Headmaster");
-  const [principalName, setPrincipalName] = useState(school.principalName || "Dr. Rajeshwar Sharma");
   const [teacherName, setTeacherName] = useState("Class Teacher");
 
   // Subject rows
@@ -85,21 +107,85 @@ export const MarksheetGenerator: React.FC<Props> = ({
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
 
   // Synchronize student data on selection
-  const syncStudentData = () => {
-    if (currentStudent) {
-      setStudentName(currentStudent.name || "");
-      setRollNo(currentStudent.rollNo || "101");
-      setRegiNo(currentStudent.admissionNo || "REG-" + (currentStudent.rollNo || "101"));
-      setFatherName(currentStudent.fatherName || "Shri Parent");
-      setMotherName(currentStudent.motherName || "Smt. Guardian");
+  const syncStudentData = (target: SchoolStudent | null) => {
+    if (target) {
+      setStudentName(target.name || "");
+      setRollNo(target.rollNo || "101");
+      setRegiNo(target.admissionNo || "REG-" + (target.rollNo || "101"));
+      setFatherName(target.fatherName || "Shri Parent");
+      setMotherName(target.motherName || "Smt. Guardian");
       setSectionName(currentClass?.section || "A");
-      setStudentPhoto((currentStudent as any)?.photoUrl || "");
+      setStudentPhoto((target as any)?.photoUrl || "");
     }
   };
 
   useEffect(() => {
-    syncStudentData();
+    syncStudentData(currentStudent);
   }, [selectedStudentId, selectedClassId]);
+
+  // ⚡ AUTO-GENERATE MARKS FROM SAVED EXAMS
+  const autoGenerateFromAppMarks = async () => {
+    setIsAutoGeneratingMarks(true);
+    setAutoGenNotice(null);
+    try {
+      const exams = await getExams(school.id, selectedClassId);
+      if (exams && exams.length > 0) {
+        const rows: MarksheetSubjectRow[] = exams.map((ex, idx) => {
+          const sm = ex.studentMarks?.[selectedStudentId];
+          const obtainedMarks = sm ? Number(sm.marks || 0) : 0;
+          const max = Number(ex.maxMarks || 100);
+
+          const allMarks = Object.values(ex.studentMarks || {}).map((m: any) => Number(m.marks || 0));
+          const highest = allMarks.length > 0 ? Math.max(...allMarks) : obtainedMarks;
+
+          const sName = (ex.subjectName || ex.examName).toLowerCase();
+          const isPracticalSubject = sName.includes("science") || sName.includes("computer") || sName.includes("it") || sName.includes("practical");
+
+          let theory = Math.round(obtainedMarks * 0.8);
+          let mcq = Math.round(obtainedMarks * 0.2);
+          let practical = 0;
+          let maxTheory = 80;
+          let maxMcq = 20;
+          let maxPractical = 0;
+
+          if (isPracticalSubject) {
+            maxTheory = 60;
+            maxMcq = 20;
+            maxPractical = 20;
+            theory = Math.min(60, Math.round(obtainedMarks * 0.6));
+            mcq = Math.min(20, Math.round(obtainedMarks * 0.2));
+            practical = Math.min(20, Math.round(obtainedMarks * 0.2));
+          }
+
+          return {
+            id: ex.id || `sub_${idx + 1}`,
+            code: ex.subjectId ? ex.subjectId.slice(0, 4).toUpperCase() : `10${idx + 1}`,
+            name: ex.subjectName || ex.examName,
+            theory,
+            mcq,
+            practical,
+            highest: highest || 95,
+            maxTheory,
+            maxMcq,
+            maxPractical,
+          };
+        });
+
+        setSubjects(rows);
+        setAutoGenNotice(`✅ App ke ${exams.length} subjects ke entered marks se marksheet auto-generate ho gayi!`);
+      } else {
+        loadSubjectPreset("class10");
+        randomizeSampleScores();
+        setAutoGenNotice("⚡ Is class ke recorded marks abhi save nahi the, isliye standard syllabus marks auto-fill kar diye gaye.");
+      }
+    } catch (err: any) {
+      console.warn("Auto-generate error:", err);
+      loadSubjectPreset("class10");
+    } finally {
+      setIsAutoGeneratingMarks(false);
+      setTimeout(() => setAutoGenNotice(null), 4000);
+    }
+  };
 
   // Load Subject Presets (Including 10, 12, and 15 subject slots)
   const loadSubjectPreset = (presetType: "class10" | "class10_12sub" | "comp_15sub" | "class12sci" | "class12com" | "primary") => {
@@ -323,8 +409,8 @@ export const MarksheetGenerator: React.FC<Props> = ({
     const verifiedPayload = {
       type: "marksheet",
       officialVerified: true,
-      school: school.name,
-      schoolCode: school.code || "SCH-001",
+      school: schoolDetails.schoolName || school?.name || "School",
+      schoolCode: schoolDetails.code || school?.code || "SCH-001",
       student: sName,
       fatherName: sFather,
       roll: sRoll,
@@ -354,7 +440,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
         {/* Decorative Watermark */}
         <div className="absolute inset-0 flex items-center justify-center opacity-[0.03] pointer-events-none select-none">
           <span className="text-[140px] font-black tracking-widest text-slate-900 uppercase">
-            {school.code || school.name.slice(0, 4)}
+            {schoolDetails.code || school?.code || (schoolDetails.schoolName || "SCHL").slice(0, 4)}
           </span>
         </div>
 
@@ -362,20 +448,20 @@ export const MarksheetGenerator: React.FC<Props> = ({
         <div className={`border-b-2 border-slate-900 ${isCompact ? "pb-2.5 mb-2.5" : "pb-4 mb-4"}`}>
           <div className="flex items-start justify-between gap-4">
             <div className="flex items-center gap-3">
-              {school.logoUrl ? (
-                <img src={school.logoUrl} alt="Logo" className={`${isCompact ? "w-13 h-13" : "w-16 h-16"} object-cover rounded-xl border border-slate-300 shadow-sm`} />
+              {schoolDetails.logoUrl ? (
+                <img src={schoolDetails.logoUrl} alt="Logo" className={`${isCompact ? "w-13 h-13" : "w-16 h-16"} object-cover rounded-xl border border-slate-300 shadow-sm`} />
               ) : (
                 <div className={`${isCompact ? "w-13 h-13" : "w-16 h-16"} rounded-xl bg-slate-900 text-amber-300 font-black text-2xl flex items-center justify-center shadow-sm`}>
-                  {school.name.slice(0, 2).toUpperCase()}
+                  {schoolDetails.schoolName.slice(0, 2).toUpperCase()}
                 </div>
               )}
               <div>
                 <h1 className={`${isCompact ? "text-xl" : "text-2xl"} font-black uppercase tracking-tight text-slate-950 leading-none`}>
-                  {school.name}
+                  {schoolDetails.schoolName}
                 </h1>
-                {school.address && <p className="text-[11px] text-slate-600 mt-0.5 font-medium">{school.address}</p>}
+                {schoolDetails.address && <p className="text-[11px] text-slate-600 mt-0.5 font-medium">{schoolDetails.address}</p>}
                 <p className="text-[9px] text-slate-500 font-semibold tracking-wide uppercase mt-0.5">
-                  Affiliated to State / Central Board of Secondary Education &bull; Code: {school.code || "SCH-001"}
+                  {schoolDetails.affiliation} &bull; Code: {schoolDetails.code || "SCH-001"}
                 </p>
               </div>
             </div>
@@ -591,10 +677,10 @@ export const MarksheetGenerator: React.FC<Props> = ({
 
           <div>
             <div className="h-8 border-b border-slate-400 mb-1 flex items-end justify-center">
-              <span className="italic font-serif font-black text-indigo-900 text-xs">{principalName}</span>
+              <span className="italic font-serif font-black text-indigo-900 text-xs">{schoolDetails.principalName}</span>
             </div>
-            <p className="font-black text-slate-950 uppercase tracking-tight text-[10.5px]">{principalTitle}</p>
-            <p className="text-[8px] text-slate-500">{school.name}</p>
+            <p className="font-black text-slate-950 uppercase tracking-tight text-[10.5px]">{schoolDetails.principalTitle}</p>
+            <p className="text-[8px] text-slate-500">{schoolDetails.schoolName}</p>
           </div>
         </div>
       </div>
@@ -612,13 +698,28 @@ export const MarksheetGenerator: React.FC<Props> = ({
           >
             <ChevronLeft className="w-4 h-4" /> School Dashboard
           </button>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => setShowSchoolHeaderModal(true)}
+              className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-amber-200 border border-amber-300/30 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+            >
+              <Building2 className="w-3.5 h-3.5" /> School Details Edit
+            </button>
+            <button
+              onClick={autoGenerateFromAppMarks}
+              disabled={isAutoGeneratingMarks}
+              className="px-3 py-1.5 bg-gradient-to-r from-amber-400 via-amber-300 to-yellow-400 hover:from-amber-500 hover:to-yellow-500 text-slate-950 rounded-lg text-xs font-black flex items-center gap-1.5 shadow-sm transition-all active:scale-95 cursor-pointer"
+              title="App ke actual marks se auto-fill karein"
+            >
+              <Zap className="w-3.5 h-3.5 text-amber-950 fill-amber-950 animate-pulse" />
+              <span>{isAutoGeneratingMarks ? "Generating..." : "⚡ Auto-Marks Fill"}</span>
+            </button>
             <button
               onClick={randomizeSampleScores}
               className="px-3 py-1.5 bg-indigo-600/60 hover:bg-indigo-600 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all"
               title="Demo marks generate karein"
             >
-              <Sparkles className="w-3.5 h-3.5" /> Sample Marks Fill
+              <Sparkles className="w-3.5 h-3.5" /> Sample Fill
             </button>
             <button
               onClick={() => setBulkMode(!bulkMode)}
@@ -639,6 +740,13 @@ export const MarksheetGenerator: React.FC<Props> = ({
       </div>
 
       <div className="max-w-6xl mx-auto px-4 py-5 print:p-0">
+        {autoGenNotice && (
+          <div className="mb-4 p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-500/30 rounded-2xl flex items-center gap-2 text-emerald-800 dark:text-emerald-200 text-xs font-bold print:hidden">
+            <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+            <span>{autoGenNotice}</span>
+          </div>
+        )}
+
         {/* Generator & Data Editing Console (Hidden during print) */}
         <div className="bg-white dark:bg-slate-800 rounded-2xl p-5 shadow-sm mb-6 space-y-4 print:hidden border border-slate-200 dark:border-slate-700">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -652,7 +760,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
               </p>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
               <div>
                 <label className="text-[10px] font-bold text-slate-500 block mb-0.5">Class Chuno:</label>
                 <select
@@ -671,8 +779,8 @@ export const MarksheetGenerator: React.FC<Props> = ({
                   <div className="flex items-center justify-between mb-0.5">
                     <label className="text-[10px] font-bold text-slate-500">Student Chuno:</label>
                     <button
-                      onClick={syncStudentData}
-                      className="text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline font-bold"
+                      onClick={() => syncStudentData(currentStudent)}
+                      className="text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline font-bold ml-2"
                       title="Reset candidate fields to selected student"
                     >
                       🔄 Reset
@@ -689,6 +797,16 @@ export const MarksheetGenerator: React.FC<Props> = ({
                   </select>
                 </div>
               )}
+
+              <div className="self-end pb-0.5">
+                <button
+                  type="button"
+                  onClick={() => setShowAddStudentModal(true)}
+                  className="px-3 py-1.5 text-xs font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-500/30 rounded-xl hover:bg-emerald-100 flex items-center gap-1 cursor-pointer"
+                >
+                  <UserPlus className="w-3.5 h-3.5" /> + Student Data
+                </button>
+              </div>
             </div>
           </div>
 
@@ -757,8 +875,8 @@ export const MarksheetGenerator: React.FC<Props> = ({
               <label className="text-xs font-bold text-slate-500 block mb-1">Principal / Head Name:</label>
               <input
                 type="text"
-                value={principalName}
-                onChange={e => setPrincipalName(e.target.value)}
+                value={schoolDetails.principalName}
+                onChange={e => setSchoolDetails(p => ({ ...p, principalName: e.target.value }))}
                 className="w-full px-3 py-1.5 text-xs font-bold bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-white rounded-xl border-0"
               />
             </div>
@@ -1021,6 +1139,32 @@ export const MarksheetGenerator: React.FC<Props> = ({
           </div>
         )}
       </div>
+
+      {/* School Header Customizer Modal */}
+      <SchoolHeaderEditorModal
+        isOpen={showSchoolHeaderModal}
+        onClose={() => setShowSchoolHeaderModal(false)}
+        school={school}
+        currentDetails={schoolDetails}
+        onApply={details => setSchoolDetails(details)}
+        title="Marksheet School Header & Details"
+        subtitle="Marksheet printout ke liye School Name, Logo, Address, Code aur Principal customize karein"
+      />
+
+      {/* Quick Add Student Modal */}
+      <QuickAddStudentModal
+        isOpen={showAddStudentModal}
+        onClose={() => setShowAddStudentModal(false)}
+        schoolId={school.id}
+        classes={classes}
+        defaultClassId={selectedClassId}
+        onStudentAdded={newStudent => {
+          setStudentList(prev => [...prev, newStudent]);
+          setSelectedClassId(newStudent.classId);
+          setSelectedStudentId(newStudent.id);
+          syncStudentData(newStudent);
+        }}
+      />
     </div>
   );
 };

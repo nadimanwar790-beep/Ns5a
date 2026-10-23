@@ -5,6 +5,7 @@ import {
   ShieldCheck, CheckCircle2, Award, Printer, ArrowLeft, School,
   FileSpreadsheet, CreditCard, Calendar, User, Phone, MapPin, Download, AlertCircle
 } from "lucide-react";
+import { getSchool, getStudent } from "../../school-firebase";
 
 interface Props {
   verifyType?: "marksheet" | "certificate" | "idcard" | string;
@@ -26,29 +27,81 @@ export const DocumentVerificationView: React.FC<Props> = ({
         const decoded = decodeURIComponent(dataParam);
         const parsed = JSON.parse(decoded);
         setDocData(parsed);
+        setLoading(false);
       } else {
-        // Fallback default sample for verification demonstration
-        setDocData({
-          type: verifyType,
-          officialVerified: true,
-          school: "National Model Academy (Affiliated to CBSE/State Board)",
-          schoolCode: "SCH-2026-99",
-          student: "Rohan Kumar Sharma",
-          roll: "101",
-          regNo: "REG-2026-X101",
-          class: "Class 10 (Secondary)",
-          session: "2026-27",
-          total: "532/600",
-          gpa: "4.85",
-          grade: "A+",
-          status: "PASSED (First Division with Distinction)",
-          date: new Date().toISOString().split("T")[0],
-          photoUrl: "",
-          certificateNo: "TC-2026-0842",
-          certificateType: "Transfer & Character Certificate",
-          issueDate: new Date().toISOString().split("T")[0],
-          phone: "+91 98765 43210",
-        });
+        const p = new URLSearchParams(window.location.search);
+        const urlName = p.get('n') || p.get('name') || p.get('studentName');
+        const urlRoll = p.get('r') || p.get('roll') || p.get('rollNo');
+        const urlSchoolId = p.get('s') || p.get('schoolId') || "";
+        const urlStudentId = p.get('u') || p.get('uid') || p.get('studentId') || "";
+        const urlClassId = p.get('c') || p.get('classId') || "";
+        const urlType = p.get('v') === 'id' ? 'idcard' : (p.get('type') || verifyType);
+
+        if (urlName || urlRoll || p.get('v') === 'id') {
+          const initialRecord = {
+            type: urlType,
+            officialVerified: true,
+            school: "NSTA Registered School / Academy",
+            schoolCode: urlSchoolId ? `SCH-${urlSchoolId.slice(0, 8)}` : "SCH-REG",
+            student: urlName ? decodeURIComponent(urlName) : "Verified Candidate",
+            roll: urlRoll || "—",
+            regNo: urlStudentId ? `REG-${urlStudentId.slice(0, 8)}` : "REG-VERIFIED",
+            class: urlClassId ? `Class ${urlClassId.slice(0, 6)}` : "Enrolled Class",
+            session: "2026-27",
+            status: "VERIFIED ACTIVE",
+            date: new Date().toISOString().split("T")[0],
+            photoUrl: "",
+            phone: "Official ID on Record",
+          };
+          setDocData(initialRecord);
+          setLoading(false);
+
+          // Try to enrich with live Firebase school and student profile
+          if (urlSchoolId && urlStudentId) {
+            Promise.all([
+              getSchool(urlSchoolId).catch(() => null),
+              getStudent(urlSchoolId, urlStudentId).catch(() => null)
+            ]).then(([schoolObj, studentObj]) => {
+              if (schoolObj || studentObj) {
+                setDocData((prev: any) => ({
+                  ...prev,
+                  school: schoolObj?.name || prev?.school,
+                  schoolCode: schoolObj?.code || prev?.schoolCode,
+                  student: studentObj?.name || prev?.student,
+                  roll: studentObj?.rollNo || prev?.roll,
+                  regNo: studentObj?.admissionNo || prev?.regNo,
+                  fatherName: studentObj?.fatherName || prev?.fatherName,
+                  phone: studentObj?.phone || prev?.phone,
+                  photoUrl: studentObj?.photoUrl || prev?.photoUrl,
+                  bloodGroup: studentObj?.bloodGroup || prev?.bloodGroup,
+                }));
+              }
+            }).catch(() => {});
+          }
+        } else {
+          // Fallback default sample for verification demonstration
+          setDocData({
+            type: verifyType,
+            officialVerified: true,
+            school: "National Model Academy (Affiliated to CBSE/State Board)",
+            schoolCode: "SCH-2026-99",
+            student: "Rohan Kumar Sharma",
+            roll: "101",
+            regNo: "REG-2026-X101",
+            class: "Class 10 (Secondary)",
+            session: "2026-27",
+            total: "532/600",
+            gpa: "4.85",
+            grade: "A+",
+            status: "PASSED (First Division with Distinction)",
+            date: new Date().toISOString().split("T")[0],
+            photoUrl: "",
+            certificateNo: "TC-2026-0842",
+            certificateType: "Transfer & Character Certificate",
+            issueDate: new Date().toISOString().split("T")[0],
+            phone: "+91 98765 43210",
+          });
+        }
       }
     } catch {
       setDocData({

@@ -38,7 +38,20 @@ export const PublicSchoolWebsite: React.FC<Props> = ({
   const [inquirySending, setInquirySending] = useState(false);
   const [inquirySent, setInquirySent] = useState(false);
 
-  const bannerColor = school.bannerColor || "#4f46e5";
+  if (!school) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-white">
+        <p className="text-sm font-bold text-slate-300">School Profile Loading...</p>
+        {onBack && (
+          <button onClick={onBack} className="mt-4 px-4 py-1.5 rounded-lg bg-white/10 text-xs font-bold hover:bg-white/20">
+            Back
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  const bannerColor = school?.bannerColor || "#4f46e5";
 
   const handleInquirySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
