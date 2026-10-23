@@ -23,12 +23,13 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
   const [existingRecord, setExistingRecord] = useState<AttendanceRecord | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [viewMode, setViewMode] = useState<"mark" | "report">("mark");
+  const [viewMode, setViewMode] = useState<"mark" | "report" | "matrix">("mark");
   const [monthlyData, setMonthlyData] = useState<AttendanceRecord[]>([]);
   const [selectedMonth, setSelectedMonth] = useState(currentMonthStr());
   const [loading, setLoading] = useState(true);
   const [showQrScanner, setShowQrScanner] = useState(false);
   const [showClassQrModal, setShowClassQrModal] = useState(false);
+  const [selectedCellInfo, setSelectedCellInfo] = useState<{ studentName: string; rollNo: string; date: string; info: any } | null>(null);
 
   useEffect(() => {
     getStudents(schoolId, classId).then(s => {
@@ -56,10 +57,10 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
   }, [selectedDate, students]);
 
   useEffect(() => {
-    if (viewMode === "report") {
+    if (viewMode === "report" || viewMode === "matrix") {
       getMonthlyAttendance(schoolId, classId, selectedMonth).then(setMonthlyData);
     }
-  }, [viewMode, selectedMonth]);
+  }, [viewMode, selectedMonth, schoolId, classId]);
 
   const toggleStudent = (id: string) => {
     setAttendance(prev => ({ ...prev, [id]: !prev[id] }));
@@ -151,9 +152,10 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
           <h2 className="font-bold text-slate-800 dark:text-white">{className} — Attendance</h2>
           <p className="text-xs text-slate-500">{students.length} students</p>
         </div>
-        <div className="flex gap-2">
-          <button onClick={() => setViewMode("mark")} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${viewMode === "mark" ? "bg-blue-600 text-white" : "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"}`}>Mark</button>
-          <button onClick={() => setViewMode("report")} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${viewMode === "report" ? "bg-blue-600 text-white" : "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"}`}>Report</button>
+        <div className="flex gap-1.5 overflow-x-auto">
+          <button onClick={() => setViewMode("mark")} className={`px-2.5 py-1.5 rounded-lg text-xs sm:text-sm font-bold whitespace-nowrap transition-colors ${viewMode === "mark" ? "bg-blue-600 text-white" : "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"}`}>Mark (दैनिक)</button>
+          <button onClick={() => setViewMode("report")} className={`px-2.5 py-1.5 rounded-lg text-xs sm:text-sm font-bold whitespace-nowrap transition-colors ${viewMode === "report" ? "bg-blue-600 text-white" : "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"}`}>Report</button>
+          <button onClick={() => setViewMode("matrix")} className={`px-2.5 py-1.5 rounded-lg text-xs sm:text-sm font-bold whitespace-nowrap transition-colors ${viewMode === "matrix" ? "bg-indigo-600 text-white" : "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"}`}>📅 31-Day Matrix</button>
         </div>
       </div>
 
@@ -207,7 +209,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
               className="py-2.5 px-3 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/20 transition cursor-pointer"
             >
               <Camera size={15} />
-              <span>📷 Scan Entry & Exit QR</span>
+              <span>📷 Camera / 🖼️ Media QR Scan</span>
             </button>
             <button
               type="button"
@@ -295,7 +297,231 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
             </button>
           )}
         </div>
-      ) : (
+      ) : viewMode === "matrix" ? (
+        /* 31-DAY MONTHLY ATTENDANCE MATRIX */
+        <div className="p-3 sm:p-4 space-y-4 max-w-full overflow-hidden">
+          {/* Month selector & actions */}
+          <div className="bg-white dark:bg-slate-800 rounded-xl p-3 sm:p-4 flex flex-wrap items-center justify-between gap-3 shadow-xs border border-slate-200 dark:border-slate-700">
+            <div className="flex items-center gap-2">
+              <button onClick={() => changeMonth(-1)} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700"><ChevronLeft className="w-4 h-4" /></button>
+              <span className="font-bold text-slate-800 dark:text-white text-base">
+                📅 {new Date(selectedMonth + "-01").toLocaleString("default", { month: "long", year: "numeric" })}
+              </span>
+              <button onClick={() => changeMonth(1)} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700"><ChevronRight className="w-4 h-4" /></button>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shadow-xs flex items-center gap-1.5 transition cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Print / PDF Matrix</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Legend */}
+          <div className="flex flex-wrap items-center gap-3 text-xs bg-slate-100 dark:bg-slate-800/60 p-3 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300">
+            <span className="font-bold text-slate-800 dark:text-white">Legend:</span>
+            <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-emerald-500 text-white font-black text-[10px] flex items-center justify-center">P</span> Present</span>
+            <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-amber-500 text-white font-black text-[10px] flex items-center justify-center">L</span> Late Arrival</span>
+            <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-rose-500 text-white font-black text-[10px] flex items-center justify-center">A</span> Absent</span>
+            <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-amber-150 text-amber-900 border border-amber-300 dark:bg-amber-950/60 dark:text-amber-300 font-bold text-[9px] flex items-center justify-center">Sun</span> Sunday</span>
+            <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-slate-200 dark:bg-slate-700 text-slate-400 font-black text-[10px] flex items-center justify-center">-</span> Holiday / No Record</span>
+            <span className="ml-auto text-[11px] text-indigo-600 dark:text-indigo-400 font-semibold italic">Tip: Click any cell to view In-Time & Exit-Time</span>
+          </div>
+
+          {/* 31-Day Matrix Table */}
+          {(() => {
+            const [yStr, mStr] = selectedMonth.split("-");
+            const yr = parseInt(yStr, 10);
+            const mn = parseInt(mStr, 10);
+            const daysInMonth = new Date(yr, mn, 0).getDate();
+            const daysArr = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+
+            return (
+              <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xs border border-slate-200 dark:border-slate-700 overflow-x-auto">
+                <table className="w-full text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-800 text-white text-[11px]">
+                      <th className="sticky left-0 z-20 bg-slate-800 px-2.5 py-2.5 text-left min-w-[50px] border-r border-slate-700">Roll</th>
+                      <th className="sticky left-[50px] z-20 bg-slate-800 px-3 py-2.5 text-left min-w-[140px] border-r border-slate-700">Student Name</th>
+                      {daysArr.map(d => {
+                        const dow = new Date(yr, mn - 1, d).getDay();
+                        const isSun = dow === 0;
+                        return (
+                          <th key={d} className={`px-1.5 py-2 text-center min-w-[30px] border-r border-slate-700 font-bold ${isSun ? "bg-amber-600/60 text-amber-100" : ""}`}>
+                            <div>{d}</div>
+                            <div className="text-[9px] font-normal opacity-80">{["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"][dow]}</div>
+                          </th>
+                        );
+                      })}
+                      <th className="px-2 py-2 text-center bg-emerald-900 text-emerald-100 min-w-[40px] font-bold">P</th>
+                      <th className="px-2 py-2 text-center bg-amber-900 text-amber-100 min-w-[40px] font-bold">L</th>
+                      <th className="px-2 py-2 text-center bg-rose-900 text-rose-100 min-w-[40px] font-bold">A</th>
+                      <th className="px-2 py-2 text-center bg-indigo-900 text-indigo-100 min-w-[50px] font-bold">%</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {students.map((st, idx) => {
+                      let pCount = 0;
+                      let lCount = 0;
+                      let aCount = 0;
+                      let recordedDays = 0;
+
+                      const cells = daysArr.map(d => {
+                        const dateStr = `${selectedMonth}-${String(d).padStart(2, "0")}`;
+                        const dow = new Date(yr, mn - 1, d).getDay();
+                        const isSun = dow === 0;
+                        const rec = monthlyData.find(r => r.date === dateStr);
+                        const entry = rec?.students?.[st.id];
+
+                        if (rec && entry !== undefined) {
+                          recordedDays++;
+                          if (entry.present) {
+                            if (entry.status === "late") {
+                              lCount++;
+                              pCount++;
+                              return { day: d, date: dateStr, status: "L", entry, isSun };
+                            }
+                            pCount++;
+                            return { day: d, date: dateStr, status: "P", entry, isSun };
+                          } else {
+                            aCount++;
+                            return { day: d, date: dateStr, status: "A", entry, isSun };
+                          }
+                        }
+
+                        if (isSun) {
+                          return { day: d, date: dateStr, status: "SUN", entry: null, isSun: true };
+                        }
+                        return { day: d, date: dateStr, status: "NONE", entry: null, isSun: false };
+                      });
+
+                      const pct = recordedDays > 0 ? Math.round((pCount / recordedDays) * 100) : 0;
+
+                      return (
+                        <tr key={st.id} className={`border-b dark:border-slate-700/60 transition-colors ${idx % 2 === 0 ? "bg-white dark:bg-slate-850" : "bg-slate-50/70 dark:bg-slate-800"}`}>
+                          <td className="sticky left-0 z-10 bg-inherit px-2.5 py-2 font-mono font-bold text-slate-500 border-r border-slate-200 dark:border-slate-700">
+                            {st.rollNo}
+                          </td>
+                          <td className="sticky left-[50px] z-10 bg-inherit px-3 py-2 font-bold text-slate-800 dark:text-white truncate border-r border-slate-200 dark:border-slate-700">
+                            {st.name}
+                          </td>
+                          {cells.map(c => {
+                            let badgeStyle = "text-slate-300 dark:text-slate-600";
+                            let text = "-";
+
+                            if (c.status === "P") {
+                              badgeStyle = "bg-emerald-500 text-white font-black cursor-pointer shadow-2xs hover:scale-110 active:scale-95";
+                              text = "P";
+                            } else if (c.status === "L") {
+                              badgeStyle = "bg-amber-500 text-white font-black cursor-pointer shadow-2xs hover:scale-110 active:scale-95";
+                              text = "L";
+                            } else if (c.status === "A") {
+                              badgeStyle = "bg-rose-500 text-white font-black cursor-pointer shadow-2xs hover:scale-110 active:scale-95";
+                              text = "A";
+                            } else if (c.status === "SUN") {
+                              badgeStyle = "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400 font-semibold text-[9px]";
+                              text = "Su";
+                            }
+
+                            return (
+                              <td
+                                key={c.day}
+                                onClick={() => {
+                                  if (c.entry) {
+                                    setSelectedCellInfo({
+                                      studentName: st.name,
+                                      rollNo: st.rollNo,
+                                      date: c.date,
+                                      info: c.entry,
+                                    });
+                                  }
+                                }}
+                                className={`px-1 py-1.5 text-center border-r border-slate-200 dark:border-slate-700 ${c.isSun ? "bg-amber-50/50 dark:bg-amber-950/20" : ""}`}
+                              >
+                                <span className={`inline-flex items-center justify-center w-6 h-6 rounded text-[10px] transition-transform ${badgeStyle}`}>
+                                  {text}
+                                </span>
+                              </td>
+                            );
+                          })}
+                          <td className="px-2 py-1.5 text-center font-bold text-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/20">{pCount}</td>
+                          <td className="px-2 py-1.5 text-center font-bold text-amber-600 bg-amber-50/50 dark:bg-amber-950/20">{lCount}</td>
+                          <td className="px-2 py-1.5 text-center font-bold text-rose-600 bg-rose-50/50 dark:bg-rose-950/20">{aCount}</td>
+                          <td className="px-2 py-1.5 text-center">
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-black ${pct >= 75 ? "bg-green-100 text-green-700 dark:bg-green-950/50 dark:text-green-300" : "bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300"}`}>
+                              {pct}%
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })()}
+
+          {/* Cell Details Dialog */}
+          {selectedCellInfo && (
+            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+              <div className="bg-white dark:bg-slate-800 rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-slate-200 dark:border-slate-700 space-y-4">
+                <div className="flex items-center justify-between border-b pb-3 dark:border-slate-700">
+                  <div>
+                    <h3 className="font-bold text-slate-800 dark:text-white text-base">
+                      {selectedCellInfo.studentName}
+                    </h3>
+                    <p className="text-xs text-slate-500">Roll #{selectedCellInfo.rollNo} • Date: {selectedCellInfo.date}</p>
+                  </div>
+                  <button onClick={() => setSelectedCellInfo(null)} className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400">✕</button>
+                </div>
+
+                <div className="space-y-2.5 text-xs">
+                  <div className="flex justify-between items-center py-1.5 border-b dark:border-slate-750">
+                    <span className="text-slate-500">Attendance Status:</span>
+                    <span className={`font-black px-2 py-0.5 rounded ${selectedCellInfo.info.present ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300" : "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300"}`}>
+                      {selectedCellInfo.info.present ? (selectedCellInfo.info.status === "late" ? "PRESENT (LATE)" : "PRESENT") : "ABSENT"}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between items-center py-1.5 border-b dark:border-slate-750">
+                    <span className="text-slate-500">In-Time (प्रवेश):</span>
+                    <span className="font-bold text-slate-800 dark:text-white">
+                      {selectedCellInfo.info.inTime ? `🟢 ${selectedCellInfo.info.inTime}` : "—"}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between items-center py-1.5 border-b dark:border-slate-750">
+                    <span className="text-slate-500">Exit-Time (प्रस्थान):</span>
+                    <span className="font-bold text-slate-800 dark:text-white">
+                      {selectedCellInfo.info.outTime ? `🔴 ${selectedCellInfo.info.outTime}` : "Not Punched Out"}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between items-center py-1.5 border-b dark:border-slate-750">
+                    <span className="text-slate-500">Stay Duration (अवधि):</span>
+                    <span className="font-bold text-blue-600 dark:text-blue-400">
+                      {selectedCellInfo.info.stayDuration ? `⏱️ ${selectedCellInfo.info.stayDuration}` : "—"}
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedCellInfo(null)}
+                  className="w-full py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold text-xs"
+                >
+                  Theek Hai (Close)
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : viewMode === "report" ? (
         /* REPORT VIEW */
         <div className="p-4 space-y-4 max-w-3xl mx-auto">
           {/* Month selector */}
@@ -352,7 +578,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
             <Download className="w-5 h-5" /> Download MHTML Report
           </button>
         </div>
-      )}
+      ) : null}
 
       {/* QR Code Scanner for Teacher / Admin */}
       <QrAttendanceScannerModal

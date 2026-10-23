@@ -4,8 +4,10 @@ import QRCode from "react-qr-code";
 import type { School, SchoolClass, SchoolStudent, SchoolSession } from "../../school-types";
 import {
   FileText, Printer, ChevronLeft, Plus, Trash2, Calendar, Clock,
-  CheckSquare, Square, Award, AlertCircle, Building2, Layers, Edit3, User, Shield, Sparkles
+  CheckSquare, Square, Award, AlertCircle, Building2, Layers, Edit3, User, Shield, Sparkles, UserPlus
 } from "lucide-react";
+import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeaderEditorModal";
+import { QuickAddStudentModal } from "./QuickAddStudentModal";
 
 interface Props {
   school: School;
@@ -26,25 +28,44 @@ export interface TimetableItem {
 export const AdmitCardManager: React.FC<Props> = ({
   school,
   classes,
-  students,
+  students: initialStudents,
   activeSession,
   onBack,
 }) => {
+  const [studentList, setStudentList] = useState<SchoolStudent[]>(initialStudents);
   const [selectedClassId, setSelectedClassId] = useState<string>(classes[0]?.id || "");
-  const classStudents = students.filter(s => s.classId === selectedClassId);
-  const [selectedStudentId, setSelectedStudentId] = useState<string>(classStudents[0]?.id || "");
+  const classStudents = studentList.filter(s => !selectedClassId || s.classId === selectedClassId);
+  const [selectedStudentId, setSelectedStudentId] = useState<string>(classStudents[0]?.id || studentList[0]?.id || "");
   const currentClass = classes.find(c => c.id === selectedClassId);
   const currentStudent = classStudents.find(s => s.id === selectedStudentId) || classStudents[0] || null;
+
+  // Modals state
+  const [showSchoolHeaderModal, setShowSchoolHeaderModal] = useState(false);
+  const [showAddStudentModal, setShowAddStudentModal] = useState(false);
+
+  // School Header Customization State
+  const [schoolDetails, setSchoolDetails] = useState<SchoolHeaderDetails>({
+    schoolName: school?.name || "National Academy",
+    tagline: school?.tagline || "Learn • Grow • Lead",
+    affiliation: "Affiliated to State / Central Board of Secondary Education",
+    address: school?.address || "Main Campus Examination Center",
+    phone: school?.mobile || school?.phone || "+91 98765 43210",
+    email: school?.email || "info@school.org",
+    logoUrl: school?.logoUrl || "",
+    principalName: school?.principalName || "Dr. Rajeshwar Sharma",
+    principalTitle: "Principal / Authorized Signatory",
+    code: school?.code || "SCH-001",
+  });
 
   // Exam & Center Info
   const [examName, setExamName] = useState("Annual Board Examination 2026-27");
   const [sessionName, setSessionName] = useState(activeSession?.name || "2026-27");
-  const [centerName, setCenterName] = useState(school.name + ", Main Campus Examination Hall");
+  const [centerName, setCenterName] = useState(schoolDetails.schoolName + ", Main Campus Examination Hall");
 
   // Signatory & Authority
   const [centerSuperintendent, setCenterSuperintendent] = useState("Center Superintendent");
   const [principalTitle, setPrincipalTitle] = useState("Principal / Authorized Signatory");
-  const [principalName, setPrincipalName] = useState(school.principalName || "Dr. Rajeshwar Sharma");
+  const [principalName, setPrincipalName] = useState(school?.principalName || "Dr. Rajeshwar Sharma");
 
   // Candidate Details Editable State (Allows overriding student details for print)
   const [candidateName, setCandidateName] = useState("");
@@ -202,7 +223,7 @@ export const AdmitCardManager: React.FC<Props> = ({
     const qrData = JSON.stringify({
       admitCard: true,
       exam: examName,
-      school: school.name,
+      school: schoolDetails.schoolName,
       studentId: student?.id || "custom",
       rollNo: sRoll,
       name: sName,
@@ -219,18 +240,18 @@ export const AdmitCardManager: React.FC<Props> = ({
         {/* School Header */}
         <div className="border-b-2 border-slate-900 pb-3 mb-4 text-center relative">
           <div className="flex items-center justify-center gap-3.5 mb-1">
-            {school.logoUrl ? (
-              <img src={school.logoUrl} alt="Logo" className="w-14 h-14 object-cover rounded-xl border border-slate-300" />
+            {schoolDetails.logoUrl ? (
+              <img src={schoolDetails.logoUrl} alt="Logo" className="w-14 h-14 object-cover rounded-xl border border-slate-300" />
             ) : (
               <div className="w-14 h-14 rounded-xl bg-slate-900 text-amber-300 font-black text-xl flex items-center justify-center">
-                {school.name.slice(0, 2).toUpperCase()}
+                {(schoolDetails.schoolName || "SC").slice(0, 2).toUpperCase()}
               </div>
             )}
             <div className="text-left">
-              <h1 className="text-xl font-black uppercase tracking-wider text-slate-950 leading-tight">{school.name}</h1>
-              {school.address && <p className="text-xs text-slate-600">{school.address}</p>}
+              <h1 className="text-xl font-black uppercase tracking-wider text-slate-950 leading-tight">{schoolDetails.schoolName}</h1>
+              {schoolDetails.address && <p className="text-xs text-slate-600">{schoolDetails.address}</p>}
               <p className="text-[10px] text-slate-500 font-semibold tracking-wide uppercase">
-                Official Examination Board &bull; Affiliation Code: {school.code || "SCH-001"}
+                {schoolDetails.affiliation || "Official Examination Board"} &bull; Affiliation Code: {schoolDetails.code || "SCH-001"} &bull; Ph: {schoolDetails.phone || ""}
               </p>
             </div>
           </div>
@@ -372,6 +393,12 @@ export const AdmitCardManager: React.FC<Props> = ({
             <ChevronLeft className="w-4 h-4" /> School Dashboard
           </button>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowSchoolHeaderModal(true)}
+              className="px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 bg-indigo-700/80 hover:bg-indigo-600 text-white shadow transition-all"
+            >
+              <Building2 className="w-3.5 h-3.5 text-amber-300" /> 🏫 School Details Edit
+            </button>
             <button
               onClick={() => setBulkMode(!bulkMode)}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
@@ -639,6 +666,13 @@ export const AdmitCardManager: React.FC<Props> = ({
                     ))}
                   </select>
                   <button
+                    onClick={() => setShowAddStudentModal(true)}
+                    className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1 shadow-xs"
+                    title="Naya student turant add karein"
+                  >
+                    <UserPlus className="w-3.5 h-3.5" /> + Student Data
+                  </button>
+                  <button
                     onClick={syncFromCurrentStudent}
                     className="px-2.5 py-1 text-xs text-indigo-600 dark:text-indigo-400 hover:underline font-bold"
                     title="Student details wapas reload karein"
@@ -807,6 +841,28 @@ export const AdmitCardManager: React.FC<Props> = ({
           </div>
         )}
       </div>
+
+      {showSchoolHeaderModal && (
+        <SchoolHeaderEditorModal
+          initialDetails={schoolDetails}
+          schoolId={school.id}
+          onClose={() => setShowSchoolHeaderModal(false)}
+          onSave={(updated) => setSchoolDetails(updated)}
+        />
+      )}
+
+      {showAddStudentModal && (
+        <QuickAddStudentModal
+          schoolId={school.id}
+          classes={classes}
+          defaultClassId={selectedClassId}
+          onClose={() => setShowAddStudentModal(false)}
+          onStudentAdded={(newStu) => {
+            setStudentList(prev => [newStu, ...prev]);
+            setSelectedStudentId(newStu.id);
+          }}
+        />
+      )}
     </div>
   );
 };

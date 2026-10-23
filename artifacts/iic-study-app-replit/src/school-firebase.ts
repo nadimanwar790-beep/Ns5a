@@ -580,6 +580,22 @@ export const saveStudent = async (student: SchoolStudent) => {
   }
 };
 
+export const getStudent = async (schoolId: string, studentId: string): Promise<SchoolStudent | null> => {
+  if (rtdb) {
+    try {
+      const snap = await withTimeout(get(ref(rtdb, `schools/${schoolId}/students/${studentId}`)), 2000);
+      if (snap && snap.exists()) return snap.val() as SchoolStudent;
+    } catch {}
+  }
+  if (db) {
+    try {
+      const snap = await withTimeout(getDoc(d(`schools/${schoolId}/students/${studentId}`)), 2500);
+      if (snap && snap.exists()) return snap.data() as SchoolStudent;
+    } catch {}
+  }
+  return null;
+};
+
 export const getStudents = async (schoolId: string, classId?: string): Promise<SchoolStudent[]> => {
   try {
     const snap = await withTimeout(getDocs(col(`schools/${schoolId}/students`)), 2500);

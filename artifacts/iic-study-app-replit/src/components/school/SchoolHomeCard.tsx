@@ -3,7 +3,7 @@ import React, { useState, useEffect } from "react";
 import type { School } from "../../school-types";
 import {
   MapPin, Users, Shield, ChevronRight, RefreshCw, QrCode,
-  CheckCircle2, Clock, Sparkles, School as SchoolIcon, Building2
+  CheckCircle2, Clock, Sparkles, School as SchoolIcon, Building2, Globe, UserPlus
 } from "lucide-react";
 import { checkTodayStudentAttendance } from "../../school-firebase";
 
@@ -12,6 +12,8 @@ interface Props {
   onOpen: () => void;
   onChangeSchool: () => void;
   onOpenQrScanner?: () => void;
+  onOpenWebsite?: () => void;
+  onOpenAdmission?: () => void;
   studentId?: string;
   studentClassId?: string;
   themeAccent?: string;
@@ -25,6 +27,8 @@ export const SchoolHomeCard: React.FC<Props> = ({
   onOpen,
   onChangeSchool,
   onOpenQrScanner,
+  onOpenWebsite,
+  onOpenAdmission,
   studentId,
   studentClassId,
   themeAccent,
@@ -32,6 +36,8 @@ export const SchoolHomeCard: React.FC<Props> = ({
   card3D = false,
   isDarkMode = false,
 }) => {
+  if (!school) return null;
+
   const accent = themeAccent || school.bannerColor || "#6366f1";
   const bg = cardBg || (isDarkMode ? "#0f172a" : "#ffffff");
   const initial = (school.name || "SC").trim().slice(0, 2).toUpperCase();
@@ -168,6 +174,41 @@ export const SchoolHomeCard: React.FC<Props> = ({
             📊 Marksheet
           </span>
         </div>
+      </div>
+
+      {/* Public School Portal & Online Admission Buttons */}
+      <div className="px-4 pb-2 pt-1 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            if (typeof onOpenWebsite === 'function') {
+              onOpenWebsite();
+            } else {
+              window.dispatchEvent(new CustomEvent('nst-open-school-public-view', { detail: { view: 'website', schoolId: school?.id, school } }));
+              try { window.history.pushState({}, '', `/?view=school_website&schoolId=${school?.id || ''}`); } catch {}
+            }
+          }}
+          className="flex-1 py-2 px-3 rounded-xl text-xs font-bold border border-indigo-500/30 bg-indigo-50/60 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer"
+        >
+          <Globe size={13} className="text-indigo-500" />
+          <span>🌐 School Website</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            if (typeof onOpenAdmission === 'function') {
+              onOpenAdmission();
+            } else {
+              window.dispatchEvent(new CustomEvent('nst-open-school-public-view', { detail: { view: 'admission', schoolId: school?.id, school } }));
+              try { window.history.pushState({}, '', `/?view=admission&schoolId=${school?.id || ''}`); } catch {}
+            }
+          }}
+          className="flex-1 py-2 px-3 rounded-xl text-xs font-bold border border-amber-500/30 bg-amber-50/60 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50 flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer"
+        >
+          <UserPlus size={13} className="text-amber-500" />
+          <span>📝 Online Admission</span>
+        </button>
       </div>
 
       {/* Action Buttons: QR Attendance, Open Dashboard, and Change School */}

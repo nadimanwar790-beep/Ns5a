@@ -84,6 +84,9 @@ const SchoolEcosystem = lazyWithRetry(() => import('./components/school/SchoolEc
 import { getSchoolUserProfile } from './school-firebase';
 const CoachingEcosystem = lazyWithRetry(() => import('./components/coaching/CoachingEcosystem').then(m => ({ default: m.CoachingEcosystem })));
 import { getCoachingUserProfile } from './coaching-firebase';
+const DocumentVerificationView = lazyWithRetry(() => import('./components/school/DocumentVerificationView').then(m => ({ default: m.DocumentVerificationView })));
+const PublicSchoolWebsite = lazyWithRetry(() => import('./components/school/PublicSchoolWebsite').then(m => ({ default: m.PublicSchoolWebsite })));
+const OnlineAdmissionManager = lazyWithRetry(() => import('./components/school/OnlineAdmissionManager').then(m => ({ default: m.OnlineAdmissionManager })));
 import { AudioStudio } from './components/AudioStudio';
 import { PremiumModal } from './components/PremiumModal';
 import { LoadingOverlay } from './components/LoadingOverlay';
@@ -133,6 +136,53 @@ const App: React.FC = () => {
 
   const [isAppLoading, setIsAppLoading] = useState(() => sessionStorage.getItem('nst_has_loaded') !== 'true');
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
+
+  const [docVerificationParams, setDocVerificationParams] = useState<{ verifyType: string; dataParam?: string } | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const p = new URLSearchParams(window.location.search);
+    if (p.get('verify') === 'doc' || p.get('verify') === '1' || p.get('v') === 'id') {
+      return {
+        verifyType: p.get('type') || (p.get('v') === 'id' ? 'idcard' : 'marksheet'),
+        dataParam: p.get('data') || undefined,
+      };
+    }
+    return null;
+  });
+
+  const [publicSchoolView, setPublicSchoolView] = useState<'website' | 'admission' | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const p = new URLSearchParams(window.location.search);
+    if (p.get('view') === 'school_website') return 'website';
+    if (p.get('view') === 'admission' || p.get('view') === 'online_admission') return 'admission';
+    return null;
+  });
+  const [selectedPublicSchool, setSelectedPublicSchool] = useState<any>(null);
+
+  useEffect(() => {
+    const handleOpenPublicSchool = (e: any) => {
+      const view = e?.detail?.view;
+      if (view === 'website' || view === 'admission') {
+        if (e?.detail?.school) {
+          setSelectedPublicSchool(e.detail.school);
+        }
+        setPublicSchoolView(view);
+      }
+    };
+    const handlePopState = () => {
+      const p = new URLSearchParams(window.location.search);
+      const viewParam = p.get('view');
+      if (viewParam === 'school_website') setPublicSchoolView('website');
+      else if (viewParam === 'admission' || viewParam === 'online_admission') setPublicSchoolView('admission');
+      else setPublicSchoolView(null);
+    };
+
+    window.addEventListener('nst-open-school-public-view', handleOpenPublicSchool);
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('nst-open-school-public-view', handleOpenPublicSchool);
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, []);
 
   useEffect(() => { initPerfMode(); }, []);
 
@@ -3686,8 +3736,69 @@ const App: React.FC = () => {
 
       {/* Removed Pedro Login Page floating test button */}
 
-      <main id="main-content" className={`flex-1 w-full ${!state.user ? 'p-0 max-w-none h-full overflow-hidden flex flex-col' : (isFullScreen || state.view === ('STUDENT_DASHBOARD' as any) ? 'p-0 max-w-6xl mx-auto' : 'p-4 mb-8 max-w-6xl mx-auto')}`}>
-        {!state.user ? (
+      <main id="main-content" className={`flex-1 w-full ${!state.user || docVerificationParams || publicSchoolView ? 'p-0 max-w-none h-full overflow-hidden flex flex-col' : (isFullScreen || state.view === ('STUDENT_DASHBOARD' as any) ? 'p-0 max-w-6xl mx-auto' : 'p-4 mb-8 max-w-6xl mx-auto')}`}>
+        {docVerificationParams ? (
+          <ErrorBoundary fallbackLabel="Document Verification">
+            <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-slate-900 text-white font-bold">Verifying Document...</div>}>
+              <DocumentVerificationView
+                verifyType={docVerificationParams.verifyType}
+                dataParam={docVerificationParams.dataParam}
+                onBack={() => {
+                  setDocVerificationParams(null);
+                  try { window.history.pushState({}, '', window.location.pathname); } catch {}
+                }}
+              />
+            </Suspense>
+          </ErrorBoundary>
+        ) : publicSchoolView === 'website' ? (
+          <ErrorBoundary fallbackLabel="School Website">
+            <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-slate-900 text-white font-bold">Loading School Portal...</div>}>
+              <PublicSchoolWebsite
+                school={selectedPublicSchool || {
+                  id: "default_school",
+                  name: state.settings.appName || "National Smart Academy",
+                  code: "SCH-2026",
+                  address: "Main Academic Campus, Knowledge City",
+                  phone: "+91 98765 43210",
+                  email: SUPPORT_EMAIL || "info@nationalsmartschool.edu",
+                  tagline: "Empowering Next-Gen Students with Smart Digital Education",
+                  bannerColor: "#4f46e5"
+                } as any}
+                onBack={() => {
+                  setPublicSchoolView(null);
+                  try { window.history.pushState({}, '', window.location.pathname); } catch {}
+                }}
+                onOpenAdmission={() => setPublicSchoolView('admission')}
+                onOpenVerification={(type, data) => {
+                  setDocVerificationParams({ verifyType: type, dataParam: data });
+                }}
+              />
+            </Suspense>
+          </ErrorBoundary>
+        ) : publicSchoolView === 'admission' ? (
+          <ErrorBoundary fallbackLabel="Online Admission">
+            <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-slate-900 text-white font-bold">Opening Admission Form...</div>}>
+              <OnlineAdmissionManager
+                school={selectedPublicSchool || {
+                  id: "default_school",
+                  name: state.settings.appName || "National Smart Academy",
+                  code: "SCH-2026",
+                  address: "Main Academic Campus, Knowledge City",
+                  phone: "+91 98765 43210",
+                  email: SUPPORT_EMAIL || "info@nationalsmartschool.edu",
+                } as any}
+                classes={[]}
+                sessions={[]}
+                activeSession={null}
+                isAdmin={false}
+                onBack={() => {
+                  setPublicSchoolView(null);
+                  try { window.history.pushState({}, '', window.location.pathname); } catch {}
+                }}
+              />
+            </Suspense>
+          </ErrorBoundary>
+        ) : !state.user ? (
             <ErrorBoundary fallbackLabel="Login" compact>
               <Auth onLogin={handleLogin} logActivity={logActivity} appSettings={state.settings} />
             </ErrorBoundary>

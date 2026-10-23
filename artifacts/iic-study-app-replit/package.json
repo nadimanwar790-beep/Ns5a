@@ -92,5 +92,8 @@
     "workbox-window": "^7.4.1",
     "wouter": "^3.3.5",
     "zod": "^3.25.76"
+  },
+  "dependencies": {
+    "jsqr": "^1.4.0"
   }
 }

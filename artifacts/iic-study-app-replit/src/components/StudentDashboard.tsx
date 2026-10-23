@@ -14715,6 +14715,14 @@ export const StudentDashboard: React.FC<Props> = ({
                           }}
                           onChangeSchool={handleOpenSchoolPicker}
                           onOpenQrScanner={() => setShowHomeQrScanner(true)}
+                          onOpenWebsite={() => {
+                            window.dispatchEvent(new CustomEvent('nst-open-school-public-view', { detail: { view: 'website', schoolId: userSchool.id, school: userSchool } }));
+                            try { window.history.pushState({}, '', `/?view=school_website&schoolId=${userSchool.id}`); } catch {}
+                          }}
+                          onOpenAdmission={() => {
+                            window.dispatchEvent(new CustomEvent('nst-open-school-public-view', { detail: { view: 'admission', schoolId: userSchool.id, school: userSchool } }));
+                            try { window.history.pushState({}, '', `/?view=admission&schoolId=${userSchool.id}`); } catch {}
+                          }}
                           studentId={user.id}
                           studentClassId={(user as any).classId || "class_10"}
                           themeAccent={themePrimary}
