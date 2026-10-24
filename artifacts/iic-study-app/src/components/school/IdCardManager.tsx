@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import QRCode from "react-qr-code";
 import type { School, SchoolClass, SchoolStudent, StaffEmployee } from "../../school-types";
 import { schoolPrintFieldEnabled } from "../../school-types";
@@ -73,6 +73,26 @@ export const IdCardManager: React.FC<Props> = ({
     documentPrintFields: school?.documentPrintFields || {},
     session: "2026-27",
   });
+
+  useEffect(() => {
+    setSchoolDetails(previous => ({
+      ...previous,
+      schoolName: school.name || "",
+      tagline: school.tagline || "",
+      affiliation: school.affiliation || "",
+      address: school.address || "",
+      phone: school.mobile || school.phone || "",
+      email: school.email || "",
+      logoUrl: school.logoUrl || "",
+      principalName: school.principalName || "",
+      code: school.code || "",
+      principalPhone: school.principalPhone || "",
+      directorName: school.directorName || "",
+      directorPhone: school.directorPhone || "",
+      customFields: school.customFields || [],
+      documentPrintFields: school.documentPrintFields || {},
+    }));
+  }, [school]);
 
   // Smart Auto-Data Mapping (Automatically places every field in its optimal card position)
   const [autoDataMapping, setAutoDataMapping] = useState(true);
@@ -369,13 +389,16 @@ export const IdCardManager: React.FC<Props> = ({
           </div>
 
           {/* Bottom Card Footer: Address & Principal Signature */}
-          <div className="px-2.5 py-0.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-[7px] text-slate-600 shrink-0">
-            <div className="truncate max-w-[200px] leading-tight">
+          <div className="px-2.5 py-1 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-2 text-[6px] text-slate-600 shrink-0">
+            <div className="min-w-0 flex-1 leading-tight break-words">
               {showSchoolDetail("address") && schoolDetails.address && <span className="font-bold text-slate-700">{schoolDetails.address}</span>}
-              {showSchoolDetail("phone") && schoolDetails.phone && <span className="ml-1 text-slate-500">• Ph: {schoolDetails.phone}</span>}
-              {showSchoolDetail("directorName") && schoolDetails.directorName && <span className="ml-1 text-slate-500">• Dir: {schoolDetails.directorName}</span>}
-              {showSchoolDetail("directorPhone") && schoolDetails.directorPhone && <span className="ml-1 text-slate-500">• D: {schoolDetails.directorPhone}</span>}
+              {showSchoolDetail("phone") && schoolDetails.phone && <span className="ml-1 text-slate-500">• School: {schoolDetails.phone}</span>}
+              {showSchoolDetail("email") && schoolDetails.email && <span className="ml-1 text-slate-500">• Email: {schoolDetails.email}</span>}
+              {showSchoolDetail("code") && schoolDetails.code && <span className="ml-1 text-slate-500">• Code: {schoolDetails.code}</span>}
+              {showSchoolDetail("principalName") && schoolDetails.principalName && <span className="ml-1 text-slate-500">• Principal: {schoolDetails.principalName}</span>}
               {showSchoolDetail("principalPhone") && schoolDetails.principalPhone && <span className="ml-1 text-slate-500">• P: {schoolDetails.principalPhone}</span>}
+              {showSchoolDetail("directorName") && schoolDetails.directorName && <span className="ml-1 text-slate-500">• Director: {schoolDetails.directorName}</span>}
+              {showSchoolDetail("directorPhone") && schoolDetails.directorPhone && <span className="ml-1 text-slate-500">• D: {schoolDetails.directorPhone}</span>}
               {customSchoolDetails && <span className="ml-1 text-slate-500">• {customSchoolDetails}</span>}
             </div>
             <div className="text-right shrink-0">
@@ -542,9 +565,10 @@ export const IdCardManager: React.FC<Props> = ({
 
         {/* Footer: Campus Address & Principal Signature */}
         <div className="px-2.5 py-1 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-[7px] text-slate-600 shrink-0 mt-auto">
-          <div className="truncate max-w-[140px] leading-tight">
+          <div className="min-w-0 flex-1 text-[6px] leading-tight break-words space-y-0.5">
             {showSchoolDetail("address") && schoolDetails.address && <span className="font-bold text-slate-700 truncate block">{schoolDetails.address}</span>}
             {showSchoolDetail("phone") && schoolDetails.phone && <span className="text-slate-500 text-[6px] block">School: {schoolDetails.phone}</span>}
+            {showSchoolDetail("email") && schoolDetails.email && <span className="text-slate-500 text-[6px] block">Email: {schoolDetails.email}</span>}
             {showSchoolDetail("code") && schoolDetails.code && <span className="text-slate-400 text-[6px]">Reg: {schoolDetails.code}</span>}
             {showSchoolDetail("directorName") && schoolDetails.directorName && <span className="text-slate-500 text-[6px] block">Director: {schoolDetails.directorName}</span>}
             {showSchoolDetail("directorPhone") && schoolDetails.directorPhone && <span className="text-slate-500 text-[6px] block">Director mobile: {schoolDetails.directorPhone}</span>}

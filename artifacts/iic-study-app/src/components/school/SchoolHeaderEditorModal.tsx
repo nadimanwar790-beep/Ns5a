@@ -56,16 +56,16 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
   subtitle = "Apne school ka naam, logo, address aur principal details yahan se likhein aur customize karein"
 }) => {
   const initialData: SchoolHeaderDetails = currentDetails || initialDetails || {
-    schoolName: school?.name || "National Academy",
-    tagline: school?.tagline || "Learn • Grow • Lead",
-    affiliation: "Affiliated to State / Central Board of Secondary Education",
-    address: school?.address || "Main Campus Examination Center",
-    phone: school?.mobile || school?.phone || "+91 98765 43210",
-    email: school?.email || "info@school.org",
+    schoolName: school?.name || "",
+    tagline: school?.tagline || "",
+    affiliation: school?.affiliation || "",
+    address: school?.address || "",
+    phone: school?.mobile || school?.phone || "",
+    email: school?.email || "",
     logoUrl: school?.logoUrl || "",
-    principalName: school?.principalName || "Dr. Rajeshwar Sharma",
+    principalName: school?.principalName || "",
     principalTitle: "Principal / Authorized Signatory",
-    code: school?.code || "SCH-001",
+    code: school?.code || "",
     principalPhone: school?.principalPhone || "",
     directorName: school?.directorName || "",
     directorPhone: school?.directorPhone || "",
@@ -149,6 +149,15 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
     const fields = enabled
       ? Array.from(new Set([...current, field]))
       : current.filter(item => item !== field);
+    setDetails(previous => ({
+      ...previous,
+      documentPrintFields: {
+        ...previous.documentPrintFields,
+        [document]: fields,
+      },
+    }));
+  };
+  const setDocumentFields = (document: SchoolDocumentKey, fields: SchoolPrintField[]) => {
     setDetails(previous => ({
       ...previous,
       documentPrintFields: {
@@ -259,12 +268,12 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
             <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
               Complete School Address
             </label>
-            <input
-              type="text"
+              <textarea
+                rows={2}
               value={details.address}
               onChange={e => setDetails(p => ({ ...p, address: e.target.value }))}
               placeholder="e.g. Main Road, Civil Lines, Patna - 800001 (Bihar)"
-              className="w-full px-3 py-2 text-xs font-medium rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-hidden"
+                className="w-full resize-y px-3 py-2 text-xs font-medium rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-hidden"
             />
           </div>
 
@@ -435,14 +444,51 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
           </section>
 
           <section className="space-y-3 border-t border-slate-200 dark:border-slate-800 pt-4">
-            <div>
-              <h3 className="text-sm font-black text-slate-800 dark:text-white">Choose details for each printout</h3>
-              <p className="text-[11px] text-slate-500">School details can be shown or hidden separately on each document.</p>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-black text-slate-800 dark:text-white">Choose details for each printout</h3>
+                <p className="text-[11px] text-slate-500">School details can be shown or hidden separately on each document.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDetails(previous => ({
+                  ...previous,
+                  documentPrintFields: {
+                    ...previous.documentPrintFields,
+                    idCard: DEFAULT_SCHOOL_DOCUMENT_PRINT_FIELDS.idCard,
+                    certificate: DEFAULT_SCHOOL_DOCUMENT_PRINT_FIELDS.certificate,
+                    marksheet: DEFAULT_SCHOOL_DOCUMENT_PRINT_FIELDS.marksheet,
+                    feeReceipt: DEFAULT_SCHOOL_DOCUMENT_PRINT_FIELDS.feeReceipt,
+                  },
+                }))}
+                className="rounded-lg bg-indigo-600 px-3 py-2 text-[10px] font-bold text-white"
+              >
+                Recommended for all
+              </button>
             </div>
             <div className="grid grid-cols-1 gap-3">
               {documentOptions.map(document => (
                 <details key={document.key} className="rounded-xl border border-slate-200 p-3 dark:border-slate-700" open={document.key === "idCard"}>
                   <summary className="cursor-pointer text-xs font-black text-slate-800 dark:text-white">{document.label}</summary>
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-[10px] text-slate-500">Blank school fields print nahi honge.</p>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setDocumentFields(document.key, DEFAULT_SCHOOL_DOCUMENT_PRINT_FIELDS[document.key])}
+                        className="rounded-lg border border-indigo-200 px-2.5 py-1.5 text-[10px] font-bold text-indigo-700 dark:border-indigo-800 dark:text-indigo-300"
+                      >
+                        Recommended
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDocumentFields(document.key, fieldOptions.map(field => field.key))}
+                        className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-bold text-slate-700 dark:border-slate-700 dark:text-slate-300"
+                      >
+                        All fields
+                      </button>
+                    </div>
+                  </div>
                   <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
                     {fieldOptions.map(field => (
                       <label key={field.key} className="flex items-center gap-2 text-[11px] text-slate-700 dark:text-slate-300">

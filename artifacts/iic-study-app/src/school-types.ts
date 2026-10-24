@@ -45,10 +45,10 @@ export type SchoolPrintField =
 export type SchoolDocumentPrintFields = Partial<Record<SchoolDocumentKey, SchoolPrintField[]>>;
 
 export const DEFAULT_SCHOOL_DOCUMENT_PRINT_FIELDS: Record<SchoolDocumentKey, SchoolPrintField[]> = {
-  idCard: ["schoolName", "affiliation", "address", "phone", "code", "principalName"],
-  certificate: ["schoolName", "address", "phone", "email", "affiliation", "code", "principalName", "directorName"],
-  marksheet: ["schoolName", "address", "phone", "email", "affiliation", "code", "principalName", "directorName"],
-  feeReceipt: ["schoolName", "address", "phone", "email", "principalName", "directorName"],
+  idCard: ["schoolName", "affiliation", "address", "phone", "email", "code", "principalName", "principalPhone", "directorName", "directorPhone"],
+  certificate: ["schoolName", "address", "phone", "email", "affiliation", "code", "principalName", "principalPhone", "directorName", "directorPhone"],
+  marksheet: ["schoolName", "address", "phone", "email", "affiliation", "code", "principalName", "principalPhone", "directorName", "directorPhone"],
+  feeReceipt: ["schoolName", "address", "phone", "email", "affiliation", "code", "principalName", "principalPhone", "directorName", "directorPhone"],
 };
 
 export const schoolPrintFieldEnabled = (

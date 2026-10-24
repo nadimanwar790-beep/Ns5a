@@ -34,6 +34,7 @@ import { PublicSchoolWebsite } from "./PublicSchoolWebsite";
 import { OnlineAdmissionManager } from "./OnlineAdmissionManager";
 import { getStaffEmployees } from "../../school-firebase";
 import type { MonthlyFee, StaffEmployee } from "../../school-types";
+import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeaderEditorModal";
 import {
   Users, BookOpen, Calendar, IndianRupee, Plus, Trash2, Settings,
   ChevronRight, ChevronLeft, X, Edit3, FileText, Award,
@@ -84,6 +85,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
   // School info card
   const [schoolCardExpanded, setSchoolCardExpanded] = useState(false);
   const [editingSchoolInfo, setEditingSchoolInfo] = useState(false);
+  const [showFullSchoolProfileEditor, setShowFullSchoolProfileEditor] = useState(false);
   const [schoolInfoForm, setSchoolInfoForm] = useState({
     principalName: "", principalPhone: "", directorName: "", directorPhone: "", mobile: "", address: "",
     tagline: "", bannerColor: ""
@@ -157,18 +159,6 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
   }, [school]);
 
   useEffect(() => {
-    setSchoolLoading(true);
-    getSchool(schoolId).then(s => {
-      setSchool(s);
-      if (s) {
-        setLockCodeInput(s.lockCode || '');
-        setLockCodeActive(s.lockCodeActive ?? false);
-      }
-    }).catch(() => {
-      setSchool(null);
-    }).finally(() => {
-      setSchoolLoading(false);
-    });
     loadSubAdmins();
     getStaffEmployees(schoolId).then(setStaffList).catch(() => {});
     const unsubSessions = subscribeToSessions(schoolId, (sess) => {
@@ -180,6 +170,26 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
     const unsubStudents = subscribeToAllStudents(schoolId, setStudents);
     return () => { unsubSessions(); unsubTeachers(); unsubStudents(); };
   }, [schoolId]);
+
+  useEffect(() => {
+    let isCurrentView = true;
+    if (!school) setSchoolLoading(true);
+    getSchool(schoolId).then(s => {
+      if (!isCurrentView) return;
+      setSchool(s);
+      if (s) {
+        setLockCodeInput(s.lockCode || "");
+        setLockCodeActive(s.lockCodeActive ?? false);
+      }
+    }).catch(() => {
+      if (isCurrentView) setSchool(null);
+    }).finally(() => {
+      if (isCurrentView) setSchoolLoading(false);
+    });
+    return () => {
+      isCurrentView = false;
+    };
+  }, [schoolId, view]);
 
   useEffect(() => {
     if (!activeSession) return;
@@ -1938,6 +1948,12 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                   >
                     <Edit3 className="w-3.5 h-3.5" /> Edit School Info
                   </button>
+                  <button
+                    onClick={() => setShowFullSchoolProfileEditor(true)}
+                    className="mt-1 flex items-center gap-1.5 text-xs text-indigo-600 dark:text-indigo-400 font-medium hover:underline"
+                  >
+                    <Building2 className="w-3.5 h-3.5" /> Complete School Profile &amp; Print Details
+                  </button>
                 </div>
               )}
 
@@ -2316,6 +2332,51 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
           classId={qrModalClass.id}
           className={qrModalClass.name}
           totalStudents={students.filter(s => s.classId === qrModalClass.id).length}
+        />
+      )}
+      {school && showFullSchoolProfileEditor && (
+        <SchoolHeaderEditorModal
+          isOpen={showFullSchoolProfileEditor}
+          onClose={() => setShowFullSchoolProfileEditor(false)}
+          school={school}
+          schoolId={schoolId}
+          currentDetails={{
+            schoolName: school.name || "",
+            tagline: school.tagline || "",
+            affiliation: school.affiliation || "",
+            address: school.address || "",
+            phone: school.mobile || school.phone || "",
+            email: school.email || "",
+            logoUrl: school.logoUrl || "",
+            principalName: school.principalName || "",
+            principalTitle: "Principal / Head of Institution",
+            code: school.code || "",
+            principalPhone: school.principalPhone || "",
+            directorName: school.directorName || "",
+            directorPhone: school.directorPhone || "",
+            customFields: school.customFields || [],
+            documentPrintFields: school.documentPrintFields || {},
+          }}
+          onApply={(details: SchoolHeaderDetails) => {
+            setSchool(previous => previous ? {
+              ...previous,
+              name: details.schoolName,
+              tagline: details.tagline,
+              affiliation: details.affiliation,
+              address: details.address,
+              phone: details.phone,
+              mobile: details.phone,
+              email: details.email,
+              logoUrl: details.logoUrl,
+              principalName: details.principalName,
+              principalPhone: details.principalPhone,
+              directorName: details.directorName,
+              directorPhone: details.directorPhone,
+              code: details.code,
+              customFields: details.customFields,
+              documentPrintFields: details.documentPrintFields,
+            } : previous);
+          }}
         />
       )}
     </div>

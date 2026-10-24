@@ -56,6 +56,25 @@ export const CertificateManager: React.FC<Props> = ({
     customFields: school?.customFields || [],
     documentPrintFields: school?.documentPrintFields || {},
   });
+  useEffect(() => {
+    setSchoolDetails(previous => ({
+      ...previous,
+      schoolName: school.name || "",
+      tagline: school.tagline || "",
+      affiliation: school.affiliation || "",
+      address: school.address || "",
+      phone: school.mobile || school.phone || "",
+      email: school.email || "",
+      logoUrl: school.logoUrl || "",
+      principalName: school.principalName || "",
+      code: school.code || "",
+      principalPhone: school.principalPhone || "",
+      directorName: school.directorName || "",
+      directorPhone: school.directorPhone || "",
+      customFields: school.customFields || [],
+      documentPrintFields: school.documentPrintFields || {},
+    }));
+  }, [school]);
   const showSchoolDetail = (field: Parameters<typeof schoolPrintFieldEnabled>[2]) =>
     schoolPrintFieldEnabled(schoolDetails.documentPrintFields, "certificate", field);
   const customSchoolDetails = showSchoolDetail("customFields")
@@ -252,13 +271,19 @@ export const CertificateManager: React.FC<Props> = ({
     <div className="min-h-screen bg-slate-100 dark:bg-slate-900 pb-20">
       <style>{`
         @media print {
-          @page { size: A4 portrait; margin: 6mm; }
-          html, body, #root { width: 100% !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; }
-          .certificate-print-container { display: block !important; width: 100% !important; max-width: none !important; margin: 0 !important; padding: 0 !important; }
+          @page { size: A4 portrait; margin: 8mm; }
+          html, body, #root {
+            width: 194mm !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important;
+            -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important;
+          }
+          .certificate-print-container {
+            display: block !important; width: 194mm !important; height: 281mm !important;
+            max-width: none !important; margin: 0 !important; padding: 0 !important;
+          }
           .certificate-print-sheet {
-            width: 198mm !important; height: 285mm !important; max-height: 285mm !important;
-            box-sizing: border-box !important; margin: 0 auto !important; padding: 8mm !important;
-            overflow: hidden !important; border-width: 2mm !important; border-radius: 0 !important;
+            width: 194mm !important; height: 281mm !important; min-height: 281mm !important; max-height: 281mm !important;
+            box-sizing: border-box !important; margin: 0 auto !important; padding: 6mm !important;
+            overflow: hidden !important; border-width: 1mm !important; border-radius: 0 !important; transform: none !important;
             box-shadow: none !important; display: flex !important; flex-direction: column !important;
             break-inside: avoid-page !important; page-break-inside: avoid !important;
           }

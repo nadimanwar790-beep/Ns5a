@@ -49,6 +49,27 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     documentPrintFields: school?.documentPrintFields || {},
   });
 
+  useEffect(() => {
+    if (!school) return;
+    setSchoolDetails(previous => ({
+      ...previous,
+      schoolName: school.name || "",
+      tagline: school.tagline || "",
+      affiliation: school.affiliation || "",
+      address: school.address || "",
+      phone: school.mobile || school.phone || "",
+      email: school.email || "",
+      logoUrl: school.logoUrl || "",
+      principalName: school.principalName || "",
+      code: school.code || "",
+      principalPhone: school.principalPhone || "",
+      directorName: school.directorName || "",
+      directorPhone: school.directorPhone || "",
+      customFields: school.customFields || [],
+      documentPrintFields: school.documentPrintFields || {},
+    }));
+  }, [school]);
+
   const loadData = async () => {
     setLoading(true);
     setFeeError(null);
@@ -328,7 +349,7 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
 
   const downloadFeeFile = (fee: MonthlyFee) => {
     const student = students.find(item => item.id === fee.studentId);
-    downloadFeeDocument({ fee, student, schoolName, className });
+    downloadFeeDocument({ fee, student, schoolName, className, schoolDetails });
   };
 
   const downloadFeeReport = () => {

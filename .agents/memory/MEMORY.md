@@ -1,0 +1,1 @@
+- [Shared school print profile](school-print-profile.md) — school contacts and custom details should be managed once and used across all school printouts.

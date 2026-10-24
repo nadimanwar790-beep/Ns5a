@@ -77,6 +77,25 @@ export const MarksheetGenerator: React.FC<Props> = ({
     customFields: school?.customFields || [],
     documentPrintFields: school?.documentPrintFields || {},
   });
+  useEffect(() => {
+    setSchoolDetails(previous => ({
+      ...previous,
+      schoolName: school.name || "",
+      tagline: school.tagline || "",
+      affiliation: school.affiliation || "",
+      address: school.address || "",
+      phone: school.mobile || school.phone || "",
+      email: school.email || "",
+      logoUrl: school.logoUrl || "",
+      principalName: school.principalName || "",
+      code: school.code || "",
+      principalPhone: school.principalPhone || "",
+      directorName: school.directorName || "",
+      directorPhone: school.directorPhone || "",
+      customFields: school.customFields || [],
+      documentPrintFields: school.documentPrintFields || {},
+    }));
+  }, [school]);
   const showSchoolDetail = (field: Parameters<typeof schoolPrintFieldEnabled>[2]) =>
     schoolPrintFieldEnabled(schoolDetails.documentPrintFields, "marksheet", field);
   const customSchoolDetails = showSchoolDetail("customFields")
