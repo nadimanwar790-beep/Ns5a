@@ -67,6 +67,7 @@ export interface SchoolClass {
   name: string; // e.g. "Class 10-A"
   section?: string;
   classTeacherId?: string;
+  defaultFee?: number;
   createdAt: string;
 }
 

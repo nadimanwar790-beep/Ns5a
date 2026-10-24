@@ -1,9 +1,9 @@
 // @ts-nocheck
 import React, { useState, useEffect } from "react";
 import {
-  getStudents, getMonthlyFees, saveFee, markFeePaid, currentMonthStr
+  getStudents, getMonthlyFees, getClasses, saveFee, markFeePaid, currentMonthStr
 } from "../../school-firebase";
-import type { SchoolStudent, MonthlyFee } from "../../school-types";
+import type { SchoolStudent, SchoolClass, MonthlyFee } from "../../school-types";
 import { CheckCircle, Clock, Download, ChevronLeft, ChevronRight, IndianRupee, Users, TrendingUp, AlertCircle, Printer, MessageCircle, ReceiptText } from "lucide-react";
 import { downloadFeeDocument } from "./feeDocument";
 
@@ -20,6 +20,7 @@ interface Props {
 export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, schoolName, sessionId, adminId, onBack }) => {
   const [students, setStudents] = useState<SchoolStudent[]>([]);
   const [fees, setFees] = useState<MonthlyFee[]>([]);
+  const [classNames, setClassNames] = useState<Record<string, string>>({});
   const [month, setMonth] = useState(currentMonthStr());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
@@ -28,10 +29,14 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
 
   const loadData = async () => {
     setLoading(true);
-    const [sts, feeData] = await Promise.all([
+    const [allStudents, allFeeData, schoolClasses] = await Promise.all([
       getStudents(schoolId, classId),
-      getMonthlyFees(schoolId, month, classId)
+      getMonthlyFees(schoolId, month, classId),
+      getClasses(schoolId, sessionId),
     ]);
+    const sts = allStudents.filter(student => !sessionId || student.sessionId === sessionId);
+    const feeData = allFeeData.filter(fee => !sessionId || fee.sessionId === sessionId);
+    setClassNames(Object.fromEntries(schoolClasses.map((schoolClass: SchoolClass) => [schoolClass.id, schoolClass.name])));
     setStudents(sts);
 
     // Create fee records for students without one
@@ -94,19 +99,23 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       : [...current, studentId]);
   };
 
-  const getReceiptMarkup = (fee: MonthlyFee, paid: boolean) => {
+  const getReceiptMarkup = (fee: MonthlyFee) => {
+    const paid = Boolean(fee.paid);
     const escapeHtml = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, char => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
     }[char] as string));
     const student = students.find(item => item.id === fee.studentId);
+    const feeClassName = className && className !== "All Classes"
+      ? className
+      : classNames[fee.classId] || fee.classId || "—";
     const paidDate = fee.paidDate ? new Date(fee.paidDate).toLocaleDateString("en-IN") : "—";
     return `<article class="receipt">
-      <div class="receipt-heading"><div><div class="school-name">${escapeHtml(schoolName || "SCHOOL")}</div><div class="school-subtitle">${escapeHtml(className || (paid ? "Fee Payment Receipt" : "Fee Due Slip"))}</div></div><div class="receipt-status ${paid ? "paid" : "due"}">${paid ? "PAID" : "AMOUNT DUE"}</div></div>
+      <div class="receipt-heading"><div><div class="school-name">${escapeHtml(schoolName || "SCHOOL")}</div><div class="school-subtitle">${escapeHtml(feeClassName)} • ${paid ? "Monthly Fee Receipt" : "Monthly Fee Due Slip"}</div></div><div class="receipt-status ${paid ? "paid" : "due"}">${paid ? "PAID" : "AMOUNT DUE"}</div></div>
       <div class="receipt-number">${paid ? "Receipt No" : "Fee Reference"}: <strong>${escapeHtml(paid ? fee.receiptNo || "—" : `${fee.studentId.slice(-8)}-${fee.month}`)}</strong></div>
       <div class="details">
         <div><span>Student</span><strong>${escapeHtml(fee.studentName)}</strong></div>
         <div><span>Roll No.</span><strong>${escapeHtml(fee.rollNo || "—")}</strong></div>
-        <div><span>Class</span><strong>${escapeHtml(className || fee.classId || "—")}</strong></div>
+        <div><span>Class</span><strong>${escapeHtml(feeClassName)}</strong></div>
         <div><span>${paid ? "Fee month" : "Due for"}</span><strong>${escapeHtml(new Date(`${fee.month}-01T00:00:00`).toLocaleDateString("en-IN", { month: "long", year: "numeric" }))}</strong></div>
         ${paid ? `<div><span>Paid on</span><strong>${escapeHtml(paidDate)}</strong></div>` : ""}
         <div><span>Parent contact</span><strong>${escapeHtml(student?.phone || "—")}</strong></div>
@@ -116,7 +125,7 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     </article>`;
   };
 
-  const printReceipts = (receiptFees: MonthlyFee[], paid = true) => {
+  const printReceipts = (receiptFees: MonthlyFee[]) => {
     if (!receiptFees.length) return;
     const pages: MonthlyFee[][] = [];
     for (let index = 0; index < receiptFees.length; index += 4) {
@@ -127,7 +136,7 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       alert("Please allow pop-ups to print fee slips.");
       return;
     }
-    printWindow.document.write(`<!doctype html><html><head><meta charset="UTF-8"><title>${paid ? "Fee Receipts" : "Fee Due Slips"}</title><style>
+    printWindow.document.write(`<!doctype html><html><head><meta charset="UTF-8"><title>Monthly Fee Slips</title><style>
       @page{size:A4 portrait;margin:8mm}
       *{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
       body{margin:0;font-family:Arial,sans-serif;color:#172033}
@@ -148,7 +157,7 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       .receipt-footer{margin-top:auto;padding-top:8mm;display:flex;justify-content:space-between;gap:8mm;font-size:8pt;color:#64748b}
       @media screen{body{padding:12px;background:#e2e8f0}.receipt-page{background:white;padding:0;margin:0 auto 12px;max-width:210mm}}
     </style></head><body>
-      ${pages.map(page => `<section class="receipt-page">${page.map(fee => getReceiptMarkup(fee, paid)).join("")}</section>`).join("")}
+      ${pages.map(page => `<section class="receipt-page">${page.map(getReceiptMarkup).join("")}</section>`).join("")}
       <script>window.onload=()=>setTimeout(()=>{window.print();window.close()},250)</script>
     </body></html>`);
     printWindow.document.close();
@@ -325,7 +334,7 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                 </button>
               </div>
               <button
-                onClick={() => printReceipts(unpaidFees.filter(fee => selectedDueSlipIds.includes(fee.studentId)), false)}
+                onClick={() => printReceipts(unpaidFees.filter(fee => selectedDueSlipIds.includes(fee.studentId)))}
                 disabled={!selectedDueSlipIds.length}
                 className="w-full py-2.5 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white rounded-lg font-semibold flex items-center justify-center gap-2 text-sm"
               >
@@ -355,6 +364,14 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                 <Printer className="w-4 h-4" /> Print selected receipts ({selectedReceiptIds.length})
               </button>
             </div>
+          )}
+          {!classId && fees.length > 0 && (
+            <button
+              onClick={() => printReceipts(fees)}
+              className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-semibold flex items-center justify-center gap-2 shadow-sm"
+            >
+              <Printer className="w-4 h-4" /> Print all monthly slips — all classes ({fees.length})
+            </button>
           )}
           <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm overflow-hidden">
             {fees.map(fee => (
@@ -396,7 +413,7 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                 ) : (
                   <>
                     <button
-                      onClick={() => printReceipts([fee], false)}
+                      onClick={() => printReceipts([fee])}
                       className="p-2 rounded-lg bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/40 dark:text-orange-300"
                       title={`Print ${fee.studentName} unpaid fee due slip`}
                       aria-label={`Print ${fee.studentName} unpaid fee due slip`}

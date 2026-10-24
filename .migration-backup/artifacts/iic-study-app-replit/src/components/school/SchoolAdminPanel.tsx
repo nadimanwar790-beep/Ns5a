@@ -13,6 +13,7 @@ import type { SchoolUserProfile } from "../../school-types";
 import type {
   School, SchoolSession, SchoolClass, SchoolSubject, SchoolTeacher, SchoolStudent
 } from "../../school-types";
+import { DEMO_SESSION_ID, seedDemoSchoolData } from "./demoSchoolData";
 import { ContentManager } from "./ContentManager";
 import { SmartClass } from "./SmartClass";
 import { AttendanceManager } from "./AttendanceManager";
@@ -55,7 +56,7 @@ interface Props {
 type AdminView =
   | "dashboard"
   | "sessions" | "classes" | "subjects" | "teachers" | "students"
-  | "content" | "attendance" | "fees" | "fee_class" | "report_card" | "marks" | "results"
+  | "content" | "attendance" | "fees" | "fee_class" | "fee_all" | "report_card" | "marks" | "results"
   | "store" | "subscription"
   | "id_cards" | "admit_cards" | "certificates" | "marksheet_hub" | "promotion" | "notices" | "staff_hrm" | "reports_hub"
   | "public_website" | "online_admissions";
@@ -104,7 +105,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
 
   // Forms
   const [sessionForm, setSessionForm] = useState({ name: "", startDate: "", endDate: "" });
-  const [classForm, setClassForm] = useState({ name: "", section: "" });
+  const [classForm, setClassForm] = useState({ name: "", section: "", defaultFee: 0 });
   const [subjectForm, setSubjectForm] = useState({ name: "" });
   const [teacherForm, setTeacherForm] = useState({ name: "", email: "", phone: "", employeeId: "" });
   const [studentForm, setStudentForm] = useState<any>({
@@ -128,6 +129,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
   const [allFees, setAllFees] = useState<MonthlyFee[]>([]);
   const [feeSummaryLoading, setFeeSummaryLoading] = useState(false);
   const [feeClassSelected, setFeeClassSelected] = useState<SchoolClass | null>(null);
+  const [demoGenerating, setDemoGenerating] = useState(false);
+  const [demoMessage, setDemoMessage] = useState("");
 
   // Advanced Class Card states
   const [expandedToolsClassId, setExpandedToolsClassId] = useState<string | null>(null);
@@ -211,10 +214,10 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
     await saveClass({
       id, schoolId, sessionId: activeSession.id,
       name: classForm.name, section: classForm.section,
-      defaultFee: Number((classForm as any).defaultFee) || 0,
+      defaultFee: Number(classForm.defaultFee) || 0,
       createdAt: new Date().toISOString()
     });
-    setClassForm({ name: "", section: "" });
+    setClassForm({ name: "", section: "", defaultFee: 0 });
     setShowForm(null);
     setSaving(false);
   };
@@ -283,13 +286,64 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
   const saveEditClass = async () => {
     if (!editingClassId || !editClassForm.name.trim()) return;
     setSaving(true);
+    const previousClass = classes.find(cls => cls.id === editingClassId);
+    const updatedDefaultFee = Number(editClassForm.defaultFee) || 0;
+    const feeChanged = Number(previousClass?.defaultFee || 0) !== updatedDefaultFee;
     await updateClass(schoolId, editingClassId, {
       name: editClassForm.name.trim(),
       section: editClassForm.section,
-      defaultFee: Number(editClassForm.defaultFee) || 0,
+      defaultFee: updatedDefaultFee,
     });
+    if (feeChanged) {
+      const classStudents = students.filter(student =>
+        student.classId === editingClassId &&
+        (!previousClass?.sessionId || student.sessionId === previousClass.sessionId)
+      );
+      await Promise.all(classStudents.map(student =>
+        updateStudent(schoolId, student.id, { monthlyFee: updatedDefaultFee })
+      ));
+      setStudents(current => current.map(student =>
+        classStudents.some(classStudent => classStudent.id === student.id)
+          ? { ...student, monthlyFee: updatedDefaultFee }
+          : student
+      ));
+    }
     setEditingClassId(null);
     setSaving(false);
+  };
+
+  const handleActivateSession = async (session: SchoolSession) => {
+    setSaving(true);
+    await Promise.all(sessions.map(item =>
+      updateSession(schoolId, item.id, { active: item.id === session.id })
+    ));
+    setActiveSession(session);
+    setSaving(false);
+  };
+
+  const handleGenerateDemoData = async () => {
+    if (demoGenerating) return;
+    const isRefresh = sessions.some(session => session.id === DEMO_SESSION_ID);
+    const confirmation = isRefresh
+      ? "Demo session ke sample classes, students, marks aur fees refresh honge. Live session par asar nahi padega."
+      : "Alag DEMO session mein 11 classes, 110 students, 110 subjects, marks aur current-month fee records banenge. Live session nahi badlega. Continue?";
+    if (!window.confirm(confirmation)) return;
+    setDemoGenerating(true);
+    setDemoMessage("");
+    try {
+      const result = await seedDemoSchoolData(schoolId, adminUid);
+      setSessions(current => [
+        ...current.filter(session => session.id !== result.session.id),
+        result.session,
+      ]);
+      setDemoMessage(
+        `${result.classes} classes, ${result.students} demo students, ${result.subjects} subjects, marks aur ${result.month} ke paid/due fees tayyar hain. Use this session dabakar demo kholen.`
+      );
+    } catch (error: any) {
+      setDemoMessage(`Demo data poora nahi bana: ${error?.message || "Dobara try karein."}`);
+    } finally {
+      setDemoGenerating(false);
+    }
   };
 
   const saveEditTeacher = async () => {
@@ -551,6 +605,19 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
     );
   }
 
+  if (view === "fee_all") {
+    return (
+      <FeeManager
+        schoolId={schoolId}
+        className="All Classes"
+        schoolName={school?.name}
+        sessionId={activeSession?.id || ""}
+        adminId={adminUid}
+        onBack={() => setView("fees")}
+      />
+    );
+  }
+
   if (view === "results" && selectedClass) {
     return (
       <ExamResultsPanel
@@ -754,6 +821,20 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
     if (view === "sessions") {
       return (
         <div className="p-4 space-y-3 max-w-2xl mx-auto">
+          <button
+            onClick={handleGenerateDemoData}
+            disabled={demoGenerating}
+            className="w-full py-3 bg-violet-600 hover:bg-violet-700 disabled:opacity-60 text-white rounded-xl font-semibold flex items-center justify-center gap-2"
+          >
+            <Sparkles className="w-4 h-4" />
+            {demoGenerating ? "Creating demo data..." : sessions.some(session => session.id === DEMO_SESSION_ID) ? "Refresh Demo Session" : "Create Demo Session"}
+          </button>
+          <p className="text-xs text-slate-500 px-1">Play se Class 10 tak 11 classes; har class mein 10 students aur 10 subjects. Demo records alag session mein rehte hain.</p>
+          {demoMessage && (
+            <p role="status" className="rounded-lg bg-violet-50 p-3 text-xs text-violet-800 dark:bg-violet-900/20 dark:text-violet-200">
+              {demoMessage}
+            </p>
+          )}
           <button onClick={() => { setShowForm("session"); setEditingSessionId(null); }}
             className="w-full py-3 bg-blue-600 text-white rounded-xl font-medium flex items-center justify-center gap-2">
             <Plus className="w-4 h-4" /> Add Session
@@ -802,6 +883,15 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                     <p className="text-xs text-slate-400">{s.startDate} → {s.endDate}</p>
                   </div>
                   {s.active && <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">Active</span>}
+                  {!s.active && (
+                    <button
+                      onClick={() => handleActivateSession(s)}
+                      disabled={saving}
+                      className="px-2.5 py-1.5 rounded-lg bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 text-xs font-semibold disabled:opacity-50"
+                    >
+                      Use this session
+                    </button>
+                  )}
                   <button onClick={() => { setEditingSessionId(s.id); setEditSessionForm({ name: s.name, startDate: s.startDate || "", endDate: s.endDate || "" }); setShowForm(null); }}
                     className="p-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-500">
                     <Edit3 className="w-4 h-4" />
