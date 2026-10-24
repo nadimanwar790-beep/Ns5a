@@ -44,6 +44,7 @@ export const IdCardManager: React.FC<Props> = ({
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [cardOrientation, setCardOrientation] = useState<"landscape" | "portrait">("landscape");
   const [cardsPerPage, setCardsPerPage] = useState<4 | 8>(4);
+  const printAreaRef = useRef<HTMLDivElement>(null);
 
   // School Details & Customization State
   const [showSchoolHeaderModal, setShowSchoolHeaderModal] = useState(false);
