@@ -6,29 +6,40 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
 
-const rawPort = process.env.PORT;
+export default defineConfig(async ({ command }) => {
+  const isServerCommand = command === 'serve';
+  const rawPort = process.env.PORT;
 
-if (!rawPort) {
-  throw new Error(
-    'PORT environment variable is required but was not provided.',
-  );
-}
+  if (isServerCommand && !rawPort) {
+    throw new Error(
+      'PORT environment variable is required but was not provided.',
+    );
+  }
 
-const port = Number(rawPort);
+  const configuredPort = Number(rawPort);
 
-if (Number.isNaN(port) || port <= 0) {
-  throw new Error(`Invalid PORT value: "${rawPort}"`);
-}
+  if (
+    isServerCommand &&
+    (!Number.isInteger(configuredPort) || configuredPort <= 0)
+  ) {
+    throw new Error(`Invalid PORT value: "${rawPort}"`);
+  }
 
-const basePath = process.env.BASE_PATH;
+  // A build does not start a server; only development and preview need a port.
+  const port =
+    Number.isInteger(configuredPort) && configuredPort > 0
+      ? configuredPort
+      : 22698;
+  const basePath =
+    process.env.BASE_PATH || (isServerCommand ? undefined : '/');
 
-if (!basePath) {
-  throw new Error(
-    'BASE_PATH environment variable is required but was not provided.',
-  );
-}
+  if (!basePath) {
+    throw new Error(
+      'BASE_PATH environment variable is required but was not provided.',
+    );
+  }
 
-export default defineConfig({
+  return {
   base: basePath,
   plugins: [
     react(),
@@ -113,4 +124,5 @@ export default defineConfig({
     host: '0.0.0.0',
     allowedHosts: true,
   },
+  };
 });
