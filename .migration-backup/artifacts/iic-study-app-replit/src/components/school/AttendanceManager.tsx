@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useEffect, useCallback } from "react";
 import {
-  saveAttendance, getAttendance, getMonthlyAttendance, getStudents, todayStr, currentMonthStr
+  saveAttendance, subscribeToAttendance, getMonthlyAttendance, getStudents, todayStr, currentMonthStr
 } from "../../school-firebase";
 import type { SchoolStudent, AttendanceRecord } from "../../school-types";
 import { CheckCircle, XCircle, Download, Calendar, Users, ChevronLeft, ChevronRight, Camera, QrCode } from "lucide-react";
@@ -42,11 +42,11 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
   }, [schoolId, classId]);
 
   useEffect(() => {
-    getAttendance(schoolId, classId, selectedDate).then((rec: AttendanceRecord | null) => {
+    const unsubscribe = subscribeToAttendance(schoolId, classId, selectedDate, (rec: AttendanceRecord | null) => {
       setExistingRecord(rec);
       if (rec) {
         const m: { [id: string]: boolean } = {};
-        Object.entries(rec.students).forEach(([id, v]: any) => (m[id] = v.present));
+        Object.entries(rec.students || {}).forEach(([id, v]: any) => (m[id] = v.present));
         setAttendance(m);
       } else {
         const init: { [id: string]: boolean } = {};
@@ -54,7 +54,9 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
         setAttendance(init);
       }
     });
-  }, [selectedDate, students]);
+
+    return unsubscribe;
+  }, [schoolId, classId, selectedDate, students]);
 
   useEffect(() => {
     if (viewMode === "report" || viewMode === "matrix") {
@@ -76,9 +78,15 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
 
   const saveRecord = async () => {
     setSaving(true);
-    const studentsMap: AttendanceRecord["students"] = {};
+    const studentsMap: AttendanceRecord["students"] = { ...(existingRecord?.students || {}) };
     students.forEach(s => {
-      studentsMap[s.id] = { present: attendance[s.id] ?? true, name: s.name, rollNo: s.rollNo };
+      const previous = studentsMap[s.id];
+      studentsMap[s.id] = {
+        ...previous,
+        present: attendance[s.id] ?? previous?.present ?? true,
+        name: s.name,
+        rollNo: s.rollNo,
+      };
     });
     const record: AttendanceRecord = {
       date: selectedDate,
