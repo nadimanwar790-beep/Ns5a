@@ -24,6 +24,7 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [selectedReceiptIds, setSelectedReceiptIds] = useState<string[]>([]);
+  const [selectedDueSlipIds, setSelectedDueSlipIds] = useState<string[]>([]);
 
   const loadData = async () => {
     setLoading(true);
@@ -44,6 +45,7 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     });
     setFees(allFees);
     setSelectedReceiptIds([]);
+    setSelectedDueSlipIds([]);
     setLoading(false);
   };
 
@@ -92,29 +94,29 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       : [...current, studentId]);
   };
 
-  const getReceiptMarkup = (fee: MonthlyFee) => {
+  const getReceiptMarkup = (fee: MonthlyFee, paid: boolean) => {
     const escapeHtml = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, char => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
     }[char] as string));
     const student = students.find(item => item.id === fee.studentId);
     const paidDate = fee.paidDate ? new Date(fee.paidDate).toLocaleDateString("en-IN") : "—";
     return `<article class="receipt">
-      <div class="receipt-heading"><div><div class="school-name">${escapeHtml(schoolName || "SCHOOL")}</div><div class="school-subtitle">${escapeHtml(className || "Fee Payment Receipt")}</div></div><div class="receipt-status">PAID</div></div>
-      <div class="receipt-number">Receipt No: <strong>${escapeHtml(fee.receiptNo || "—")}</strong></div>
+      <div class="receipt-heading"><div><div class="school-name">${escapeHtml(schoolName || "SCHOOL")}</div><div class="school-subtitle">${escapeHtml(className || (paid ? "Fee Payment Receipt" : "Fee Due Slip"))}</div></div><div class="receipt-status ${paid ? "paid" : "due"}">${paid ? "PAID" : "AMOUNT DUE"}</div></div>
+      <div class="receipt-number">${paid ? "Receipt No" : "Fee Reference"}: <strong>${escapeHtml(paid ? fee.receiptNo || "—" : `${fee.studentId.slice(-8)}-${fee.month}`)}</strong></div>
       <div class="details">
         <div><span>Student</span><strong>${escapeHtml(fee.studentName)}</strong></div>
         <div><span>Roll No.</span><strong>${escapeHtml(fee.rollNo || "—")}</strong></div>
         <div><span>Class</span><strong>${escapeHtml(className || fee.classId || "—")}</strong></div>
-        <div><span>Fee month</span><strong>${escapeHtml(new Date(`${fee.month}-01T00:00:00`).toLocaleDateString("en-IN", { month: "long", year: "numeric" }))}</strong></div>
-        <div><span>Paid on</span><strong>${escapeHtml(paidDate)}</strong></div>
+        <div><span>${paid ? "Fee month" : "Due for"}</span><strong>${escapeHtml(new Date(`${fee.month}-01T00:00:00`).toLocaleDateString("en-IN", { month: "long", year: "numeric" }))}</strong></div>
+        ${paid ? `<div><span>Paid on</span><strong>${escapeHtml(paidDate)}</strong></div>` : ""}
         <div><span>Parent contact</span><strong>${escapeHtml(student?.phone || "—")}</strong></div>
       </div>
-      <div class="amount-row"><span>Amount received</span><strong>₹${escapeHtml(Number(fee.amount || 0).toLocaleString("en-IN"))}</strong></div>
-      <div class="receipt-footer"><span>Keep this receipt for your records.</span><span>Authorized signature</span></div>
+      <div class="amount-row"><span>${paid ? "Amount received" : "Amount due"}</span><strong>₹${escapeHtml(Number(fee.amount || 0).toLocaleString("en-IN"))}</strong></div>
+      <div class="receipt-footer"><span>${paid ? "Keep this receipt for your records." : "Please return this slip with the fee payment."}</span><span>Parent signature&nbsp;&nbsp;&nbsp; Authorized signature</span></div>
     </article>`;
   };
 
-  const printReceipts = (receiptFees: MonthlyFee[]) => {
+  const printReceipts = (receiptFees: MonthlyFee[], paid = true) => {
     if (!receiptFees.length) return;
     const pages: MonthlyFee[][] = [];
     for (let index = 0; index < receiptFees.length; index += 4) {
@@ -122,10 +124,10 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     }
     const printWindow = window.open("", "_blank", "width=1000,height=750");
     if (!printWindow) {
-      alert("Please allow pop-ups to print fee receipts.");
+      alert("Please allow pop-ups to print fee slips.");
       return;
     }
-    printWindow.document.write(`<!doctype html><html><head><meta charset="UTF-8"><title>Fee Receipts</title><style>
+    printWindow.document.write(`<!doctype html><html><head><meta charset="UTF-8"><title>${paid ? "Fee Receipts" : "Fee Due Slips"}</title><style>
       @page{size:A4 portrait;margin:8mm}
       *{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
       body{margin:0;font-family:Arial,sans-serif;color:#172033}
@@ -135,7 +137,8 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       .receipt-heading{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #1d4ed8;padding-bottom:4mm}
       .school-name{font-weight:800;font-size:15pt;letter-spacing:.03em}
       .school-subtitle{font-size:9pt;color:#64748b;margin-top:2mm}
-      .receipt-status{background:#dcfce7;color:#15803d;padding:2mm 4mm;border-radius:4px;font-size:9pt;font-weight:700}
+      .receipt-status{padding:2mm 4mm;border-radius:4px;font-size:9pt;font-weight:700}
+      .receipt-status.paid{background:#dcfce7;color:#15803d}.receipt-status.due{background:#ffedd5;color:#c2410c}
       .receipt-number{font-size:10pt;margin:4mm 0}
       .details{display:grid;grid-template-columns:1fr 1fr;gap:4mm 6mm}
       .details div{display:flex;flex-direction:column;gap:1mm}
@@ -145,7 +148,7 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       .receipt-footer{margin-top:auto;padding-top:8mm;display:flex;justify-content:space-between;gap:8mm;font-size:8pt;color:#64748b}
       @media screen{body{padding:12px;background:#e2e8f0}.receipt-page{background:white;padding:0;margin:0 auto 12px;max-width:210mm}}
     </style></head><body>
-      ${pages.map(page => `<section class="receipt-page">${page.map(getReceiptMarkup).join("")}</section>`).join("")}
+      ${pages.map(page => `<section class="receipt-page">${page.map(fee => getReceiptMarkup(fee, paid)).join("")}</section>`).join("")}
       <script>window.onload=()=>setTimeout(()=>{window.print();window.close()},250)</script>
     </body></html>`);
     printWindow.document.close();
@@ -307,6 +310,29 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
           <div className="text-center py-12 text-slate-400">Loading...</div>
         ) : (
           <>
+          {unpaidFees.length > 0 && (
+            <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="font-bold text-slate-800 dark:text-white flex items-center gap-2"><ReceiptText className="w-4 h-4 text-orange-600" /> Unpaid fee due slips</p>
+                  <p className="text-xs text-slate-500 mt-1">Print take-home slips for students. A4 par 4 slips per page.</p>
+                </div>
+                <button
+                  onClick={() => setSelectedDueSlipIds(selectedDueSlipIds.length === unpaidFees.length ? [] : unpaidFees.map(fee => fee.studentId))}
+                  className="px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200"
+                >
+                  {selectedDueSlipIds.length === unpaidFees.length ? "Deselect all" : "Select all unpaid"}
+                </button>
+              </div>
+              <button
+                onClick={() => printReceipts(unpaidFees.filter(fee => selectedDueSlipIds.includes(fee.studentId)), false)}
+                disabled={!selectedDueSlipIds.length}
+                className="w-full py-2.5 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white rounded-lg font-semibold flex items-center justify-center gap-2 text-sm"
+              >
+                <Printer className="w-4 h-4" /> Print selected due slips ({selectedDueSlipIds.length})
+              </button>
+            </div>
+          )}
           {paidFees.length > 0 && (
             <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -342,6 +368,17 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                     className="h-4 w-4 accent-blue-600"
                   />
                 )}
+                {!fee.paid && (
+                  <input
+                    aria-label={`Select ${fee.studentName} unpaid fee slip`}
+                    type="checkbox"
+                    checked={selectedDueSlipIds.includes(fee.studentId)}
+                    onChange={() => setSelectedDueSlipIds(current => current.includes(fee.studentId)
+                      ? current.filter(id => id !== fee.studentId)
+                      : [...current, fee.studentId])}
+                    className="h-4 w-4 accent-orange-600"
+                  />
+                )}
                 <span className="text-xs text-slate-400 w-8">{fee.rollNo}</span>
                 <div className="flex-1">
                   <p className="font-medium text-slate-800 dark:text-white text-sm">{fee.studentName}</p>
@@ -358,6 +395,14 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                   </button>
                 ) : (
                   <>
+                    <button
+                      onClick={() => printReceipts([fee], false)}
+                      className="p-2 rounded-lg bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/40 dark:text-orange-300"
+                      title={`Print ${fee.studentName} unpaid fee due slip`}
+                      aria-label={`Print ${fee.studentName} unpaid fee due slip`}
+                    >
+                      <Printer className="w-4 h-4" />
+                    </button>
                     <button
                       onClick={() => sendDueSlipOnWhatsApp(fee)}
                       className="p-2 rounded-lg bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/40 dark:text-green-300"
