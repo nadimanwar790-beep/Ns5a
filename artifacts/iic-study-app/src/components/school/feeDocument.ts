@@ -124,10 +124,10 @@ export function downloadFeeDocument({
     ["Parent contact", student?.phone || "—"],
   ];
   if (currentMonthAmount > 0) {
-    details.push(["Current month fee", `Rs. ${currentMonthAmount.toLocaleString("en-IN")}`]);
+    details.push(["Fee", `Rs. ${currentMonthAmount.toLocaleString("en-IN")}`]);
   }
   if (arrearsAmount > 0) {
-    details.push(["Previous unpaid dues", `Rs. ${arrearsAmount.toLocaleString("en-IN")}`]);
+    details.push(["Back due", `Rs. ${arrearsAmount.toLocaleString("en-IN")}`]);
     if (fee.arrearsMonths?.length) details.push(["Unpaid months", fee.arrearsMonths.join(", ")]);
   }
   if (paid) {

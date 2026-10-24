@@ -165,16 +165,28 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
 
   useEffect(() => { loadData(); }, [month, classId]);
 
-  const handleMarkPaid = async (fee: MonthlyFee) => {
+  const setFeeStatus = async (fee: MonthlyFee, paid: boolean) => {
+    if (fee.paid === paid) return;
     setSaving(fee.studentId);
-    if (!fee.paid) {
-      await saveFee({ ...fee, month });
-      await markFeePaid(schoolId, fee.studentId, month, adminId);
-    } else {
-      await saveFee({ ...fee, paid: false, paidDate: undefined, paidBy: undefined, receiptNo: undefined });
+    setFeeError(null);
+    try {
+      const unpaidRecord = {
+        ...fee,
+        month,
+        paid: false,
+        paidDate: undefined,
+        paidBy: undefined,
+        receiptNo: undefined,
+      };
+      await saveFee(unpaidRecord);
+      if (paid) await markFeePaid(schoolId, fee.studentId, month, adminId);
+      await loadData();
+    } catch (error) {
+      console.error(`Could not mark fee ${paid ? "paid" : "unpaid"}:`, error);
+      setFeeError(`Could not mark ${fee.studentName}'s fee ${paid ? "paid" : "unpaid"}. Please retry.`);
+    } finally {
+      setSaving(null);
     }
-    await loadData();
-    setSaving(null);
   };
 
   const handleInitAllFees = async () => {
@@ -248,11 +260,11 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
         <div><span>${paid ? "Fee month" : "Due for"}</span><strong>${escapeHtml(new Date(`${fee.month}-01T00:00:00`).toLocaleDateString("en-IN", { month: "long", year: "numeric" }))}</strong></div>
         ${paid ? `<div><span>Paid on</span><strong>${escapeHtml(paidDate)}</strong></div>` : ""}
         <div><span>Parent contact</span><strong>${escapeHtml(student?.phone || "—")}</strong></div>
-        <div><span>Current month fee</span><strong>₹${escapeHtml(Number(fee.monthlyAmount ?? fee.amount ?? 0).toLocaleString("en-IN"))}</strong></div>
-        ${Number(fee.arrearsAmount || 0) > 0 ? `<div><span>Previous unpaid dues</span><strong>₹${escapeHtml(Number(fee.arrearsAmount).toLocaleString("en-IN"))}</strong></div>` : ""}
+        <div><span>Fee</span><strong>₹${escapeHtml(Number(fee.monthlyAmount ?? fee.amount ?? 0).toLocaleString("en-IN"))}</strong></div>
+        ${Number(fee.arrearsAmount || 0) > 0 ? `<div><span>Back due</span><strong>₹${escapeHtml(Number(fee.arrearsAmount).toLocaleString("en-IN"))}</strong></div>` : ""}
         ${fee.arrearsMonths?.length ? `<div><span>Unpaid months</span><strong>${escapeHtml(fee.arrearsMonths.map(value => new Date(`${value}-01T00:00:00`).toLocaleDateString("en-IN", { month: "short", year: "numeric" })).join(", "))}</strong></div>` : ""}
       </div>
-      <div class="amount-row"><span>${paid ? "Amount received" : "Amount due"}</span><strong>₹${escapeHtml(Number(fee.amount || 0).toLocaleString("en-IN"))}</strong></div>
+      <div class="amount-row"><span>Fee + Back due</span><strong>₹${escapeHtml(Number(fee.amount || 0).toLocaleString("en-IN"))}</strong></div>
       <div class="receipt-footer"><span>${paid ? "Keep this receipt for your records." : "Please return this slip with the fee payment."}</span><span>Parent signature&nbsp;&nbsp;&nbsp; Authorized signature</span></div>
     </article>`;
   };
@@ -537,9 +549,43 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                   />
                 )}
                 <span className="text-xs text-slate-400 w-8">{fee.rollNo}</span>
-                <div className="flex-1">
+                <div className="flex-1 min-w-0">
                   <p className="font-medium text-slate-800 dark:text-white text-sm">{fee.studentName}</p>
-                  <p className="text-xs text-slate-400">₹{fee.amount}{fee.paidDate ? ` • Paid ${new Date(fee.paidDate).toLocaleDateString()}` : ""}{fee.receiptNo ? ` • ${fee.receiptNo}` : ""}</p>
+                  <p className="text-xs text-slate-400">
+                    Fee ₹{Number(fee.monthlyAmount ?? fee.amount ?? 0).toLocaleString("en-IN")}
+                    {Number(fee.arrearsAmount || 0) > 0 ? ` + Back due ₹${Number(fee.arrearsAmount).toLocaleString("en-IN")}` : ""}
+                    {` = ₹${Number(fee.amount || 0).toLocaleString("en-IN")}`}
+                    {fee.paidDate ? ` • Paid ${new Date(fee.paidDate).toLocaleDateString()}` : ""}
+                    {fee.receiptNo ? ` • ${fee.receiptNo}` : ""}
+                  </p>
+                  <div className="mt-1.5 flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setFeeStatus(fee, true)}
+                      disabled={saving === fee.studentId}
+                      aria-pressed={fee.paid}
+                      className={`rounded-md px-2.5 py-1 text-[10px] font-bold transition-colors disabled:opacity-50 ${
+                        fee.paid
+                          ? "bg-green-600 text-white"
+                          : "bg-slate-100 text-slate-600 hover:bg-green-100 hover:text-green-700 dark:bg-slate-700 dark:text-slate-200"
+                      }`}
+                    >
+                      {saving === fee.studentId ? "..." : "Paid"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFeeStatus(fee, false)}
+                      disabled={saving === fee.studentId}
+                      aria-pressed={!fee.paid}
+                      className={`rounded-md px-2.5 py-1 text-[10px] font-bold transition-colors disabled:opacity-50 ${
+                        !fee.paid
+                          ? "bg-orange-500 text-white"
+                          : "bg-slate-100 text-slate-600 hover:bg-orange-100 hover:text-orange-700 dark:bg-slate-700 dark:text-slate-200"
+                      }`}
+                    >
+                      {saving === fee.studentId ? "..." : "Unpaid"}
+                    </button>
+                  </div>
                 </div>
                 {fee.paid ? (
                   <button
@@ -578,12 +624,6 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                     </button>
                   </>
                 )}
-                <button
-                  onClick={() => handleMarkPaid(fee)}
-                  disabled={saving === fee.studentId}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${fee.paid ? "bg-green-100 text-green-700 dark:bg-green-900/40" : "bg-orange-100 text-orange-700 dark:bg-orange-900/40"}`}>
-                  {saving === fee.studentId ? "..." : fee.paid ? <><CheckCircle className="w-3.5 h-3.5" /> Paid</> : <><Clock className="w-3.5 h-3.5" /> Unpaid</>}
-                </button>
               </div>
             ))}
             {fees.length === 0 && (
