@@ -17,6 +17,7 @@ import {
 import { currentMonthStr } from "../../school-firebase";
 import { uploadImageToTelegram } from "../../services/telegramStorageService";
 import { QrAttendanceScannerModal } from "./QrAttendanceScannerModal";
+import { downloadFeeDocument } from "./feeDocument";
 
 interface Props {
   schoolId: string;
@@ -936,6 +937,19 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                   {fee.paid ? "PAID" : "DUE"}
                 </span>
               </div>
+              {fee.paid && (
+                <button
+                  onClick={() => downloadFeeDocument({
+                    fee,
+                    student: studentData,
+                    schoolName: school?.name,
+                    className: studentData?.classId || classId,
+                  })}
+                  className="mt-3 w-full flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
+                >
+                  <Download className="w-4 h-4" /> Download my paid receipt
+                </button>
+              )}
             </div>
           ))}
         </div>

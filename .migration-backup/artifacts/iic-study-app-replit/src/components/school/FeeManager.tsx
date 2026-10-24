@@ -5,6 +5,7 @@ import {
 } from "../../school-firebase";
 import type { SchoolStudent, MonthlyFee } from "../../school-types";
 import { CheckCircle, Clock, Download, ChevronLeft, ChevronRight, IndianRupee, Users, TrendingUp, AlertCircle, Printer, MessageCircle, ReceiptText } from "lucide-react";
+import { downloadFeeDocument } from "./feeDocument";
 
 interface Props {
   schoolId: string;
@@ -176,6 +177,36 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     window.open(`https://wa.me/${whatsappNumber}?text=${encodeURIComponent(message)}`, "_blank", "noopener,noreferrer");
   };
 
+  const sendDueSlipOnWhatsApp = (fee: MonthlyFee) => {
+    const student = students.find(item => item.id === fee.studentId);
+    const digits = (student?.phone || "").replace(/\D/g, "");
+    if (!digits) {
+      alert(`Parent/guardian phone number is missing for ${fee.studentName}.`);
+      return;
+    }
+    const whatsappNumber = digits.length === 10
+      ? `91${digits}`
+      : digits.length === 11 && digits.startsWith("0")
+        ? `91${digits.slice(1)}`
+        : digits;
+    const monthLabel = new Date(`${fee.month}-01T00:00:00`).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+    const message = [
+      `Fee due reminder — ${schoolName || className || "School"}`,
+      `Student: ${fee.studentName}`,
+      `Roll No: ${fee.rollNo || "—"}`,
+      `Class: ${className || fee.classId || "—"}`,
+      `Fee month: ${monthLabel}`,
+      `Amount due: ₹${Number(fee.amount || 0).toLocaleString("en-IN")}`,
+      "Please contact the school office to pay this fee.",
+    ].join("\n");
+    window.open(`https://wa.me/${whatsappNumber}?text=${encodeURIComponent(message)}`, "_blank", "noopener,noreferrer");
+  };
+
+  const downloadFeeFile = (fee: MonthlyFee) => {
+    const student = students.find(item => item.id === fee.studentId);
+    downloadFeeDocument({ fee, student, schoolName, className });
+  };
+
   const downloadFeeReport = () => {
     const rows = fees.map(f =>
       `<tr style="background:${f.paid ? "#f0fdf4" : "#fff7ed"}">
@@ -316,7 +347,7 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                   <p className="font-medium text-slate-800 dark:text-white text-sm">{fee.studentName}</p>
                   <p className="text-xs text-slate-400">₹{fee.amount}{fee.paidDate ? ` • Paid ${new Date(fee.paidDate).toLocaleDateString()}` : ""}{fee.receiptNo ? ` • ${fee.receiptNo}` : ""}</p>
                 </div>
-                {fee.paid && (
+                {fee.paid ? (
                   <button
                     onClick={() => sendReceiptOnWhatsApp(fee)}
                     className="p-2 rounded-lg bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/40 dark:text-green-300"
@@ -325,6 +356,25 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                   >
                     <MessageCircle className="w-4 h-4" />
                   </button>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => sendDueSlipOnWhatsApp(fee)}
+                      className="p-2 rounded-lg bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/40 dark:text-green-300"
+                      title={`WhatsApp fee reminder to ${students.find(student => student.id === fee.studentId)?.phone || "parent number"}`}
+                      aria-label={`Send ${fee.studentName} fee reminder on WhatsApp`}
+                    >
+                      <MessageCircle className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => downloadFeeFile(fee)}
+                      className="p-2 rounded-lg bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/40 dark:text-orange-300"
+                      title={`Download ${fee.studentName} fee due slip`}
+                      aria-label={`Download ${fee.studentName} unpaid fee slip`}
+                    >
+                      <Download className="w-4 h-4" />
+                    </button>
+                  </>
                 )}
                 <button
                   onClick={() => handleMarkPaid(fee)}
