@@ -440,6 +440,7 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
 
   // Active Scan Mode: Live Camera vs Media / Gallery
   const [activeTab, setActiveTab] = useState<"camera" | "media">("camera");
+  const scanMode = "auto" as const;
 
   // Camera State
   const [cameraActive, setCameraActive] = useState(false);
@@ -459,8 +460,6 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
-  // Attendance Mode
-  const [scanMode, setScanMode] = useState<"auto" | "in" | "out">("auto");
   const [cutoffTime, setCutoffTime] = useState("08:30");
 
   // Recent Punches Feed (Live Feed)
@@ -927,6 +926,7 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
       }
     } else {
       stopScanner();
+      setActiveTab("camera");
     }
   }, [isOpen, activeTab]);
 
@@ -945,15 +945,6 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
             <div className="min-w-0">
               <h3 className="text-base font-black text-white flex items-center gap-1.5 truncate">
                 <span>{isTeacherMode ? "Student Attendance Scanner" : "QR Attendance Scanner"}</span>
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                  activeTab === "camera"
-                    ? cameraActive
-                      ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
-                      : "bg-slate-700 text-slate-300 border-slate-600"
-                    : "bg-purple-500/20 text-purple-400 border-purple-500/30"
-                }`}>
-                  {activeTab === "camera" ? (cameraActive ? "Live HD" : "Ready") : "Media File"}
-                </span>
               </h3>
               <p className="text-[11px] text-slate-400 truncate">
                 {isTeacherMode
@@ -975,71 +966,9 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
           </button>
         </div>
 
-        {/* Tab Switcher: 📷 Live Camera vs 🖼️ Media / Gallery QR Scan */}
-        <div className="bg-slate-950 px-4 pt-2.5 pb-2 border-b border-slate-800 flex items-center justify-between gap-2 shrink-0">
-          <div className="flex p-0.5 bg-slate-800/80 rounded-xl w-full">
-            <button
-              type="button"
-              onClick={() => {
-                setActiveTab("camera");
-                setLastScannedResult(null);
-                setMediaError(null);
-              }}
-              className={`flex-1 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition ${
-                activeTab === "camera"
-                  ? "bg-indigo-600 text-white shadow-xs font-black"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              <Camera size={14} />
-              <span>📷 Live Camera</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                stopScanner();
-                setActiveTab("media");
-                setLastScannedResult(null);
-                setMediaError(null);
-              }}
-              className={`flex-1 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition ${
-                activeTab === "media"
-                  ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-xs font-black"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              <FolderOpen size={14} />
-              <span>🖼️ Media / Gallery File</span>
-            </button>
-          </div>
-        </div>
-
         {/* Scan Mode & Time Options (In / Exit / Cutoff) */}
         {isTeacherMode && (
           <div className="bg-slate-950 px-4 py-2 border-b border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
-            <div className="flex items-center gap-1 bg-slate-800 p-0.5 rounded-xl">
-              <button
-                type="button"
-                onClick={() => setScanMode("auto")}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${scanMode === "auto" ? "bg-indigo-600 text-white shadow-xs" : "text-slate-400 hover:text-white"}`}
-              >
-                Auto (In/Exit)
-              </button>
-              <button
-                type="button"
-                onClick={() => setScanMode("in")}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${scanMode === "in" ? "bg-emerald-600 text-white shadow-xs" : "text-slate-400 hover:text-white"}`}
-              >
-                🟢 Entry Only
-              </button>
-              <button
-                type="button"
-                onClick={() => setScanMode("out")}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${scanMode === "out" ? "bg-amber-600 text-white shadow-xs" : "text-slate-400 hover:text-white"}`}
-              >
-                🚪 Exit Only
-              </button>
-            </div>
             <div className="flex items-center gap-1 text-[11px] text-slate-400">
               <span>Cutoff:</span>
               <input
@@ -1079,9 +1008,7 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
                 <div className="mt-4 px-4 py-1.5 rounded-full bg-black/75 backdrop-blur-md border border-white/10 text-white text-xs font-bold tracking-wide flex items-center gap-2">
                   <Sparkles size={13} className="text-amber-400 animate-spin" />
                   <span>
-                    {scanMode === "in" ? "Entry Scan: Student ID card dikhayein" :
-                     scanMode === "out" ? "Exit Scan: Student ID card dikhayein" :
-                     "QR Code ko is box ke andar layein"}
+                    QR Code ko is box ke andar layein
                   </span>
                 </div>
               </div>
@@ -1333,11 +1260,13 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
                   <button
                     type="button"
                     onClick={() => {
-                      setLastScannedResult(null);
                       if (activeTab === "media") {
-                        setMediaPreviewUrl(null);
-                        setMediaFile(null);
-                        setTimeout(() => mediaTabFileInputRef.current?.click(), 100);
+                        if (mediaTabFileInputRef.current) {
+                          mediaTabFileInputRef.current.value = "";
+                          mediaTabFileInputRef.current.click();
+                        }
+                      } else {
+                        setLastScannedResult(null);
                       }
                     }}
                     className="flex-1 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-black text-xs flex items-center justify-center gap-1.5 transition-all shadow-md shadow-indigo-600/30"
@@ -1345,17 +1274,21 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
                     <span>{activeTab === "media" ? "Media se Agla Scan" : "Agla Student Scan Karein"}</span>
                     <ArrowRight size={14} />
                   </button>
-                  {activeTab === "media" && (
+                  {activeTab === "camera" && (
                     <button
                       type="button"
                       onClick={() => {
-                        setActiveTab("camera");
-                        setLastScannedResult(null);
+                        setActiveTab("media");
+                        if (mediaTabFileInputRef.current) {
+                          mediaTabFileInputRef.current.value = "";
+                          setTimeout(() => mediaTabFileInputRef.current?.click(), 100);
+                        }
                       }}
-                      className="px-3.5 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs flex items-center gap-1 transition"
-                      title="Live Camera par jayein"
+                      className="px-3.5 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs flex items-center justify-center gap-1 transition"
+                      title="Media / Gallery se scan karein"
                     >
-                      <Camera size={14} />
+                      <FolderOpen size={14} />
+                      <span>Media Scan</span>
                     </button>
                   )}
                   <button
