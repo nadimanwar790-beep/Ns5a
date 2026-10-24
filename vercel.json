@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "outputDirectory": ".migration-backup/artifacts/iic-study-app-replit/dist/public",
+  "cleanUrls": true,
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
