@@ -1358,6 +1358,17 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
                       <Camera size={14} />
                     </button>
                   )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      stopScanner();
+                      onClose();
+                    }}
+                    className="px-3.5 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs flex items-center justify-center gap-1 transition"
+                  >
+                    <X size={14} />
+                    <span>Close</span>
+                  </button>
                 </>
               ) : (
                 <button
