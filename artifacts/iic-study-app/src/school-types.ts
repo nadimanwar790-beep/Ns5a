@@ -208,6 +208,8 @@ export interface AttendanceRecord {
       stayDuration?: string; // e.g. "6h 15m"
       status?: "present" | "late" | "half_day" | "absent";
       scanType?: "in" | "out";
+       /** Timestamp retained by some legacy attendance entries. */
+       createdAt?: string;
     };
   };
   createdAt: string;

@@ -1358,13 +1358,13 @@ export const subscribeToUsers = (callback: (users: any[]) => void) => {
                const userList = data ? Object.values(data) : [];
                callback(userList);
             }, (rtdbErr) => {
-               console.warn('[firebase] RTDB users fallback warning:', rtdbErr?.code || rtdbErr);
+                console.warn('[firebase] RTDB users fallback warning:', (rtdbErr as Error & { code?: string })?.code || rtdbErr);
             }, { onlyOnce: true });
           } catch {}
       }
     },
     (err) => {
-      console.warn('[firebase] subscribeToUsers error:', err?.code || err);
+      console.warn('[firebase] subscribeToUsers error:', (err as Error & { code?: string })?.code || err);
       // Fallback to RTDB on permission-denied or offline
       try {
         const usersRef = ref(rtdb, 'users');
@@ -1373,7 +1373,7 @@ export const subscribeToUsers = (callback: (users: any[]) => void) => {
            const userList = data ? Object.values(data) : [];
            callback(userList);
         }, (rtdbErr) => {
-           console.warn('[firebase] RTDB users fallback warning:', rtdbErr?.code || rtdbErr);
+            console.warn('[firebase] RTDB users fallback warning:', (rtdbErr as Error & { code?: string })?.code || rtdbErr);
         }, { onlyOnce: true });
       } catch {}
     }

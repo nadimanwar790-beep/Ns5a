@@ -156,6 +156,7 @@ import { auth, getChapterData, saveUserToLive, subscribeMcqLessons, saveTestResu
 import { STATIC_SYLLABUS, ADMIN_EMAIL, LUCENT_SUBJECT_OPTIONS_BASE, getLucentSubjectOptions } from '../constants';
 import { parseMCQText, extractStatements } from '../utils/mcqParser';
 import { parseMcqQuestion } from '../utils/mcqRender';
+import { renderMathInHtml } from '../utils/mathUtils';
 import McqQuestionDisplay from './McqQuestionDisplay';
 import { detectQuestionType } from '../utils/questionTypeDetector';
 import { type MCQResult } from '../types';

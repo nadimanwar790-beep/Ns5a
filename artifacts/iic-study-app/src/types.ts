@@ -1839,6 +1839,8 @@ export interface MatchColumnData {
 }
 
 export interface MCQItem {
+  /** Optional source identifier used to deduplicate imported question-bank entries. */
+  id?: string;
   question: string;
   subject?: string;
   /** Stable exam question number used by Revision Hub tracking (Q1, Q2...). */
