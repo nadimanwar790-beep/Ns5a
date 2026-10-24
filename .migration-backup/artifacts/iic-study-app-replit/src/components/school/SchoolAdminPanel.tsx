@@ -543,6 +543,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
         schoolId={schoolId}
         classId={feeClassSelected.id}
         className={feeClassSelected.name}
+        schoolName={school?.name}
         sessionId={activeSession?.id || ""}
         adminId={adminUid}
         onBack={() => setView("fees")}

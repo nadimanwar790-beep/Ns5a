@@ -4,23 +4,25 @@ import {
   getStudents, getMonthlyFees, saveFee, markFeePaid, currentMonthStr
 } from "../../school-firebase";
 import type { SchoolStudent, MonthlyFee } from "../../school-types";
-import { CheckCircle, Clock, Download, ChevronLeft, ChevronRight, IndianRupee, Users, TrendingUp, AlertCircle } from "lucide-react";
+import { CheckCircle, Clock, Download, ChevronLeft, ChevronRight, IndianRupee, Users, TrendingUp, AlertCircle, Printer, MessageCircle, ReceiptText } from "lucide-react";
 
 interface Props {
   schoolId: string;
   classId?: string;
   className?: string;
+  schoolName?: string;
   sessionId: string;
   adminId: string;
   onBack?: () => void;
 }
 
-export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, sessionId, adminId, onBack }) => {
+export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, schoolName, sessionId, adminId, onBack }) => {
   const [students, setStudents] = useState<SchoolStudent[]>([]);
   const [fees, setFees] = useState<MonthlyFee[]>([]);
   const [month, setMonth] = useState(currentMonthStr());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
+  const [selectedReceiptIds, setSelectedReceiptIds] = useState<string[]>([]);
 
   const loadData = async () => {
     setLoading(true);
@@ -40,6 +42,7 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, sess
       };
     });
     setFees(allFees);
+    setSelectedReceiptIds([]);
     setLoading(false);
   };
 
@@ -81,6 +84,97 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, sess
   const totalAmount = fees.reduce((sum, f) => sum + (f.amount || 0), 0);
   const collectedAmount = paidFees.reduce((sum, f) => sum + (f.amount || 0), 0);
   const pendingAmount = totalAmount - collectedAmount;
+
+  const toggleReceiptSelection = (studentId: string) => {
+    setSelectedReceiptIds(current => current.includes(studentId)
+      ? current.filter(id => id !== studentId)
+      : [...current, studentId]);
+  };
+
+  const getReceiptMarkup = (fee: MonthlyFee) => {
+    const escapeHtml = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, char => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[char] as string));
+    const student = students.find(item => item.id === fee.studentId);
+    const paidDate = fee.paidDate ? new Date(fee.paidDate).toLocaleDateString("en-IN") : "—";
+    return `<article class="receipt">
+      <div class="receipt-heading"><div><div class="school-name">${escapeHtml(schoolName || "SCHOOL")}</div><div class="school-subtitle">${escapeHtml(className || "Fee Payment Receipt")}</div></div><div class="receipt-status">PAID</div></div>
+      <div class="receipt-number">Receipt No: <strong>${escapeHtml(fee.receiptNo || "—")}</strong></div>
+      <div class="details">
+        <div><span>Student</span><strong>${escapeHtml(fee.studentName)}</strong></div>
+        <div><span>Roll No.</span><strong>${escapeHtml(fee.rollNo || "—")}</strong></div>
+        <div><span>Class</span><strong>${escapeHtml(className || fee.classId || "—")}</strong></div>
+        <div><span>Fee month</span><strong>${escapeHtml(new Date(`${fee.month}-01T00:00:00`).toLocaleDateString("en-IN", { month: "long", year: "numeric" }))}</strong></div>
+        <div><span>Paid on</span><strong>${escapeHtml(paidDate)}</strong></div>
+        <div><span>Parent contact</span><strong>${escapeHtml(student?.phone || "—")}</strong></div>
+      </div>
+      <div class="amount-row"><span>Amount received</span><strong>₹${escapeHtml(Number(fee.amount || 0).toLocaleString("en-IN"))}</strong></div>
+      <div class="receipt-footer"><span>Keep this receipt for your records.</span><span>Authorized signature</span></div>
+    </article>`;
+  };
+
+  const printReceipts = (receiptFees: MonthlyFee[]) => {
+    if (!receiptFees.length) return;
+    const pages: MonthlyFee[][] = [];
+    for (let index = 0; index < receiptFees.length; index += 4) {
+      pages.push(receiptFees.slice(index, index + 4));
+    }
+    const printWindow = window.open("", "_blank", "width=1000,height=750");
+    if (!printWindow) {
+      alert("Please allow pop-ups to print fee receipts.");
+      return;
+    }
+    printWindow.document.write(`<!doctype html><html><head><meta charset="UTF-8"><title>Fee Receipts</title><style>
+      @page{size:A4 portrait;margin:8mm}
+      *{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+      body{margin:0;font-family:Arial,sans-serif;color:#172033}
+      .receipt-page{height:281mm;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:5mm;page-break-after:always;break-after:page}
+      .receipt-page:last-child{page-break-after:auto;break-after:auto}
+      .receipt{border:1px solid #94a3b8;border-radius:5px;padding:8mm;display:flex;flex-direction:column;min-height:0}
+      .receipt-heading{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #1d4ed8;padding-bottom:4mm}
+      .school-name{font-weight:800;font-size:15pt;letter-spacing:.03em}
+      .school-subtitle{font-size:9pt;color:#64748b;margin-top:2mm}
+      .receipt-status{background:#dcfce7;color:#15803d;padding:2mm 4mm;border-radius:4px;font-size:9pt;font-weight:700}
+      .receipt-number{font-size:10pt;margin:4mm 0}
+      .details{display:grid;grid-template-columns:1fr 1fr;gap:4mm 6mm}
+      .details div{display:flex;flex-direction:column;gap:1mm}
+      .details span{font-size:8pt;color:#64748b}.details strong{font-size:10pt}
+      .amount-row{margin-top:6mm;border-top:1px solid #cbd5e1;border-bottom:1px solid #cbd5e1;padding:4mm 0;display:flex;justify-content:space-between;align-items:center;font-size:11pt}
+      .amount-row strong{font-size:18pt;color:#1d4ed8}
+      .receipt-footer{margin-top:auto;padding-top:8mm;display:flex;justify-content:space-between;gap:8mm;font-size:8pt;color:#64748b}
+      @media screen{body{padding:12px;background:#e2e8f0}.receipt-page{background:white;padding:0;margin:0 auto 12px;max-width:210mm}}
+    </style></head><body>
+      ${pages.map(page => `<section class="receipt-page">${page.map(getReceiptMarkup).join("")}</section>`).join("")}
+      <script>window.onload=()=>setTimeout(()=>{window.print();window.close()},250)</script>
+    </body></html>`);
+    printWindow.document.close();
+  };
+
+  const sendReceiptOnWhatsApp = (fee: MonthlyFee) => {
+    const student = students.find(item => item.id === fee.studentId);
+    const rawPhone = student?.phone?.trim() || "";
+    const digits = rawPhone.replace(/\D/g, "");
+    if (!digits) {
+      alert(`Parent/guardian phone number is missing for ${fee.studentName}.`);
+      return;
+    }
+    const whatsappNumber = digits.length === 10
+      ? `91${digits}`
+      : digits.length === 11 && digits.startsWith("0")
+        ? `91${digits.slice(1)}`
+        : digits;
+    const monthLabel = new Date(`${fee.month}-01T00:00:00`).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+    const message = [
+      `Fee payment receipt — ${className || "School"}`,
+      `Student: ${fee.studentName}`,
+      `Roll No: ${fee.rollNo || "—"}`,
+      `Month: ${monthLabel}`,
+      `Amount received: ₹${Number(fee.amount || 0).toLocaleString("en-IN")}`,
+      `Receipt No: ${fee.receiptNo || "—"}`,
+      `Paid on: ${fee.paidDate ? new Date(fee.paidDate).toLocaleDateString("en-IN") : "—"}`,
+    ].join("\n");
+    window.open(`https://wa.me/${whatsappNumber}?text=${encodeURIComponent(message)}`, "_blank", "noopener,noreferrer");
+  };
 
   const downloadFeeReport = () => {
     const rows = fees.map(f =>
@@ -181,14 +275,57 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
         {loading ? (
           <div className="text-center py-12 text-slate-400">Loading...</div>
         ) : (
+          <>
+          {paidFees.length > 0 && (
+            <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="font-bold text-slate-800 dark:text-white flex items-center gap-2"><ReceiptText className="w-4 h-4 text-blue-600" /> Fee receipts</p>
+                  <p className="text-xs text-slate-500 mt-1">A4 par 4 receipts per page. WhatsApp kholkar message bhej sakte hain.</p>
+                </div>
+                <button
+                  onClick={() => setSelectedReceiptIds(selectedReceiptIds.length === paidFees.length ? [] : paidFees.map(fee => fee.studentId))}
+                  className="px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200"
+                >
+                  {selectedReceiptIds.length === paidFees.length ? "Deselect all" : "Select all paid"}
+                </button>
+              </div>
+              <button
+                onClick={() => printReceipts(paidFees.filter(fee => selectedReceiptIds.includes(fee.studentId)))}
+                disabled={!selectedReceiptIds.length}
+                className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg font-semibold flex items-center justify-center gap-2 text-sm"
+              >
+                <Printer className="w-4 h-4" /> Print selected receipts ({selectedReceiptIds.length})
+              </button>
+            </div>
+          )}
           <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm overflow-hidden">
             {fees.map(fee => (
               <div key={fee.studentId} className={`flex items-center gap-3 px-4 py-3 border-b dark:border-slate-700 last:border-0 ${fee.paid ? "bg-green-50/50 dark:bg-green-900/10" : ""}`}>
+                {fee.paid && (
+                  <input
+                    aria-label={`Select ${fee.studentName} receipt`}
+                    type="checkbox"
+                    checked={selectedReceiptIds.includes(fee.studentId)}
+                    onChange={() => toggleReceiptSelection(fee.studentId)}
+                    className="h-4 w-4 accent-blue-600"
+                  />
+                )}
                 <span className="text-xs text-slate-400 w-8">{fee.rollNo}</span>
                 <div className="flex-1">
                   <p className="font-medium text-slate-800 dark:text-white text-sm">{fee.studentName}</p>
-                  <p className="text-xs text-slate-400">₹{fee.amount}{fee.paidDate ? ` • Paid ${new Date(fee.paidDate).toLocaleDateString()}` : ""}</p>
+                  <p className="text-xs text-slate-400">₹{fee.amount}{fee.paidDate ? ` • Paid ${new Date(fee.paidDate).toLocaleDateString()}` : ""}{fee.receiptNo ? ` • ${fee.receiptNo}` : ""}</p>
                 </div>
+                {fee.paid && (
+                  <button
+                    onClick={() => sendReceiptOnWhatsApp(fee)}
+                    className="p-2 rounded-lg bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/40 dark:text-green-300"
+                    title={`WhatsApp receipt to ${students.find(student => student.id === fee.studentId)?.phone || "parent number"}`}
+                    aria-label={`Send ${fee.studentName} receipt on WhatsApp`}
+                  >
+                    <MessageCircle className="w-4 h-4" />
+                  </button>
+                )}
                 <button
                   onClick={() => handleMarkPaid(fee)}
                   disabled={saving === fee.studentId}
@@ -204,6 +341,7 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
               </div>
             )}
           </div>
+          </>
         )}
 
         <button onClick={downloadFeeReport}

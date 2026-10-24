@@ -43,6 +43,7 @@ export const IdCardManager: React.FC<Props> = ({
   const [bulkMode, setBulkMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [cardOrientation, setCardOrientation] = useState<"landscape" | "portrait">("landscape");
+  const [cardsPerPage, setCardsPerPage] = useState<4 | 8>(4);
 
   // School Details & Customization State
   const [showSchoolHeaderModal, setShowSchoolHeaderModal] = useState(false);
@@ -506,8 +507,8 @@ export const IdCardManager: React.FC<Props> = ({
       <style>{`
         @media print {
           @page {
-            size: auto;
-            margin: 6mm;
+            size: ${cardOrientation === "landscape" ? "A4 landscape" : "A4 portrait"};
+            margin: 8mm;
           }
           body {
             background: white !important;
@@ -522,8 +523,35 @@ export const IdCardManager: React.FC<Props> = ({
             page-break-inside: avoid !important;
             break-inside: avoid !important;
             box-shadow: none !important;
-            margin: 3mm !important;
+            margin: 0 !important;
             display: inline-block !important;
+            transform-origin: center center !important;
+          }
+          .idcard-page {
+            width: ${cardOrientation === "landscape" ? "281mm" : "194mm"} !important;
+            height: ${cardOrientation === "landscape" ? "194mm" : "281mm"} !important;
+            display: grid !important;
+            grid-template-columns: repeat(${cardsPerPage === 4 ? 2 : cardOrientation === "landscape" ? 4 : 2}, 1fr) !important;
+            grid-template-rows: repeat(${cardsPerPage === 4 ? 2 : cardOrientation === "landscape" ? 2 : 4}, 1fr) !important;
+            gap: 2mm !important;
+            align-items: center !important;
+            justify-items: center !important;
+            page-break-after: always !important;
+            break-after: page !important;
+          }
+          .idcard-page:last-child {
+            page-break-after: auto !important;
+            break-after: auto !important;
+          }
+          .idcard-print-cell {
+            width: 100% !important;
+            height: 100% !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+          }
+          .idcard-print-cell .print-card-box {
+            transform: scale(${cardsPerPage === 4 ? (cardOrientation === "landscape" ? 1.55 : 1.45) : 0.78}) !important;
           }
           #pre-react-splash {
             display: none !important;
@@ -927,6 +955,17 @@ export const IdCardManager: React.FC<Props> = ({
                   {selectedIds.length > 0 ? `${selectedIds.length} cards ready to print` : "Print ke liye cards select karein"}
                 </span>
               </div>
+              <label className="flex items-center gap-2 text-xs font-bold text-slate-600 dark:text-slate-300">
+                A4 layout
+                <select
+                  value={cardsPerPage}
+                  onChange={event => setCardsPerPage(Number(event.target.value) as 4 | 8)}
+                  className="px-2 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700"
+                >
+                  <option value={4}>4 cards per page · larger</option>
+                  <option value={8}>8 cards per page · standard</option>
+                </select>
+              </label>
               <button
                 onClick={handlePrint}
                 disabled={selectedIds.length === 0}
@@ -937,22 +976,33 @@ export const IdCardManager: React.FC<Props> = ({
             </div>
 
             {/* A4 Sheet Print Grid with Cut Guides */}
-            <div
-              ref={printAreaRef}
-              className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 justify-items-center print:block print:w-full"
-            >
-              {(selectedIds.length > 0 ? currentList.filter(item => selectedIds.includes(item.id)) : currentList).map(item => (
-                <div key={item.id} className="relative group">
-                  <button
-                    onClick={() => toggleSelect(item.id)}
-                    className="absolute top-2 right-2 z-10 p-1.5 bg-white/90 rounded-lg shadow text-indigo-600 hover:scale-110 transition-transform print:hidden"
-                  >
-                    {selectedIds.includes(item.id) ? <CheckSquare className="w-5 h-5 text-indigo-600" /> : <Square className="w-5 h-5 text-slate-400" />}
-                  </button>
-                  {renderCard(item, activeTab === "staff")}
+            {(() => {
+              const printItems = selectedIds.length > 0
+                ? currentList.filter(item => selectedIds.includes(item.id))
+                : currentList;
+              const pages = Array.from({ length: Math.ceil(printItems.length / cardsPerPage) }, (_, pageIndex) =>
+                printItems.slice(pageIndex * cardsPerPage, (pageIndex + 1) * cardsPerPage)
+              );
+              return (
+                <div ref={printAreaRef} className="space-y-6 print:space-y-0">
+                  {pages.map((pageItems, pageIndex) => (
+                    <div key={`page-${pageIndex}`} className="idcard-page grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 justify-items-center print:gap-0">
+                      {pageItems.map(item => (
+                        <div key={item.id} className="idcard-print-cell relative group">
+                          <button
+                            onClick={() => toggleSelect(item.id)}
+                            className="absolute top-2 right-2 z-10 p-1.5 bg-white/90 rounded-lg shadow text-indigo-600 hover:scale-110 transition-transform print:hidden"
+                          >
+                            {selectedIds.includes(item.id) ? <CheckSquare className="w-5 h-5 text-indigo-600" /> : <Square className="w-5 h-5 text-slate-400" />}
+                          </button>
+                          {renderCard(item, activeTab === "staff")}
+                        </div>
+                      ))}
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              );
+            })()}
           </div>
         ) : (
           /* Single Card Live Studio */
