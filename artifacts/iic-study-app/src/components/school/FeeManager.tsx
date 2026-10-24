@@ -59,8 +59,11 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       getSchoolFeeHistory(schoolId),
     ]);
     const sts = allStudents.filter(student => !sessionId || student.sessionId === sessionId);
-    const feeData = allFeeData.filter(fee => !sessionId || fee.sessionId === sessionId);
-    const history = feeHistory.filter(fee => !sessionId || fee.sessionId === sessionId);
+    const feeData = allFeeData.filter(fee =>
+      !sessionId || !fee.sessionId || fee.sessionId === sessionId
+    );
+    // Unpaid fee balances belong to the student and carry across academic sessions.
+    const history = feeHistory;
     setClassNames(Object.fromEntries(schoolClasses.map((schoolClass: SchoolClass) => [schoolClass.id, schoolClass.name])));
     setStudents(sts);
 
@@ -74,14 +77,24 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       const latestCumulative = [...previousFees].reverse().find(fee =>
         fee.monthlyAmount !== undefined || fee.arrearsAmount !== undefined || fee.arrearsMonths !== undefined
       );
-      const unpaidLegacyFees = previousFees.filter(fee => !fee.paid);
-      const arrearsAmount = latestCumulative
-        ? (latestCumulative.paid ? 0 : Number(latestCumulative.amount || 0))
-        : unpaidLegacyFees.reduce((sum, fee) => sum + Number(fee.amount || 0), 0);
-      const arrearsMonths = latestCumulative
-        ? (latestCumulative.paid ? [] : Array.from(new Set([...(latestCumulative.arrearsMonths || []), latestCumulative.month])))
-        : unpaidLegacyFees.map(fee => fee.month);
-      const monthlyAmount = Number(existing?.monthlyAmount ?? existing?.amount ?? student.monthlyFee ?? 0);
+      const unpaidLegacyFees = previousFees.filter(fee =>
+        !fee.paid &&
+        (latestCumulative ? fee.month > latestCumulative.month : true)
+      );
+      const arrearsAmount =
+        (latestCumulative && !latestCumulative.paid
+          ? Number(latestCumulative.amount || 0)
+          : 0) +
+        unpaidLegacyFees.reduce((sum, fee) => sum + Number(fee.amount || 0), 0);
+      const arrearsMonths = Array.from(new Set([
+        ...(latestCumulative && !latestCumulative.paid
+          ? [...(latestCumulative.arrearsMonths || []), latestCumulative.month]
+          : []),
+        ...unpaidLegacyFees.map(fee => fee.month),
+      ])).sort();
+      const monthlyAmount = Number(
+        existing?.monthlyAmount ?? existing?.amount ?? student.monthlyFee ?? 0
+      );
 
       return {
         ...(existing || {}),
@@ -99,8 +112,23 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
         paid: Boolean(existing?.paid),
       } as MonthlyFee;
     });
-    if (month <= currentMonthStr()) {
-      const newBills = allFees.filter(fee => !feeMap.has(fee.studentId) && !fee.paid);
+    const currentMonth = currentMonthStr();
+    if (month <= currentMonth) {
+      const newBills = allFees.filter(fee => {
+        if (fee.paid) return false;
+        const stored = feeMap.get(fee.studentId);
+        if (!stored) return true;
+        if (month !== currentMonth) return false;
+
+        const storedMonths = [...(stored.arrearsMonths || [])].sort();
+        const calculatedMonths = [...(fee.arrearsMonths || [])].sort();
+        return (
+          Number(stored.amount || 0) !== Number(fee.amount || 0) ||
+          Number(stored.monthlyAmount ?? 0) !== Number(fee.monthlyAmount ?? 0) ||
+          Number(stored.arrearsAmount ?? 0) !== Number(fee.arrearsAmount ?? 0) ||
+          JSON.stringify(storedMonths) !== JSON.stringify(calculatedMonths)
+        );
+      });
       try {
         await Promise.all(newBills.map(fee => saveFee(fee)));
       } catch (error) {

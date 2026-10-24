@@ -566,7 +566,7 @@ export const IdCardManager: React.FC<Props> = ({
       <style>{`
         @media print {
           @page {
-            size: ${cardOrientation === "landscape" ? "A4 landscape" : "A4 portrait"};
+            size: A4 portrait;
             margin: 8mm;
           }
           body {
@@ -587,11 +587,11 @@ export const IdCardManager: React.FC<Props> = ({
             transform-origin: center center !important;
           }
           .idcard-page {
-            width: ${cardOrientation === "landscape" ? "281mm" : "194mm"} !important;
-            height: ${cardOrientation === "landscape" ? "194mm" : "281mm"} !important;
+            width: 194mm !important;
+            height: 281mm !important;
             display: grid !important;
-            grid-template-columns: repeat(${cardsPerPage === 4 ? 2 : cardOrientation === "landscape" ? 4 : 2}, 1fr) !important;
-            grid-template-rows: repeat(${cardsPerPage === 4 ? 2 : cardOrientation === "landscape" ? 2 : 4}, 1fr) !important;
+            grid-template-columns: repeat(2, 1fr) !important;
+            grid-template-rows: repeat(${cardsPerPage === 4 ? 2 : 4}, 1fr) !important;
             gap: 2mm !important;
             align-items: center !important;
             justify-items: center !important;
@@ -610,7 +610,7 @@ export const IdCardManager: React.FC<Props> = ({
             justify-content: center !important;
           }
           .idcard-print-cell .print-card-box {
-            transform: scale(${cardsPerPage === 4 ? (cardOrientation === "landscape" ? 1.55 : 1.45) : 0.78}) !important;
+            transform: scale(${cardsPerPage === 8 && cardOrientation === "portrait" ? 0.78 : 1}) !important;
           }
           #pre-react-splash {
             display: none !important;
