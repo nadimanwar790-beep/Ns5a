@@ -1,7 +1,8 @@
 {
-  "name": "Remix Remix Remix Remix Remix Remix Remix Revisunhub",
-  "description": "Imported from GitHub",
-  "capabilities": [
+  "name": "Remix StartKaro",
+  "description": "Launch your daily tasks and favorite applications instantly with a single, seamless tap.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]
 }
