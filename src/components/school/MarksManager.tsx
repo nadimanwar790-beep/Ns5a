@@ -39,6 +39,7 @@ export const MarksManager: React.FC<Props> = ({
   const [exams, setExams] = useState<ExamEntry[]>([]);
   const [view, setView] = useState<"list" | "new" | "entry" | "totals">("list");
   const [selectedExam, setSelectedExam] = useState<ExamEntry | null>(null);
+  const [termFilter, setTermFilter] = useState<string>("all");
   const [saving, setSaving] = useState(false);
 
   // New exam form
@@ -175,17 +176,51 @@ export const MarksManager: React.FC<Props> = ({
       <div className="p-4 space-y-4 max-w-2xl mx-auto">
         {isNew && (
           <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm space-y-3">
+            {/* 6-Exam System Presets */}
+            <div>
+              <label className="text-xs font-bold text-slate-500 dark:text-slate-400 block mb-1.5">
+                📅 2-Month Exam Presets (PA 40 Marks, Half/Final 100 Marks):
+              </label>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {[
+                  { name: "PA 1 (Periodic Assessment 1)", max: 40, date: "2026-05-18", label: "PA 1 (40 M)" },
+                  { name: "PA 2 (Periodic Assessment 2)", max: 40, date: "2026-07-25", label: "PA 2 (40 M)" },
+                  { name: "Half Yearly Examination", max: 100, date: "2026-09-22", label: "Half Yearly (100 M)" },
+                  { name: "PA 3 (Periodic Assessment 3)", max: 40, date: "2026-11-28", label: "PA 3 (40 M)" },
+                  { name: "PA 4 (Periodic Assessment 4)", max: 40, date: "2027-01-20", label: "PA 4 (40 M)" },
+                  { name: "Final Annual Examination", max: 100, date: "2027-03-15", label: "Final Exam (100 M)" },
+                ].map(p => (
+                  <button
+                    key={p.name}
+                    type="button"
+                    onClick={() => {
+                      setExamName(p.name);
+                      setMaxMarks(p.max);
+                      setExamDate(p.date);
+                    }}
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold border transition cursor-pointer ${
+                      examName === p.name
+                        ? "bg-blue-600 text-white border-blue-600 shadow-xs"
+                        : "bg-slate-50 dark:bg-slate-700 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-600 hover:bg-blue-50"
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <input value={examName} onChange={e => setExamName(e.target.value)} placeholder="Exam Name (e.g. Unit Test 1)"
-              className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white" />
+              className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-xs font-bold" />
             <input value={examSubjectName} onChange={e => setExamSubjectName(e.target.value)} placeholder="Subject Name"
-              className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white" />
+              className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-xs font-bold" />
             <div className="flex gap-3">
               <input type="date" value={examDate} onChange={e => setExamDate(e.target.value)}
-                className="flex-1 px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white" />
+                className="flex-1 px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-xs font-bold" />
               <div className="flex-1 flex items-center gap-2">
-                <label className="text-sm text-slate-500">Max:</label>
+                <label className="text-xs font-bold text-slate-500">Max Marks:</label>
                 <input type="number" value={maxMarks} onChange={e => setMaxMarks(Number(e.target.value))} min={1} max={1000}
-                  className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white" />
+                  className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-xs font-black" />
               </div>
             </div>
           </div>
@@ -251,6 +286,31 @@ export const MarksManager: React.FC<Props> = ({
 
       {view === "list" && (
         <div className="p-4 space-y-3 max-w-2xl mx-auto">
+          {/* Term Filter Pills */}
+          <div className="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+            {[
+              { id: "all", label: "Sabhi Exams" },
+              { id: "PA 1", label: "PA 1 (40 M)" },
+              { id: "PA 2", label: "PA 2 (40 M)" },
+              { id: "Half Yearly", label: "Half Yearly (100 M)" },
+              { id: "PA 3", label: "PA 3 (40 M)" },
+              { id: "PA 4", label: "PA 4 (40 M)" },
+              { id: "Final", label: "Final Exam (100 M)" },
+            ].map(tf => (
+              <button
+                key={tf.id}
+                onClick={() => setTermFilter(tf.id)}
+                className={`px-3 py-1 rounded-lg text-xs font-bold whitespace-nowrap transition cursor-pointer ${
+                  termFilter === tf.id
+                    ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-xs"
+                    : "bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
+                }`}
+              >
+                {tf.label}
+              </button>
+            ))}
+          </div>
+
           {exams.length === 0 && (
             <div className="text-center py-16 text-slate-400">
               <BookOpen className="w-12 h-12 mx-auto mb-2 opacity-30" />
@@ -258,32 +318,46 @@ export const MarksManager: React.FC<Props> = ({
               <p className="text-sm mt-1">Tap "New Exam" to add marks</p>
             </div>
           )}
-          {exams.map(exam => {
+          {exams
+            .filter(exam => {
+              if (termFilter === "all") return true;
+              return exam.examName.toLowerCase().includes(termFilter.toLowerCase());
+            })
+            .map(exam => {
             const appeared = Object.values(exam.studentMarks).filter(m => !m.absent).length;
             const avg = appeared > 0
               ? Math.round(Object.values(exam.studentMarks).filter(m => !m.absent).reduce((s, m) => s + m.marks, 0) / appeared)
               : 0;
             const pass = Object.values(exam.studentMarks).filter(m => !m.absent && m.marks / exam.maxMarks >= 0.33).length;
             return (
-              <div key={exam.id} className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm">
+              <div key={exam.id} className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm border border-slate-100 dark:border-slate-700">
                 <div className="flex items-start gap-3">
                   <div className="flex-1">
-                    <p className="font-bold text-slate-800 dark:text-white">{exam.examName}</p>
-                    <p className="text-sm text-slate-500">{exam.subjectName} • {exam.examDate} • Max: {exam.maxMarks}</p>
+                    <div className="flex items-center gap-2 flex-wrap mb-1">
+                      <p className="font-black text-slate-900 dark:text-white text-sm">{exam.examName}</p>
+                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase ${
+                        exam.maxMarks === 40
+                          ? "bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300"
+                          : "bg-purple-100 text-purple-800 dark:bg-purple-900/60 dark:text-purple-300"
+                      }`}>
+                        {exam.maxMarks === 40 ? "40 M • Periodic" : "100 M • Term Exam"}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500 font-bold">{exam.subjectName} • {exam.examDate}</p>
                     <div className="flex gap-3 mt-2 text-xs">
-                      <span className="text-slate-400">Appeared: <b className="text-slate-700 dark:text-slate-200">{appeared}</b></span>
-                      <span className="text-slate-400">Avg: <b className="text-blue-500">{avg}/{exam.maxMarks}</b></span>
-                      <span className="text-slate-400">Pass: <b className="text-green-500">{pass}</b></span>
+                      <span className="text-slate-400 font-medium">Appeared: <b className="text-slate-700 dark:text-slate-200">{appeared}</b></span>
+                      <span className="text-slate-400 font-medium">Avg: <b className="text-blue-500">{avg}/{exam.maxMarks}</b></span>
+                      <span className="text-slate-400 font-medium">Pass: <b className="text-green-500">{pass}</b></span>
                     </div>
                   </div>
                   <div className="flex gap-1">
-                    <button onClick={() => downloadExamReport(exam)} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700">
+                    <button onClick={() => downloadExamReport(exam)} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700" title="Download report">
                       <Download className="w-4 h-4 text-slate-500" />
                     </button>
-                    <button onClick={() => openExam(exam)} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700">
+                    <button onClick={() => openExam(exam)} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700" title="View & edit marks">
                       <BookOpen className="w-4 h-4 text-blue-500" />
                     </button>
-                    <button onClick={() => handleDeleteExam(exam.id)} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700">
+                    <button onClick={() => handleDeleteExam(exam.id)} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700" title="Delete exam">
                       <Trash2 className="w-4 h-4 text-red-400" />
                     </button>
                   </div>

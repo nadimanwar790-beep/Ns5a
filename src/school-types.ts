@@ -102,14 +102,30 @@ export interface SchoolSession {
   createdAt: string;
 }
 
+export interface ClassFeeHead {
+  id: string;
+  name: string; // e.g. "Admission Fee", "Tuition Fee", "Caution Money", "Annual Charges", "Bus Fee"
+  amount: number;
+}
+
+export interface ClassFeeStructure {
+  admissionFee: number;
+  tuitionFee: number;
+  cautionMoney: number;
+  annualCharges: number;
+  busFee: number;
+  customHeads?: ClassFeeHead[];
+}
+
 export interface SchoolClass {
   id: string;
   schoolId: string;
   sessionId: string;
-  name: string; // e.g. "Class 10-A"
-  section?: string;
+  name: string; // e.g. "Class 6"
+  section?: string; // e.g. "A" or "B"
   classTeacherId?: string;
   defaultFee?: number;
+  feeStructure?: ClassFeeStructure;
   createdAt: string;
 }
 
@@ -212,7 +228,7 @@ export interface AttendanceRecord {
       inTime?: string; // e.g. "08:15:30 AM"
       outTime?: string; // e.g. "02:30:15 PM"
       stayDuration?: string; // e.g. "6h 15m"
-      status?: "present" | "late" | "half_day" | "absent";
+      status?: "present" | "late" | "half_day" | "absent" | "leave" | "bunk";
       scanType?: "in" | "out";
        /** Timestamp retained by some legacy attendance entries. */
        createdAt?: string;
@@ -262,6 +278,27 @@ export interface MonthlyFee {
   paidBy?: string; // admin UID
   receiptNo?: string;
   note?: string;
+  paidAmount?: number;
+  balanceDue?: number;
+  concession?: number;
+  includeAdmissionFee?: boolean;
+  includeCautionMoney?: boolean;
+  includeAnnualCharges?: boolean;
+  includeBusFee?: boolean;
+  payModeInfo?: {
+    payMode: string;
+    date: string;
+    bank: string;
+    number: string;
+  };
+  items?: {
+    id: string;
+    slNo: number;
+    description: string;
+    due: number;
+    con: number;
+    paid: number;
+  }[];
 }
 
 // HOMEWORK
@@ -356,6 +393,19 @@ export interface SchoolNotice {
   createdBy: string;
   attachmentUrl?: string;
   pinned?: boolean;
+}
+
+export interface SchoolHoliday {
+  id: string;
+  schoolId: string;
+  title: string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD
+  days: number;
+  type: 'festival' | 'national' | 'vacation' | 'emergency';
+  description?: string;
+  createdAt: string;
+  createdBy: string;
 }
 
 export interface SchoolCertificate {

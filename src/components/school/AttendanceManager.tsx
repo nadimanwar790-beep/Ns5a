@@ -352,10 +352,12 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
             <span className="font-bold text-slate-800 dark:text-white">Legend:</span>
             <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-emerald-500 text-white font-black text-[10px] flex items-center justify-center">P</span> Present</span>
             <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-amber-500 text-white font-black text-[10px] flex items-center justify-center">L</span> Late Arrival</span>
+            <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-blue-500 text-white font-black text-[10px] flex items-center justify-center">LV</span> Leave</span>
+            <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-purple-600 text-white font-black text-[10px] flex items-center justify-center">B</span> Bunk</span>
             <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-rose-500 text-white font-black text-[10px] flex items-center justify-center">A</span> Absent</span>
             <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-amber-150 text-amber-900 border border-amber-300 dark:bg-amber-950/60 dark:text-amber-300 font-bold text-[9px] flex items-center justify-center">Sun</span> Sunday</span>
             <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-slate-200 dark:bg-slate-700 text-slate-400 font-black text-[10px] flex items-center justify-center">-</span> Holiday / No Record</span>
-            <span className="ml-auto text-[11px] text-indigo-600 dark:text-indigo-400 font-semibold italic">Tip: Click any cell to view In-Time & Exit-Time</span>
+            <span className="ml-auto text-[11px] text-indigo-600 dark:text-indigo-400 font-semibold italic">Tip: Click cell to view In-Time & Exit-Time</span>
           </div>
 
           {/* 31-Day Matrix Table */}
@@ -405,7 +407,12 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
 
                         if (rec && entry !== undefined) {
                           recordedDays++;
-                          if (entry.present) {
+                          if (entry.status === "leave") {
+                            return { day: d, date: dateStr, status: "LV", entry, isSun };
+                          } else if (entry.status === "bunk") {
+                            aCount++;
+                            return { day: d, date: dateStr, status: "B", entry, isSun };
+                          } else if (entry.present) {
                             if (entry.status === "late") {
                               lCount++;
                               pCount++;
@@ -448,6 +455,12 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
                             } else if (c.status === "A") {
                               badgeStyle = "bg-rose-500 text-white font-black cursor-pointer shadow-2xs hover:scale-110 active:scale-95";
                               text = "A";
+                            } else if (c.status === "LV") {
+                              badgeStyle = "bg-blue-500 text-white font-black cursor-pointer shadow-2xs hover:scale-110 active:scale-95";
+                              text = "LV";
+                            } else if (c.status === "B") {
+                              badgeStyle = "bg-purple-600 text-white font-black cursor-pointer shadow-2xs hover:scale-110 active:scale-95";
+                              text = "B";
                             } else if (c.status === "SUN") {
                               badgeStyle = "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400 font-semibold text-[9px]";
                               text = "Su";

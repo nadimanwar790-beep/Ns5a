@@ -44,12 +44,13 @@ import {
   Lock, Eye, EyeOff, Shield, ArrowLeft, ShoppingBag, AlertTriangle, Crown,
   CreditCard, Megaphone, TrendingUp, Briefcase, FileSpreadsheet,
   ClipboardList, Globe, UserPlus, QrCode, GraduationCap, CheckCircle2,
-  Printer, Search, Sparkles, Mail, PenTool
+  Printer, Search, Sparkles, Mail, PenTool, Loader2, AlertCircle
 } from "lucide-react";
 import { SchoolStore } from "./SchoolStore";
 import { SchoolPlanView } from "./SchoolPlanView";
 import { ClassQrCodeModal } from "./ClassQrCodeModal";
 import { StudentQuickActionModal } from "./StudentQuickActionModal";
+import { ClassFeeStructureSection } from "./ClassFeeStructureSection";
 
 interface Props {
   schoolId: string;
@@ -60,7 +61,7 @@ interface Props {
 type AdminView =
   | "dashboard"
   | "sessions" | "classes" | "subjects" | "teachers" | "students"
-  | "content" | "attendance" | "fees" | "fee_class" | "fee_all" | "report_card" | "marks" | "results"
+  | "content" | "attendance" | "fees" | "fee_class" | "fee_all" | "fee_structure" | "report_card" | "marks" | "results"
   | "store" | "subscription"
   | "id_cards" | "admit_cards" | "certificates" | "marksheet_hub" | "promotion" | "notices" | "staff_hrm" | "reports_hub"
   | "public_website" | "online_admissions";
@@ -204,6 +205,16 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
   }, [activeSession]);
 
   useEffect(() => {
+    // If active session is the demo session and classes still have old split classes (_a or _b), auto re-seed to 13 classes x 70 students
+    if (activeSession?.id === DEMO_SESSION_ID && classes.length > 0) {
+      const hasOldSplit = classes.some(c => c.id.includes("_a") || c.id.includes("_b"));
+      if (hasOldSplit && !demoGenerating) {
+        seedDemoSchoolData(schoolId, adminUid).catch(err => console.warn("Auto demo upgrade:", err));
+      }
+    }
+  }, [activeSession, classes, demoGenerating, schoolId, adminUid]);
+
+  useEffect(() => {
     if (!selectedClass) return;
     const unsubSubjects = subscribeToSubjects(schoolId, selectedClass.id, setSubjects);
     return unsubSubjects;
@@ -342,8 +353,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
     if (demoGenerating) return;
     const isRefresh = sessions.some(session => session.id === DEMO_SESSION_ID);
     const confirmation = isRefresh
-      ? "Demo session ke sample classes, students, marks aur fees refresh honge. Live session par asar nahi padega."
-      : "Alag DEMO session mein 11 classes, 110 students, 110 subjects, marks aur current-month fee records banenge. Live session nahi badlega. Continue?";
+      ? "Demo session ke 13 classes (Nursery to 10), 70 students per class (Sections A & B), 1:35 teacher ratio, 6 exams (PA1-4 40M, Half/Final 100M), 1-year fee receipts with 3-12 month dues, month-wise notices aur festival holidays refresh honge. Continue?"
+      : "Full 1-Year CBSE Demo Setup create hoga: 13 Classes (Nursery to 10), har class me 70 students (Sec A: 35, Sec B: 35), 1:35 teacher ratio (Salaries ₹5K-₹15K, Principal ₹25K, 3-day late cut), 6 exams (2-month cycle, PA 40M, Half/Final 100M), 1-year fee receipts with 3-12 month dues, month-wise notices aur festival holidays. Continue?";
     if (!window.confirm(confirmation)) return;
     setDemoGenerating(true);
     setDemoMessage("");
@@ -354,7 +365,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
         result.session,
       ]);
       setDemoMessage(
-        `${result.classes} classes, ${result.students} demo students, ${result.subjects} subjects, marks aur ${result.month} ke paid/due fees tayyar hain. Use this session dabakar demo kholen.`
+        `✅ Demo Complete: ${result.classes} sections, ${result.students} students (70/class), ${result.staff} staff (1:35 ratio), ${result.exams} exams (PA 40M / Term 100M), 1-year fee dues (3-12 months), ${result.notices} monthly notices aur ${result.holidays} festival holidays tayyar hain!`
       );
     } catch (error: any) {
       setDemoMessage(`Demo data poora nahi bana: ${error?.message || "Dobara try karein."}`);
@@ -809,9 +820,22 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
     );
   }
 
+  if (view === "fee_structure") {
+    return (
+      <ClassFeeStructureSection
+        schoolId={schoolId}
+        sessionId={activeSession?.id}
+        classes={classes}
+        onBack={() => setView("dashboard")}
+        onClassesUpdated={() => {}}
+      />
+    );
+  }
+
   const menuItems = [
     { label: "Sessions", icon: <Calendar className="w-5 h-5 text-blue-500" />, view: "sessions", count: sessions.length, locked: false },
     { label: "Classes", icon: <BookOpen className="w-5 h-5 text-purple-500" />, view: "classes", count: classes.length, locked: false },
+    { label: "Class Fee Setup", icon: <IndianRupee className="w-5 h-5 text-emerald-600" />, view: "fee_structure", count: "5 Heads", locked: false },
     { label: "Teachers", icon: <Users className="w-5 h-5 text-green-500" />, view: "teachers", count: teachers.length, locked: false },
     { label: "Students", icon: <Users className="w-5 h-5 text-orange-500" />, view: "students", count: students.length, locked: false },
     { label: "Fee Collection", icon: <IndianRupee className="w-5 h-5 text-emerald-500" />, view: "fees", count: null, locked: false },
@@ -882,8 +906,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
               </div>
             </div>
           )}
-          {sessions.map(s => (
-            <div key={s.id} className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm">
+          {sessions.map((s, idx) => (
+            <div key={s.id || `session-${s.name || idx}-${idx}`} className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm">
               {editingSessionId === s.id ? (
                 <div className="space-y-3">
                   <p className="text-xs font-semibold text-blue-500 uppercase tracking-wider">Edit Session</p>
@@ -978,7 +1002,16 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setView("fee_structure")}
+                    className="flex-1 sm:flex-none px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-1.5 shadow-md shadow-emerald-500/20 active:scale-95 transition-all cursor-pointer"
+                    title="Admission Fee, Tuition Fee, Caution Money, Annual Charges, Bus Fee edit karein"
+                  >
+                    <IndianRupee className="w-4 h-4" />
+                    <span>Class Fee Setup (5 Heads)</span>
+                  </button>
                   <button
                     type="button"
                     onClick={() => { setShowForm(showForm === "class" ? null : "class"); setEditingClassId(null); }}
@@ -1033,9 +1066,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                   <div>
                     <p className="text-xs text-slate-500 font-bold mb-1.5">Quick Grade Presets:</p>
                     <div className="flex flex-wrap gap-1.5">
-                      {CLASS_PRESETS.map(preset => (
+                      {CLASS_PRESETS.map((preset, idx) => (
                         <button
-                          key={preset}
+                          key={`quick-preset-${preset}-${idx}`}
                           type="button"
                           onClick={() => setClassForm(p => ({ ...p, name: preset }))}
                           className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all ${
@@ -1119,7 +1152,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                   </p>
                 </div>
               ) : (
-                filteredClasses.map(cls => {
+                filteredClasses.map((cls, idx) => {
                   const classStudents = students.filter(s => s.classId === cls.id);
                   const classSubjects = subjects.filter(s => s.classId === cls.id);
                   const defaultFee = Number((cls as any).defaultFee) || 0;
@@ -1132,7 +1165,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
 
                   return (
                     <div
-                      key={cls.id}
+                      key={cls.id || `cls-${cls.name}-${idx}`}
                       className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200/90 dark:border-slate-700/80 shadow-xs hover:shadow-md transition-all overflow-hidden"
                     >
                       {editingClassId === cls.id ? (
@@ -1146,9 +1179,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                           </div>
 
                           <div className="flex flex-wrap gap-1.5">
-                            {CLASS_PRESETS.map(preset => (
+                            {CLASS_PRESETS.map((preset, pIdx) => (
                               <button
-                                key={preset}
+                                key={`edit-preset-${cls.id || idx}-${preset}-${pIdx}`}
                                 type="button"
                                 onClick={() => setEditClassForm(p => ({ ...p, name: preset }))}
                                 className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-colors ${
@@ -1568,8 +1601,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                   </div>
                 </div>
               )}
-              {subjects.map(sub => (
-                <div key={sub.id} className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm flex items-center gap-3">
+              {subjects.map((sub, idx) => (
+                <div key={sub.id || `subject-${sub.name || idx}-${idx}`} className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm flex items-center gap-3">
                   <div className="flex-1">
                     <p className="font-bold text-slate-800 dark:text-white">{sub.name}</p>
                   </div>
@@ -1600,8 +1633,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
               {[
                 ["name", "Full Name *", "text"], ["email", "Email", "email"],
                 ["phone", "Phone", "tel"], ["employeeId", "Employee ID", "text"]
-              ].map(([k, label, type]) => (
-                <input key={k} type={type} value={(teacherForm as any)[k]}
+              ].map(([k, label, type], idx) => (
+                <input key={`teacher-field-${k}-${idx}`} type={type} value={(teacherForm as any)[k]}
                   onChange={e => setTeacherForm(p => ({ ...p, [k]: e.target.value }))}
                   placeholder={label}
                   className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
@@ -1612,16 +1645,16 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
               </div>
             </div>
           )}
-          {teachers.map(t => (
-            <div key={t.id} className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm">
+          {teachers.map((t, idx) => (
+            <div key={t.id || `teacher-${t.name || idx}-${idx}`} className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm">
               {editingTeacherId === t.id ? (
                 <div className="space-y-3">
                   <p className="text-xs font-semibold text-green-500 uppercase tracking-wider">Edit Teacher</p>
                   {[
                     ["name", "Full Name *", "text"], ["email", "Email", "email"],
                     ["phone", "Phone", "tel"], ["employeeId", "Employee ID", "text"]
-                  ].map(([k, label, type]) => (
-                    <input key={k} type={type} value={(editTeacherForm as any)[k]}
+                  ].map(([k, label, type], idx) => (
+                    <input key={`edit-teacher-field-${k}-${idx}`} type={type} value={(editTeacherForm as any)[k]}
                       onChange={e => setEditTeacherForm(p => ({ ...p, [k]: e.target.value }))}
                       placeholder={label}
                       className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
@@ -1679,8 +1712,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                     ["name", "Full Name *", "text"], ["rollNo", "Roll Number *", "text"],
                     ["admissionNo", "Admission No", "text"], ["fatherName", "Father's Name", "text"],
                     ["motherName", "Mother's Name", "text"], ["phone", "Phone / Mobile", "tel"],
-                  ].map(([k, label, type]) => (
-                    <input key={k} type={type} value={(studentForm as any)[k]}
+                  ].map(([k, label, type], idx) => (
+                    <input key={`student-field-${k}-${idx}`} type={type} value={(studentForm as any)[k]}
                       onChange={e => setStudentForm(p => ({ ...p, [k]: e.target.value }))}
                       placeholder={label}
                       className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
@@ -1702,8 +1735,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                         className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm font-semibold"
                       >
                         <option value="">Select Blood Group (Optional)</option>
-                        {BLOOD_GROUPS.map(bg => (
-                          <option key={bg} value={bg}>{bg}</option>
+                        {BLOOD_GROUPS.map((bg, idx) => (
+                          <option key={`student-bg-${bg}-${idx}`} value={bg}>{bg}</option>
                         ))}
                       </select>
                     </div>
@@ -1730,8 +1763,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
               )}
             </>
           )}
-          {classStudents.map(s => (
-            <div key={s.id} className="bg-white dark:bg-slate-800 rounded-xl p-3 shadow-sm border border-slate-100 dark:border-slate-700">
+          {classStudents.map((s, idx) => (
+            <div key={s.id || `student-${s.rollNo || idx}-${idx}`} className="bg-white dark:bg-slate-800 rounded-xl p-3 shadow-sm border border-slate-100 dark:border-slate-700">
               {editingStudentId === s.id ? (
                 <div className="space-y-3">
                   <p className="text-xs font-semibold text-orange-500 uppercase tracking-wider">Edit Student Details</p>
@@ -1739,8 +1772,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                     ["name", "Full Name *", "text"], ["rollNo", "Roll Number", "text"],
                     ["fatherName", "Father's Name", "text"], ["motherName", "Mother's Name", "text"],
                     ["phone", "Phone", "tel"]
-                  ].map(([k, label, type]) => (
-                    <input key={k} type={type} value={(editStudentForm as any)[k]}
+                  ].map(([k, label, type], idx) => (
+                    <input key={`edit-student-field-${k}-${idx}`} type={type} value={(editStudentForm as any)[k]}
                       onChange={e => setEditStudentForm(p => ({ ...p, [k]: e.target.value }))}
                       placeholder={label}
                       className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
@@ -1755,8 +1788,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                       className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm font-semibold"
                     >
                       <option value="">Select Blood Group</option>
-                      {BLOOD_GROUPS.map(bg => (
-                        <option key={bg} value={bg}>{bg}</option>
+                      {BLOOD_GROUPS.map((bg, idx) => (
+                        <option key={`edit-student-bg-${bg}-${idx}`} value={bg}>{bg}</option>
                       ))}
                     </select>
                   </div>
@@ -1900,7 +1933,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
 
           {feeSummaryLoading ? (
             <div className="text-center py-10 text-slate-400 text-sm">Loading fees...</div>
-          ) : sortedClasses.map(cls => {
+          ) : sortedClasses.map((cls, idx) => {
             const classStudents = students.filter(s => s.classId === cls.id);
             const classFees = allFees.filter(f => f.classId === cls.id);
             const expected = classStudents.reduce((sum, s) => sum + (s.monthlyFee || 0), 0);
@@ -1908,7 +1941,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
             const due = classFees.filter(f => !f.paid).reduce((sum, f) => sum + (f.amount || 0), 0);
             const pct = expected > 0 ? Math.round((collected / expected) * 100) : 0;
             return (
-              <button key={cls.id} onClick={() => { setFeeClassSelected(cls); setView("fee_class"); }}
+              <button key={cls.id || `fee-cls-${cls.name}-${idx}`} onClick={() => { setFeeClassSelected(cls); setView("fee_class"); }}
                 className="w-full bg-white dark:bg-slate-800 rounded-xl p-3 shadow-sm text-left hover:shadow-md transition-shadow">
                 <div className="flex items-center justify-between mb-1.5">
                   <p className="font-semibold text-slate-800 dark:text-white text-sm">{cls.name}</p>
@@ -2208,7 +2241,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                 {Array.isArray(school.customFields) && school.customFields.length > 0 && (
                   <div className="flex flex-wrap gap-1.5 pt-1">
                     {school.customFields.filter(f => f.label && f.value).map((f, i) => (
-                      <span key={i} className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-white/10 border border-white/10 text-[11px] text-blue-100 font-mono">
+                      <span key={`custom-field-${f.label}-${i}`} className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-white/10 border border-white/10 text-[11px] text-blue-100 font-mono">
                         <span className="font-semibold text-slate-300">{f.label}:</span>
                         <span>{f.value}</span>
                       </span>
@@ -2268,8 +2301,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                         ["mobile",        "Helpline / Mobile Number", "tel"],
                         ["address",       "Campus Address", "text"],
                         ["tagline",       "School Tagline / Motto", "text"],
-                      ].map(([k, lbl, t]) => (
-                        <div key={k}>
+                      ].map(([k, lbl, t], idx) => (
+                        <div key={`school-info-field-${k}-${idx}`}>
                           <label className="text-[11px] text-slate-300 mb-1 block">{lbl}</label>
                           <input
                             type={t}
@@ -2367,8 +2400,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
             {/* Existing sub-admins list */}
             {subAdmins.filter(p => p.role === 'SCHOOL_SUB_ADMIN').length > 0 && (
               <div className="space-y-2">
-                {subAdmins.filter(p => p.role === 'SCHOOL_SUB_ADMIN').map(p => (
-                  <div key={p.uid} className="flex items-center gap-3 bg-purple-50 dark:bg-purple-900/20 rounded-xl px-3 py-2">
+                {subAdmins.filter(p => p.role === 'SCHOOL_SUB_ADMIN').map((p, idx) => (
+                  <div key={p.uid || p.email || `subadmin-${idx}`} className="flex items-center gap-3 bg-purple-50 dark:bg-purple-900/20 rounded-xl px-3 py-2">
                     <div className="w-8 h-8 rounded-full bg-purple-200 dark:bg-purple-700 flex items-center justify-center text-sm font-bold text-purple-700 dark:text-purple-200 flex-shrink-0">
                       {(p.name || p.email).slice(0, 1).toUpperCase()}
                     </div>
@@ -2532,8 +2565,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
 
           {/* Menu */}
           <div className="space-y-2">
-            {menuItems.map(item => (
-              <button key={item.view} onClick={() => setView(item.view as AdminView)}
+            {menuItems.map((item, idx) => (
+              <button key={item.view || `menu-item-${item.label}-${idx}`} onClick={() => setView(item.view as AdminView)}
                 className="w-full bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm flex items-center gap-3 hover:shadow-md transition-shadow text-left">
                 {item.icon}
                 <span className="flex-1 font-medium text-slate-800 dark:text-white">{item.label}</span>

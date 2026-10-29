@@ -1694,7 +1694,7 @@ export const FlashcardMcqView: React.FC<Props> = ({
                         const toEliminate = sampleN(wrongIndices, Math.min(2, wrongIndices.length));
                         setProjectorEliminated(prev => ({
                           ...prev,
-                          [projectorQIndex]: new Set(toEliminate)
+                          [projectorQIndex]: new Set<number>(toEliminate as number[])
                         }));
                       }
                     }

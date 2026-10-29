@@ -82,42 +82,83 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
   const [layoutMode, setLayoutMode] = useState<"4in1" | "full">("4in1");
 
   // Pay Mode Information
-  const [payMode, setPayMode] = useState<string>("Cheque");
-  const [bank, setBank] = useState<string>("HDFC BANK");
-  const [chequeNumber, setChequeNumber] = useState<string>("689870,06,07");
-  const [payDate, setPayDate] = useState<string>(receiptDate);
+  const [payMode, setPayMode] = useState<string>(() => fee.payModeInfo?.payMode || "Cheque");
+  const [bank, setBank] = useState<string>(() => fee.payModeInfo?.bank || "HDFC BANK");
+  const [chequeNumber, setChequeNumber] = useState<string>(() => fee.payModeInfo?.number || "689870,06,07");
+  const [payDate, setPayDate] = useState<string>(() => fee.payModeInfo?.date || receiptDate);
 
-  // Fee items breakdown (Default mirrors realistic breakdown from DPS screenshot or dynamically adapts to fee)
+  // Fee items breakdown (All 5 fee heads matching Delhi Public School screenshot)
   const [items, setItems] = useState<FeeReceiptItem[]>(() => {
-    const baseFee = Number(fee.monthlyAmount ?? fee.amount ?? 0) || 5000;
+    if (fee.items && fee.items.length > 0) {
+      return fee.items;
+    }
+    const baseFee = Number(fee.monthlyAmount ?? fee.amount ?? 0) || 19140;
+    const effectivePaid = fee.paidAmount !== undefined ? Number(fee.paidAmount) : (fee.paid ? baseFee : 0);
     const arrears = Number(fee.arrearsAmount || 0);
 
-    if (baseFee >= 50000) {
-      // Large fee breakdown like in screenshot
-      return [
-        { id: "1", slNo: 1, description: "Admission Fee", due: 65000, con: 0, paid: 65000 },
-        { id: "2", slNo: 2, description: "Tuition Fee", due: 19140, con: 0, paid: 19140 },
-        { id: "3", slNo: 3, description: "Caution Money", due: 60000, con: 0, paid: 60000 },
-        { id: "4", slNo: 4, description: "Annual Charges", due: 23320, con: 0, paid: 23320 },
-        { id: "5", slNo: 5, description: "Bus Fee", due: 10360, con: 0, paid: 10360 },
-      ];
-    }
+    const initialList: FeeReceiptItem[] = [];
+    let sl = 1;
+    initialList.push({
+      id: "tuition",
+      slNo: sl++,
+      description: "Tuition Fee",
+      due: baseFee,
+      con: Number(fee.concession || 0),
+      paid: effectivePaid
+    });
 
-    // Standard school fee breakdown
-    const list: FeeReceiptItem[] = [
-      { id: "1", slNo: 1, description: "Tuition Fee", due: baseFee, con: 0, paid: baseFee },
-    ];
+    if (fee.includeAdmissionFee) {
+      initialList.push({
+        id: "admission",
+        slNo: sl++,
+        description: "Admission Fee",
+        due: 65000,
+        con: 0,
+        paid: fee.paid ? 65000 : 0
+      });
+    }
+    if (fee.includeCautionMoney) {
+      initialList.push({
+        id: "caution",
+        slNo: sl++,
+        description: "Caution Money",
+        due: 60000,
+        con: 0,
+        paid: fee.paid ? 60000 : 0
+      });
+    }
+    if (fee.includeAnnualCharges) {
+      initialList.push({
+        id: "annual",
+        slNo: sl++,
+        description: "Annual Charges",
+        due: 23320,
+        con: 0,
+        paid: fee.paid ? 23320 : 0
+      });
+    }
+    if (fee.includeBusFee) {
+      initialList.push({
+        id: "bus",
+        slNo: sl++,
+        description: "Bus Fee",
+        due: 10360,
+        con: 0,
+        paid: fee.paid ? 10360 : 0
+      });
+    }
     if (arrears > 0) {
-      list.push({
-        id: "2",
-        slNo: 2,
+      initialList.push({
+        id: "arrears",
+        slNo: sl++,
         description: "Back Due / Previous Arrears",
         due: arrears,
         con: 0,
-        paid: arrears,
+        paid: fee.paid ? arrears : 0
       });
     }
-    return list;
+
+    return initialList;
   });
 
   // Calculate totals

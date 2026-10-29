@@ -210,11 +210,11 @@ export const PlanComparisonManager: React.FC<Props> = ({
       const q = searchQuery.toLowerCase();
       const filteredItems = g.items.filter(
         i =>
-          i.label.toLowerCase().includes(q) ||
-          i.free.toLowerCase().includes(q) ||
-          i.basic.toLowerCase().includes(q) ||
-          i.ultra.toLowerCase().includes(q) ||
-          g.category.toLowerCase().includes(q)
+          (i.label && String(i.label).toLowerCase().includes(q)) ||
+          String(i.free ?? '').toLowerCase().includes(q) ||
+          String(i.basic ?? '').toLowerCase().includes(q) ||
+          String(i.ultra ?? '').toLowerCase().includes(q) ||
+          (g.category && String(g.category).toLowerCase().includes(q))
       );
       return { ...g, items: filteredItems };
     })
@@ -607,7 +607,7 @@ export const PlanComparisonManager: React.FC<Props> = ({
                                 </label>
                                 <input
                                   type="text"
-                                  value={item.free}
+                                  value={String(item.free ?? '')}
                                   onChange={e =>
                                     handleItemChange(realGroupIndex, iIdx, 'free', e.target.value)
                                   }
@@ -642,7 +642,7 @@ export const PlanComparisonManager: React.FC<Props> = ({
                                 </label>
                                 <input
                                   type="text"
-                                  value={item.basic}
+                                  value={String(item.basic ?? '')}
                                   onChange={e =>
                                     handleItemChange(realGroupIndex, iIdx, 'basic', e.target.value)
                                   }
@@ -674,7 +674,7 @@ export const PlanComparisonManager: React.FC<Props> = ({
                                 </label>
                                 <input
                                   type="text"
-                                  value={item.ultra}
+                                  value={String(item.ultra ?? '')}
                                   onChange={e =>
                                     handleItemChange(realGroupIndex, iIdx, 'ultra', e.target.value)
                                   }

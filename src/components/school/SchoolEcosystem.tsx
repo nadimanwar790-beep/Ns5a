@@ -14,11 +14,22 @@ interface Props {
   email: string;
   displayName: string;
   isSuperAdmin: boolean; // true if uid matches global super admin
+  defaultSchoolId?: string;
+  forceAdminView?: boolean;
   onBack?: () => void;
   onOpenPlatformContent?: () => void;
 }
 
-export const SchoolEcosystem: React.FC<Props> = ({ uid, email, displayName, isSuperAdmin, onBack, onOpenPlatformContent }) => {
+export const SchoolEcosystem: React.FC<Props> = ({
+  uid,
+  email,
+  displayName,
+  isSuperAdmin,
+  defaultSchoolId = "dps_gurgaon_sector45",
+  forceAdminView = true,
+  onBack,
+  onOpenPlatformContent
+}) => {
   const [profile, setProfile] = useState<SchoolUserProfile | null | undefined>(undefined);
   const [loading, setLoading] = useState(true);
 
@@ -27,6 +38,8 @@ export const SchoolEcosystem: React.FC<Props> = ({ uid, email, displayName, isSu
     setLoading(true);
     getSchoolUserProfile(uid).then(p => {
       setProfile(p);
+      setLoading(false);
+    }).catch(() => {
       setLoading(false);
     });
   };
@@ -51,7 +64,14 @@ export const SchoolEcosystem: React.FC<Props> = ({ uid, email, displayName, isSu
     return <SuperAdminPanel adminUid={uid} onBack={onBack} />;
   }
 
-  // No profile found — let the user pick & join a school
+  // If forceAdminView or user has school admin profile, open SchoolAdminPanel directly
+  const effectiveSchoolId = profile?.schoolId || defaultSchoolId || "dps_gurgaon_sector45";
+
+  if (forceAdminView || profile?.role === "SCHOOL_ADMIN" || profile?.role === "SCHOOL_SUB_ADMIN") {
+    return <SchoolAdminPanel schoolId={effectiveSchoolId} adminUid={uid} onBack={onBack} />;
+  }
+
+  // No profile found and forceAdminView is false — let the user pick & join a school
   if (!profile) {
     return (
       <SchoolJoinScreen
@@ -62,11 +82,6 @@ export const SchoolEcosystem: React.FC<Props> = ({ uid, email, displayName, isSu
         onBack={onBack}
       />
     );
-  }
-
-  // School Admin or Sub-Admin (same panel, same access)
-  if (profile.role === "SCHOOL_ADMIN" || profile.role === "SCHOOL_SUB_ADMIN") {
-    return <SchoolAdminPanel schoolId={profile.schoolId} adminUid={uid} onBack={onBack} />;
   }
 
   // Teacher

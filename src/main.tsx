@@ -1,161 +1,96 @@
-import React from 'react';
+import React, { Component, ErrorInfo, ReactNode } from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
-import './app.css';
-import 'katex/dist/katex.min.css';
-import { ErrorBoundary } from './components/ErrorBoundary';
-import { registerSW } from 'virtual:pwa-register';
-import { installStorageQuotaProtection } from './utils/safeUtils';
-import { logErrorToFirebase } from './utils/errorLogger';
 
-// Intercept and protect localStorage against QuotaExceededError crashes
-installStorageQuotaProtection();
-
-registerSW({
-  onNeedRefresh() {},
-  onOfflineReady() {
-    console.log('[PWA] App is ready to work offline');
-  },
-});
-
-// Request persistent storage so the browser does NOT auto-evict
-// IndexedDB data (nst_content_* chapter cache, nst_user_history, etc.)
-// This prevents the daily content-deletion issue on mobile Chrome.
-if (navigator.storage && navigator.storage.persist) {
-  navigator.storage.persist().then(granted => {
-    console.log(`[IIC] Persistent storage ${granted ? 'granted ✅' : 'not granted (browser may still evict)'}`);
-  }).catch(() => {});
+interface ErrorBoundaryProps {
+  children: ReactNode;
 }
 
-// Intercept benign Firestore offline transition and network warnings so they don't get logged as fatal uncaught console errors
-const _origConsoleError = console.error;
-console.error = (...args: any[]) => {
-  const text = args.map(a => (a?.stack || a?.message || String(a || ''))).join(' ').toLowerCase();
-  if (
-    text.includes('could not reach cloud firestore backend') ||
-    text.includes('client will operate in offline mode') ||
-    text.includes("backend didn't respond within") ||
-    text.includes('pending promise was never set') ||
-    (text.includes('@firebase/auth') && text.includes('internal assertion failed')) ||
-    (text.includes('@firebase/firestore') && (text.includes('offline') || text.includes('10 seconds'))) ||
-    text.includes('failed to reload') ||
-    (text.includes('[vite]') && (text.includes('reload') || text.includes('hmr') || text.includes('connecting'))) ||
-    text.includes('permission denied') ||
-    text.includes('permission-denied') ||
-    text.includes('permission_denied')
-  ) {
-    console.warn('[IIC Notice]', ...args);
-    return;
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+class RootErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false, error: null };
   }
-  _origConsoleError.apply(console, args);
-};
 
-const isBenignError = (reason: any): boolean => {
-  if (!reason) return true;
-  const code = reason.code || reason.name || '';
-  const msg = (reason.message || String(reason)).toLowerCase();
-  return (
-    code === 'unavailable' ||
-    code === 'failed-precondition' ||
-    code === 'deadline-exceeded' ||
-    code === 'cancelled' ||
-    code === 'AbortError' ||
-    code === 'NetworkError' ||
-    code === 'QuotaExceededError' ||
-    code === 'NS_ERROR_DOM_QUOTA_REACHED' ||
-    code === 'permission-denied' ||
-    code === 'PERMISSION_DENIED' ||
-    msg.includes('permission denied') ||
-    msg.includes('permission-denied') ||
-    msg.includes('permission_denied') ||
-    msg.includes('script error') ||
-    msg === 'script error.' ||
-    msg === 'script error' ||
-    msg.includes('network') ||
-    msg.includes('offline') ||
-    msg.includes('failed to fetch') ||
-    msg.includes('load failed') ||
-    msg.includes('client is offline') ||
-    msg.includes('could not reach cloud firestore backend') ||
-    msg.includes("backend didn't respond") ||
-    msg.includes('client will operate in offline mode') ||
-    msg.includes('pending promise was never set') ||
-    msg.includes('internal assertion failed') ||
-    msg.includes('quota') ||
-    msg.includes('exceeded the quota')
-  );
-};
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
 
-// Auto-capture console.error calls containing Error objects or error strings
-const _originalConsoleError = console.error;
-let _isLoggingConsoleError = false;
-console.error = function (...args: any[]) {
-  try {
-    _originalConsoleError.apply(console, args);
-  } catch {}
-  if (_isLoggingConsoleError) return;
-  try {
-    _isLoggingConsoleError = true;
-    for (const arg of args) {
-      if (arg instanceof Error) {
-        if (!isBenignError(arg)) {
-          logErrorToFirebase(arg, { type: 'runtime' }).catch(() => {});
-        }
-        break;
-      } else if (typeof arg === 'string' && (arg.toLowerCase().includes('error') || arg.toLowerCase().includes('failed') || arg.toLowerCase().includes('uncaught'))) {
-        if (!isBenignError(arg)) {
-          logErrorToFirebase(new Error(arg), { type: 'runtime' }).catch(() => {});
-          break;
-        }
-      }
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('Uncaught error in React tree:', error, errorInfo);
+    // Dismiss splash screen in case error happened during mount
+    if (typeof (window as any).hidePreReactSplash === 'function') {
+      (window as any).hidePreReactSplash();
     }
-  } catch {} finally {
-    _isLoggingConsoleError = false;
   }
-};
 
-window.addEventListener('unhandledrejection', (event) => {
-  if (isBenignError(event.reason)) {
-    console.warn('[suppressed rejection]:', event.reason);
-    event.preventDefault();
-    return;
-  }
-  const err = event.reason instanceof Error ? event.reason : new Error(String(event.reason ?? 'Unhandled Promise Rejection'));
-  logErrorToFirebase(err, { type: 'promise' }).catch(() => {});
-});
+  handleReload = () => {
+    window.location.reload();
+  };
 
-window.addEventListener('error', (event) => {
-  if (!event.error && (event.message === 'Script error.' || event.message === 'Script error')) {
-    event.preventDefault();
-    if (event.stopImmediatePropagation) event.stopImmediatePropagation();
-    return;
+  handleReset = () => {
+    try {
+      localStorage.clear();
+      sessionStorage.clear();
+    } catch (e) {}
+    window.location.reload();
+  };
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4">
+          <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center shadow-2xl">
+            <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-2xl">
+              ⚠️
+            </div>
+            <h2 className="text-xl font-bold text-slate-100 mb-2">Application Notice</h2>
+            <p className="text-sm text-slate-400 mb-6">
+              A temporary issue occurred while rendering. Click below to reload or reset the view.
+            </p>
+            <div className="flex items-center justify-center gap-3">
+              <button
+                onClick={this.handleReload}
+                className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-xl text-sm transition-colors shadow-lg shadow-blue-600/25"
+              >
+                Reload App
+              </button>
+              <button
+                onClick={this.handleReset}
+                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium rounded-xl text-sm transition-colors border border-slate-700"
+              >
+                Reset Data
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
   }
-  if (isBenignError(event.error || event.message)) {
-    console.warn('[suppressed error]:', event.error || event.message);
-    event.preventDefault();
-    if (event.stopImmediatePropagation) event.stopImmediatePropagation();
-    return;
-  }
-  logErrorToFirebase(event.error || new Error(event.message || 'Unknown runtime error'), {
-    type: 'runtime',
-  }).catch(() => {});
-}, true);
+}
 
 const rootElement = document.getElementById('root');
-if (!rootElement) {
-  throw new Error("Could not find root element to mount to");
+if (rootElement) {
+  const root = ReactDOM.createRoot(rootElement);
+  root.render(
+    <React.StrictMode>
+      <RootErrorBoundary>
+        <App />
+      </RootErrorBoundary>
+    </React.StrictMode>
+  );
+
+  // Trigger splash dismissal as soon as render is dispatched
+  if (typeof (window as any).hidePreReactSplash === 'function') {
+    (window as any).hidePreReactSplash();
+  }
 }
 
-const root = ReactDOM.createRoot(rootElement);
-root.render(
-  <React.StrictMode>
-    <ErrorBoundary>
-      <App />
-    </ErrorBoundary>
-  </React.StrictMode>
-);
-
-if (typeof (window as any).hidePreReactSplash === 'function') {
-  (window as any).hidePreReactSplash();
-}

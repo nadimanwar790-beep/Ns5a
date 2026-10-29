@@ -46,6 +46,7 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
 
   // Pay slip state
   const [selectedStaffForSlip, setSelectedStaffForSlip] = useState<StaffEmployee | null>(null);
+  const [lateDaysMap, setLateDaysMap] = useState<Record<string, number>>({});
 
   const loadData = async () => {
     setLoading(true);
@@ -281,6 +282,17 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
                       <p className="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
                         <Phone className="w-3 h-3" /> {st.phone}
                       </p>
+                      {/* Late Entries & 3-day rule badge */}
+                      {Number(st.lateEntriesCount || 0) > 0 ? (
+                        <div className="mt-2 text-[10px] font-bold px-2 py-1 rounded-lg bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-800 flex items-center justify-between">
+                          <span>⏱️ {st.lateEntriesCount} Late Entries</span>
+                          <span>Cut: {Math.floor(Number(st.lateEntriesCount) / 3)} Day</span>
+                        </div>
+                      ) : (
+                        <div className="mt-2 text-[10px] font-bold px-2 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300">
+                          ✨ 0 Late Entries (Full Pay)
+                        </div>
+                      )}
                     </div>
                     <div className="pt-2 border-t dark:border-slate-700 flex justify-between items-center text-xs">
                       <span className="text-slate-400">Monthly Salary:</span>
@@ -444,56 +456,107 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
             </div>
 
             {selectedStaffForSlip ? (
-              <div className="bg-white rounded-2xl border-2 border-slate-900 p-8 shadow-xl max-w-2xl mx-auto text-slate-900 print:shadow-none print:border-2 print:m-0 print:max-w-none">
-                <div className="text-center border-b-2 border-slate-900 pb-4 mb-4">
-                  <h2 className="text-2xl font-black uppercase text-slate-900">{school.name}</h2>
-                  <p className="text-xs text-slate-600">{school.address}</p>
-                  <span className="inline-block px-3 py-1 rounded-full bg-slate-900 text-white font-black text-xs uppercase mt-2">
-                    MONTHLY SALARY SLIP
-                  </span>
+              <div className="space-y-4">
+                {/* Rule notice & interactive late adjuster */}
+                <div className="bg-amber-50 dark:bg-amber-950/40 p-4 rounded-2xl border border-amber-200 dark:border-amber-800 flex flex-wrap items-center justify-between gap-3 print:hidden">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-black uppercase tracking-wider text-amber-900 dark:text-amber-200">
+                        ⚖️ Teacher Attendance & Late Entry Salary Cut Rule:
+                      </span>
+                      <span className="text-[11px] font-black px-2 py-0.5 rounded-full bg-amber-200 dark:bg-amber-900 text-amber-950 dark:text-amber-100">
+                        3 Days Late = 1 Day Salary Cut
+                      </span>
+                    </div>
+                    <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                      Agar teacher 3 din late aate hain to 1 din ka salary kat jayega. Daily rate = ₹{Math.round(selectedStaffForSlip.monthlySalary / 30)}/day.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 bg-white dark:bg-slate-800 px-3 py-1.5 rounded-xl border border-amber-300 dark:border-amber-700">
+                    <span className="text-xs font-bold text-slate-600 dark:text-slate-300">Late Days (This Month):</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="31"
+                      value={lateDaysMap[selectedStaffForSlip.id] ?? (selectedStaffForSlip.lateEntriesCount || 0)}
+                      onChange={e => {
+                        const val = Math.max(0, parseInt(e.target.value) || 0);
+                        setLateDaysMap(prev => ({ ...prev, [selectedStaffForSlip.id]: val }));
+                      }}
+                      className="w-16 px-2 py-1 text-xs font-black bg-slate-100 dark:bg-slate-700 rounded-lg text-center border-0 text-slate-900 dark:text-white"
+                    />
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4 text-xs bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6">
-                  <div>
-                    <span className="text-slate-500 font-bold">Employee Name: </span>
-                    <strong className="text-slate-900 text-sm">{selectedStaffForSlip.name}</strong>
+                <div className="bg-white rounded-2xl border-2 border-slate-900 p-8 shadow-xl max-w-2xl mx-auto text-slate-900 print:shadow-none print:border-2 print:m-0 print:max-w-none">
+                  <div className="text-center border-b-2 border-slate-900 pb-4 mb-4">
+                    <h2 className="text-2xl font-black uppercase text-slate-900">{school.name}</h2>
+                    <p className="text-xs text-slate-600">{school.address}</p>
+                    <span className="inline-block px-3 py-1 rounded-full bg-slate-900 text-white font-black text-xs uppercase mt-2">
+                      MONTHLY SALARY SLIP
+                    </span>
                   </div>
-                  <div>
-                    <span className="text-slate-500 font-bold">Designation: </span>
-                    <strong className="text-slate-900">{selectedStaffForSlip.designation}</strong>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 font-bold">Phone Number: </span>
-                    <strong className="text-slate-900">{selectedStaffForSlip.phone}</strong>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 font-bold">Pay Month: </span>
-                    <strong className="text-slate-900">{new Date().toLocaleString("en-IN", { month: "long", year: "numeric" })}</strong>
-                  </div>
-                </div>
 
-                <table className="w-full text-left text-xs border border-slate-300 rounded-xl overflow-hidden mb-6">
-                  <thead className="bg-slate-800 text-white">
-                    <tr>
-                      <th className="p-2.5">Earnings Description</th>
-                      <th className="p-2.5 text-right">Amount (₹)</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200">
-                    <tr>
-                      <td className="p-2.5 font-bold">Basic Pay + Allowances</td>
-                      <td className="p-2.5 text-right font-black">₹{selectedStaffForSlip.monthlySalary.toLocaleString()}</td>
-                    </tr>
-                    <tr>
-                      <td className="p-2.5 text-slate-500">Deductions (TDS / Advance / PF)</td>
-                      <td className="p-2.5 text-right text-slate-500">₹0</td>
-                    </tr>
-                    <tr className="bg-emerald-50 text-emerald-950 font-black text-sm">
-                      <td className="p-2.5">Net Payable Salary</td>
-                      <td className="p-2.5 text-right">₹{selectedStaffForSlip.monthlySalary.toLocaleString()}</td>
-                    </tr>
-                  </tbody>
-                </table>
+                  <div className="grid grid-cols-2 gap-4 text-xs bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6">
+                    <div>
+                      <span className="text-slate-500 font-bold">Employee Name: </span>
+                      <strong className="text-slate-900 text-sm">{selectedStaffForSlip.name}</strong>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 font-bold">Designation: </span>
+                      <strong className="text-slate-900">{selectedStaffForSlip.designation}</strong>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 font-bold">Phone Number: </span>
+                      <strong className="text-slate-900">{selectedStaffForSlip.phone}</strong>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 font-bold">Pay Month: </span>
+                      <strong className="text-slate-900">{new Date().toLocaleString("en-IN", { month: "long", year: "numeric" })}</strong>
+                    </div>
+                  </div>
+
+                  {(() => {
+                    const lateCount = lateDaysMap[selectedStaffForSlip.id] ?? (selectedStaffForSlip.lateEntriesCount || 0);
+                    const dailyRate = Math.round(selectedStaffForSlip.monthlySalary / 30);
+                    const deductedDays = Math.floor(lateCount / 3);
+                    const lateDeduction = deductedDays * dailyRate;
+                    const netSalary = Math.max(0, selectedStaffForSlip.monthlySalary - lateDeduction);
+
+                    return (
+                      <table className="w-full text-left text-xs border border-slate-300 rounded-xl overflow-hidden mb-6">
+                        <thead className="bg-slate-800 text-white">
+                          <tr>
+                            <th className="p-2.5">Earnings & Deductions Description</th>
+                            <th className="p-2.5 text-right">Amount (₹)</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200">
+                          <tr>
+                            <td className="p-2.5 font-bold">Basic Pay + Standard Allowances</td>
+                            <td className="p-2.5 text-right font-black">₹{selectedStaffForSlip.monthlySalary.toLocaleString()}</td>
+                          </tr>
+                          {deductedDays > 0 ? (
+                            <tr className="bg-rose-50 text-rose-900">
+                              <td className="p-2.5 font-bold">
+                                Late Entry Penalty ({lateCount} Late Days @ 3:1 Ratio = -{deductedDays} Day Salary Cut)
+                              </td>
+                              <td className="p-2.5 text-right font-black text-rose-700">-₹{lateDeduction.toLocaleString()}</td>
+                            </tr>
+                          ) : (
+                            <tr>
+                              <td className="p-2.5 text-slate-500">Late Penalty (0 Late Days)</td>
+                              <td className="p-2.5 text-right text-slate-500">₹0</td>
+                            </tr>
+                          )}
+                          <tr className="bg-emerald-50 text-emerald-950 font-black text-sm">
+                            <td className="p-2.5">Net Payable Salary</td>
+                            <td className="p-2.5 text-right text-emerald-800">₹{netSalary.toLocaleString()}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    );
+                  })()}
 
                 <div className="grid grid-cols-2 gap-8 pt-8 border-t border-slate-300 text-center text-xs">
                   <div>
@@ -508,7 +571,8 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
                   </div>
                 </div>
               </div>
-            ) : null}
+            </div>
+          ) : null}
           </div>
         )}
       </div>

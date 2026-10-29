@@ -48,7 +48,7 @@ export function getNewContentItems(
         pageIndex: i,
         bookName: entry.bookName || "Lucent",
         lessonTitle: entry.lessonTitle || "Chapter",
-        pageNo: page.pageNo || String(i + 1),
+        pageNo: String(page.pageNo || (i + 1)),
         date: page.date,
         classLevel: entry.classLevel || "COMPETITION",
         subject: entry.subject || "",

@@ -43,6 +43,7 @@ export const StudentQuickActionModal: React.FC<Props> = ({
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
   const [updatingFeeId, setUpdatingFeeId] = useState<string | null>(null);
   const [dpsReceiptFee, setDpsReceiptFee] = useState<MonthlyFee | null>(null);
+  const [expandedFeeMonths, setExpandedFeeMonths] = useState<string[]>([]);
   const [updatingBloodGroup, setUpdatingBloodGroup] = useState(false);
   const [bloodGroupUpdatedToast, setBloodGroupUpdatedToast] = useState(false);
 
@@ -599,68 +600,119 @@ export const StudentQuickActionModal: React.FC<Props> = ({
                   </div>
                 ) : (
                   <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-                    {feeRecords.map(fee => {
+                    {feeRecords.map((fee, idx) => {
                       const monthName = new Date(`${fee.month}-01T00:00:00`).toLocaleDateString("en-IN", {
                         month: "short",
                         year: "numeric",
                       });
                       return (
                         <div
-                          key={fee.month}
-                          className={`p-3 rounded-xl border flex items-center justify-between gap-3 text-xs ${
+                          key={fee.id || fee.month || `fee-rec-${idx}`}
+                          className={`p-3 rounded-xl border text-xs space-y-2 ${
                             fee.paid
                               ? "bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800"
                               : "bg-orange-50/50 dark:bg-orange-950/20 border-orange-200 dark:border-orange-800"
                           }`}
                         >
-                          <div>
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-slate-800 dark:text-white text-sm">{monthName}</span>
+                                <span
+                                  className={`px-2 py-0.5 rounded text-[10px] font-extrabold ${
+                                    fee.paid
+                                      ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300"
+                                      : "bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300"
+                                  }`}
+                                >
+                                  {fee.paid ? "PAID" : "UNPAID"}
+                                </span>
+                              </div>
+                              <p className="text-slate-500 text-[11px] mt-0.5">
+                                Fee: ₹{Number(fee.monthlyAmount ?? fee.amount ?? 0).toLocaleString("en-IN")}
+                                {Number(fee.arrearsAmount || 0) > 0 ? ` + Due: ₹${fee.arrearsAmount}` : ""}
+                                {fee.receiptNo ? ` • ${fee.receiptNo}` : ""}
+                                {fee.paidDate ? ` • ${new Date(fee.paidDate).toLocaleDateString("en-IN")}` : ""}
+                              </p>
+                            </div>
+
                             <div className="flex items-center gap-2">
-                              <span className="font-bold text-slate-800 dark:text-white text-sm">{monthName}</span>
-                              <span
-                                className={`px-2 py-0.5 rounded text-[10px] font-extrabold ${
+                              <span className="font-bold text-sm text-slate-800 dark:text-white">
+                                ₹{Number(fee.amount || 0).toLocaleString("en-IN")}
+                              </span>
+                              {fee.paid && (
+                                <button
+                                  type="button"
+                                  onClick={() => setDpsReceiptFee(fee)}
+                                  className="px-2 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-xs font-bold hover:bg-indigo-100 dark:hover:bg-indigo-900/60 flex items-center gap-1 shadow-xs transition cursor-pointer"
+                                  title="Open Official DPS-Format Fee Receipt"
+                                >
+                                  <ReceiptText className="w-3.5 h-3.5 text-amber-500" />
+                                  <span className="hidden sm:inline">DPS Receipt</span>
+                                </button>
+                              )}
+                              <button
+                                onClick={() => handleToggleFeePaid(fee)}
+                                disabled={updatingFeeId === fee.month}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-colors disabled:opacity-50 ${
                                   fee.paid
-                                    ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300"
-                                    : "bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300"
+                                    ? "bg-orange-500 hover:bg-orange-600 text-white"
+                                    : "bg-emerald-600 hover:bg-emerald-700 text-white"
                                 }`}
                               >
-                                {fee.paid ? "PAID" : "UNPAID"}
-                              </span>
+                                {updatingFeeId === fee.month ? "..." : fee.paid ? "Unpay" : "Mark Paid"}
+                              </button>
                             </div>
-                            <p className="text-slate-500 text-[11px] mt-0.5">
-                              Fee: ₹{Number(fee.monthlyAmount ?? fee.amount ?? 0).toLocaleString("en-IN")}
-                              {Number(fee.arrearsAmount || 0) > 0 ? ` + Due: ₹${fee.arrearsAmount}` : ""}
-                              {fee.receiptNo ? ` • ${fee.receiptNo}` : ""}
-                              {fee.paidDate ? ` • ${new Date(fee.paidDate).toLocaleDateString("en-IN")}` : ""}
-                            </p>
                           </div>
 
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-sm text-slate-800 dark:text-white">
-                              ₹{Number(fee.amount || 0).toLocaleString("en-IN")}
-                            </span>
-                            {fee.paid && (
-                              <button
-                                type="button"
-                                onClick={() => setDpsReceiptFee(fee)}
-                                className="px-2 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-xs font-bold hover:bg-indigo-100 dark:hover:bg-indigo-900/60 flex items-center gap-1 shadow-xs transition cursor-pointer"
-                                title="Open Official DPS-Format Fee Receipt"
-                              >
-                                <ReceiptText className="w-3.5 h-3.5 text-amber-500" />
-                                <span className="hidden sm:inline">DPS Receipt</span>
-                              </button>
-                            )}
+                          {/* 5 Fee Heads Toggle & Chips */}
+                          <div className="flex items-center justify-between pt-1 border-t border-slate-200/60 dark:border-slate-700/60 text-[10px]">
+                            <div className="flex items-center gap-1 flex-wrap text-slate-600 dark:text-slate-400">
+                              <span>Adm: ₹65k</span>
+                              <span>•</span>
+                              <span className="font-bold text-blue-600 dark:text-blue-400">Tuition: ₹{Number(fee.monthlyAmount ?? fee.amount ?? 0).toLocaleString("en-IN")}</span>
+                              <span>•</span>
+                              <span>Caution: ₹60k</span>
+                              <span>•</span>
+                              <span>Annual: ₹23.3k</span>
+                              <span>•</span>
+                              <span>Bus: ₹10.3k</span>
+                            </div>
                             <button
-                              onClick={() => handleToggleFeePaid(fee)}
-                              disabled={updatingFeeId === fee.month}
-                              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-colors disabled:opacity-50 ${
-                                fee.paid
-                                  ? "bg-orange-500 hover:bg-orange-600 text-white"
-                                  : "bg-emerald-600 hover:bg-emerald-700 text-white"
-                              }`}
+                              type="button"
+                              onClick={() => {
+                                setExpandedFeeMonths(prev =>
+                                  prev.includes(fee.month) ? prev.filter(m => m !== fee.month) : [...prev, fee.month]
+                                );
+                              }}
+                              className="font-bold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
                             >
-                              {updatingFeeId === fee.month ? "..." : fee.paid ? "Unpay" : "Mark Paid"}
+                              {expandedFeeMonths.includes(fee.month) ? "Hide List ▲" : "📋 सारे Fee का List ▼"}
                             </button>
                           </div>
+
+                          {/* Expanded 5 Fee Heads Ledger */}
+                          {expandedFeeMonths.includes(fee.month) && (
+                            <div className="p-2 bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700 overflow-x-auto">
+                              <table className="w-full text-left text-[10px] border-collapse">
+                                <thead>
+                                  <tr className="border-b dark:border-slate-700 text-slate-400">
+                                    <th className="p-1">#</th>
+                                    <th className="p-1">Fee Head</th>
+                                    <th className="p-1">Due (₹)</th>
+                                    <th className="p-1">Paid (₹)</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                  <tr><td className="p-1">1</td><td className="p-1 font-bold">Admission Fee</td><td className="p-1">65,000</td><td className="p-1 text-emerald-600 font-bold">{fee.paid ? "65,000" : "0"}</td></tr>
+                                  <tr><td className="p-1">2</td><td className="p-1 font-bold text-blue-600">Tuition Fee</td><td className="p-1">{Number(fee.monthlyAmount ?? fee.amount ?? 0).toLocaleString("en-IN")}</td><td className="p-1 text-emerald-600 font-bold">{fee.paid ? Number(fee.amount ?? 0).toLocaleString("en-IN") : "0"}</td></tr>
+                                  <tr><td className="p-1">3</td><td className="p-1 font-bold">Caution Money</td><td className="p-1">60,000</td><td className="p-1 text-emerald-600 font-bold">{fee.paid ? "60,000" : "0"}</td></tr>
+                                  <tr><td className="p-1">4</td><td className="p-1 font-bold">Annual Charges</td><td className="p-1">23,320</td><td className="p-1 text-emerald-600 font-bold">{fee.paid ? "23,320" : "0"}</td></tr>
+                                  <tr><td className="p-1">5</td><td className="p-1 font-bold">Bus Fee</td><td className="p-1">10,360</td><td className="p-1 text-emerald-600 font-bold">{fee.paid ? "10,360" : "0"}</td></tr>
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
                         </div>
                       );
                     })}

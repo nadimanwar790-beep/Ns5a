@@ -201,7 +201,7 @@ export const getLevelDailyLimits = (level: number): LevelDailyLimits => {
 // Admin can override per-level per-tier limits via settings.levelLimitsOverride
 export const getLevelDailyLimitsWithOverride = (
   level: number,
-  settings?: { levelLimitsOverride?: Record<string, Partial<LevelDailyLimitsOverride>> } | null
+  settings?: any
 ): LevelDailyLimits => {
   const base = getLevelDailyLimits(level);
   if (!settings?.levelLimitsOverride) return base;
@@ -250,7 +250,7 @@ export const getEffectiveDailyLimit = (
   feature: DailyLimitFeature,
   level: number,
   tier: 'FREE' | 'BASIC' | 'ULTRA',
-  settings?: { mcqLimitFree?: number; mcqLimitBasic?: number; mcqLimitUltra?: number; levelLimitsOverride?: Record<string, Partial<LevelDailyLimitsOverride>> } | null
+  settings?: any
 ): number => {
   if (feature === 'mcq') {
     if (tier === 'ULTRA') return settings?.mcqLimitUltra ?? 3000;
@@ -286,7 +286,7 @@ export const getLevelLimitBonus = (level: number): LevelLimitBonus => {
 
 export const getLevelInfo = (
   score: number,
-  settings?: { levelScoreOverride?: Record<string, number> } | null
+  settings?: any
 ): LevelInfo => {
   let info = LEVEL_INFO[0];
   const overrides = settings?.levelScoreOverride;
@@ -298,8 +298,8 @@ export const getLevelInfo = (
   return info;
 };
 
-export const getLevelFromScore = (score: number, settings?: { levelScoreOverride?: Record<string, number> } | null): number => getLevelInfo(score, settings).level;
-export const getScoreDiscountFromScore = (score: number, settings?: { levelScoreOverride?: Record<string, number> } | null): number => getLevelInfo(score, settings).discount;
+export const getLevelFromScore = (score: number, settings?: any): number => getLevelInfo(score, settings).level;
+export const getScoreDiscountFromScore = (score: number, settings?: any): number => getLevelInfo(score, settings).discount;
 
 export const getScoreForLevel = (level: number): number => {
   const idx = Math.max(0, Math.min(level - 1, MAX_LEVEL - 1));
@@ -613,7 +613,7 @@ export const getLevelSubTier = (level: number, progressPct: number): LevelSubTie
  */
 export const getSubTierInfoFromScore = (
   score: number,
-  settings?: { levelScoreOverride?: Record<string, number> } | null
+  settings?: any
 ): LevelSubTier => {
   const lvlInfo = getLevelInfo(score, settings);
   const progressPct = getLevelProgress(score);

@@ -34,24 +34,42 @@
       // and React mounting without introducing a blank frame.
       window.__nstaBootStartedAt = Date.now();
 
-      // Suppress cross-origin opaque script errors (e.g. from CDNs, iframes, fonts, or browser extensions)
+      // Suppress cross-origin opaque script errors and Vite dev-server HMR / WebSocket connection errors
+      function isIgnoredError(msg) {
+        if (!msg) return true;
+        var s = String(msg);
+        return s === 'Script error.' ||
+               s === 'Script error' ||
+               s.indexOf('send was called before connect') !== -1 ||
+               s.indexOf('WebSocket') !== -1 ||
+               s.indexOf('vite') !== -1 ||
+               s.indexOf('AbortError') !== -1;
+      }
       window.addEventListener('error', function(event) {
-        if (!event.error && (event.message === 'Script error.' || event.message === 'Script error' || !event.message)) {
+        var msg = (event && (event.message || (event.error && event.error.message))) || '';
+        if (!event.error && (msg === 'Script error.' || msg === 'Script error' || !msg)) {
+          if (event.preventDefault) event.preventDefault();
+          if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+          return true;
+        }
+        if (isIgnoredError(msg)) {
           if (event.preventDefault) event.preventDefault();
           if (event.stopImmediatePropagation) event.stopImmediatePropagation();
           return true;
         }
       }, true);
       window.onerror = function(msg, url, line, col, error) {
-        if (!error && (msg === 'Script error.' || msg === 'Script error')) {
+        var errMsg = msg || (error && error.message);
+        if (isIgnoredError(errMsg)) {
           return true;
         }
       };
       window.addEventListener('unhandledrejection', function(event) {
         var reason = event.reason;
         var msg = (reason && (reason.message || String(reason))) || '';
-        if (msg.indexOf('Script error') !== -1 || msg.indexOf('AbortError') !== -1) {
+        if (isIgnoredError(msg)) {
           if (event.preventDefault) event.preventDefault();
+          if (event.stopImmediatePropagation) event.stopImmediatePropagation();
         }
       });
     </script>
@@ -207,26 +225,31 @@
     <script>
       window.__nstaReactMounted = false;
       window.hidePreReactSplash = function() {
+        if (window.__nstaReactMounted) return;
         window.__nstaReactMounted = true;
         const splash = document.getElementById('pre-react-splash');
         if (splash) {
-          splash.style.transition = 'opacity 0.35s ease, transform 0.35s ease';
+          splash.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
           splash.style.opacity = '0';
           splash.style.transform = 'scale(0.98)';
-          setTimeout(() => splash.remove(), 350);
+          setTimeout(function() {
+            try { splash.remove(); } catch(e) {}
+          }, 320);
         }
       };
 
-      // Failsafe: if React didn't mount after 6 seconds, show a recovery action inside the splash
-      setTimeout(() => {
-        const root = document.getElementById('root');
-        if (!window.__nstaReactMounted && (!root || root.children.length === 0)) {
-          const startingDiv = document.querySelector('.pre-react-splash-starting');
-          if (startingDiv) {
-            startingDiv.innerHTML = '<button onclick="window.location.reload()" style="background:#2563eb;color:#fff;border:none;padding:6px 14px;border-radius:12px;font-size:12px;font-weight:bold;cursor:pointer;margin-right:8px;box-shadow:0 4px 12px rgba(37,99,235,0.3)">Reload App</button><button onclick="try{localStorage.clear();sessionStorage.clear();}catch(e){}window.location.reload()" style="background:#e2e8f0;color:#334155;border:none;padding:6px 12px;border-radius:12px;font-size:12px;font-weight:bold;cursor:pointer">Reset</button>';
-          }
-        }
-      }, 6000);
+      // Guaranteed auto-hide timeout: dismiss splash after 1.2s so user never gets stuck
+      setTimeout(function() {
+        if (window.hidePreReactSplash) window.hidePreReactSplash();
+      }, 1200);
+
+      if (document.readyState === 'complete') {
+        setTimeout(window.hidePreReactSplash, 400);
+      } else {
+        window.addEventListener('load', function() {
+          setTimeout(window.hidePreReactSplash, 400);
+        });
+      }
     </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>

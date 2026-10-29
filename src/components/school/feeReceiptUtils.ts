@@ -2,6 +2,162 @@
 // Matches the authentic Delhi Public School fee receipt layout with pixel precision,
 // student photo, high-definition vector QR, and 4-in-1 A4 sheet printing (4 receipts per A4 page).
 
+import type { Student, SchoolConfig } from '../../types';
+
+export const DEFAULT_SCHOOL_CONFIG: SchoolConfig = {
+  name: "DELHI PUBLIC SCHOOL",
+  tagline: "Service Before Self",
+  affiliationNo: "CBSE/AFF/330169",
+  schoolCode: "DPS-PAT-01",
+  board: "CBSE, New Delhi",
+  address: "Village Chandmari, Danapur Cantonment",
+  cityStateZip: "Patna, Bihar 801503",
+  phone: "+91 612 2999 555 / 8227070298",
+  email: "accounts@dpspatna.edu.in",
+  website: "www.dpspatna.edu.in",
+  upiId: "dpspatna@sbi",
+  logoUrl: "https://images.unsplash.com/photo-1546410531-bb4caa6b424d?w=160&auto=format&fit=crop&q=80",
+};
+
+export const INITIAL_STUDENTS: Student[] = [
+  {
+    id: "std-01",
+    rollNo: "01",
+    admissionNo: "DPS/2023/1042",
+    name: "Aarav Sharma",
+    fatherName: "Rajesh Sharma",
+    motherName: "Pooja Sharma",
+    classGrade: "X",
+    section: "A",
+    phone: "9876543210",
+    email: "aarav.sharma@dpspatna.edu.in",
+    photoUrl: "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=240&auto=format&fit=crop&q=80",
+    address: "Boring Road, Patna, Bihar",
+    admissionDate: "2023-04-10",
+    monthlyFee: 3850,
+    duesAmount: 0,
+  },
+  {
+    id: "std-02",
+    rollNo: "02",
+    admissionNo: "DPS/2023/1089",
+    name: "Ananya Kumari",
+    fatherName: "Sunil Verma",
+    motherName: "Renu Verma",
+    classGrade: "X",
+    section: "A",
+    phone: "9835012345",
+    email: "ananya.verma@dpspatna.edu.in",
+    photoUrl: "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=240&auto=format&fit=crop&q=80",
+    address: "Kankarbagh Colony, Patna, Bihar",
+    admissionDate: "2023-04-12",
+    monthlyFee: 3850,
+    duesAmount: 3850,
+  },
+  {
+    id: "std-03",
+    rollNo: "05",
+    admissionNo: "DPS/2022/0784",
+    name: "Vivaan Roy",
+    fatherName: "Amitabh Roy",
+    motherName: "Sushma Roy",
+    classGrade: "IX",
+    section: "B",
+    phone: "9123456780",
+    email: "vivaan.roy@dpspatna.edu.in",
+    photoUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=240&auto=format&fit=crop&q=80",
+    address: "Bailey Road, Patna, Bihar",
+    admissionDate: "2022-04-05",
+    monthlyFee: 3600,
+    duesAmount: 0,
+  },
+  {
+    id: "std-04",
+    rollNo: "12",
+    admissionNo: "DPS/2024/2105",
+    name: "Diya Patel",
+    fatherName: "Dharmendra Patel",
+    motherName: "Geeta Patel",
+    classGrade: "VIII",
+    section: "A",
+    phone: "9431098765",
+    email: "diya.patel@dpspatna.edu.in",
+    photoUrl: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=240&auto=format&fit=crop&q=80",
+    address: "Rajendra Nagar, Patna, Bihar",
+    admissionDate: "2024-04-08",
+    monthlyFee: 3450,
+    duesAmount: 0,
+  },
+  {
+    id: "std-05",
+    rollNo: "18",
+    admissionNo: "DPS/2021/0452",
+    name: "Ishaan Gupta",
+    fatherName: "Manoj Gupta",
+    motherName: "Sunita Gupta",
+    classGrade: "XII",
+    section: "Science",
+    phone: "9765432109",
+    email: "ishaan.gupta@dpspatna.edu.in",
+    photoUrl: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=240&auto=format&fit=crop&q=80",
+    address: "Ashiana Nagar, Patna, Bihar",
+    admissionDate: "2021-04-02",
+    monthlyFee: 4500,
+    duesAmount: 4500,
+  },
+  {
+    id: "std-06",
+    rollNo: "21",
+    admissionNo: "DPS/2023/1290",
+    name: "Saanvi Mishra",
+    fatherName: "Pradeep Mishra",
+    motherName: "Archana Mishra",
+    classGrade: "VI",
+    section: "B",
+    phone: "9811223344",
+    email: "saanvi.m@dpspatna.edu.in",
+    photoUrl: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=240&auto=format&fit=crop&q=80",
+    address: "Danapur Cantt, Patna, Bihar",
+    admissionDate: "2023-04-15",
+    monthlyFee: 3200,
+    duesAmount: 0,
+  },
+  {
+    id: "std-07",
+    rollNo: "24",
+    admissionNo: "DPS/2022/0914",
+    name: "Reyansh Singh",
+    fatherName: "Vikramaditya Singh",
+    motherName: "Kavita Singh",
+    classGrade: "VII",
+    section: "A",
+    phone: "9934123456",
+    email: "reyansh.s@dpspatna.edu.in",
+    photoUrl: "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=240&auto=format&fit=crop&q=80",
+    address: "Anisabad, Patna, Bihar",
+    admissionDate: "2022-04-18",
+    monthlyFee: 3300,
+    duesAmount: 3300,
+  },
+  {
+    id: "std-08",
+    rollNo: "30",
+    admissionNo: "DPS/2020/0198",
+    name: "Aadhya Roy",
+    fatherName: "Tapan Roy",
+    motherName: "Madhumita Roy",
+    classGrade: "XI",
+    section: "Commerce",
+    phone: "9823456789",
+    email: "aadhya.roy@dpspatna.edu.in",
+    photoUrl: "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=240&auto=format&fit=crop&q=80",
+    address: "Exhibition Road, Patna, Bihar",
+    admissionDate: "2020-04-06",
+    monthlyFee: 4200,
+    duesAmount: 0,
+  }
+];
+
 export interface FeeReceiptItem {
   id: string;
   slNo: number;
@@ -54,7 +210,7 @@ export interface DpsReceiptData {
 }
 
 export interface DpsReceiptRenderOptions {
-  layout?: "full" | "compact"; // "compact" fits 4 on 1 A4 page
+  layout?: "full" | "compact" | "mini"; // "compact" fits 4 on 1 A4 page, "mini" fits 6 on 1 A4 page
   copyTitle?: string; // e.g. "STUDENT COPY", "OFFICE COPY", "ACCOUNTS COPY", "GUARDIAN COPY"
 }
 
@@ -173,7 +329,8 @@ export function generateDpsReceiptHtml(
   data: DpsReceiptData,
   options: DpsReceiptRenderOptions = {}
 ): string {
-  const isCompact = options.layout === "compact";
+  const isMini = options.layout === "mini";
+  const isCompact = options.layout === "compact" || isMini;
   const copyTitle = options.copyTitle || "";
 
   const escapeHtml = (val: unknown) =>
@@ -195,7 +352,7 @@ export function generateDpsReceiptHtml(
     ? `<img src="${escapeHtml(data.schoolLogoUrl)}" alt="Logo" class="dps-logo-img" />`
     : DPS_DEFAULT_CREST_SVG;
 
-  const cardClasses = `dps-receipt-card ${isCompact ? "is-compact" : ""}`;
+  const cardClasses = `dps-receipt-card ${isMini ? "is-mini is-compact" : isCompact ? "is-compact" : ""}`;
 
   return `
   <div class="${cardClasses}">
@@ -419,7 +576,25 @@ export function generate4in1A4PageHtml(receipts4: { data: DpsReceiptData; copyTi
 }
 
 /**
- * Common CSS Stylesheet for printing and previewing the DPS Fee Receipt (both Full and 4-in-1 A4 sheet).
+ * Generates an A4 sheet containing exactly 6 receipts in a 2x3 grid (Super Saver format).
+ */
+export function generate6in1A4PageHtml(receipts6: { data: DpsReceiptData; copyTitle?: string }[]): string {
+  return `
+    <div class="dps-6in1-page">
+      ${receipts6.map(item => `
+        <div class="dps-6in1-cell">
+          ${generateDpsReceiptHtml(item.data, { layout: "mini", copyTitle: item.copyTitle })}
+        </div>
+      `).join("")}
+      ${Array.from({ length: Math.max(0, 6 - receipts6.length) }).map(() => `
+        <div class="dps-6in1-cell dps-6in1-empty"></div>
+      `).join("")}
+    </div>
+  `;
+}
+
+/**
+ * Common CSS Stylesheet for printing and previewing the DPS Fee Receipt (both Full, 4-in-1, and 6-in-1 A4 sheet).
  */
 export const DPS_RECEIPT_CSS = `
   @page {
@@ -471,6 +646,42 @@ export const DPS_RECEIPT_CSS = `
     overflow: hidden;
   }
   .dps-4in1-empty {
+    border: 1px dashed #cbd5e1;
+    background: #f8fafc;
+  }
+
+  /* ════════════════════════════════════════════════════════════════════
+     6-IN-1 A4 GRID (2 COLUMNS × 3 ROWS = 6 RECEIPTS PER A4 PAGE - SUPER SAVER)
+     ════════════════════════════════════════════════════════════════════ */
+  .dps-6in1-page {
+    width: 200mm;
+    height: 288mm;
+    max-height: 288mm;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr 1fr;
+    gap: 2mm;
+    page-break-after: always;
+    break-after: page;
+    box-sizing: border-box;
+    margin: 0 auto;
+    background: #ffffff;
+    overflow: hidden;
+  }
+  .dps-6in1-page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+  .dps-6in1-cell {
+    position: relative;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    max-height: 94mm;
+    overflow: hidden;
+  }
+  .dps-6in1-empty {
     border: 1px dashed #cbd5e1;
     background: #f8fafc;
   }
@@ -1000,6 +1211,143 @@ export const DPS_RECEIPT_CSS = `
     font-size: 6px;
   }
 
+  /* ════════════════════════════════════════════════════════════════════
+     6-IN-1 ULTRA-COMPACT (is-mini) STYLING (93mm max-height per receipt)
+     ════════════════════════════════════════════════════════════════════ */
+  .is-mini.dps-receipt-card {
+    border-width: 1px;
+    font-size: 6.5px;
+    line-height: 1.15;
+  }
+  .is-mini .dps-header {
+    padding: 2px 4px 1px;
+    gap: 5px;
+  }
+  .is-mini .dps-logo-col {
+    width: 24px;
+    height: 28px;
+  }
+  .is-mini .dps-logo-img {
+    max-width: 24px;
+    max-height: 28px;
+  }
+  .is-mini .dps-logo-crest {
+    width: 24px;
+    height: 28px;
+  }
+  .is-mini .dps-school-info {
+    padding-right: 2px;
+  }
+  .is-mini .dps-school-name {
+    font-size: 10px;
+    margin-bottom: 0px;
+  }
+  .is-mini .dps-school-address {
+    font-size: 5.5px;
+  }
+  .is-mini .dps-banner {
+    padding: 1.5px 3px;
+    font-size: 7px;
+    border-top-width: 1px;
+    border-bottom-width: 1px;
+  }
+  .is-mini .dps-copy-tag {
+    font-size: 6px;
+  }
+  .is-mini .dps-meta-grid {
+    padding: 2px 4px;
+    gap: 4px;
+  }
+  .is-mini .dps-meta-col {
+    gap: 0.5px;
+  }
+  .is-mini .dps-meta-row {
+    font-size: 6.5px;
+    line-height: 1.15;
+  }
+  .is-mini .dps-label {
+    width: 44px;
+  }
+  .is-mini .dps-colon {
+    width: 6px;
+  }
+  .is-mini .dps-photo-col {
+    width: 26px;
+  }
+  .is-mini .dps-photo-box {
+    width: 24px;
+    height: 30px;
+    border-width: 1px;
+  }
+  .is-mini .dps-photo-empty svg {
+    width: 10px;
+    height: 10px;
+  }
+  .is-mini .dps-photo-empty span {
+    font-size: 5px;
+  }
+  .is-mini .dps-fee-table {
+    font-size: 6.5px;
+  }
+  .is-mini .dps-fee-table thead th {
+    padding: 1px 3px;
+    font-size: 5.8px;
+  }
+  .is-mini .dps-fee-table tbody td {
+    padding: 1px 3px;
+    font-size: 6.5px;
+  }
+  .is-mini .th-sl, .is-mini .td-sl {
+    width: 18px;
+  }
+  .is-mini .th-con, .is-mini .td-con {
+    width: 24px;
+  }
+  .is-mini .th-num, .is-mini .td-num {
+    width: 36px;
+  }
+  .is-mini .empty-spacer-row td {
+    height: 3px;
+  }
+  .is-mini .dps-paymode-grid {
+    padding: 1px 4px;
+    gap: 1px;
+    font-size: 6px;
+  }
+  .is-mini .dps-pay-label {
+    width: 34px;
+  }
+  .is-mini .dps-paymode-subtotal {
+    padding: 1px 4px;
+    font-size: 6.5px;
+  }
+  .is-mini .dps-grand-total-row {
+    padding: 1.5px 4px;
+    font-size: 7.2px;
+  }
+  .is-mini .dps-words-box {
+    padding: 1px 4px;
+    font-size: 5.8px;
+    line-height: 1.1;
+  }
+  .is-mini .dps-footer {
+    padding: 1.5px 4px;
+    gap: 4px;
+    margin-top: auto;
+  }
+  .is-mini .dps-qr-code {
+    width: 26px;
+    height: 26px;
+    border-width: 1px;
+    padding: 0.5px;
+  }
+  .is-mini .dps-note-text {
+    font-size: 5.8px;
+  }
+  .is-mini .dps-computer-gen {
+    font-size: 5px;
+  }
+
   @media screen {
     .dps-preview-wrapper {
       padding: 16px;
@@ -1022,6 +1370,21 @@ export const DPS_RECEIPT_CSS = `
       border-radius: 8px;
     }
     .dps-4in1-cell {
+      max-height: none;
+      min-height: auto;
+    }
+    .dps-6in1-page {
+      width: 100%;
+      max-width: 760px;
+      height: auto;
+      max-height: none;
+      box-shadow: 0 4px 25px rgba(0, 0, 0, 0.18);
+      padding: 6px;
+      gap: 4px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+    }
+    .dps-6in1-cell {
       max-height: none;
       min-height: auto;
     }
@@ -1049,6 +1412,18 @@ export const DPS_RECEIPT_CSS = `
     }
     .dps-4in1-cell {
       max-height: 142mm !important;
+    }
+    .dps-6in1-page {
+      width: 200mm !important;
+      height: 288mm !important;
+      max-height: 288mm !important;
+      margin: 0 auto !important;
+      padding: 0 !important;
+      box-shadow: none !important;
+      border: none !important;
+    }
+    .dps-6in1-cell {
+      max-height: 94mm !important;
     }
   }
 `;
@@ -1119,14 +1494,83 @@ export function printDpsReceipts4in1(
 }
 
 /**
- * Direct print helper: defaults to 4-in-1 A4 sheet as requested by user.
+ * Prints 6 receipts per A4 sheet (2x3 grid Super Saver format).
+ * If 1 student: prints 6 copies (Student, School, Accounts, Guardian, Audit, Counter Copy).
+ * If multiple students: chunks into 6 per A4 page!
+ */
+export function printDpsReceipts6in1(
+  receipts: DpsReceiptData[],
+  options?: { customTitle?: string }
+) {
+  const printWin = window.open("", "_blank", "width=900,height=950");
+  if (!printWin) {
+    alert("Please allow pop-ups to print 6-in-1 fee receipts.");
+    return;
+  }
+
+  let pagesHtml = "";
+
+  if (receipts.length === 1) {
+    const r = receipts[0];
+    const copies = [
+      { data: r, copyTitle: "STUDENT COPY" },
+      { data: r, copyTitle: "SCHOOL / OFFICE COPY" },
+      { data: r, copyTitle: "ACCOUNTS COPY" },
+      { data: r, copyTitle: "PARENT / GUARDIAN COPY" },
+      { data: r, copyTitle: "AUDIT / RECORD COPY" },
+      { data: r, copyTitle: "EXTRA COUNTER COPY" },
+    ];
+    pagesHtml = generate6in1A4PageHtml(copies);
+  } else {
+    for (let i = 0; i < receipts.length; i += 6) {
+      const chunk = receipts.slice(i, i + 6).map((r, idx) => ({
+        data: r,
+        copyTitle: `STUDENT #${i + idx + 1}`,
+      }));
+      pagesHtml += generate6in1A4PageHtml(chunk);
+    }
+  }
+
+  const htmlContent = `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>${options?.customTitle || "Fee Receipts (6-in-1 Super Saver A4 Sheet)"}</title>
+        <style>
+          ${DPS_RECEIPT_CSS}
+        </style>
+      </head>
+      <body>
+        ${pagesHtml}
+        <script>
+          window.onload = () => {
+            setTimeout(() => {
+              window.print();
+              window.close();
+            }, 250);
+          };
+        </script>
+      </body>
+    </html>
+  `;
+  printWin.document.write(htmlContent);
+  printWin.document.close();
+}
+
+/**
+ * Direct print helper: supports 4-in-1, 6-in-1 (super saver), and full A4 sheet.
  */
 export function printDpsReceiptDirect(
   data: DpsReceiptData,
-  mode: "4in1" | "full" = "4in1"
+  mode: "4in1" | "6in1" | "full" = "4in1"
 ) {
   if (mode === "4in1") {
     printDpsReceipts4in1([data]);
+    return;
+  }
+  if (mode === "6in1") {
+    printDpsReceipts6in1([data]);
     return;
   }
 

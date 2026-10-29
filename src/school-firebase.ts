@@ -40,12 +40,49 @@ const d = (path: string) => doc(db, path);
 // ── SCHOOLS LOCAL CACHE ───────────────────────────────────────────────────────
 const LOCAL_SCHOOLS_KEY = "nst_schools_local_cache";
 
+export const DEFAULT_DPS_SCHOOL: School = {
+  id: "dps_gurgaon_sector45",
+  name: "Delhi Public School",
+  code: "DPS_DEL",
+  address: "Site No.1, Sector-45, Urban Estate, Gurgaon, Haryana",
+  phone: "0124-4125800",
+  email: "dpsgurgaon45@dps.edu.in",
+  affiliation: "CBSE Affiliated • Affiliation No. 530025",
+  adminEmail: "admin@dps.edu.in",
+  principalName: "Dr. Arvind Swaminathan",
+  principalPhone: "9811023450",
+  directorName: "Mrs. Shashi Sharma",
+  directorPhone: "9811023451",
+  mobile: "0124-4125800",
+  tagline: "Service Before Self",
+  bannerColor: "#047857",
+  subscription: {
+    reading: true,
+    writing: true,
+    pdf: true,
+    mcq: true,
+    monthlyAmount: 4500,
+    status: "active",
+    tier: "full"
+  },
+  active: true,
+  createdAt: "2026-04-01T00:00:00.000Z",
+  createdBy: "admin_uid",
+  totalStudents: 910,
+  totalTeachers: 26
+};
+
 export const getLocalSchools = (): School[] => {
   try {
     const raw = localStorage.getItem(LOCAL_SCHOOLS_KEY);
-    return raw ? JSON.parse(raw) : [];
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+    // Return default school if empty
+    return [DEFAULT_DPS_SCHOOL];
   } catch {
-    return [];
+    return [DEFAULT_DPS_SCHOOL];
   }
 };
 
@@ -744,7 +781,7 @@ export const markStudentQrAttendance = async (params: {
     let outTime = existingEntry?.outTime;
     let stayDuration = existingEntry?.stayDuration;
     let isLate = existingEntry?.status === "late";
-    let status: "present" | "late" | "half_day" | "absent" = existingEntry?.status || "present";
+    let status: "present" | "late" | "half_day" | "absent" | "leave" | "bunk" = existingEntry?.status || "present";
 
     // Check Late Entry (if cutoff is provided, default 08:30 AM)
     const cutoff = params.cutoffTime || "08:30";
@@ -1103,7 +1140,7 @@ export const removeSchoolUserByUid = async (uid: string) => {
 export const getSchoolAdmins = async (schoolId: string): Promise<SchoolUserProfile[]> => {
   const q = query(col('school_users'), where('schoolId', '==', schoolId), where('role', 'in', ['SCHOOL_ADMIN', 'SCHOOL_SUB_ADMIN']));
   const snap = await getDocs(q);
-  return snap.docs.map(d => d.data() as SchoolUserProfile);
+  return snap.docs.map(d => ({ uid: d.id, ...(d.data() as any) } as SchoolUserProfile));
 };
 
 // ── FEE ALL CLASSES ──────────────────────────────────────────────────────────
@@ -1387,5 +1424,68 @@ export const saveSchoolEvent = async (schoolId: string, event: import('./school-
 
 export const deleteSchoolEvent = async (schoolId: string, eventId: string): Promise<void> => {
   await deleteDoc(d(`schools/${schoolId}/events/${eventId}`));
+};
+
+// ── HOLIDAYS & FESTIVALS ────────────────────────────────────────────────────
+
+const LOCAL_HOLIDAYS_KEY = (schoolId: string) => `nst_holidays_${schoolId}`;
+
+export const getSchoolHolidays = async (schoolId: string): Promise<import('./school-types').SchoolHoliday[]> => {
+  try {
+    const raw = localStorage.getItem(LOCAL_HOLIDAYS_KEY(schoolId));
+    let localList: import('./school-types').SchoolHoliday[] = raw ? JSON.parse(raw) : [];
+
+    try {
+      const snap = await withTimeout(getDocs(col(`schools/${schoolId}/holidays`)), 2500);
+      if (snap && !snap.empty) {
+        const remote = snap.docs.map(doc => doc.data() as import('./school-types').SchoolHoliday);
+        localStorage.setItem(LOCAL_HOLIDAYS_KEY(schoolId), JSON.stringify(remote));
+        return remote.sort((a, b) => a.startDate.localeCompare(b.startDate));
+      }
+    } catch {}
+
+    return localList.sort((a, b) => a.startDate.localeCompare(b.startDate));
+  } catch {
+    return [];
+  }
+};
+
+export const saveSchoolHoliday = async (schoolId: string, holiday: import('./school-types').SchoolHoliday): Promise<void> => {
+  try {
+    const list = await getSchoolHolidays(schoolId);
+    const updated = [holiday, ...list.filter(h => h.id !== holiday.id)].sort((a, b) => a.startDate.localeCompare(b.startDate));
+    localStorage.setItem(LOCAL_HOLIDAYS_KEY(schoolId), JSON.stringify(updated));
+
+    if (db) {
+      await withTimeout(setDoc(d(`schools/${schoolId}/holidays/${holiday.id}`), sanitizeForFirestore(holiday)), 2500);
+    }
+  } catch (e) {
+    console.warn("[school-firebase] saveSchoolHoliday:", e);
+  }
+};
+
+export const deleteSchoolHoliday = async (schoolId: string, holidayId: string): Promise<void> => {
+  try {
+    const list = await getSchoolHolidays(schoolId);
+    const updated = list.filter(h => h.id !== holidayId);
+    localStorage.setItem(LOCAL_HOLIDAYS_KEY(schoolId), JSON.stringify(updated));
+
+    if (db) {
+      await withTimeout(deleteDoc(d(`schools/${schoolId}/holidays/${holidayId}`)), 2500);
+    }
+  } catch (e) {
+    console.warn("[school-firebase] deleteSchoolHoliday:", e);
+  }
+};
+
+export const updateClassFeeStructure = async (
+  schoolId: string,
+  classId: string,
+  feeStructure: import('./school-types').ClassFeeStructure
+): Promise<void> => {
+  await updateClass(schoolId, classId, {
+    feeStructure,
+    defaultFee: feeStructure.tuitionFee || 0
+  });
 };
 
