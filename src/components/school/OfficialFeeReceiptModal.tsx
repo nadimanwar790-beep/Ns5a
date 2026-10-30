@@ -89,12 +89,29 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
 
   // Fee items breakdown (All 5 fee heads matching Delhi Public School screenshot)
   const [items, setItems] = useState<FeeReceiptItem[]>(() => {
+    const arrears = Number(fee.arrearsAmount || 0);
+    const arrearsMonthsStr = fee.arrearsMonths?.length ? ` (${fee.arrearsMonths.join(", ")})` : "";
+
     if (fee.items && fee.items.length > 0) {
-      return fee.items;
+      const list = [...fee.items];
+      if (arrears > 0) {
+        const hasArrears = list.some(i => i.description.toLowerCase().includes("arrear") || i.description.toLowerCase().includes("back due"));
+        if (!hasArrears) {
+          list.push({
+            id: "arrears",
+            slNo: list.length + 1,
+            description: `Back Due / Previous Arrears${arrearsMonthsStr}`,
+            due: arrears,
+            con: 0,
+            paid: fee.paid ? arrears : 0
+          });
+        }
+      }
+      return list;
     }
+
     const baseFee = Number(fee.monthlyAmount ?? fee.amount ?? 0) || 19140;
     const effectivePaid = fee.paidAmount !== undefined ? Number(fee.paidAmount) : (fee.paid ? baseFee : 0);
-    const arrears = Number(fee.arrearsAmount || 0);
 
     const initialList: FeeReceiptItem[] = [];
     let sl = 1;
@@ -151,7 +168,7 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
       initialList.push({
         id: "arrears",
         slNo: sl++,
-        description: "Back Due / Previous Arrears",
+        description: `Back Due / Previous Arrears${arrearsMonthsStr}`,
         due: arrears,
         con: 0,
         paid: fee.paid ? arrears : 0

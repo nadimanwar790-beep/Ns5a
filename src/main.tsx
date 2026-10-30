@@ -22,11 +22,35 @@ class RootErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState
     return { hasError: true, error };
   }
 
+  componentDidMount() {
+    try {
+      sessionStorage.removeItem('chunk_reload_retry');
+    } catch (e) {}
+  }
+
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('Uncaught error in React tree:', error, errorInfo);
     // Dismiss splash screen in case error happened during mount
     if (typeof (window as any).hidePreReactSplash === 'function') {
       (window as any).hidePreReactSplash();
+    }
+    // Auto-recover from transient dynamic import network hiccups (e.g. server restart)
+    const msg = error?.message || '';
+    if (
+      msg.includes('dynamically imported module') ||
+      msg.includes('Failed to fetch') ||
+      msg.includes('error loading dynamically imported module')
+    ) {
+      try {
+        const hasRetried = sessionStorage.getItem('chunk_reload_retry');
+        if (!hasRetried) {
+          sessionStorage.setItem('chunk_reload_retry', 'true');
+          setTimeout(() => {
+            window.location.reload();
+          }, 200);
+          return;
+        }
+      } catch (e) {}
     }
   }
 

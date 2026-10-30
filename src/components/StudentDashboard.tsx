@@ -13887,7 +13887,7 @@ export const StudentDashboard: React.FC<Props> = ({
                 isFromRoutine: true,
               });
             }}
-            isTopBarHidden={isTopBarHidden || isLandscapeUiHidden}
+            isTopBarHidden={false}
             bottomNav={null}
           />
         </div>
@@ -15423,8 +15423,10 @@ export const StudentDashboard: React.FC<Props> = ({
                 if (initialParentSubject) {
                   setInitialParentSubject(null);
                 } else {
-                  // If going back from root subject list, go back to HOME class selection
-                  setActiveSessionClass(null);
+                  // Smoothly return to HOME tab without thrashing session class state
+                  setContentViewStep("SUBJECTS");
+                  setSelectedSubject(null);
+                  setSelectedChapter(null);
                   onTabChange("HOME");
                 }
               }}
@@ -19036,7 +19038,27 @@ export const StudentDashboard: React.FC<Props> = ({
       {/* NEW GLOBAL TOP BAR */}
       <div
         id="top-banner-container"
-        className={`sticky top-0 z-[100] w-full flex flex-col relative transition-all duration-150 ease-in-out overflow-hidden ${isFullscreenMode || Boolean(mathViewerEntry) ? "!hidden !h-0 overflow-hidden pointer-events-none" : ""} ${(isTopBarHidden || isLandscapeUiHidden || isCompetitionHomeworkOpen || showWhatsAppChatModal || showNstaQuickWheel || activeTab === 'STORE' || activeTab === 'CUSTOM_PAGE' || activeTab === 'PROFILE' || activeTab === 'UNIVERSAL_VIDEO') ? "-translate-y-full !h-0 overflow-hidden opacity-0 pointer-events-none" : "translate-y-0 opacity-100"}`}
+        className={`sticky top-0 z-[100] w-full flex flex-col relative transition-all duration-150 ease-in-out overflow-hidden ${
+          isFullscreenMode || Boolean(mathViewerEntry) ? "!hidden !h-0 overflow-hidden pointer-events-none" : ""
+        } ${(
+          isTopBarHidden ||
+          isLandscapeUiHidden ||
+          isCompetitionHomeworkOpen ||
+          showWhatsAppChatModal ||
+          showNstaQuickWheel ||
+          activeTab === 'STORE' ||
+          activeTab === 'CUSTOM_PAGE' ||
+          activeTab === 'PROFILE' ||
+          activeTab === 'UNIVERSAL_VIDEO' ||
+          activeTab === 'MCQ' ||
+          activeTab === 'COMMUNITY' ||
+          activeTab === 'ROUTINE' ||
+          showMyRoutine ||
+          (showChat && (chatMode === 'MCQ' || chatMode === 'COMMUNITY')) ||
+          currentLogicalTab === ('MCQ' as any) ||
+          currentLogicalTab === ('ROUTINE' as any) ||
+          (currentLogicalTab as any) === 'COMMUNITY_SUPPORT'
+        ) ? "!hidden -translate-y-full !h-0 overflow-hidden opacity-0 pointer-events-none" : "translate-y-0 opacity-100"}`}
         style={{ background: activeTopBarGrad }}
       >
         <TopBarEffectsLayer effects={activeTopBarEffects} />

@@ -10,23 +10,36 @@ import {
 } from 'lucide-react';
 import { PwaInstallPrompt } from './components/PwaInstallPrompt';
 
-// Dynamic lazy imports for smooth chunk loading & performance
-const StudentDashboard = lazy(() =>
-  import('./components/StudentDashboard').then(m => ({
-    default: m.StudentDashboard || (m as any).default,
-  }))
-);
+// Direct static import for primary StudentDashboard to eliminate chunk loading failures
+import { StudentDashboard } from './components/StudentDashboard';
+
+// Dynamic lazy imports with automatic retry for secondary views
+const retryDynamicImport = async (fn: () => Promise<any>, retriesLeft = 3, interval = 500): Promise<any> => {
+  try {
+    return await fn();
+  } catch (error) {
+    if (retriesLeft <= 0) {
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, interval));
+    return retryDynamicImport(fn, retriesLeft - 1, interval * 1.5);
+  }
+};
 
 const AdminDashboard = lazy(() =>
-  import('./components/AdminDashboard').then(m => ({
-    default: m.AdminDashboard || (m as any).default,
-  }))
+  retryDynamicImport(() =>
+    import('./components/AdminDashboard').then(m => ({
+      default: m.AdminDashboard || (m as any).default,
+    }))
+  )
 );
 
 const SchoolEcosystem = lazy(() =>
-  import('./components/school/SchoolEcosystem').then(m => ({
-    default: m.SchoolEcosystem || (m as any).default,
-  }))
+  retryDynamicImport(() =>
+    import('./components/school/SchoolEcosystem').then(m => ({
+      default: m.SchoolEcosystem || (m as any).default,
+    }))
+  )
 );
 
 export type AppViewMode = 'STUDENT' | 'ADMIN' | 'SCHOOL_ERP';

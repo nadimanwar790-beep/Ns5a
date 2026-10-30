@@ -207,6 +207,7 @@ export interface DpsReceiptData {
   principalSignatureUrl?: string;
   principalName?: string;
   principalTitle?: string;
+  receiptTypeTitle?: string; // e.g. "FEE RECEIPT" or "FEE DUE SLIP"
 }
 
 export interface DpsReceiptRenderOptions {
@@ -369,7 +370,7 @@ export function generateDpsReceiptHtml(
 
     <!-- Shaded Grey Banner: FEE RECEIPT (+ Copy Tag) -->
     <div class="dps-banner">
-      <span>FEE RECEIPT</span>
+      <span>${escapeHtml(data.receiptTypeTitle || "FEE RECEIPT")}</span>
       ${copyTitle ? `<span class="dps-copy-tag">[ ${escapeHtml(copyTitle)} ]</span>` : ""}
     </div>
 
@@ -798,7 +799,13 @@ export const DPS_RECEIPT_CSS = `
     line-height: 1.35;
   }
   .dps-label {
-    width: 78px;
+    width: 68px;
+    flex-shrink: 0;
+    font-weight: 700;
+    color: #000000;
+  }
+  .dps-meta-col-right .dps-label {
+    width: 58px;
     flex-shrink: 0;
     font-weight: 700;
     color: #000000;
@@ -814,6 +821,11 @@ export const DPS_RECEIPT_CSS = `
     flex: 1;
     color: #000000;
     word-break: break-word;
+  }
+  .dps-meta-col-right .dps-val {
+    white-space: nowrap;
+    word-break: keep-all;
+    font-variant-numeric: tabular-nums;
   }
   .font-bold { font-weight: 800; }
   .font-semibold { font-weight: 600; }
@@ -1116,7 +1128,14 @@ export const DPS_RECEIPT_CSS = `
     line-height: 1.25;
   }
   .is-compact .dps-label {
-    width: 52px;
+    width: 48px;
+  }
+  .is-compact .dps-meta-col-right .dps-label {
+    width: 42px;
+  }
+  .is-compact .dps-meta-col-right .dps-val {
+    white-space: nowrap;
+    word-break: keep-all;
   }
   .is-compact .dps-colon {
     width: 8px;
@@ -1445,25 +1464,13 @@ export function printDpsReceipts4in1(
 
   let pagesHtml = "";
 
-  if (receipts.length === 1) {
-    // 1 student: print 4 copies on 1 A4 page
-    const r = receipts[0];
-    const copies = [
-      { data: r, copyTitle: "STUDENT COPY" },
-      { data: r, copyTitle: "SCHOOL / OFFICE COPY" },
-      { data: r, copyTitle: "ACCOUNTS COPY" },
-      { data: r, copyTitle: "PARENT / GUARDIAN COPY" },
-    ];
-    pagesHtml = generate4in1A4PageHtml(copies);
-  } else {
-    // Multiple students: chunk into 4 per page
-    for (let i = 0; i < receipts.length; i += 4) {
-      const chunk = receipts.slice(i, i + 4).map((r, idx) => ({
-        data: r,
-        copyTitle: `STUDENT #${i + idx + 1}`,
-      }));
-      pagesHtml += generate4in1A4PageHtml(chunk);
-    }
+  // Print 4 DIFFERENT students per A4 page (Each cell holds a distinct student, never duplicating the same student 4 times)
+  for (let i = 0; i < receipts.length; i += 4) {
+    const chunk = receipts.slice(i, i + 4).map((r) => ({
+      data: r,
+      copyTitle: "",
+    }));
+    pagesHtml += generate4in1A4PageHtml(chunk);
   }
 
   const htmlContent = `
@@ -1510,25 +1517,13 @@ export function printDpsReceipts6in1(
 
   let pagesHtml = "";
 
-  if (receipts.length === 1) {
-    const r = receipts[0];
-    const copies = [
-      { data: r, copyTitle: "STUDENT COPY" },
-      { data: r, copyTitle: "SCHOOL / OFFICE COPY" },
-      { data: r, copyTitle: "ACCOUNTS COPY" },
-      { data: r, copyTitle: "PARENT / GUARDIAN COPY" },
-      { data: r, copyTitle: "AUDIT / RECORD COPY" },
-      { data: r, copyTitle: "EXTRA COUNTER COPY" },
-    ];
-    pagesHtml = generate6in1A4PageHtml(copies);
-  } else {
-    for (let i = 0; i < receipts.length; i += 6) {
-      const chunk = receipts.slice(i, i + 6).map((r, idx) => ({
-        data: r,
-        copyTitle: `STUDENT #${i + idx + 1}`,
-      }));
-      pagesHtml += generate6in1A4PageHtml(chunk);
-    }
+  // Print 6 DIFFERENT students per A4 page (Each cell holds a distinct student)
+  for (let i = 0; i < receipts.length; i += 6) {
+    const chunk = receipts.slice(i, i + 6).map((r) => ({
+      data: r,
+      copyTitle: "",
+    }));
+    pagesHtml += generate6in1A4PageHtml(chunk);
   }
 
   const htmlContent = `
