@@ -30,6 +30,7 @@ import { MarksheetGenerator } from "./MarksheetGenerator";
 import { StudentPromotionManager } from "./StudentPromotionManager";
 import { NoticeBoardManager } from "./NoticeBoardManager";
 import { StaffHRMManager } from "./StaffHRMManager";
+import { HolidayManager } from "./HolidayManager";
 import { SchoolReportsHub } from "./SchoolReportsHub";
 import { PublicSchoolWebsite } from "./PublicSchoolWebsite";
 import { OnlineAdmissionManager } from "./OnlineAdmissionManager";
@@ -63,7 +64,7 @@ type AdminView =
   | "sessions" | "classes" | "subjects" | "teachers" | "students"
   | "content" | "attendance" | "fees" | "fee_class" | "fee_all" | "fee_structure" | "report_card" | "marks" | "results"
   | "store" | "subscription"
-  | "id_cards" | "admit_cards" | "certificates" | "marksheet_hub" | "promotion" | "notices" | "staff_hrm" | "reports_hub"
+  | "id_cards" | "admit_cards" | "certificates" | "marksheet_hub" | "promotion" | "notices" | "holidays" | "staff_hrm" | "reports_hub"
   | "public_website" | "online_admissions";
 
 
@@ -768,6 +769,17 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
     );
   }
 
+  if (view === "holidays") {
+    return (
+      <HolidayManager
+        schoolId={schoolId}
+        adminUid={adminUid}
+        schoolName={school?.name}
+        onBack={() => setView("dashboard")}
+      />
+    );
+  }
+
   if (view === "staff_hrm") {
     return (
       <StaffHRMManager
@@ -846,6 +858,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
     { label: "Marksheet (रिजल्ट)", icon: <FileSpreadsheet className="w-5 h-5 text-emerald-600" />, view: "marksheet_hub", count: "Official Print", locked: false },
     { label: "Class Promotion", icon: <TrendingUp className="w-5 h-5 text-blue-600" />, view: "promotion", count: "Promote", locked: false },
     { label: "Notice Board", icon: <Megaphone className="w-5 h-5 text-purple-600" />, view: "notices", count: "Circulars", locked: false },
+    { label: "Festival Holidays (छुट्टियां)", icon: <Calendar className="w-5 h-5 text-pink-500" />, view: "holidays", count: "20+ Holidays", locked: false },
     { label: "Staff HRM & Leaves", icon: <Briefcase className="w-5 h-5 text-teal-600" />, view: "staff_hrm", count: "Salaries", locked: false },
     { label: "Reports & Print", icon: <FileSpreadsheet className="w-5 h-5 text-cyan-600" />, view: "reports_hub", count: "40+ Reports", locked: false },
     { label: "Public Website & Portal", icon: <Globe className="w-5 h-5 text-indigo-500" />, view: "public_website", count: "Live", locked: false },
@@ -1998,7 +2011,39 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
       </div>
 
       {view === "dashboard" ? (
-        <div className="p-4 max-w-2xl mx-auto">
+        <div className="p-4 max-w-2xl mx-auto space-y-4">
+
+          {/* ── 1-CLICK 1-YEAR COMPREHENSIVE ACADEMIC DATASET LAUNCHER ── */}
+          <div className="bg-gradient-to-r from-violet-950 via-indigo-950 to-slate-900 border-2 border-amber-500/30 rounded-3xl p-4 sm:p-5 text-white shadow-xl relative overflow-hidden">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Sparkles className="w-5 h-5 text-amber-400 shrink-0" />
+                  <h3 className="font-black text-sm sm:text-base text-white">Full 1-Year Academic Dataset (910 Students)</h3>
+                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                    DPS / CBSE Pattern
+                  </span>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  13 Classes (Nursery to 10), 70 Students/Class (910 total), 1:35 Teacher Ratio (Salaries ₹5K-₹15K, Principal ₹25K, 3-Day Late Rule), 6 Bi-Monthly Exams (PA 40M / Term 100M), 1-Year Fee Receipts with 3-12 Month Dues &amp; Festival Holidays.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleGenerateDemoData}
+                disabled={demoGenerating}
+                className="px-4 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs sm:text-sm rounded-xl shadow-lg shadow-amber-500/25 flex items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer shrink-0 disabled:opacity-60"
+              >
+                <Sparkles className="w-4 h-4 text-slate-950" />
+                {demoGenerating ? "Generating 910 Students..." : "⚡ 1-Click Load 1-Year Dataset"}
+              </button>
+            </div>
+            {demoMessage && (
+              <div className="mt-3 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3 text-xs text-amber-200 font-semibold flex items-center gap-2">
+                <span>{demoMessage}</span>
+              </div>
+            )}
+          </div>
 
           {/* ── PROFESSIONAL INSTITUTIONAL IDENTITY HERO CARD ─────────────────────────────── */}
           {school && (

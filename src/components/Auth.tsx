@@ -3,16 +3,20 @@ import React, { useState, useEffect } from 'react';
 import type { User, SystemSettings } from '../types';
 import { ADMIN_EMAIL } from '../constants';
 import { saveUserToLive, auth, getUserByEmail, getUserByMobileOrId, getUserData, getFreshUserData, getUserByLinkedGoogleUid } from '../firebase';
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, setPersistence, browserLocalPersistence, signInAnonymously, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult } from 'firebase/auth';
-import { Lock, User as UserIcon, Phone, Mail, ShieldCheck, KeyRound, Copy, Check, XCircle, HelpCircle, Eye, EyeOff, ShieldQuestion, Loader2, ArrowRight, CheckCircle2, Sparkles } from 'lucide-react';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, setPersistence, browserLocalPersistence, signInAnonymously, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut } from 'firebase/auth';
+import { Lock, User as UserIcon, Phone, Mail, ShieldCheck, KeyRound, Copy, Check, XCircle, HelpCircle, Eye, EyeOff, ShieldQuestion, Loader2, ArrowRight, CheckCircle2, Sparkles, QrCode, Users } from 'lucide-react';
 import { LoginGuide } from './LoginGuide';
 import { CustomAlert } from './CustomDialogs';
 import { PedroAuthGuide } from './PedroAuthGuide';
+import { QrScannerModal } from './QrScannerModal';
+import { GuestRoomJoinModal } from './GuestRoomJoinModal';
+import { parseLoginQrToken } from '../services/sessionManager';
 
 interface Props {
   onLogin: (user: User) => void;
   logActivity?: (action: string, details: string, user?: User) => void;
   appSettings?: SystemSettings;
+  onOpenGuestStudyRoom?: () => void;
 }
 
 type AuthView = 'LOGIN' | 'SIGNUP' | 'RECOVERY' | 'SUCCESS_ID';
@@ -105,6 +109,69 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings }) => 
   const [userEnteredAnswer, setUserEnteredAnswer] = useState('');
   const [highlightedField, setHighlightedField] = useState<string | null>(null);
 
+  const [showQrLoginScanner, setShowQrLoginScanner] = useState(false);
+  const [showGuestStudyModal, setShowGuestStudyModal] = useState(false);
+
+  const handleScanLoginSuccess = async (scannedText: string) => {
+    setShowQrLoginScanner(false);
+    setLoading(true);
+    try {
+      const payload = parseLoginQrToken(scannedText);
+      if (!payload || !payload.uid) {
+        setError('Amanaya (Invalid) Login QR Code hai.');
+        setLoading(false);
+        return;
+      }
+      let fresh = await getFreshUserData(payload.uid);
+      if (!fresh) {
+        fresh = await getUserData(payload.uid);
+      }
+      const finalUser: User = fresh || {
+        id: payload.uid,
+        uid: payload.uid,
+        name: payload.name || 'Student',
+        email: payload.email || '',
+        mobile: payload.mobile || '',
+        displayId: payload.displayId || `NSTA-${payload.uid.slice(0, 6).toUpperCase()}`,
+        role: 'STUDENT',
+        credits: 50,
+        streak: 1,
+        totalScore: 0,
+        profileCompleted: true,
+        provider: 'qr_code'
+      };
+      saveUserToLive(finalUser, { immediate: true });
+      localStorage.setItem('nst_current_user', JSON.stringify(finalUser));
+      localStorage.setItem('nst_last_user_id', finalUser.id || finalUser.uid);
+      localStorage.removeItem('nst_logged_out');
+      triggerLoginSuccess(finalUser);
+    } catch (e: any) {
+      setError('QR Login fail hua: ' + (e?.message || 'Error'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGuestStudySubmit = (guestName: string, roomCode?: string) => {
+    setShowGuestStudyModal(false);
+    const guestUser: User = {
+      id: `guest_${Date.now()}`,
+      uid: `guest_${Date.now()}`,
+      name: guestName,
+      isGuest: true,
+      role: 'STUDENT',
+      targetStudyRoomCode: roomCode,
+      credits: 10,
+      streak: 1,
+      totalScore: 0,
+      profileCompleted: true,
+      provider: 'guest_study'
+    };
+    localStorage.setItem('nst_current_user', JSON.stringify(guestUser));
+    localStorage.removeItem('nst_logged_out');
+    triggerLoginSuccess(guestUser);
+  };
+
   useEffect(() => {
     if (highlightedField) {
       const timer = setTimeout(() => setHighlightedField(null), 6000);
@@ -160,14 +227,43 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings }) => 
   };
 
   const completeGoogleRedirectLogin = async (firebaseUser: any) => {
+    if (!firebaseUser) return;
     const userEmail = (firebaseUser.email || '').trim().toLowerCase();
     const userDisplayName = firebaseUser.displayName || 'Student';
     const userPhoto = firebaseUser.photoURL || '';
     const uid = firebaseUser.uid;
 
-    let appUser: any = await withTimeout(getFreshUserData(uid), 8000, null);
-    if (!appUser && userEmail) appUser = await withTimeout(getUserByEmail(userEmail), 8000, null);
-    if (!appUser) appUser = await withTimeout(getUserByLinkedGoogleUid(uid), 8000, null);
+    let appUser: any = null;
+    try {
+      appUser = await Promise.race([
+        getFreshUserData(uid).catch(() => null),
+        new Promise((res) => setTimeout(() => res(null), 2500))
+      ]);
+    } catch (e) {
+      console.warn('[Auth] getFreshUserData non-blocking catch:', e);
+    }
+
+    if (!appUser && userEmail) {
+      try {
+        appUser = await Promise.race([
+          getUserByEmail(userEmail).catch(() => null),
+          new Promise((res) => setTimeout(() => res(null), 2500))
+        ]);
+      } catch (e) {
+        console.warn('[Auth] getUserByEmail non-blocking catch:', e);
+      }
+    }
+
+    if (!appUser) {
+      try {
+        appUser = await Promise.race([
+          getUserByLinkedGoogleUid(uid).catch(() => null),
+          new Promise((res) => setTimeout(() => res(null), 2000))
+        ]);
+      } catch (e) {
+        console.warn('[Auth] getUserByLinkedGoogleUid non-blocking catch:', e);
+      }
+    }
 
     const newUser: User = appUser ? {
       ...appUser,
@@ -210,22 +306,30 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings }) => 
       studyMode: 'CREDIT',
     };
 
-    // Auth should succeed even when a Firestore/RTDB mirror is temporarily unavailable.
-    void saveUserToLive(newUser, { immediate: true });
-    localStorage.setItem('nst_current_user', JSON.stringify(newUser));
-    localStorage.setItem('nst_last_user_id', uid);
-    if (!appUser) {
-      try {
+    // Store in localStorage & clean logged out flag immediately
+    try {
+      localStorage.removeItem('nst_logged_out');
+      localStorage.removeItem('nst_is_guest');
+      localStorage.setItem('nst_current_user', JSON.stringify(newUser));
+      localStorage.setItem('nst_last_user_id', uid);
+      if (!appUser) {
         localStorage.removeItem('nsta_first_assembly_seen');
         sessionStorage.removeItem('nsta_home_assembly_seen');
-      } catch {}
-    }
+      }
+    } catch {}
+
+    // Save to Firestore in background
+    void saveUserToLive(newUser, { immediate: true }).catch(() => {});
     if (logActivity) logActivity(appUser ? "LOGIN" : "SIGNUP_GOOGLE", appUser ? "Logged In via Google Auth" : "New Student via Google", newUser);
+
+    // Immediately trigger login success to transition off the Auth screen
     triggerLoginSuccess(newUser);
   };
 
   useEffect(() => {
     let active = true;
+
+    // 1. Check getRedirectResult
     getRedirectResult(auth)
       .then(async (result) => {
         if (!active || !result?.user) return;
@@ -234,39 +338,73 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings }) => 
       })
       .catch((err) => {
         if (active && err?.code !== 'auth/no-auth-event') {
-          setError(getAuthErrorMessage(err, 'Google Login fail hua.'));
+          console.warn('[Auth] redirect result notice:', err);
         }
       })
       .finally(() => {
         if (active) setLoading(false);
       });
-    return () => { active = false; };
+
+    // 2. Also listen for onAuthStateChanged so any successful Google sign-in immediately proceeds!
+    const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!active || !firebaseUser || firebaseUser.isAnonymous) return;
+      await completeGoogleRedirectLogin(firebaseUser);
+    });
+
+    return () => {
+      active = false;
+      unsub();
+    };
   }, []);
 
   const handleGoogleAuth = async () => {
     try {
       setLoading(true);
       setError(null);
+
+      // If an anonymous session exists, clear it first to avoid auth/credential-already-in-use
+      if (auth.currentUser?.isAnonymous) {
+        await signOut(auth).catch(() => {});
+      }
+
       const provider = new GoogleAuthProvider();
       provider.setCustomParameters({ prompt: 'select_account' });
 
       // Run persistence in background without blocking synchronous user click gesture:
       void setPersistence(auth, browserLocalPersistence).catch(() => {});
 
-      // In-App Popup: Keeps user inside the application without navigating away
-      const result = await signInWithPopup(auth, provider);
-      await completeGoogleRedirectLogin(result.user);
+      let resUser: any = null;
+      try {
+        const result = await signInWithPopup(auth, provider);
+        resUser = result?.user;
+      } catch (popupErr: any) {
+        console.warn('[Auth] signInWithPopup error:', popupErr);
+        if (popupErr.code === 'auth/credential-already-in-use') {
+          // Conflicted with a lingering session, sign out and retry once cleanly
+          await signOut(auth).catch(() => {});
+          const retryResult = await signInWithPopup(auth, provider);
+          resUser = retryResult?.user;
+        } else if (popupErr.code === 'auth/popup-blocked') {
+          // Fallback to redirect if popup window was blocked
+          await signInWithRedirect(auth, provider);
+          return;
+        } else {
+          throw popupErr;
+        }
+      }
+
+      if (resUser) {
+        await completeGoogleRedirectLogin(resUser);
+      }
     } catch (err: any) {
       console.warn('[Auth] Google in-app sign-in error:', err);
       if (err.code === 'auth/popup-closed-by-user') {
         // User closed the account selector popup voluntarily
         setError(null);
-      } else if (err.code === 'auth/popup-blocked') {
-        setError('Google popup window block ho gayi. Kripya browser setting me popups allow karein ya button par dobara tap karein.');
       } else if (err.code === 'auth/cancelled-popup-request') {
         // Ignored
       } else {
-        setError(getAuthErrorMessage(err, 'Google Login fail hua.'));
+        setError(getAuthErrorMessage(err, 'Google Login fail hua. Dobara koshish karein.'));
       }
     } finally {
       setLoading(false);
@@ -328,6 +466,55 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings }) => 
     } catch (err: any) {
       console.error('[Auth] Guest login failed:', err);
       setError('Guest mode shuru nahi ho saka: ' + (err.message || 'Error'));
+    }
+  };
+
+  const handleDemoStudentLogin = () => {
+    setError(null);
+    try {
+      try {
+        localStorage.removeItem('nst_logged_out');
+        localStorage.removeItem('nst_is_guest');
+      } catch (_) {}
+
+      const demoUser: User = {
+        id: 'student_demo_1',
+        uid: 'student_demo_1',
+        displayId: 'NSTA-STU-001',
+        name: 'Student Demo',
+        email: 'student@nsta.app',
+        mobile: '9876543210',
+        role: 'STUDENT',
+        isGuest: false,
+        board: 'CBSE',
+        classLevel: '10',
+        stream: 'Science',
+        credits: 100,
+        diamonds: 50,
+        streak: 5,
+        longestStreak: 14,
+        totalScore: 1250,
+        studyCoins: 350,
+        studyMode: 'CREDIT',
+        profileCompleted: true,
+        createdAt: new Date().toISOString(),
+        lastLoginDate: new Date().toISOString(),
+        redeemedCodes: [],
+        timedUnlocks: {},
+        savedNotes: [],
+        testResults: [],
+      };
+
+      localStorage.setItem('nst_current_user', JSON.stringify(demoUser));
+      localStorage.setItem('nst_last_user_id', demoUser.id);
+      if (logActivity) logActivity("LOGIN", "Entered as Demo Student", demoUser);
+      triggerLoginSuccess(demoUser);
+
+      if (!auth.currentUser) {
+        signInAnonymously(auth).catch(() => {});
+      }
+    } catch (err: any) {
+      setError('Demo login fail hua: ' + (err.message || 'Error'));
     }
   };
 
@@ -682,7 +869,7 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings }) => 
 
   if (view === 'SUCCESS_ID') {
     return (
-      <div className="h-full max-h-[100dvh] w-full flex flex-col items-center justify-between bg-gradient-to-b from-slate-50 via-white to-blue-50/20 px-3 sm:px-4 pt-2 pb-0 select-none relative overflow-hidden overscroll-none">
+      <div className="min-h-screen min-h-[100dvh] w-full flex-1 flex flex-col items-center justify-between bg-gradient-to-b from-slate-50 via-white to-blue-50/20 px-3 sm:px-4 pt-2 pb-6 select-none relative overflow-x-hidden">
         <div className="absolute -top-32 -left-32 w-80 h-80 rounded-full bg-blue-500/10 blur-[80px] pointer-events-none" />
         <div className="absolute -bottom-32 -right-32 w-80 h-80 rounded-full bg-indigo-500/10 blur-[80px] pointer-events-none" />
 
@@ -730,7 +917,7 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings }) => 
   const isFlipped = view === 'SIGNUP';
 
   return (
-    <div className="h-full max-h-[100dvh] w-full flex flex-col justify-between items-center bg-gradient-to-b from-slate-100/90 via-slate-50 to-slate-100/80 text-slate-800 px-3 sm:px-4 pt-1 sm:pt-2 pb-0 select-none font-sans overflow-hidden relative overscroll-none">
+    <div className="min-h-screen min-h-[100dvh] w-full flex-1 flex flex-col justify-between items-center bg-gradient-to-b from-slate-100 via-slate-50 to-slate-100 text-slate-800 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 dark:text-slate-100 px-3 sm:px-4 pt-1 sm:pt-2 pb-6 select-none font-sans relative overflow-x-hidden">
       {/* Premium Ambient Luminous Orbs */}
       <div className="absolute -top-32 -left-32 w-80 h-80 rounded-full bg-slate-400/10 blur-[90px] pointer-events-none" />
       <div className="absolute -bottom-32 -right-32 w-80 h-80 rounded-full bg-indigo-500/8 blur-[90px] pointer-events-none" />
@@ -1144,15 +1331,25 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings }) => 
                 <div className="flex-1 border-t border-slate-200" />
               </div>
 
-              {/* 4. Professional & Clean "Continue as Guest" Button (matching Google sign-in style) */}
-              <div className="w-full">
+              {/* 4. Professional Login Options: QR Scan & Guest */}
+              <div className="w-full flex flex-col gap-2">
+                <button 
+                  type="button" 
+                  onClick={() => setShowQrLoginScanner(true)} 
+                  disabled={loading}
+                  className="w-full py-2.5 sm:py-3 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white shadow-md shadow-indigo-600/25 active:scale-[0.99] transition-all flex items-center justify-center gap-2 text-xs sm:text-sm font-bold cursor-pointer"
+                >
+                  <QrCode size={16} className="text-white shrink-0" />
+                  <span>Scan QR Code se Direct Login (बिना पासवर्ड)</span>
+                </button>
+
                 <button 
                   type="button" 
                   onClick={handleContinueAsGuest} 
                   disabled={loading}
-                  className="w-full py-2.5 sm:py-3 rounded-xl bg-white border border-slate-200/90 hover:bg-slate-50/90 hover:border-slate-300 shadow-xs active:scale-[0.99] transition-all flex items-center justify-center gap-2 text-xs sm:text-sm font-bold text-slate-700 cursor-pointer"
+                  className="w-full py-2 sm:py-2.5 rounded-xl bg-white border border-slate-200/90 hover:bg-slate-50/90 hover:border-slate-300 shadow-xs active:scale-[0.99] transition-all flex items-center justify-center gap-2 text-xs font-semibold text-slate-600 cursor-pointer"
                 >
-                  <UserIcon size={16} className="text-slate-500 shrink-0" />
+                  <UserIcon size={15} className="text-slate-400 shrink-0" />
                   <span>Continue as Guest</span>
                 </button>
               </div>
@@ -1407,6 +1604,23 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings }) => 
       </div>
 
       <div className="h-1 shrink-0" />
+
+      {/* QR Scanner Modal for Passwordless Login */}
+      <QrScannerModal
+        isOpen={showQrLoginScanner}
+        onClose={() => setShowQrLoginScanner(false)}
+        mode="LOGIN"
+        title="Scan Login QR Code"
+        onScanSuccess={handleScanLoginSuccess}
+      />
+
+      {/* Guest Study Room Modal */}
+      <GuestRoomJoinModal
+        isOpen={showGuestStudyModal}
+        onClose={() => setShowGuestStudyModal(false)}
+        onSubmitName={handleGuestStudySubmit}
+        appName={appSettings?.appName || settings?.appName || 'NSTA'}
+      />
     </div>
   );
 };

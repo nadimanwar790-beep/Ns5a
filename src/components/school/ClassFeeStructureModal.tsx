@@ -118,10 +118,10 @@ export const ClassFeeStructureModal: React.FC<Props> = ({
     (structure.customHeads || []).reduce((sum, h) => sum + (Number(h.amount) || 0), 0);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/75 backdrop-blur-xs overflow-hidden">
-      <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-2xl max-h-[92vh] sm:max-h-[90vh] flex flex-col border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs overflow-y-auto">
+      <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-2xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden my-6">
         {/* Header */}
-        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-blue-950 px-5 py-4 sm:px-6 sm:py-5 text-white flex items-center justify-between shrink-0">
+        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-blue-950 px-6 py-5 text-white flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-amber-400 text-slate-950 font-black flex items-center justify-center shadow">
               <IndianRupee className="w-5 h-5" />
@@ -135,14 +135,14 @@ export const ClassFeeStructureModal: React.FC<Props> = ({
           </div>
           <button
             onClick={onClose}
-            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition cursor-pointer"
+            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Content */}
-        <div className="p-4 sm:p-6 space-y-6 overflow-y-auto flex-1 overscroll-contain">
+        <div className="p-6 space-y-6">
           {/* Class Selector & Quick Preset */}
           <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between bg-slate-50 dark:bg-slate-800/60 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
             <div className="flex-1">
@@ -356,7 +356,7 @@ export const ClassFeeStructureModal: React.FC<Props> = ({
         </div>
 
         {/* Footer */}
-        <div className="bg-slate-50 dark:bg-slate-800/80 px-4 py-3 sm:px-6 sm:py-4 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between shrink-0">
+        <div className="bg-slate-50 dark:bg-slate-800/80 px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between">
           <button
             onClick={onClose}
             className="px-4 py-2 text-xs font-bold text-slate-600 dark:text-slate-300 hover:text-slate-900"

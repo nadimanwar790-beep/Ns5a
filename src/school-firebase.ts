@@ -908,109 +908,31 @@ export const deleteExam = async (schoolId: string, examId: string) => {
 
 // ── FEE ─────────────────────────────────────────────────────────────────────
 
-const LOCAL_FEES_KEY = (schoolId: string) => `nst_school_fees_${schoolId}`;
-
-export const getLocalSchoolFees = (schoolId: string): MonthlyFee[] => {
-  try {
-    const raw = localStorage.getItem(LOCAL_FEES_KEY(schoolId));
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
-    }
-  } catch {}
-  return [];
-};
-
-export const setLocalSchoolFees = (schoolId: string, fees: MonthlyFee[]) => {
-  try {
-    localStorage.setItem(LOCAL_FEES_KEY(schoolId), JSON.stringify(fees));
-  } catch {}
-};
-
 export const saveFee = async (fee: MonthlyFee) => {
   const id = `${fee.studentId}_${fee.month}`;
-  const sanitized = sanitizeForFirestore(fee);
-
-  // 1. Immediately cache in localStorage for instant 0ms retrieval
-  try {
-    const current = getLocalSchoolFees(fee.schoolId);
-    const filtered = current.filter(f => !(f.studentId === fee.studentId && f.month === fee.month));
-    setLocalSchoolFees(fee.schoolId, [...filtered, sanitized]);
-  } catch (e) {
-    console.warn("[school-firebase] Local cache saveFee error:", e);
-  }
-
-  // 2. Realtime Database fast sync
-  if (rtdb) {
-    try {
-      await withTimeout(set(ref(rtdb, `schools/${fee.schoolId}/fees/${id}`), sanitized), 2000);
-    } catch (e) {
-      console.warn("[school-firebase] RTDB saveFee:", e);
-    }
-  }
-
-  // 3. Firestore persistence
-  if (db) {
-    try {
-      await withTimeout(setDoc(d(`schools/${fee.schoolId}/fees/${id}`), sanitized), 2500);
-    } catch (e) {
-      console.warn("[school-firebase] Firestore saveFee error:", e);
-    }
-  }
+  await setDoc(d(`schools/${fee.schoolId}/fees/${id}`), sanitizeForFirestore(fee));
 };
 
 export const getStudentFees = async (schoolId: string, studentId: string): Promise<MonthlyFee[]> => {
-  const local = getLocalSchoolFees(schoolId).filter(f => f.studentId === studentId);
-  try {
-    const snap = await withTimeout(getDocs(col(`schools/${schoolId}/fees`)), 2500);
-    const firestoreFees = (snap as any).docs
-      .map((doc: any) => doc.data() as MonthlyFee)
-      .filter((f: MonthlyFee) => f.studentId === studentId);
-
-    // Merge: local takes precedence for recent updates
-    const map = new Map<string, MonthlyFee>();
-    firestoreFees.forEach((f: MonthlyFee) => map.set(`${f.studentId}_${f.month}`, f));
-    local.forEach((f: MonthlyFee) => map.set(`${f.studentId}_${f.month}`, f));
-    return Array.from(map.values()).sort((a, b) => b.month.localeCompare(a.month));
-  } catch {
-    return local.sort((a, b) => b.month.localeCompare(a.month));
-  }
+  const snap = await getDocs(col(`schools/${schoolId}/fees`));
+  return snap.docs
+    .map(d => d.data() as MonthlyFee)
+    .filter(f => f.studentId === studentId)
+    .sort((a, b) => b.month.localeCompare(a.month));
 };
 
 export const getMonthlyFees = async (schoolId: string, month: string, classId?: string): Promise<MonthlyFee[]> => {
-  const local = getLocalSchoolFees(schoolId).filter(f => f.month === month && (!classId || f.classId === classId));
-  try {
-    const snap = await withTimeout(getDocs(col(`schools/${schoolId}/fees`)), 2500);
-    const firestoreFees = (snap as any).docs
-      .map((doc: any) => doc.data() as MonthlyFee)
-      .filter((f: MonthlyFee) => f.month === month && (!classId || f.classId === classId));
-
-    const map = new Map<string, MonthlyFee>();
-    firestoreFees.forEach((f: MonthlyFee) => map.set(`${f.studentId}_${f.month}`, f));
-    local.forEach((f: MonthlyFee) => map.set(`${f.studentId}_${f.month}`, f));
-
-    let all = Array.from(map.values());
-    if (classId) all = all.filter(f => f.classId === classId);
-    return all.sort((a, b) => a.studentName.localeCompare(b.studentName));
-  } catch {
-    return local.sort((a, b) => a.studentName.localeCompare(b.studentName));
-  }
+  const snap = await getDocs(col(`schools/${schoolId}/fees`));
+  let all = snap.docs.map(d => d.data() as MonthlyFee).filter(f => f.month === month);
+  if (classId) all = all.filter(f => f.classId === classId);
+  return all.sort((a, b) => a.studentName.localeCompare(b.studentName));
 };
 
 export const getSchoolFeeHistory = async (schoolId: string): Promise<MonthlyFee[]> => {
-  const local = getLocalSchoolFees(schoolId);
-  try {
-    const snap = await withTimeout(getDocs(col(`schools/${schoolId}/fees`)), 2500);
-    const firestoreFees = (snap as any).docs.map((doc: any) => doc.data() as MonthlyFee);
-
-    const map = new Map<string, MonthlyFee>();
-    firestoreFees.forEach((f: MonthlyFee) => map.set(`${f.studentId}_${f.month}`, f));
-    local.forEach((f: MonthlyFee) => map.set(`${f.studentId}_${f.month}`, f));
-
-    return Array.from(map.values()).sort((a, b) => a.month.localeCompare(b.month));
-  } catch {
-    return local.sort((a, b) => a.month.localeCompare(b.month));
-  }
+  const snap = await getDocs(col(`schools/${schoolId}/fees`));
+  return snap.docs
+    .map(d => d.data() as MonthlyFee)
+    .sort((a, b) => a.month.localeCompare(b.month));
 };
 
 export const subscribeToClassFees = (schoolId: string, month: string, classId: string, cb: (fees: MonthlyFee[]) => void) =>
@@ -1022,23 +944,12 @@ export const subscribeToClassFees = (schoolId: string, month: string, classId: s
 
 export const markFeePaid = async (schoolId: string, studentId: string, month: string, paidBy: string) => {
   const id = `${studentId}_${month}`;
-  const updates = {
+  await updateDoc(d(`schools/${schoolId}/fees/${id}`), sanitizeForFirestore({
     paid: true,
     paidDate: new Date().toISOString(),
     paidBy,
-  };
-  const current = getLocalSchoolFees(schoolId);
-  const target = current.find(f => f.studentId === studentId && f.month === month);
-  if (target) {
-    const updated = { ...target, ...updates, balanceDue: 0, paidAmount: target.amount };
-    setLocalSchoolFees(schoolId, [...current.filter(f => !(f.studentId === studentId && f.month === month)), updated]);
-  }
-  if (rtdb) {
-    try { await update(ref(rtdb, `schools/${schoolId}/fees/${id}`), updates); } catch {}
-  }
-  if (db) {
-    try { await updateDoc(d(`schools/${schoolId}/fees/${id}`), sanitizeForFirestore(updates)); } catch {}
-  }
+    receiptNo: `RCP-${Date.now()}`
+  }));
 };
 
 // ── HOMEWORK ─────────────────────────────────────────────────────────────────

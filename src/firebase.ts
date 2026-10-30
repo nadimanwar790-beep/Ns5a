@@ -1,7 +1,7 @@
 import { getApp, getApps, initializeApp } from "firebase/app";
 import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, setLogLevel, doc, setDoc, getDoc, getDocFromServer, collection, updateDoc, deleteDoc, onSnapshot, getDocs, query, where, limitToLast, orderBy, increment, arrayUnion, limit, startAfter, QueryDocumentSnapshot } from "firebase/firestore";
 import { getDatabase, ref, set, get, onValue, update, remove, query as rtdbQuery, limitToLast as rtdbLimitToLast, orderByChild as rtdbOrderByChild, equalTo as rtdbEqualTo, runTransaction, serverTimestamp } from "firebase/database";
-import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
+import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, signInAnonymously } from "firebase/auth";
 import { storage } from "./utils/storage";
 import { CLASS_10_FAKE_LESSONS } from "./constants/class10SeedLessons";
 
@@ -65,6 +65,8 @@ if (typeof window !== 'undefined') {
     if (
       msg.toLowerCase().includes('permission denied') ||
       msg.toLowerCase().includes('permission-denied') ||
+      msg.toLowerCase().includes('permission_denied') ||
+      msg.toLowerCase().includes("client doesn't have permission") ||
       msg.includes('PERMISSION_DENIED')
     ) {
       event.preventDefault();
@@ -2325,7 +2327,12 @@ export const subscribeToSettings = (callback: (settings: any) => void) => {
     };
 
     if (lucentEntriesConfirmed) {
-      merged.lucentNotes = latestOrder.map(id => latestLucentMap[id]).filter(Boolean);
+      const orderedNotes = latestOrder.map(id => latestLucentMap[id]).filter(Boolean);
+      const orderedIds = new Set(latestOrder);
+      const remainingNotes = Object.values(latestLucentMap).filter((n: any) => n && n.id && !orderedIds.has(n.id));
+      merged.lucentNotes = [...orderedNotes, ...remainingNotes];
+    } else if (latestCore?.lucentNotes && Array.isArray(latestCore.lucentNotes)) {
+      merged.lucentNotes = latestCore.lucentNotes;
     }
 
     const currentNotes = Array.isArray(merged.lucentNotes) ? merged.lucentNotes : [];

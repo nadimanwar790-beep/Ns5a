@@ -1,4 +1,7 @@
 {
-  "name": "NSTA Study & School Portal",
-  "description": "Comprehensive school and study management portal with student records, attendance, 4-in-1 A4 DPS official monthly fee receipts with QR code & photo verification, and learning tools."
+  "name": "NSTA - National Study & Tracking App",
+  "description": "Comprehensive learning platform with syllabus, notes, audio studio, MCQs, and student progress tracking.",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

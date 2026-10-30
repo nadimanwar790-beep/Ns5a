@@ -56,7 +56,11 @@ import {
   ChevronUp,
   Settings,
   SlidersHorizontal,
+  QrCode,
+  Camera,
 } from 'lucide-react';
+import { StudyRoomQrModal } from './StudyRoomQrModal';
+import { QrScannerModal } from './QrScannerModal';
 
 const FaWhatsapp = ({ size = 14, className = "" }: { size?: number; className?: string }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" className={className}>
@@ -468,6 +472,23 @@ export const GroupStudyModal: React.FC<GroupStudyModalProps> = ({
   const [joinCodeError, setJoinCodeError] = useState<string>('');
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'MCQ' | 'LEADERBOARD' | 'MEMBERS' | 'CHAT'>('MCQ');
+  const [showRoomQrModal, setShowRoomQrModal] = useState<boolean>(false);
+  const [showJoinScanner, setShowJoinScanner] = useState<boolean>(false);
+
+  const handleQrJoinScan = (decodedText: string) => {
+    setShowJoinScanner(false);
+    let extractedCode = decodedText.trim();
+    try {
+      if (extractedCode.includes('studyRoom=')) {
+        const u = new URL(extractedCode);
+        const code = u.searchParams.get('studyRoom');
+        if (code) extractedCode = code;
+      }
+    } catch {}
+    if (extractedCode) {
+      setJoinCodeInput(extractedCode.toUpperCase());
+    }
+  };
 
   // ── Password Protection & Optional Name on Entry State ───────────────────
   const [passwordModalRoom, setPasswordModalRoom] = useState<GroupStudyRoom | null>(null);
@@ -3716,6 +3737,19 @@ Aao dekhte hain kisme kitna hai dum! 🏆`;
             {currentRoom && (
               <button
                 type="button"
+                onClick={() => setShowRoomQrModal(true)}
+                className="h-9 px-3 rounded-xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 border border-teal-500/50 text-xs font-bold text-white flex items-center justify-center gap-1.5 active:scale-95 transition shadow-sm cursor-pointer whitespace-nowrap shrink-0"
+                title="QR Code se Room Share Karein"
+                aria-label="QR Share Room"
+              >
+                <QrCode size={14} className="shrink-0" />
+                <span>QR Share</span>
+              </button>
+            )}
+
+            {currentRoom && (
+              <button
+                type="button"
                 onClick={() => handleCopyCode()}
                 className="h-9 px-3 rounded-xl bg-slate-800/90 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 flex items-center justify-center gap-1.5 active:scale-95 transition shadow-sm cursor-pointer whitespace-nowrap shrink-0"
                 title="Room Code copy karein"
@@ -3941,15 +3975,25 @@ Aao dekhte hain kisme kitna hai dum! 🏆`;
                       />
                     </div>
 
-                    {/* Join button */}
-                    <div className="sm:col-span-2">
+                    {/* Join button & Scan QR button */}
+                    <div className="sm:col-span-2 flex items-center gap-1.5">
                       <button
                         type="submit"
                         disabled={!joinCodeInput.trim() || isLoading}
-                        className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black text-xs shadow-md active:scale-95 disabled:opacity-50 transition cursor-pointer flex items-center justify-center gap-1.5"
+                        className="flex-1 py-2 px-2.5 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black text-xs shadow-md active:scale-95 disabled:opacity-50 transition cursor-pointer flex items-center justify-center gap-1"
                       >
                         {isLoading ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} className="fill-current" />}
                         <span>Join</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setShowJoinScanner(true)}
+                        className="p-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-md active:scale-95 transition cursor-pointer flex items-center justify-center shrink-0"
+                        title="Scan Room QR Code"
+                        aria-label="Scan QR Code"
+                      >
+                        <Camera size={14} />
                       </button>
                     </div>
                   </form>
@@ -9086,6 +9130,22 @@ Aao dekhte hain kisme kitna hai dum! 🏆`;
           </div>
         );
       })()}
+
+      {/* Study Room QR Share Modal */}
+      <StudyRoomQrModal
+        isOpen={showRoomQrModal}
+        onClose={() => setShowRoomQrModal(false)}
+        room={currentRoom}
+      />
+
+      {/* QR Scanner for joining room */}
+      <QrScannerModal
+        isOpen={showJoinScanner}
+        onClose={() => setShowJoinScanner(false)}
+        mode="STUDY_ROOM"
+        title="Scan Study Room QR Code"
+        onScanSuccess={handleQrJoinScan}
+      />
     </div>
   );
 };

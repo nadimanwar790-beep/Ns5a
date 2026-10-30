@@ -120,6 +120,19 @@
   100% { opacity: 0; }
 }
 
+html, body {
+  min-height: 100%;
+  margin: 0;
+  padding: 0;
+  background-color: #f8fafc;
+  color: #0f172a;
+}
+
+html.dark, html.dark body, body.dark-mode, .dark-mode body {
+  background-color: #020617;
+  color: #f8fafc;
+}
+
 /* Dark-mode token overrides — applied via .dark-mode on <html> */
 .dark-mode {
   --nst-color-surface: #0d0d0d;

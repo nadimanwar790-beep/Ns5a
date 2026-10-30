@@ -1772,10 +1772,10 @@ export const McqHub: React.FC<McqHubProps> = ({
     <div
       id="mcq-hub-root-container"
       data-wallpaper-active={settings?.mcqHubBackgroundImage ? "true" : undefined}
-      className={`w-full h-full flex-1 flex flex-col overflow-y-auto overscroll-contain relative ${
+      className={`w-full h-full max-h-full flex-1 flex flex-col overflow-y-auto overscroll-contain relative pb-28 ${
         settings?.mcqHubBackgroundImage ? 'bg-transparent text-slate-800 dark:text-slate-100' : isDarkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-800'
       }`}
-      style={{ WebkitOverflowScrolling: 'touch' }}
+      style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}
     >
       {/* Background Wallpaper (Admin Configured Live Wallpaper) */}
       {settings?.mcqHubBackgroundImage && (
@@ -1791,10 +1791,10 @@ export const McqHub: React.FC<McqHubProps> = ({
       )}
       {/* ── Top Header: Back button (Left) + Mode Switcher (Fills top bar) + Close button (Right) ── */}
       <header
-        className={`sticky top-0 z-30 px-2 sm:px-4 py-1.5 border-b backdrop-blur-md shrink-0 flex items-center justify-between gap-2 w-full ${
+        className={`sticky top-0 z-40 px-2 sm:px-4 py-2 border-b backdrop-blur-md shrink-0 flex items-center justify-between gap-2 w-full ${
           isDarkMode
-            ? 'bg-slate-900/95 border-slate-800 text-white'
-            : 'bg-white/95 border-slate-200 text-slate-900 shadow-2xs'
+            ? 'bg-slate-900/98 border-slate-800 text-white shadow-md'
+            : 'bg-white/98 border-slate-200 text-slate-900 shadow-xs'
         }`}
       >
         {/* Left: Back button */}
@@ -1948,10 +1948,10 @@ export const McqHub: React.FC<McqHubProps> = ({
 
       {/* ── Sub-bar: Compact Controls & Class Selector ── */}
       <div
-        className={`sticky top-[44px] z-20 px-3 py-1 border-b shrink-0 flex items-center justify-between gap-2 backdrop-blur-md ${
+        className={`sticky top-[47px] z-30 px-3 py-1.5 border-b shrink-0 flex items-center justify-between gap-2 backdrop-blur-md ${
           isDarkMode
-            ? 'bg-slate-900/90 border-slate-800/80 text-white'
-            : 'bg-white/90 border-slate-200/80 text-slate-900'
+            ? 'bg-slate-900/98 border-slate-800/80 text-white shadow-xs'
+            : 'bg-white/98 border-slate-200/80 text-slate-900 shadow-xs'
         }`}
       >
         {activeSubMode === 'OFFICIAL' ? (
@@ -2842,7 +2842,10 @@ export const McqHub: React.FC<McqHubProps> = ({
       {/* 2. PRACTICE SETS VIEW (Moved from Home Page)                           */}
       {/* ═══════════════════════════════════════════════════════════════════════ */}
       {activeSubMode === 'PRACTICE_SETS' && (
-        <div className="flex-1 flex flex-col max-w-4xl w-full mx-auto px-2 sm:px-4 py-2 pb-24 gap-3 animate-in fade-in duration-150">
+        <div
+          className="flex-1 flex flex-col max-w-4xl w-full mx-auto px-2 sm:px-4 py-2 pb-28 gap-3 animate-in fade-in duration-150 touch-pan-y"
+          style={{ WebkitOverflowScrolling: 'touch' }}
+        >
           <CompetitionPracticeSetLauncher
             user={user}
             settings={settings}

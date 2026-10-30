@@ -491,7 +491,10 @@ export const CompetitionPracticeSetLauncher: React.FC<Props> = ({
             </div>
 
             {/* Scrollable Drawer Body with ample bottom padding */}
-            <div className="p-4 sm:p-5 overflow-y-auto space-y-4 no-scrollbar flex-1 pb-10">
+            <div
+              className="p-4 sm:p-5 overflow-y-auto overscroll-contain space-y-4 flex-1 pb-12 touch-pan-y"
+              style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}
+            >
               {/* Key Specs Grid */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-center">
                 <div className="p-2.5 rounded-2xl bg-slate-800/60 border border-slate-700/60">

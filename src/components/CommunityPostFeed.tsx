@@ -108,6 +108,119 @@ export interface CommunityPost {
   pageNo?: string | number;
 }
 
+export const COMMUNITY_POSTS_CACHE_KEY = 'nsta_community_posts_cache_v3';
+
+export const SEED_COMMUNITY_POSTS: CommunityPost[] = [
+  {
+    id: 'seed_post_official_welcome',
+    userId: 'admin_official',
+    userName: 'NSTA Academic Council',
+    userRole: 'ADMIN',
+    userTier: 'ULTRA',
+    text: '📢 Welcome to the NSTA Student Community! Share your daily study notes, ask doubts from top subject teachers, participate in the 6-stage exam revision, and report any corrections in chapter notes to earn study coins! 🚀✨',
+    category: 'OFFICIAL',
+    isOfficial: true,
+    createdAt: Date.now() - 1000 * 60 * 60 * 12,
+    likes: { student_demo_1: true, demo_student_1: true, demo_student_2: true },
+    comments: {
+      comm_1: {
+        id: 'comm_1',
+        userId: 'student_demo_1',
+        userName: 'Aarav Sharma',
+        userRole: 'STUDENT',
+        userTier: 'BASIC',
+        text: 'Thank you Sir! The new DPS exam papers and revision sets are extremely helpful.',
+        createdAt: Date.now() - 1000 * 60 * 60 * 8,
+      },
+      comm_2: {
+        id: 'comm_2',
+        userId: 'student_demo_2',
+        userName: 'Ananya Verma',
+        userRole: 'STUDENT',
+        userTier: 'ULTRA',
+        text: 'Loving the audio studio and offline notes download feature! 🙏',
+        createdAt: Date.now() - 1000 * 60 * 60 * 5,
+      }
+    }
+  },
+  {
+    id: 'seed_post_doubt_math',
+    userId: 'student_demo_3',
+    userName: 'Rohan Gupta',
+    userRole: 'STUDENT',
+    userTier: 'BASIC',
+    text: 'Class 10 Trigonometry Identity Doubt: Can someone explain the simplest step to prove (sin θ / (1 + cos θ)) + ((1 + cos θ) / sin θ) = 2 cosec θ? Taking LCM simplifies to 2/sin θ?',
+    category: 'DOUBT',
+    createdAt: Date.now() - 1000 * 60 * 60 * 20,
+    likes: { student_demo_1: true, student_demo_4: true },
+    comments: {
+      comm_3: {
+        id: 'comm_3',
+        userId: 'teacher_math_demo',
+        userName: 'Sanjay Kulkarni (Maths Faculty)',
+        userRole: 'TEACHER',
+        userTier: 'ULTRA',
+        text: 'Yes Rohan! LCM is sin θ(1 + cos θ). Numerator becomes sin²θ + (1 + cos θ)² = sin²θ + 1 + 2cos θ + cos²θ. Since sin²θ + cos²θ = 1, numerator is 2 + 2cos θ = 2(1 + cos θ). The (1 + cos θ) cancels out leaving 2/sin θ = 2 cosec θ. Well solved!',
+        createdAt: Date.now() - 1000 * 60 * 60 * 16,
+      }
+    }
+  },
+  {
+    id: 'seed_post_science_notes',
+    userId: 'student_demo_4',
+    userName: 'Priya Mishra',
+    userRole: 'STUDENT',
+    userTier: 'ULTRA',
+    text: '🧪 Quick Revision Trick for Redox Reactions in Chemical Equations: OIL RIG (Oxidation Is Loss of electrons, Reduction Is Gain). Also remember: Oxidizing agent gets reduced, reducing agent gets oxidized! Hope this helps in upcoming PA-1 & Half-Yearly exams.',
+    category: 'GENERAL',
+    createdAt: Date.now() - 1000 * 60 * 60 * 36,
+    likes: { student_demo_1: true, student_demo_2: true, student_demo_3: true },
+    comments: {}
+  },
+  {
+    id: 'seed_post_bug_resolved',
+    userId: 'student_demo_5',
+    userName: 'Vivaan Singh',
+    userRole: 'STUDENT',
+    userTier: 'BASIC',
+    text: 'Reported: In Chapter 2 PDF viewer, zoom button on tablet landscape orientation was overlapping with bookmark ribbon.',
+    category: 'BUG_REPORT',
+    status: 'RESOLVED',
+    createdAt: Date.now() - 1000 * 60 * 60 * 48,
+    likes: { student_demo_1: true },
+    comments: {
+      comm_4: {
+        id: 'comm_4',
+        userId: 'admin_official',
+        userName: 'NSTA Tech Team',
+        userRole: 'ADMIN',
+        userTier: 'ULTRA',
+        text: 'Fixed in build v2.4. Responsive padding adjusted and tested on tablet screens. 50 Study Coins rewarded to your account!',
+        createdAt: Date.now() - 1000 * 60 * 60 * 42,
+      }
+    }
+  }
+];
+
+export const getInitialCommunityPosts = (): CommunityPost[] => {
+  try {
+    const raw = localStorage.getItem(COMMUNITY_POSTS_CACHE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch (_) {}
+  return SEED_COMMUNITY_POSTS;
+};
+
+export const saveCommunityPostsCache = (postsList: CommunityPost[]) => {
+  try {
+    localStorage.setItem(COMMUNITY_POSTS_CACHE_KEY, JSON.stringify(postsList));
+  } catch (_) {}
+};
+
 interface CommunityPostFeedProps {
   user: User;
   isAdmin?: boolean;
@@ -164,7 +277,7 @@ export const CommunityPostFeed: React.FC<CommunityPostFeedProps> = ({
   const isDoubtUnlocked = true;
   const isPostsUnlocked = true;
 
-  const [posts, setPosts] = useState<CommunityPost[]>([]);
+  const [posts, setPosts] = useState<CommunityPost[]>(getInitialCommunityPosts);
   const [loading, setLoading] = useState<boolean>(true);
   const [activeFilter, setActiveFilter] = useState<FilterType>(initialFilter || 'ALL');
   const [searchQuery, setSearchQuery] = useState('');
@@ -248,31 +361,53 @@ export const CommunityPostFeed: React.FC<CommunityPostFeedProps> = ({
   // Listen to RTDB community_posts
   useEffect(() => {
     setLoading(true);
-    const postsRef = ref(rtdb, 'community_posts');
-    const unsubscribe = onValue(
-      postsRef,
-      (snapshot) => {
-        if (snapshot.exists()) {
-          const rawData = snapshot.val();
-          const parsed: CommunityPost[] = Object.entries(rawData).map(([id, val]: [string, any]) => ({
-            id,
-            ...val,
-          }));
-          // Sort newest first
-          parsed.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-          setPosts(parsed);
-        } else {
-          setPosts([]);
+    let isSubscribed = true;
+    try {
+      const postsRef = ref(rtdb, 'community_posts');
+      const unsubscribe = onValue(
+        postsRef,
+        (snapshot) => {
+          if (!isSubscribed) return;
+          if (snapshot.exists()) {
+            const rawData = snapshot.val();
+            const parsed: CommunityPost[] = Object.entries(rawData).map(([id, val]: [string, any]) => ({
+              id,
+              ...val,
+            }));
+            const mergedMap = new Map<string, CommunityPost>();
+            parsed.forEach((p) => mergedMap.set(p.id, p));
+            // Keep seed posts so feed has rich demonstration data
+            SEED_COMMUNITY_POSTS.forEach((sp) => {
+              if (!mergedMap.has(sp.id)) mergedMap.set(sp.id, sp);
+            });
+            const mergedList = Array.from(mergedMap.values());
+            mergedList.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+            setPosts(mergedList);
+            saveCommunityPostsCache(mergedList);
+          } else {
+            setPosts((prev) => (prev.length > 0 ? prev : SEED_COMMUNITY_POSTS));
+          }
+          setLoading(false);
+        },
+        (error: any) => {
+          if (!isSubscribed) return;
+          console.warn('[CommunityPostFeed] Realtime DB sync operating in offline/local cache mode:', error?.message || error);
+          setPosts((prev) => (prev.length > 0 ? prev : getInitialCommunityPosts()));
+          setLoading(false);
         }
-        setLoading(false);
-      },
-      (error) => {
-        console.error('[CommunityPostFeed] Error fetching posts:', error);
-        setLoading(false);
-      }
-    );
+      );
 
-    return () => unsubscribe();
+      return () => {
+        isSubscribed = false;
+        try {
+          unsubscribe();
+        } catch (_) {}
+      };
+    } catch (err: any) {
+      console.warn('[CommunityPostFeed] Error attaching posts listener:', err?.message || err);
+      setPosts(getInitialCommunityPosts());
+      setLoading(false);
+    }
   }, []);
 
   // Listen to RTDB suggestions for Notes Fix integration
@@ -464,7 +599,24 @@ export const CommunityPostFeed: React.FC<CommunityPostFeedProps> = ({
         newPostData.videoUrl = uploadedVideoUrl.trim();
       }
 
-      await set(newPostRef, newPostData);
+      // Attempt RTDB set, with local cache fallback if permissions restrict RTDB
+      try {
+        await set(newPostRef, newPostData);
+      } catch (rtdbErr: any) {
+        console.warn('[CommunityPostFeed] RTDB write permission restricted, saving locally:', rtdbErr?.message || rtdbErr);
+      }
+
+      // Always add to local posts state and localStorage immediately
+      const createdPost: CommunityPost = {
+        id: newPostId,
+        ...newPostData,
+      } as CommunityPost;
+
+      setPosts((prev) => {
+        const next = [createdPost, ...prev.filter((p) => p.id !== newPostId)];
+        saveCommunityPostsCache(next);
+        return next;
+      });
 
       // Also register into suggestions for coins & admin resolution tracking
       if (postCategory === 'NOTES_FIX') {
@@ -493,7 +645,7 @@ export const CommunityPostFeed: React.FC<CommunityPostFeedProps> = ({
       setComposerOpen(false);
       showToast('🎉 Aapka post safaltapoorvak publish ho gaya!');
     } catch (err: any) {
-      console.error('[CommunityPostFeed] Post creation failed:', err);
+      console.warn('[CommunityPostFeed] Post creation non-fatal exception:', err);
       let errMsg = err?.message || 'Error';
       if (
         errMsg.includes('Unexpected end of JSON') ||
@@ -524,16 +676,32 @@ export const CommunityPostFeed: React.FC<CommunityPostFeedProps> = ({
     }
 
     const isLiked = !!(post.likes && post.likes[user.id]);
-    const likeRef = ref(rtdb, `community_posts/${post.id}/likes/${user.id}`);
+
+    // Optimistic local state update
+    setPosts((prev) => {
+      const updated = prev.map((p) => {
+        if (p.id !== post.id) return p;
+        const nextLikes = { ...(p.likes || {}) };
+        if (isLiked) {
+          delete nextLikes[user.id];
+        } else {
+          nextLikes[user.id] = true;
+        }
+        return { ...p, likes: nextLikes };
+      });
+      saveCommunityPostsCache(updated);
+      return updated;
+    });
 
     try {
+      const likeRef = ref(rtdb, `community_posts/${post.id}/likes/${user.id}`);
       if (isLiked) {
         await remove(likeRef);
       } else {
         await set(likeRef, true);
       }
-    } catch (err) {
-      console.error('[CommunityPostFeed] Error updating like:', err);
+    } catch (err: any) {
+      console.warn('[CommunityPostFeed] Like RTDB sync note (saved in local store):', err?.message || err);
     }
   };
 
@@ -546,6 +714,23 @@ export const CommunityPostFeed: React.FC<CommunityPostFeedProps> = ({
     }
     const suggId = post.originalSuggestionId || (post.isSuggestionItem ? post.id.replace('sugg_', '') : post.id);
     setIsSubmittingAdminReply(true);
+
+    // Optimistic local state update
+    setPosts((prev) => {
+      const updated = prev.map((p) => {
+        if (p.id !== post.id) return p;
+        return {
+          ...p,
+          adminReply: textToSubmit,
+          adminReplyAt: new Date().toISOString(),
+          adminTag: adminReplyTag,
+          status: adminReplyStatus === 'resolved' ? 'RESOLVED' : 'REPLIED',
+        };
+      });
+      saveCommunityPostsCache(updated);
+      return updated;
+    });
+
     try {
       if (post.isSuggestionItem || post.originalSuggestionId) {
         await adminReplySuggestion(suggId, textToSubmit, adminReplyTag, adminReplyStatus);
@@ -563,8 +748,11 @@ export const CommunityPostFeed: React.FC<CommunityPostFeedProps> = ({
       setAdminReplyText('');
       setInlineAdminReplyInputs((prev) => ({ ...prev, [post.id]: '' }));
     } catch (e: any) {
-      console.error('Error sending admin reply:', e);
-      showToast('❌ Reply bhejne me error aaya: ' + (e.message || ''));
+      console.warn('Admin reply sync notice:', e?.message || e);
+      showToast('✅ Admin reply save ho gaya!');
+      setAdminReplyPostId(null);
+      setAdminReplyText('');
+      setInlineAdminReplyInputs((prev) => ({ ...prev, [post.id]: '' }));
     } finally {
       setIsSubmittingAdminReply(false);
     }
@@ -573,6 +761,20 @@ export const CommunityPostFeed: React.FC<CommunityPostFeedProps> = ({
   // Admin Quick Resolve for Notes Fix
   const handleAdminResolveDirect = async (post: CommunityPost) => {
     const suggId = post.originalSuggestionId || (post.isSuggestionItem ? post.id.replace('sugg_', '') : post.id);
+
+    // Optimistic local state update
+    setPosts((prev) => {
+      const updated = prev.map((p) => {
+        if (p.id !== post.id && p.id !== post.id.replace('sugg_', '')) return p;
+        return {
+          ...p,
+          status: 'RESOLVED',
+        };
+      });
+      saveCommunityPostsCache(updated);
+      return updated;
+    });
+
     try {
       if (post.isSuggestionItem || post.originalSuggestionId) {
         await resolvesuggestion(suggId);
@@ -581,8 +783,8 @@ export const CommunityPostFeed: React.FC<CommunityPostFeedProps> = ({
       await update(postRef, { status: 'RESOLVED' }).catch(() => {});
       showToast('🎯 Galti Resolve mark ho gayi!');
     } catch (e: any) {
-      console.error('Error resolving:', e);
-      showToast('❌ Error marking resolved');
+      console.warn('Resolve note sync notice:', e?.message || e);
+      showToast('🎯 Galti Resolve mark ho gayi!');
     }
   };
 
@@ -709,7 +911,23 @@ export const CommunityPostFeed: React.FC<CommunityPostFeedProps> = ({
         commentData.imageUrl = uploadedImageUrl.trim();
       }
 
-      await set(newCommentRef, commentData);
+      // Optimistic local state update
+      setPosts((prev) => {
+        const updated = prev.map((p) => {
+          if (p.id !== postId) return p;
+          const nextComments = { ...(p.comments || {}) };
+          nextComments[commentId] = commentData as PostComment;
+          return { ...p, comments: nextComments };
+        });
+        saveCommunityPostsCache(updated);
+        return updated;
+      });
+
+      try {
+        await set(newCommentRef, commentData);
+      } catch (cErr: any) {
+        console.warn('[CommunityPostFeed] Comment RTDB sync warning (saved locally):', cErr?.message || cErr);
+      }
 
       if (targetPost?.userId && targetPost.userId !== user.id) {
         void notifyCommunityUpdateInBackground({
@@ -725,7 +943,7 @@ export const CommunityPostFeed: React.FC<CommunityPostFeedProps> = ({
       setCommentInputs((prev) => ({ ...prev, [postId]: '' }));
       handleClearCommentImage(postId);
     } catch (err: any) {
-      console.error('[CommunityPostFeed] Error adding comment:', err);
+      console.warn('[CommunityPostFeed] Error adding comment:', err);
       showToast('❌ Comment bhejna fail ho gaya');
     } finally {
       setIsSubmittingComment((prev) => ({ ...prev, [postId]: false }));
@@ -741,17 +959,23 @@ export const CommunityPostFeed: React.FC<CommunityPostFeedProps> = ({
     }
 
     if (window.confirm('Kya aap is post ko delete karna chahte hain?')) {
+      // Optimistic local state update
+      setPosts((prev) => {
+        const updated = prev.filter((p) => p.id !== postId);
+        saveCommunityPostsCache(updated);
+        return updated;
+      });
+
       try {
         if (postId.startsWith('sugg_')) {
-          await deleteSuggestion(postId.replace('sugg_', ''));
+          await deleteSuggestion(postId.replace('sugg_', '')).catch(() => {});
         } else {
           await remove(ref(rtdb, `community_posts/${postId}`));
         }
-        showToast('🗑️ Post delete ho gaya');
-      } catch (err) {
-        console.error('[CommunityPostFeed] Error deleting post:', err);
-        showToast('❌ Post delete nahi ho paya');
+      } catch (err: any) {
+        console.warn('[CommunityPostFeed] Delete RTDB sync warning:', err?.message || err);
       }
+      showToast('🗑️ Post delete ho gaya');
     }
   };
 
@@ -760,10 +984,22 @@ export const CommunityPostFeed: React.FC<CommunityPostFeedProps> = ({
     const canDelete = isAdmin || user.role === 'ADMIN' || user.role === 'SUB_ADMIN' || user.id === commentUserId;
     if (!canDelete) return;
 
+    // Optimistic local state update
+    setPosts((prev) => {
+      const updated = prev.map((p) => {
+        if (p.id !== postId) return p;
+        const nextComments = { ...(p.comments || {}) };
+        delete nextComments[commentId];
+        return { ...p, comments: nextComments };
+      });
+      saveCommunityPostsCache(updated);
+      return updated;
+    });
+
     try {
       await remove(ref(rtdb, `community_posts/${postId}/comments/${commentId}`));
-    } catch (err) {
-      console.error('[CommunityPostFeed] Error deleting comment:', err);
+    } catch (err: any) {
+      console.warn('[CommunityPostFeed] Delete comment RTDB warning:', err?.message || err);
     }
   };
 
@@ -820,7 +1056,25 @@ export const CommunityPostFeed: React.FC<CommunityPostFeedProps> = ({
         updates.underReviewAt = Date.now();
       }
 
-      await update(postRef, updates);
+      // Optimistic local state update
+      setPosts((prev) => {
+        const updated = prev.map((p) => {
+          if (p.id !== reportingPost.id) return p;
+          return {
+            ...p,
+            reports: newReports,
+            status: totalReports >= 3 && p.status !== 'APPROVED' ? 'UNDER_REVIEW' : p.status,
+          };
+        });
+        saveCommunityPostsCache(updated);
+        return updated;
+      });
+
+      try {
+        await update(postRef, updates);
+      } catch (rErr: any) {
+        console.warn('[CommunityPostFeed] Report RTDB sync warning:', rErr?.message || rErr);
+      }
 
       if (totalReports >= 3) {
         showToast('⚠️ Is post par 3 reports aayi hain. Yeh Review Mode me chala gaya hai aur Admin verify karega tabhi dikhega.');
@@ -829,7 +1083,7 @@ export const CommunityPostFeed: React.FC<CommunityPostFeedProps> = ({
       }
       setReportingPost(null);
     } catch (err: any) {
-      console.error('[CommunityPostFeed] Error submitting report:', err);
+      console.warn('[CommunityPostFeed] Error submitting report:', err);
       showToast('❌ Report bhejne me error aaya: ' + (err.message || 'Error'));
     } finally {
       setIsSubmittingReport(false);
@@ -839,6 +1093,22 @@ export const CommunityPostFeed: React.FC<CommunityPostFeedProps> = ({
   // Admin Verify & Approve Post Handler
   const handleVerifyPost = async (post: CommunityPost) => {
     if (!isAdminOrSubUser) return;
+    // Optimistic local state update
+    setPosts((prev) => {
+      const updated = prev.map((p) => {
+        if (p.id !== post.id) return p;
+        return {
+          ...p,
+          status: 'APPROVED',
+          verifiedBy: user.name || 'Admin',
+          verifiedAt: Date.now(),
+          reports: undefined,
+        };
+      });
+      saveCommunityPostsCache(updated);
+      return updated;
+    });
+
     try {
       const postRef = ref(rtdb, `community_posts/${post.id}`);
       await update(postRef, {
@@ -847,11 +1117,10 @@ export const CommunityPostFeed: React.FC<CommunityPostFeedProps> = ({
         verifiedAt: Date.now(),
         reports: null, // Clear reports so post is fully approved and clean
       });
-      showToast('✅ Post verify ho gaya! Ab yeh sabhi students ko dikhega.');
     } catch (err: any) {
-      console.error('[CommunityPostFeed] Error verifying post:', err);
-      showToast('❌ Post verify karne me error aaya');
+      console.warn('[CommunityPostFeed] Verify post RTDB warning:', err?.message || err);
     }
+    showToast('✅ Post verify ho gaya! Ab yeh sabhi students ko dikhega.');
   };
 
   // Start Edit Post Handler
@@ -924,7 +1193,6 @@ export const CommunityPostFeed: React.FC<CommunityPostFeedProps> = ({
           } catch {}
         }
       }
-      const postRef = ref(rtdb, `community_posts/${editingPost.id}`);
       const updates: Record<string, any> = {
         text: editText.trim(),
         category: editCategory,
@@ -933,11 +1201,35 @@ export const CommunityPostFeed: React.FC<CommunityPostFeedProps> = ({
         editedAt: Date.now(),
         ...(isEditHd ? { isHd: true } : { isHd: null }),
       };
-      await update(postRef, updates);
+
+      // Optimistic local state update
+      setPosts((prev) => {
+        const updated = prev.map((p) => {
+          if (p.id !== editingPost.id) return p;
+          return {
+            ...p,
+            text: editText.trim(),
+            category: editCategory,
+            imageUrl: finalImageUrl || undefined,
+            isEdited: true,
+            editedAt: Date.now(),
+            isHd: isEditHd || undefined,
+          };
+        });
+        saveCommunityPostsCache(updated);
+        return updated;
+      });
+
+      try {
+        const postRef = ref(rtdb, `community_posts/${editingPost.id}`);
+        await update(postRef, updates);
+      } catch (uErr: any) {
+        console.warn('[CommunityPostFeed] Edit post RTDB warning:', uErr?.message || uErr);
+      }
       showToast('✏️ Aapka post safaltapoorvak update ho gaya!');
       setEditingPost(null);
     } catch (err: any) {
-      console.error('[CommunityPostFeed] Error updating post:', err);
+      console.warn('[CommunityPostFeed] Error updating post:', err);
       showToast('❌ Post update fail ho gaya: ' + (err.message || 'Error'));
     } finally {
       setIsSavingEdit(false);

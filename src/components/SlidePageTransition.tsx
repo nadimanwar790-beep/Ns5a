@@ -34,35 +34,12 @@ export const SlidePageTransition: React.FC<SlidePageTransitionProps> = ({
   const touchStartRef = useRef<{ x: number; y: number; time: number; target: EventTarget | null } | null>(null);
 
   useEffect(() => {
-    if (disabled) {
-      setCurrentKey(pageKey);
-      setDisplayChildren(children);
-      setExitingChildren(null);
-      setIsTransitioning(false);
-      prevKeyRef.current = pageKey;
-      return;
-    }
-
-    if (pageKey !== prevKeyRef.current) {
-      // Transitioning to a new page!
-      setExitingChildren(displayChildren);
-      setDisplayChildren(children);
-      setCurrentKey(pageKey);
-      setActiveDirection(direction);
-      setIsTransitioning(true);
-
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => {
-        setIsTransitioning(false);
-        setExitingChildren(null);
-      }, durationMs);
-
-      prevKeyRef.current = pageKey;
-    } else {
-      // Normal props update without pageKey change
-      setDisplayChildren(children);
-    }
-  }, [pageKey, children, direction, disabled, durationMs]);
+    setCurrentKey(pageKey);
+    setDisplayChildren(children);
+    setExitingChildren(null);
+    setIsTransitioning(false);
+    prevKeyRef.current = pageKey;
+  }, [pageKey, children]);
 
   useEffect(() => {
     return () => {
@@ -132,34 +109,12 @@ export const SlidePageTransition: React.FC<SlidePageTransitionProps> = ({
 
   return (
     <div
-      className={`relative w-full overflow-x-hidden min-h-[calc(100dvh-64px)] ${className}`}
+      key={`page-${String(currentKey)}`}
+      className={`relative w-full min-h-[calc(100dvh-64px)] animate-in fade-in duration-100 ${className}`}
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
     >
-      {/* Exiting Page: slides out in activeDirection */}
-      {isTransitioning && exitingChildren && (
-        <div
-          key={`exit-${String(currentKey)}`}
-          aria-hidden="true"
-          className={`absolute inset-0 w-full h-full pointer-events-none overflow-y-auto ${
-            activeDirection === 'forward' ? 'nst-page-exit-forward' : 'nst-page-exit-backward'
-          }`}
-        >
-          {exitingChildren}
-        </div>
-      )}
-
-      {/* Entering Page: slides in in activeDirection */}
-      <div
-        key={`enter-${String(currentKey)}`}
-        className={`w-full min-h-full ${
-          isTransitioning
-            ? activeDirection === 'forward'
-              ? 'nst-page-enter-forward relative'
-              : 'nst-page-enter-backward relative'
-            : ''
-        }`}
-      >
+      <div className="w-full min-h-full">
         {displayChildren}
       </div>
     </div>

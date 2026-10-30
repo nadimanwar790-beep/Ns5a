@@ -23,6 +23,7 @@ import { LevelLeaderboard } from "./LevelLeaderboard";
 import { StudentLevelPage } from "./StudentLevelPage";
 import { TopBarRow2XpBar } from "./TopBarRow2XpBar";
 import { UserLevelBadge, UserNameTierBadge, UserBadgeGroup } from "./UserLevelBadge";
+import { UserLoginQrModal } from "./UserLoginQrModal";
 import {
   User,
   Subject,
@@ -326,6 +327,7 @@ import { getTierTheme, buildOverrideTierTheme, buildGranularTierTheme, getEffect
 import { ThemeProvider } from '../utils/themeContext';
 import { SearchResult } from "../utils/syllabusSearch";
 import { RevisionHub } from "./RevisionHub"; // NEW
+import { WeeklyTestView } from "./WeeklyTestView";
 import { AiHub } from "./AiHub"; // NEW: AI Hub
 import { McqReviewHub } from "./McqReviewHub"; // NEW
 import { UniversalVideoView } from "./UniversalVideoView"; // NEW
@@ -2544,12 +2546,30 @@ export const StudentDashboard: React.FC<Props> = ({
     message: string;
   }>({ isOpen: false, type: "INFO", message: "" });
 
+  // USER PERSONAL LOGIN QR CODE MODAL STATE
+  const [showUserLoginQrModal, setShowUserLoginQrModal] = useState<boolean>(false);
+
   // CUSTOM CONFIRM DIALOG STATE
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean;
     message: string;
     onConfirm: () => void;
   } | null>(null);
+
+  const handlePerformLogout = () => {
+    try {
+      localStorage.removeItem('nst_current_user');
+      localStorage.removeItem('nsta_cached_user');
+      localStorage.removeItem('nst_is_guest');
+      localStorage.setItem('nst_logged_out', 'true');
+    } catch (e) {}
+
+    if (onLogout) {
+      onLogout();
+    } else {
+      window.location.reload();
+    }
+  };
 
   // FLOATING LOGO BUTTON DRAG STATE — uses Pointer Events API for reliable drag + tap on mobile
   const [floatLogoPos, setFloatLogoPos] = useState<{ x: number; y: number } | null>(null);
@@ -8314,6 +8334,7 @@ export const StudentDashboard: React.FC<Props> = ({
   );
   const [dailyChallengeStarting, setDailyChallengeStarting] = useState(false);
   const dailyChallengeLaunchRef = useRef(false);
+  const [activeDailyTest, setActiveDailyTest] = useState<WeeklyTest | null>(null);
   const [routineSelectionVersion, setRoutineSelectionVersion] = useState(0);
   const [homeBannerIndex, setHomeBannerIndex] = useState(0);
 
@@ -9810,10 +9831,6 @@ export const StudentDashboard: React.FC<Props> = ({
   };
 
   const handleStartDailyChallenge = async (challenge?: Challenge20) => {
-    if (!onStartWeeklyTest) {
-      showAlert('Daily Challenge test abhi available nahi hai. Thodi der baad dobara try karein.', 'ERROR');
-      return;
-    }
     if (dailyChallengeLaunchRef.current) return;
     dailyChallengeLaunchRef.current = true;
     setDailyChallengeStarting(true);
@@ -9831,7 +9848,7 @@ export const StudentDashboard: React.FC<Props> = ({
           'DAILY',
         );
         if (!generated.questions.length) {
-          showAlert('Is class ke liye abhi questions nahi mile. Questions load hone ke baad dobara try karein.', 'ERROR');
+          showAlert('Is class ke liye abhi questions load ho rahe hain. Thodi der baad dobara koshish karein.', 'INFO');
           return;
         }
         daily = {
@@ -9861,7 +9878,7 @@ export const StudentDashboard: React.FC<Props> = ({
         }
       }
 
-      onStartWeeklyTest({
+      const testPayload = {
         id: daily.id,
         name: daily.title,
         description: daily.description || 'Aaj ka Daily Challenge 2.0',
@@ -9873,7 +9890,13 @@ export const StudentDashboard: React.FC<Props> = ({
         questions: daily.questions,
         classLevel: daily.classLevel,
         challengeType: 'DAILY_CHALLENGE',
-      } as any);
+      } as any;
+
+      if (onStartWeeklyTest) {
+        onStartWeeklyTest(testPayload);
+      } else {
+        setActiveDailyTest(testPayload);
+      }
     } catch (error) {
       console.error('Could not start the Daily Challenge:', error);
       showAlert('Daily Challenge load nahi ho paya. Internet check karke dobara try karein.', 'ERROR');
@@ -10200,7 +10223,7 @@ export const StudentDashboard: React.FC<Props> = ({
     // MCQ DUAL ARENA: Official 100 Daily MCQs & MCQ Battles
     if (type === "MCQ" && contentViewStep !== "PLAYER") {
       return (
-        <div className="flex-1 w-full h-full flex flex-col min-h-0 overflow-y-auto overscroll-contain">
+        <div className="w-full h-[calc(100dvh-64px)] max-h-[calc(100dvh-64px)] flex flex-col overflow-hidden">
           <McqHub
             user={user}
             settings={settings}
@@ -10620,7 +10643,11 @@ export const StudentDashboard: React.FC<Props> = ({
         return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY;
       };
       const filteredHw = (settings?.homework || [])
-        .filter(hw => hw.targetSubject === homeworkSubjectView && (hw.board === _curBoard || !hw.board))
+        .filter(hw => {
+          if (hw.targetSubject !== homeworkSubjectView) return false;
+          if (syllabusMode === 'COMPETITION' || activeSessionClass === 'COMPETITION' || user.classLevel === 'COMPETITION') return true;
+          return hw.board === _curBoard || !hw.board || hw.board === 'ALL';
+        })
         .sort((a, b) => {
           if (isPageWiseSubject) {
             const pa = _toPage(a), pb = _toPage(b);
@@ -10711,9 +10738,37 @@ export const StudentDashboard: React.FC<Props> = ({
       const _customBookForView = customBooksFromSettings.find(b => b.id === homeworkSubjectView);
       const subjectLucentLessons = ((settings?.lucentNotes || []) as LucentNoteEntry[])
         .filter(n => {
-          const bySubject = n.subject?.toLowerCase().trim() === homeworkSubjectView?.toLowerCase().trim();
-          const byBookName = _customBookForView && n.bookName?.trim().toLowerCase() === _customBookForView.name?.trim().toLowerCase();
-          return (bySubject || byBookName) && (n.classLevel === 'COMPETITION' || !n.classLevel) && (n.board === _curBoard || !n.board);
+          const isComp = syllabusMode === 'COMPETITION' || activeSessionClass === 'COMPETITION' || user.classLevel === 'COMPETITION' || n.classLevel === 'COMPETITION' || !n.classLevel;
+          if (!isComp && n.classLevel !== activeSessionClass) return false;
+
+          const isBoardOk = !n.board || n.board === 'ALL' || n.board === _curBoard || isComp;
+          if (!isBoardOk) return false;
+
+          const tk = (homeworkSubjectView || '').toLowerCase().trim();
+          const nSub = (n.subject || '').toLowerCase().trim();
+          const nBook = (n.bookName || '').toLowerCase().trim();
+
+          if (nSub === tk || nBook === tk) return true;
+          if (tk === 'speedyscience' || tk === 'speedy_science') {
+            return nBook.includes('speedy science') || (nSub.includes('speedy') && (nSub.includes('sci') || nBook.includes('sci'))) || nBook.includes('speedy sci');
+          }
+          if (tk === 'speedysocialscience' || tk === 'speedy_social_science') {
+            return nBook.includes('speedy social') || (nSub.includes('speedy') && (nSub.includes('social') || nBook.includes('social') || nSub.includes('soc')));
+          }
+          if (tk === 'sarsangrah' || tk === 'sar_sangrah') {
+            return nBook.includes('sar sangrah') || nSub.includes('sar sangrah') || nBook.includes('sangrah') || nSub.includes('sangrah');
+          }
+          if (tk === 'lucent') {
+            return nBook.includes('lucent') || nSub.includes('lucent') || (!n.bookName && (!n.subject || n.subject === 'lucent'));
+          }
+
+          if (_customBookForView) {
+            const cId = _customBookForView.id.toLowerCase().trim();
+            const cName = _customBookForView.name.toLowerCase().trim();
+            if (nSub === cId || nSub === cName || nBook === cId || nBook === cName) return true;
+          }
+
+          return isSubjectMatch(n.subject, homeworkSubjectView, 'COMPETITION', settings);
         })
         .sort((a, b) => _subjLucentMinPg(a) - _subjLucentMinPg(b));
       const showLucentSection = subjectLucentLessons.length > 0
@@ -13209,9 +13264,13 @@ export const StudentDashboard: React.FC<Props> = ({
         (n.pages || []).forEach(p => { const x = parseInt(p.pageNo || '', 10); if (!isNaN(x) && x < m) m = x; });
         return m === Infinity ? 99999 : m;
       };
-      // All COMPETITION-level admin notes — filtered by classLevel=COMPETITION + active board
+      // All COMPETITION-level admin notes
       const competitionNotes = ((settings?.lucentNotes || []) as LucentNoteEntry[])
-        .filter(n => (n.classLevel === 'COMPETITION' || !n.classLevel) && (n.board === _curBoard || !n.board));
+        .filter(n => {
+          const isComp = n.classLevel === 'COMPETITION' || !n.classLevel || n.subject === 'lucent' || n.subject === 'speedyScience' || n.subject === 'speedySocialScience' || n.subject === 'sarSangrah';
+          const isBoardOk = !n.board || n.board === 'ALL' || n.board === _curBoard || syllabusMode === 'COMPETITION' || activeSessionClass === 'COMPETITION';
+          return isComp && isBoardOk;
+        });
       // Unique book names — entries with no bookName fall under 'Lucent'
       const uniqueBooks: string[] = Array.from(
         new Set(competitionNotes.map(n => (n.bookName?.trim()) || 'Lucent'))
@@ -13887,7 +13946,7 @@ export const StudentDashboard: React.FC<Props> = ({
                 isFromRoutine: true,
               });
             }}
-            isTopBarHidden={false}
+            isTopBarHidden={isTopBarHidden || isLandscapeUiHidden}
             bottomNav={null}
           />
         </div>
@@ -15423,10 +15482,8 @@ export const StudentDashboard: React.FC<Props> = ({
                 if (initialParentSubject) {
                   setInitialParentSubject(null);
                 } else {
-                  // Smoothly return to HOME tab without thrashing session class state
-                  setContentViewStep("SUBJECTS");
-                  setSelectedSubject(null);
-                  setSelectedChapter(null);
+                  // If going back from root subject list, go back to HOME class selection
+                  setActiveSessionClass(null);
                   onTabChange("HOME");
                 }
               }}
@@ -17784,6 +17841,53 @@ export const StudentDashboard: React.FC<Props> = ({
               </button>
             </div>
 
+          {/* ── MERA LOGIN QR CODE CARD ── */}
+          <div
+            className="mx-4 rounded-2xl overflow-hidden mb-3 relative select-none shadow-xl transition-all duration-200 group border"
+            style={{
+              background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.16) 0%, rgba(15, 23, 42, 0.94) 50%, rgba(99, 102, 241, 0.22) 100%)',
+              borderColor: 'rgba(99, 102, 241, 0.45)',
+              boxShadow: '0 6px 25px rgba(59, 130, 246, 0.18)',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                hapticMedium();
+                setShowUserLoginQrModal(true);
+              }}
+              className="w-full px-4 py-3.5 flex items-center justify-between gap-3 text-left transition-all active:scale-[0.98] cursor-pointer"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div
+                  className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border border-blue-400/40 shadow-lg relative overflow-hidden"
+                  style={{
+                    background: 'linear-gradient(135deg, #2563eb, #4f46e5)',
+                    boxShadow: '0 0 14px rgba(37, 99, 235, 0.5)',
+                  }}
+                >
+                  <QrCode size={18} className="text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.7)]" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[13px] font-black text-white tracking-wide">
+                      Mera Login QR Code
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full text-[8.5px] font-black uppercase tracking-wider bg-blue-500/30 text-blue-300 border border-blue-400/30">
+                      Bina Password
+                    </span>
+                  </div>
+                  <p className="text-[10.5px] font-medium text-slate-300 truncate mt-0.5">
+                    Kisi bhi phone me QR scan karke bina password login karein
+                  </p>
+                </div>
+              </div>
+              <div className="w-8 h-8 rounded-xl flex items-center justify-center text-xs font-black shadow-md shrink-0 bg-blue-500/20 text-blue-300 border border-blue-400/30">
+                <ChevronRight size={16} />
+              </div>
+            </button>
+          </div>
+
           {/* ── RARE MYTHIC LOGOUT CARD (SAB SE LAST ME PROFILE PAGE ME) ── */}
           {(settings?.isLogoutEnabled !== false || user.role === 'ADMIN' || isImpersonating) && (
             <div
@@ -17807,7 +17911,10 @@ export const StudentDashboard: React.FC<Props> = ({
                 onClick={() => setConfirmDialog({
                   isOpen: true,
                   message: 'Kya aap logout karna chahte hain?',
-                  onConfirm: () => { setConfirmDialog(null); onLogout?.(); }
+                  onConfirm: () => {
+                    setConfirmDialog(null);
+                    handlePerformLogout();
+                  }
                 })}
                 className="w-full px-4 py-3.5 flex items-center justify-between gap-3 text-left transition-all active:scale-[0.98] cursor-pointer"
               >
@@ -18102,13 +18209,16 @@ export const StudentDashboard: React.FC<Props> = ({
             isImpersonating) && (
             <button
               onClick={() => {
-                if (onLogout) onLogout();
-                else {
-                  localStorage.removeItem("nst_current_user");
-                  window.location.reload();
-                }
+                setConfirmDialog({
+                  isOpen: true,
+                  message: 'Kya aap logout karna chahte hain?',
+                  onConfirm: () => {
+                    setConfirmDialog(null);
+                    handlePerformLogout();
+                  }
+                });
               }}
-              className="w-full text-slate-500 py-4 font-bold hover:text-white"
+              className="w-full text-slate-500 py-4 font-bold hover:text-white cursor-pointer active:scale-98 transition-all"
             >
               Logout
             </button>
@@ -18408,6 +18518,7 @@ export const StudentDashboard: React.FC<Props> = ({
                   setForceShowBottomNav(true);
                   setSlideDirection('backward');
                   switchToLogicalTab("HOME");
+                  onTabChange('HOME');
                 },
               },
               {
@@ -18531,23 +18642,6 @@ export const StudentDashboard: React.FC<Props> = ({
                   onTabChange('MCQ');
                 },
               },
-              ...(!settings?.appStorePageHidden && !(settings?.hiddenBottomNavButtons || []).includes('APP_STORE')
-                ? [
-                    {
-                      id: "APP_STORE" as const,
-                      label: "Apps",
-                      Icon: ShoppingBag,
-                      filledOnActive: true,
-                      activeColor: "#ec4899",
-                      isActive: !showStarredPage && !showRevisionHubScreen && !showUpdatesPage && !showMyRoutine && !showProgressDashboard && !showChat && currentLogicalTab === "APP_STORE",
-                      onClick: () => {
-                        const cIdx = getCurrentSwipeTabIndex();
-                        setSlideDirection(cIdx <= 3.5 ? 'forward' : 'backward');
-                        switchToLogicalTab("APP_STORE");
-                      },
-                    },
-                  ]
-                : []),
               {
                 id: "PROFILE" as const,
                 label: "Profile",
@@ -18984,7 +19078,7 @@ export const StudentDashboard: React.FC<Props> = ({
           (activeTab === 'COMMUNITY' && settings?.communityBackgroundImage) ||
           (activeTab === 'ROUTINE' && settings?.routineBackgroundImage) ||
           (activeTab === 'PROFILE' && settings?.profileBackgroundImage)
-        ) ? 'transparent' : _appBg
+        ) ? 'transparent' : (activeTab === 'MCQ' ? (isDarkMode ? '#020617' : '#f8fafc') : _appBg)
       }}
     >
       <NotificationPrompt userId={user.id} />
@@ -19035,33 +19129,46 @@ export const StudentDashboard: React.FC<Props> = ({
         }}
       />
 
-      {/* NEW GLOBAL TOP BAR */}
-      <div
-        id="top-banner-container"
-        className={`sticky top-0 z-[100] w-full flex flex-col relative transition-all duration-150 ease-in-out overflow-hidden ${
-          isFullscreenMode || Boolean(mathViewerEntry) ? "!hidden !h-0 overflow-hidden pointer-events-none" : ""
-        } ${(
+      {/* NEW GLOBAL TOP BAR — strictly shown on Home page, hidden on Community, MCQ, Routine, DailyEventPage, etc. */}
+      {(() => {
+        const shouldHideHomeTopBar = (
+          showMyRoutine ||
+          showDailyEventPage ||
+          showChat ||
+          (activeTab !== 'HOME' && Boolean(activeTab)) ||
+          activeLogicalScreenKey === 'ROUTINE' ||
+          activeLogicalScreenKey === 'COMMUNITY' ||
+          activeLogicalScreenKey === 'MCQ' ||
+          activeLogicalScreenKey === 'SUPPORT' ||
+          activeLogicalScreenKey === 'PROFILE' ||
+          activeLogicalScreenKey === 'DAILY_EVENT' ||
+          activeLogicalScreenKey === 'REVISION' ||
+          showRevisionHubScreen ||
+          showStarredPage ||
+          showUpdatesPage ||
+          showProgressDashboard ||
+          showAllNotesCatalog ||
+          showWhatsAppChatModal ||
+          showGroupStudyModal ||
+          showNstaQuickWheel ||
+          isCompetitionHomeworkOpen ||
           isTopBarHidden ||
           isLandscapeUiHidden ||
-          isCompetitionHomeworkOpen ||
-          showWhatsAppChatModal ||
-          showNstaQuickWheel ||
-          activeTab === 'STORE' ||
-          activeTab === 'CUSTOM_PAGE' ||
-          activeTab === 'PROFILE' ||
-          activeTab === 'UNIVERSAL_VIDEO' ||
-          activeTab === 'MCQ' ||
-          activeTab === 'COMMUNITY' ||
-          activeTab === 'ROUTINE' ||
-          showMyRoutine ||
-          (showChat && (chatMode === 'MCQ' || chatMode === 'COMMUNITY')) ||
-          currentLogicalTab === ('MCQ' as any) ||
-          currentLogicalTab === ('ROUTINE' as any) ||
-          (currentLogicalTab as any) === 'COMMUNITY_SUPPORT'
-        ) ? "!hidden -translate-y-full !h-0 overflow-hidden opacity-0 pointer-events-none" : "translate-y-0 opacity-100"}`}
-        style={{ background: activeTopBarGrad }}
-      >
-        <TopBarEffectsLayer effects={activeTopBarEffects} />
+          isFullscreenMode ||
+          Boolean(mathViewerEntry)
+        );
+
+        return (
+          <div
+            id="top-banner-container"
+            className={`sticky top-0 z-[100] w-full flex flex-col relative transition-all duration-150 ease-in-out overflow-hidden ${
+              shouldHideHomeTopBar
+                ? "!hidden !h-0 overflow-hidden pointer-events-none opacity-0 -translate-y-full"
+                : "translate-y-0 opacity-100"
+            }`}
+            style={shouldHideHomeTopBar ? { display: 'none' } : { background: activeTopBarGrad }}
+          >
+            <TopBarEffectsLayer effects={activeTopBarEffects} />
 
         {/* Main Header Row */}
         <div className="relative z-10 flex items-center justify-between w-full px-2.5 sm:px-3 pt-2.5 pb-1.5 gap-1.5">
@@ -20146,6 +20253,8 @@ export const StudentDashboard: React.FC<Props> = ({
           </div>
         </div>
       </div>
+    );
+  })()}
 
       {/* LIFETIME POPUP — enhanced with white shimmer */}
       {showLifetimePopup && !isFullscreenMode && (() => {
@@ -24648,7 +24757,7 @@ export const StudentDashboard: React.FC<Props> = ({
               ? ""
               : activeTab === "HOME"
                 ? "px-4 pt-1 pb-20"
-                : activeTab === "PROFILE" || activeTab === "STORE" || activeTab === "CUSTOM_PAGE"
+                : activeTab === "PROFILE" || activeTab === "STORE" || activeTab === "CUSTOM_PAGE" || activeTab === "MCQ" || activeTab === "COMMUNITY" || activeTab === "ROUTINE"
                   ? "p-0"
                   : "p-4 pb-20"
         }`}
@@ -25667,7 +25776,7 @@ export const StudentDashboard: React.FC<Props> = ({
                 });
                 if (recentHistory.length === 0) return (
                   <div className="text-center py-14 flex flex-col items-center">
-                    <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4 text-slate-300 text-3xl">📜</div>
+                    <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4 text-slate-300 text-3xl">������</div>
                     <p className="text-slate-500 font-bold text-sm">No history yet</p>
                     <p className="text-slate-400 text-xs mt-1">Claimed rewards appear here for 7 days</p>
                   </div>
@@ -32956,6 +33065,42 @@ RULES:
             </div>
           );
         }
+        const _isLogout = (confirmDialog.message || '').toLowerCase().includes('logout');
+        if (_isLogout) {
+          return (
+            <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm px-6 animate-in fade-in duration-150" onClick={() => setConfirmDialog(null)}>
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl w-full max-w-sm p-6 flex flex-col gap-4 text-center animate-in zoom-in-95 duration-150" onClick={e => e.stopPropagation()}>
+                <div className="w-14 h-14 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center mx-auto text-rose-400 shadow-lg shadow-rose-500/10">
+                  <LogOut size={26} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-white">Account Logout</h3>
+                  <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                    Kya aap logout karna chahte hain? Aapka progress aur data surakshit rahenge.
+                  </p>
+                </div>
+                <div className="flex gap-2.5 mt-2">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDialog(null)}
+                    className="flex-1 py-3 rounded-xl bg-slate-800 text-slate-300 font-bold text-xs hover:bg-slate-700 active:scale-95 transition-all cursor-pointer"
+                  >
+                    Nahi, Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={confirmDialog.onConfirm}
+                    className="flex-1 py-3 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 text-white font-black text-xs hover:from-rose-500 hover:to-red-500 shadow-lg shadow-rose-600/30 active:scale-95 transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <LogOut size={14} />
+                    <span>Haan, Logout</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
         return (
           <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm px-6 animate-in fade-in duration-150">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 flex flex-col gap-4">
@@ -35238,6 +35383,29 @@ Explanation: Yahan explanation...`}</p>
           unlockedFeatures={levelUpCelebrationData.features}
           onClose={() => setLevelUpCelebrationData(null)}
         />
+      )}
+
+      {/* ── USER PERSONAL LOGIN QR CODE MODAL ── */}
+      <UserLoginQrModal
+        isOpen={showUserLoginQrModal}
+        onClose={() => setShowUserLoginQrModal(false)}
+        user={user}
+        appName={settings?.appName || 'NSTA'}
+      />
+
+      {/* ── DAILY CHALLENGE FULL TEST VIEW ── */}
+      {activeDailyTest && (
+        <div className="fixed inset-0 z-[99999] bg-slate-950 flex flex-col">
+          <WeeklyTestView
+            test={activeDailyTest}
+            onComplete={async (score, total) => {
+              setActiveDailyTest(null);
+              showAlert(`🎉 Test complete! Score: ${score}/${total}`, 'SUCCESS');
+              await handleDailyChallenge20Claim();
+            }}
+            onExit={() => setActiveDailyTest(null)}
+          />
+        </div>
       )}
     </div>
   </ThemeProvider>
