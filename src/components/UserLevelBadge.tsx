@@ -94,13 +94,8 @@ export const UserLevelBadge: React.FC<UserLevelBadgeProps> = ({
     },
   }[size];
 
-  // Determine progressive tier effects based on level
-  let animClass = '';
-  if (currentLevel >= 11) {
-    animClass = 'level-badge-cosmic-active';
-  } else if (currentLevel >= 7) {
-    animClass = 'level-badge-pulse-active';
-  }
+  // Determine progressive tier effects based on level (clean static)
+  const animClass = '';
 
   const bgStyle = {
     background:
@@ -126,14 +121,14 @@ export const UserLevelBadge: React.FC<UserLevelBadgeProps> = ({
         }
         className={`user-level-badge-base rounded-full ${
           isDiamondGammaV
-            ? 'level-badge-pinnacle-diamond-v shadow-lg'
+            ? 'level-badge-pinnacle-diamond-v shadow-md'
             : currentLevel >= 15
-            ? 'level-badge-l15-apex border border-violet-400/70 shadow-md'
+            ? 'border border-violet-400/70 shadow-sm'
             : `border ${animClass}`
         } ${sizeStyles.pad} ${className} cursor-pointer active:scale-95`}
         style={
           isDiamondGammaV
-            ? { boxShadow: '0 0 16px rgba(192, 132, 252, 0.75), 0 0 30px rgba(56, 189, 248, 0.45)' }
+            ? { boxShadow: '0 0 10px rgba(192, 132, 252, 0.45)' }
             : currentLevel >= 15
             ? ({
                 '--lvl-color': '#a5f3fc',
@@ -152,11 +147,10 @@ export const UserLevelBadge: React.FC<UserLevelBadgeProps> = ({
             >
               {compact ? 'L15 γ-V' : 'ABSOLUTE LEGEND · γ-V'}
             </span>
-            <Sparkles size={sizeStyles.sparkleSize} className="text-amber-300 animate-pulse shrink-0" />
+            <Sparkles size={sizeStyles.sparkleSize} className="text-amber-300 shrink-0" />
           </>
         ) : currentLevel >= 15 ? (
           <>
-            <span className="level-badge-shimmer-layer" />
             <span className={sizeStyles.icon}>{levelInfo.emoji}</span>
             <span className={`${sizeStyles.text} font-black text-cyan-100 tracking-wide`}>
               {compact
@@ -166,8 +160,6 @@ export const UserLevelBadge: React.FC<UserLevelBadgeProps> = ({
           </>
         ) : (
           <>
-            {/* Light sweep shimmer for level 4 and above */}
-            {currentLevel >= 4 && <span className="level-badge-shimmer-layer" />}
             <span className={sizeStyles.icon}>{levelInfo.emoji}</span>
             <span className={`${sizeStyles.text} font-black leading-none drop-shadow-xs`}>
               {compact ? (

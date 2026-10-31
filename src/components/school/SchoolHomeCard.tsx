@@ -176,61 +176,11 @@ export const SchoolHomeCard: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* Public School Portal & Online Admission Buttons */}
-      <div className="px-4 pb-2 pt-1 flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => {
-            if (typeof onOpenWebsite === 'function') {
-              onOpenWebsite();
-            } else {
-              window.dispatchEvent(new CustomEvent('nst-open-school-public-view', { detail: { view: 'website', schoolId: school?.id, school } }));
-              try { window.history.pushState({}, '', `/?view=school_website&schoolId=${school?.id || ''}`); } catch {}
-            }
-          }}
-          className="flex-1 py-2 px-3 rounded-xl text-xs font-bold border border-indigo-500/30 bg-indigo-50/60 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer"
-        >
-          <Globe size={13} className="text-indigo-500" />
-          <span>🌐 School Website</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => {
-            if (typeof onOpenAdmission === 'function') {
-              onOpenAdmission();
-            } else {
-              window.dispatchEvent(new CustomEvent('nst-open-school-public-view', { detail: { view: 'admission', schoolId: school?.id, school } }));
-              try { window.history.pushState({}, '', `/?view=admission&schoolId=${school?.id || ''}`); } catch {}
-            }
-          }}
-          className="flex-1 py-2 px-3 rounded-xl text-xs font-bold border border-amber-500/30 bg-amber-50/60 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50 flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer"
-        >
-          <UserPlus size={13} className="text-amber-500" />
-          <span>📝 Online Admission</span>
-        </button>
-      </div>
-
-      {/* Action Buttons: QR Attendance, Open Dashboard, and Change School */}
+      {/* Action Buttons: Open Dashboard, and Change School */}
       <div
         className="mt-1 pt-2.5 pb-3 px-4 border-t flex flex-wrap items-center gap-2"
         style={{ borderColor: isDarkMode ? "rgba(255,255,255,0.08)" : `${accent}20` }}
       >
-        {/* QR Attendance Button */}
-        {onOpenQrScanner && (
-          <button
-            type="button"
-            onClick={onOpenQrScanner}
-            className="flex-1 min-w-[130px] py-2.5 px-3 rounded-xl text-xs font-black shadow-md flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-95 text-white"
-            style={{
-              background: `linear-gradient(135deg, #10b981, #059669)`,
-              boxShadow: "0 4px 14px rgba(16, 185, 129, 0.35)",
-            }}
-          >
-            <QrCode size={15} />
-            <span>📷 QR Attendance</span>
-          </button>
-        )}
 
         {/* Open School Portal Button */}
         <button

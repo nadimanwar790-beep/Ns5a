@@ -153,6 +153,99 @@ const DEFAULT_diamondUnifiedTemplates = [
   }
 ];
 
+export const DEFAULT_STORE_SUBSCRIPTION_PLANS = [
+  {
+    id: 'weekly',
+    name: 'Weekly',
+    duration: '7 days',
+    durationDays: 7,
+    basicPrice: 49,
+    basicOriginalPrice: 99,
+    ultraPrice: 79,
+    ultraOriginalPrice: 149,
+    proPlusPrice: 79,
+    proPlusOriginalPrice: 149,
+    maxPlusPrice: 119,
+    maxPlusOriginalPrice: 229,
+    proPlusDailyDiamonds: 10,
+    maxPlusDailyDiamonds: 35,
+    features: ['Premium Content', 'MCQs & Notes Access'],
+    popular: false,
+  },
+  {
+    id: 'monthly',
+    name: 'Monthly',
+    duration: '30 days',
+    durationDays: 30,
+    basicPrice: 149,
+    basicOriginalPrice: 299,
+    ultraPrice: 199,
+    ultraOriginalPrice: 399,
+    proPlusPrice: 229,
+    proPlusOriginalPrice: 449,
+    maxPlusPrice: 299,
+    maxPlusOriginalPrice: 599,
+    proPlusDailyDiamonds: 25,
+    maxPlusDailyDiamonds: 50,
+    features: ['Everything in Weekly', 'Live Chat', 'Full Syllabus Access'],
+    popular: true,
+  },
+  {
+    id: 'quarterly',
+    name: 'Quarterly',
+    duration: '3 months',
+    durationDays: 90,
+    basicPrice: 399,
+    basicOriginalPrice: 799,
+    ultraPrice: 499,
+    ultraOriginalPrice: 999,
+    proPlusPrice: 599,
+    proPlusOriginalPrice: 1199,
+    maxPlusPrice: 749,
+    maxPlusOriginalPrice: 1499,
+    proPlusDailyDiamonds: 40,
+    maxPlusDailyDiamonds: 70,
+    features: ['Everything in Monthly', 'Priority Support', 'Offline Downloads'],
+    popular: false,
+  },
+  {
+    id: 'yearly',
+    name: 'Yearly',
+    duration: '365 days',
+    durationDays: 365,
+    basicPrice: 999,
+    basicOriginalPrice: 1999,
+    ultraPrice: 1499,
+    ultraOriginalPrice: 2999,
+    proPlusPrice: 1499,
+    proPlusOriginalPrice: 2999,
+    maxPlusPrice: 2249,
+    maxPlusOriginalPrice: 4499,
+    proPlusDailyDiamonds: 60,
+    maxPlusDailyDiamonds: 100,
+    features: ['Everything in Quarterly', 'Priority Support', 'Full Year Unlimited'],
+    popular: false,
+  },
+  {
+    id: 'lifetime',
+    name: 'Yearly Plus',
+    duration: '365 days',
+    durationDays: 365,
+    basicPrice: 4999,
+    basicOriginalPrice: 9999,
+    ultraPrice: 7499,
+    ultraOriginalPrice: 14999,
+    proPlusPrice: 4999,
+    proPlusOriginalPrice: 9999,
+    maxPlusPrice: 7499,
+    maxPlusOriginalPrice: 14999,
+    proPlusDailyDiamonds: 80,
+    maxPlusDailyDiamonds: 150,
+    features: ['VIP Status', 'All Access'],
+    popular: true,
+  },
+];
+
 /* ─── 12:00 AM Midnight Reset Live Countdown Hook ─── */
 const getMidnightResetCountdown = (): string => {
   const now = new Date();
@@ -706,11 +799,9 @@ export const Store: React.FC<Props> = ({ user, settings, onUserUpdate, onBack, i
     if (initialTier) {
       if (initialTier === 'CREDITS' && !isCreditsStoreOn) return isCreditEconomy ? 'VIP_PLUS' : 'SUBSCRIPTION';
       if (initialTier === 'DIAMONDS' && !isDiamondsStoreOn) return isCreditEconomy ? 'VIP_PLUS' : 'SUBSCRIPTION';
-      if (initialTier === 'SUBSCRIPTION') return isCreditEconomy ? 'VIP_PLUS' : 'SUBSCRIPTION';
-      if (initialTier === 'VIP_PLUS') return isCreditEconomy ? 'VIP_PLUS' : 'SUBSCRIPTION';
       return initialTier;
     }
-    // Credit ON -> VIP+, Credit OFF -> VIP
+    // Default: VIP+ if in credit mode, VIP otherwise, but both tabs are always active and selectable
     return isCreditEconomy ? 'VIP_PLUS' : 'SUBSCRIPTION';
   });
 
@@ -720,15 +811,11 @@ export const Store: React.FC<Props> = ({ user, settings, onUserUpdate, onBack, i
         setTierType(isCreditEconomy ? 'VIP_PLUS' : 'SUBSCRIPTION');
       } else if (initialTier === 'DIAMONDS' && !isDiamondsStoreOn) {
         setTierType(isCreditEconomy ? 'VIP_PLUS' : 'SUBSCRIPTION');
-      } else if (initialTier === 'SUBSCRIPTION' && isCreditEconomy) {
-        setTierType('VIP_PLUS');
-      } else if (initialTier === 'VIP_PLUS' && !isCreditEconomy) {
-        setTierType('SUBSCRIPTION');
       } else {
         setTierType(initialTier);
       }
     }
-  }, [initialTier, isCreditsStoreOn, isDiamondsStoreOn, isCreditEconomy]);
+  }, [initialTier, isCreditsStoreOn, isDiamondsStoreOn]);
 
   /* Free Plan Side-by-Side Ad Modal State */
   
@@ -741,8 +828,6 @@ export const Store: React.FC<Props> = ({ user, settings, onUserUpdate, onBack, i
     ? settings.diamondTemplates 
     : DEFAULT_diamondUnifiedTemplates;
 
-
-
   /* Diamond State */
   const [diamondSubTab, setDiamondSubTab] = useState<'PACKS' | 'SUBSCRIPTION'>('SUBSCRIPTION');
   const [selectedDiamondDurations, setSelectedDiamondDurations] = useState<Record<string, string>>({});
@@ -751,16 +836,20 @@ export const Store: React.FC<Props> = ({ user, settings, onUserUpdate, onBack, i
   const [claimingDiamonds, setClaimingDiamonds] = useState(false);
   const [diamondClaimSuccessMsg, setDiamondClaimSuccessMsg] = useState<string | null>(null);
 
-  /* Plan Select State */
-  const [selectedProPlanId, setSelectedProPlanId] = useState<string | null>(null);
-  const [selectedMaxPlanId, setSelectedMaxPlanId] = useState<string | null>(null);
-  const [selectedProPlusPlanId, setSelectedProPlusPlanId] = useState<string | null>(null);
-  const [selectedMaxPlusPlanId, setSelectedMaxPlusPlanId] = useState<string | null>(null);
-  const [selectedTierForPurchase, setSelectedTierForPurchase] = useState<'BASIC' | 'ULTRA' | 'PRO_PLUS' | 'MAX_PLUS'>('BASIC');
-  const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
-
   const packages = settings?.packages || [];
-  const subscriptionPlans = settings?.subscriptionPlans || [];
+  const subscriptionPlans = (settings?.subscriptionPlans && settings.subscriptionPlans.length > 0)
+    ? settings.subscriptionPlans
+    : DEFAULT_STORE_SUBSCRIPTION_PLANS;
+
+  /* Plan Select State */
+  const defaultInitialPlan = subscriptionPlans.find(p => p.name.includes('Monthly')) || subscriptionPlans[0];
+  const [selectedProPlanId, setSelectedProPlanId] = useState<string | null>(() => defaultInitialPlan?.id || 'monthly');
+  const [selectedMaxPlanId, setSelectedMaxPlanId] = useState<string | null>(() => defaultInitialPlan?.id || 'monthly');
+  const [selectedProPlusPlanId, setSelectedProPlusPlanId] = useState<string | null>(() => defaultInitialPlan?.id || 'monthly');
+  const [selectedMaxPlusPlanId, setSelectedMaxPlusPlanId] = useState<string | null>(() => defaultInitialPlan?.id || 'monthly');
+  const [selectedTierForPurchase, setSelectedTierForPurchase] = useState<'BASIC' | 'ULTRA' | 'PRO_PLUS' | 'MAX_PLUS'>('BASIC');
+  const [selectedPlanId, setSelectedPlanId] = useState<string | null>(() => defaultInitialPlan?.id || 'monthly');
+
   const isCreditSubAllowed = settings?.allowCreditSubscription !== false;
   const [creditSubTab, setCreditSubTab] = useState<'PASS' | 'PACKAGES'>('PASS');
   const [planDurations, setPlanDurations] = useState<Record<string, string>>({});
@@ -1022,10 +1111,8 @@ export const Store: React.FC<Props> = ({ user, settings, onUserUpdate, onBack, i
 
   const allTabs = [
     ...(!settings?.hideSubscriptionsStore ? [
-      ...(isCreditEconomy
-        ? [{ id: 'VIP_PLUS' as const, label: 'VIP+', emoji: '��', color: '#38bdf8', bg: 'rgba(56,189,248,0.18)', border: 'rgba(56,189,248,0.45)', glow: 'rgba(56,189,248,0.35)' }]
-        : [{ id: 'SUBSCRIPTION' as const, label: 'VIP', emoji: '👑', color: '#c084fc', bg: 'rgba(192,132,252,0.16)', border: 'rgba(192,132,252,0.35)', glow: 'rgba(192,132,252,0.25)' }]
-      ),
+      { id: 'SUBSCRIPTION' as const, label: 'VIP', emoji: '👑', color: '#c084fc', bg: 'rgba(192,132,252,0.16)', border: 'rgba(192,132,252,0.35)', glow: 'rgba(192,132,252,0.25)' },
+      { id: 'VIP_PLUS' as const, label: 'VIP+', emoji: '💎', color: '#38bdf8', bg: 'rgba(56,189,248,0.18)', border: 'rgba(56,189,248,0.45)', glow: 'rgba(56,189,248,0.35)' },
     ] : []),
     ...(isCreditsStoreOn ? [{ id: 'CREDITS' as const, label: 'Credits', emoji: '🪙', color: C.gold, bg: C.goldBg, border: C.goldBorder, glow: 'rgba(251,191,36,0.22)' }] : []),
     ...(isDiamondsStoreOn ? [{ id: 'DIAMONDS' as const, label: 'Diamonds', emoji: '💎', color: C.diamond, bg: C.diamondBg, border: C.diamondBorder, glow: C.diamondGlow }] : []),
@@ -1707,6 +1794,27 @@ export const Store: React.FC<Props> = ({ user, settings, onUserUpdate, onBack, i
         {/* ── 2. VIP SUBSCRIPTIONS (CLEAN PRO & MAX PASS CARDS) ── */}
         {tierType === 'SUBSCRIPTION' && (
           <div className="space-y-4">
+            {/* VIP vs VIP+ Card Switcher Option Bar */}
+            <div className="p-1.5 rounded-2xl bg-slate-900/90 border border-white/10 shadow-lg flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setTierType('SUBSCRIPTION')}
+                className="flex-1 py-2.5 px-3 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-2 cursor-pointer bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white shadow-md shadow-purple-500/25 border border-purple-400/40"
+              >
+                <span className="text-base">👑</span>
+                <span>VIP Pass (Pro & Max)</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white/20 text-white font-bold">Active</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setTierType('VIP_PLUS')}
+                className="flex-1 py-2.5 px-3 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-2 cursor-pointer bg-white/5 text-slate-300 hover:text-white hover:bg-white/10 border border-white/10 active:scale-98"
+              >
+                <span className="text-base">💎</span>
+                <span>VIP+ Elite Pass</span>
+                <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-cyan-400/20 text-cyan-300 border border-cyan-400/30 font-bold">Daily 💎 Drops</span>
+              </button>
+            </div>
             {isVipEventActive && eventDiscountPercent > 0 && (
               <div className="p-3 rounded-xl bg-gradient-to-r from-purple-500/20 to-pink-600/20 border border-purple-400/40 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
@@ -1820,7 +1928,7 @@ export const Store: React.FC<Props> = ({ user, settings, onUserUpdate, onBack, i
 
                     {/* Duration Options */}
                     <div className="my-2.5">
-                      <div className="grid grid-cols-4 gap-1 sm:gap-1.5">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-1.5 sm:gap-2">
                         {subscriptionPlans.map(plan => {
                           const isSel = plan.id === activePlanId;
                           const planDurDisc = getPlanDurationDiscount(plan);
@@ -1954,6 +2062,26 @@ export const Store: React.FC<Props> = ({ user, settings, onUserUpdate, onBack, i
         {/* ── 2B. VIP+ ELITE PASSES (PRO+ & MAX+) ── */}
         {tierType === 'VIP_PLUS' && (
           <div className="space-y-5">
+            {/* VIP vs VIP+ Card Switcher Option Bar */}
+            <div className="p-1.5 rounded-2xl bg-slate-900/90 border border-white/10 shadow-lg flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setTierType('SUBSCRIPTION')}
+                className="flex-1 py-2.5 px-3 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-2 cursor-pointer bg-white/5 text-slate-300 hover:text-white hover:bg-white/10 border border-white/10 active:scale-98"
+              >
+                <span className="text-base">👑</span>
+                <span>VIP Pass (Pro & Max)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setTierType('VIP_PLUS')}
+                className="flex-1 py-2.5 px-3 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-2 cursor-pointer bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md shadow-cyan-500/25 border border-cyan-400/40"
+              >
+                <span className="text-base">💎</span>
+                <span>VIP+ Elite Pass</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white/20 text-white font-bold">Active</span>
+              </button>
+            </div>
             {/* Ultra-Luxe VIP+ Hero Showcase Banner */}
             <div className="p-5 rounded-3xl bg-gradient-to-r from-slate-950 via-cyan-950/50 to-fuchsia-950/50 border border-cyan-400/40 shadow-2xl relative overflow-hidden">
               <div className="absolute top-0 right-0 w-64 h-64 bg-gradient-to-bl from-cyan-400/15 via-fuchsia-500/15 to-transparent blur-3xl pointer-events-none" />
@@ -2116,7 +2244,7 @@ export const Store: React.FC<Props> = ({ user, settings, onUserUpdate, onBack, i
                           Total {totalDiamonds.toLocaleString('en-IN')} Diamonds
                         </span>
                       </div>
-                      <div className="grid grid-cols-4 gap-1 sm:gap-1.5">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-1.5 sm:gap-2">
                         {subscriptionPlans.map(plan => {
                           const isSel = activePlan.id === plan.id;
                           const planDurDisc = getPlanDurationDiscount(plan);

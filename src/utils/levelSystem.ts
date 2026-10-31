@@ -363,35 +363,9 @@ export const getMaxReadingSeconds = (level: number): number => {
   return base + (level - 8) * 60;
 };
 
-export const getLevelTopBarEffects = (lvl: LevelInfo): Array<{id:string;enabled:boolean;color:string;speed?:number;opacity?:number}> => {
-  const c = lvl.color;
-  const g = lvl.glowColor;
-  switch (lvl.animationIntensity) {
-    case 0: return [];
-    case 1:
-      return [{ id: 'shimmer-forward', enabled: true, color: c, speed: 3, opacity: 0.3 }];
-    case 2:
-      return [
-        { id: 'shimmer-forward', enabled: true, color: c, speed: 2, opacity: 0.5 },
-        { id: 'glow-bottom',     enabled: true, color: g, speed: 1.5, opacity: 0.6 },
-      ];
-    case 3:
-      return [
-        { id: 'shimmer-forward', enabled: true, color: c, speed: 1.5 },
-        { id: 'shimmer-reverse', enabled: true, color: c, speed: 2 },
-        { id: 'glow-both',       enabled: true, color: g, speed: 1 },
-        { id: 'sparkle-top',     enabled: true, color: c, speed: 1 },
-      ];
-    case 4:
-      return [
-        { id: 'shimmer-forward', enabled: true, color: c, speed: 1 },
-        { id: 'shimmer-reverse', enabled: true, color: c, speed: 1.2 },
-        { id: 'glow-both',       enabled: true, color: g, speed: 0.8 },
-        { id: 'sparkle-full',    enabled: true, color: c, speed: 0.8 },
-        { id: 'sparkle-top',     enabled: true, color: '#fbbf24', speed: 1.2 },
-      ];
-    default: return [];
-  }
+export const getLevelTopBarEffects = (_lvl: LevelInfo): Array<{id:string;enabled:boolean;color:string;speed?:number;opacity?:number}> => {
+  // Level-based top bar animations removed as requested: top bar remains static and clean
+  return [];
 };
 
 // ── Multi-Tier Sub-System (Roman I-V, Greek Alpha/Beta/Gamma, Metal Leagues) ────

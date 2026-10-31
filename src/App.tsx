@@ -15,7 +15,16 @@ import { auth, logoutUser } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { DeviceConflictModal } from './components/DeviceConflictModal';
 import { GuestRoomJoinModal } from './components/GuestRoomJoinModal';
-import { initUserSession, listenToUserSession, clearLocalSession } from './services/sessionManager';
+import { QrLoginApprovalModal } from './components/QrLoginApprovalModal';
+import {
+  initUserSession,
+  listenToUserSession,
+  clearLocalSession,
+  listenToLoginChallenge,
+  sendSessionHeartbeat,
+  LoginChallengeData,
+} from './services/sessionManager';
+import { performDailyMasterSync, isDailySyncNeeded } from './services/dailySyncManager';
 
 // Dynamic lazy imports for smooth chunk loading & performance
 const StudentDashboard = lazy(() =>
@@ -175,6 +184,7 @@ export function App() {
 
   const [conflictModalOpen, setConflictModalOpen] = useState(false);
   const [remoteDeviceName, setRemoteDeviceName] = useState('Dusra Mobile / Device');
+  const [incomingLoginChallenge, setIncomingLoginChallenge] = useState<LoginChallengeData | null>(null);
   const [studyRoomCodeFromUrl, setStudyRoomCodeFromUrl] = useState<string | null>(null);
   const [showGuestStudyJoin, setShowGuestStudyJoin] = useState(false);
 
@@ -241,7 +251,19 @@ export function App() {
     } catch {}
   }, []);
 
-  // 1-Device Enforcement: Listen for active session changes on RTDB
+  // Daily Master Pack 1st-Login Sync (Runs once per day, 0 reads for rest of the day!)
+  useEffect(() => {
+    if (!user || user.isGuest) return;
+    if (isDailySyncNeeded()) {
+      performDailyMasterSync(user).then((res) => {
+        if (res.success && res.bundle?.userSnapshot) {
+          setUser((prev: any) => ({ ...prev, ...res.bundle.userSnapshot }));
+        }
+      });
+    }
+  }, [user?.uid, user?.id, user?.isGuest]);
+
+  // 1-Device Enforcement & Cross-Device QR Challenge Listener
   useEffect(() => {
     if (!user || user.isGuest) return;
     const uid = user.uid || user.id;
@@ -249,13 +271,31 @@ export function App() {
 
     initUserSession(user);
 
-    const unsubscribe = listenToUserSession(uid, (remote) => {
+    // Heartbeat throttled to 5 minutes & only pings when tab is actively visible!
+    const heartbeatInterval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        sendSessionHeartbeat(uid);
+      }
+    }, 300000);
+
+    const unsubscribeSession = listenToUserSession(uid, (remote) => {
+      // Immediate lockdown: wipe local session immediately so no background requests succeed
+      clearLocalSession();
+      try {
+        localStorage.removeItem('nst_current_user');
+      } catch {}
       setRemoteDeviceName(remote.device || 'Dusra Mobile / Device');
       setConflictModalOpen(true);
     });
 
+    const unsubscribeChallenge = listenToLoginChallenge(uid, (challenge) => {
+      setIncomingLoginChallenge(challenge);
+    });
+
     return () => {
-      unsubscribe();
+      clearInterval(heartbeatInterval);
+      unsubscribeSession();
+      unsubscribeChallenge();
     };
   }, [user?.uid, user?.id, user?.isGuest]);
 
@@ -479,6 +519,12 @@ export function App() {
         isOpen={conflictModalOpen}
         deviceName={remoteDeviceName}
         onAcknowledge={handleAcknowledgeConflict}
+      />
+
+      <QrLoginApprovalModal
+        challenge={incomingLoginChallenge}
+        userId={user?.uid || user?.id || ''}
+        onDismiss={() => setIncomingLoginChallenge(null)}
       />
 
       <GuestRoomJoinModal

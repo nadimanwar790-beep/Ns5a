@@ -10,7 +10,8 @@ import { CustomAlert } from './CustomDialogs';
 import { PedroAuthGuide } from './PedroAuthGuide';
 import { QrScannerModal } from './QrScannerModal';
 import { GuestRoomJoinModal } from './GuestRoomJoinModal';
-import { parseLoginQrToken } from '../services/sessionManager';
+import { QrLoginOtpChallengeModal } from './QrLoginOtpChallengeModal';
+import { parseLoginQrToken, checkActiveRemoteSession, createLoginChallenge } from '../services/sessionManager';
 
 interface Props {
   onLogin: (user: User) => void;
@@ -111,6 +112,25 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings }) => 
 
   const [showQrLoginScanner, setShowQrLoginScanner] = useState(false);
   const [showGuestStudyModal, setShowGuestStudyModal] = useState(false);
+  const [qrChallengeData, setQrChallengeData] = useState<{
+    isOpen: boolean;
+    userId: string;
+    challengeId: string;
+    remoteDeviceName?: string;
+    pendingUser?: User;
+  }>({
+    isOpen: false,
+    userId: '',
+    challengeId: '',
+  });
+
+  const completeQrLogin = (targetUser: User) => {
+    saveUserToLive(targetUser, { immediate: true });
+    localStorage.setItem('nst_current_user', JSON.stringify(targetUser));
+    localStorage.setItem('nst_last_user_id', targetUser.id || targetUser.uid);
+    localStorage.removeItem('nst_logged_out');
+    triggerLoginSuccess(targetUser);
+  };
 
   const handleScanLoginSuccess = async (scannedText: string) => {
     setShowQrLoginScanner(false);
@@ -119,6 +139,11 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings }) => 
       const payload = parseLoginQrToken(scannedText);
       if (!payload || !payload.uid) {
         setError('Amanaya (Invalid) Login QR Code hai.');
+        setLoading(false);
+        return;
+      }
+      if (payload.isExpired) {
+        setError('Yeh QR Code expire ho chuka hai (60s security limit). Kripya screen par naya QR refresh karke scan karein.');
         setLoading(false);
         return;
       }
@@ -140,11 +165,28 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings }) => 
         profileCompleted: true,
         provider: 'qr_code'
       };
-      saveUserToLive(finalUser, { immediate: true });
-      localStorage.setItem('nst_current_user', JSON.stringify(finalUser));
-      localStorage.setItem('nst_last_user_id', finalUser.id || finalUser.uid);
-      localStorage.removeItem('nst_logged_out');
-      triggerLoginSuccess(finalUser);
+
+      const targetUid = finalUser.id || finalUser.uid;
+
+      // Cross-Device Security Check: Is this account already logged into another phone?
+      const remoteSession = await checkActiveRemoteSession(targetUid);
+      if (remoteSession && remoteSession.sessionId) {
+        // Active remote session detected on another mobile!
+        // Generate an instant 6-digit OTP challenge and write to RTDB
+        const challenge = await createLoginChallenge(targetUid);
+        setQrChallengeData({
+          isOpen: true,
+          userId: targetUid,
+          challengeId: challenge.challengeId,
+          remoteDeviceName: remoteSession.device || 'Active Mobile Phone',
+          pendingUser: finalUser,
+        });
+        setLoading(false);
+        return;
+      }
+
+      // No active remote session, proceed directly
+      completeQrLogin(finalUser);
     } catch (e: any) {
       setError('QR Login fail hua: ' + (e?.message || 'Error'));
     } finally {
@@ -1620,6 +1662,39 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings }) => 
         onClose={() => setShowGuestStudyModal(false)}
         onSubmitName={handleGuestStudySubmit}
         appName={appSettings?.appName || settings?.appName || 'NSTA'}
+      />
+
+      {/* Cross-Device QR Login OTP Challenge Modal */}
+      <QrLoginOtpChallengeModal
+        isOpen={qrChallengeData.isOpen}
+        userId={qrChallengeData.userId}
+        challengeId={qrChallengeData.challengeId}
+        remoteDeviceName={qrChallengeData.remoteDeviceName}
+        onSuccess={() => {
+          const userToLogin = qrChallengeData.pendingUser;
+          setQrChallengeData((prev) => ({ ...prev, isOpen: false }));
+          if (userToLogin) {
+            completeQrLogin(userToLogin);
+          }
+        }}
+        onCancel={() => {
+          setQrChallengeData((prev) => ({ ...prev, isOpen: false }));
+        }}
+        onFallbackToPassword={() => {
+          const target = qrChallengeData.pendingUser;
+          setQrChallengeData((prev) => ({ ...prev, isOpen: false }));
+          setView('LOGIN');
+          if (target) {
+            setFormData((prev) => ({
+              ...prev,
+              id: target.email || target.mobile || target.displayId || target.id || '',
+            }));
+          }
+          setAlertConfig({
+            isOpen: true,
+            message: 'Purana phone paas nahi hai toh aap apne Password ya Security Key se seedha login kar sakte hain.',
+          });
+        }}
       />
     </div>
   );

@@ -627,7 +627,6 @@ export const TodayMcqSession: React.FC<Props> = ({ user, topics, onClose, onComp
                             totalScore: (_u.totalScore || 0) + totalPts,
                         };
                         onUpdateUser(updated);
-                        saveUserToLive(updated);
                         // Home-sync key update — yahi pts ab credit sync se skip honge
                         try { localStorage.setItem(`nst_credit_sync_score_${_u.id}`, String((_u.totalScore || 0) + totalPts)); } catch {}
                     }
@@ -642,7 +641,6 @@ export const TodayMcqSession: React.FC<Props> = ({ user, topics, onClose, onComp
                 if (_u && onUpdateUser) {
                     const updated = { ..._u, totalScore: Math.max(0, (_u.totalScore || 0) - 2) };
                     onUpdateUser(updated);
-                    saveUserToLive(updated);
                 }
                 showMcqScore(-2);
             }
@@ -944,7 +942,7 @@ export const TodayMcqSession: React.FC<Props> = ({ user, topics, onClose, onComp
             questions: interleavedQuestions,
         };
 
-        // Immediate background persistence to localStorage and Firebase
+        // Immediate background persistence to localStorage and Firebase (Single final write!)
         if (effUserId && effUserId !== 'anonymous') {
             try {
                 const existing = JSON.parse(localStorage.getItem(`nst_test_results_${effUserId}`) || '[]');
@@ -952,6 +950,9 @@ export const TodayMcqSession: React.FC<Props> = ({ user, topics, onClose, onComp
             } catch (_) {}
             saveTestResult(effUserId, megaResult).catch(e => console.warn('[IIC] TodayMcqSession saveTestResult error:', e));
             saveUserHistory(effUserId, megaResult).catch(e => console.warn('[IIC] TodayMcqSession saveUserHistory error:', e));
+            if (userRef.current) {
+                saveUserToLive(userRef.current).catch(e => console.warn('[IIC] TodayMcqSession saveUserToLive final write error:', e));
+            }
         }
 
         // Enrich topicSummary with sessionHistory from revision tracker

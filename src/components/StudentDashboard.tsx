@@ -24,6 +24,7 @@ import { StudentLevelPage } from "./StudentLevelPage";
 import { TopBarRow2XpBar } from "./TopBarRow2XpBar";
 import { UserLevelBadge, UserNameTierBadge, UserBadgeGroup } from "./UserLevelBadge";
 import { UserLoginQrModal } from "./UserLoginQrModal";
+import { performDailyMasterSync, getDailySyncInfo } from "../services/dailySyncManager";
 import {
   User,
   Subject,
@@ -1310,19 +1311,14 @@ export const StudentDashboard: React.FC<Props> = ({
     if (adminEffects.length > 0) {
       return adminEffects;
     }
-    const effLvl = (user.role === 'ADMIN' || user.role === 'SUB_ADMIN') ? LEVEL_INFO[14] : _userLevelInfo;
-    return getLevelTopBarEffects(effLvl);
-  }, [levelAnimOff, user.customAnimation, user.role, _userLevelInfo, settings?.topBarEffects]);
+    // Level-based top bar animations removed as requested by user
+    return [];
+  }, [levelAnimOff, user.customAnimation, settings?.topBarEffects]);
 
-  // Active Profile Card Effects (Admin Profile Card Effects -> Admin Top Bar Effects -> Active Top Bar Effects)
+  // Active Profile Card Effects: static without animations
   const activeProfileEffects = React.useMemo(() => {
-    if (levelAnimOff) return [];
-    const adminProfileEffects = (settings?.profileBarEffects || []).filter(e => e.enabled);
-    if (adminProfileEffects.length > 0) {
-      return adminProfileEffects;
-    }
-    return activeTopBarEffects;
-  }, [levelAnimOff, settings?.profileBarEffects, activeTopBarEffects]);
+    return [];
+  }, []);
 
   // Free quota (0 free views — credit-only, but track key for limit enforcement)
   const _freeHtmlKey   = `nst_free_html_${user.id}_${_todayKey}`;
@@ -3348,18 +3344,11 @@ export const StudentDashboard: React.FC<Props> = ({
   const [levelUpCelebrationData, setLevelUpCelebrationData] = useState<{ newLevel: number; features: any[] } | null>(null);
   const lastRecordedLevelRef = useRef<number>(_userLevel);
 
-  // Trigger celebration modal when user levels up
+  // Level up tracking (silent, no animated popup)
   useEffect(() => {
     if (user.role === 'ADMIN' || user.role === 'SUB_ADMIN') return;
     const storedLastLevel = parseInt(localStorage.getItem(`nsta_last_seen_level_${user.id}`) || '1', 10);
-    if (_userLevel > storedLastLevel && _userLevel > 1) {
-      const unlocked = getFeaturesUnlockedAtLevel(_userLevel);
-      setLevelUpCelebrationData({
-        newLevel: _userLevel,
-        features: unlocked,
-      });
-      localStorage.setItem(`nsta_last_seen_level_${user.id}`, String(_userLevel));
-    } else if (!localStorage.getItem(`nsta_last_seen_level_${user.id}`)) {
+    if (!localStorage.getItem(`nsta_last_seen_level_${user.id}`) || _userLevel !== storedLastLevel) {
       localStorage.setItem(`nsta_last_seen_level_${user.id}`, String(_userLevel));
     }
     lastRecordedLevelRef.current = _userLevel;
@@ -3823,16 +3812,6 @@ export const StudentDashboard: React.FC<Props> = ({
       handleUserUpdate(updatedUser);
       saveUserToLive(updatedUser);
 
-      // Trigger Celebration popup
-      if (unclaimedLevels.length > 0 || subSummary.hasPinnacleReward) {
-        setLevelUpCelebration({ 
-          level: lvl.level, 
-          emoji: subSummary.hasPinnacleReward ? '👑💎' : lvl.emoji, 
-          label: subSummary.hasPinnacleReward ? 'ABSOLUTE LEGEND · Diamond Gamma V' : lvl.label,
-          coinReward: totalCoinsToAdd,
-        });
-      }
-
       const curSub = getLevelSubTier(lvl.level, getLevelProgress(score));
       let rewardMsg = '';
       if (subSummary.hasPinnacleReward || subDiamondsToAdd > 0) {
@@ -3856,15 +3835,6 @@ export const StudentDashboard: React.FC<Props> = ({
       try {
         localStorage.setItem(`nst_last_notified_level_${user.id}`, String(lvl.level));
       } catch {}
-      if (storedNotified > 0) {
-        setLevelUpCelebration({ 
-          level: lvl.level, 
-          emoji: lvl.emoji, 
-          label: lvl.label,
-          coinReward: 0,
-        });
-        setTimeout(() => setLevelUpCelebration(null), 4500);
-      }
     }
   }, [user.totalScore, user.id, user.role]);
 
@@ -14532,9 +14502,6 @@ export const StudentDashboard: React.FC<Props> = ({
                                     📚 7 Books
                                   </span>
                                   <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold" style={{ background: themeChipBg, border: `1px solid ${themeChipBorder}`, color: themeChipText }}>
-                                    🎯 SSC · UPSC · Railway · Police
-                                  </span>
-                                  <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold" style={{ background: themeChipBg, border: `1px solid ${themeChipBorder}`, color: themeChipText }}>
                                     ⚡ {compMcqCount > 0 ? `${compMcqCount}+ MCQs` : '10,000+ MCQs'}
                                   </span>
                                   <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold" style={{ background: themeChipBg, border: `1px solid ${themeChipBorder}`, color: themeChipText }}>
@@ -14755,14 +14722,6 @@ export const StudentDashboard: React.FC<Props> = ({
                         <span className="text-[10px] font-black uppercase tracking-widest" style={{ color: isDarkMode ? '#94a3b8' : tierTheme.textSecondary || '#64748b' }}>
                           🏫 Enrolled School Portal
                         </span>
-                        <button
-                          type="button"
-                          onClick={() => setShowHomeQrScanner(true)}
-                          className="px-2.5 py-1 rounded-xl text-xs font-black flex items-center gap-1.5 transition active:scale-95 cursor-pointer shadow-xs border bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30"
-                        >
-                          <QrCode size={13} />
-                          <span>QR Attendance</span>
-                        </button>
                       </div>
 
                       {userSchool ? (
@@ -15738,7 +15697,7 @@ export const StudentDashboard: React.FC<Props> = ({
       const _adminBgIsLight  = !!(_adminProfileTheme?.bgColor && _isColorLight(_adminProfileTheme.bgColor));
       const _profileIsLight  = profileWhite || _isLightBgEarly || _adminBgIsLight;
 
-      // ── Level-based name effect (uses _displayLvl so user can pick any unlocked level's style) ──
+      // ── Level-based name effect (uses _displayLvl so user can pick any unlocked level's style, static without animation) ──
       const _nameStyle = ((): React.CSSProperties => {
         const lvl = _displayLvl.level;
         const col = _displayLvl.nameColor || _displayLvl.color;
@@ -15747,43 +15706,26 @@ export const StudentDashboard: React.FC<Props> = ({
           return { color: lvl >= 4 ? col : (_profileIsLight ? '#1e293b' : '#ffffff') };
         }
         if (lvl <= 2) return { color: '#ffffff' };
-        if (lvl <= 4) return { color: col, textShadow: `0 0 14px ${glow}` };
-        if (lvl <= 6) return {
-          color: col,
-          animation: 'name-fx-glow 2.2s ease-in-out infinite',
-          ['--name-glow' as any]: glow,
-        };
-        // Gradient text definitions per level
+        if (lvl <= 4) return { color: col, textShadow: `0 0 10px ${glow}` };
+        // Gradient text definitions per level (clean static without animations)
         const grads: Record<number, string> = {
-          7:  'linear-gradient(135deg,#c084fc,#a855f7,#7c3aed,#c084fc)',
-          8:  'linear-gradient(135deg,#fde68a,#f59e0b,#d97706,#fde68a)',
-          9:  'linear-gradient(135deg,#fde047,#eab308,#facc15,#fde047)',
-          10: 'linear-gradient(135deg,#fb923c,#f59e0b,#fbbf24,#fb923c)',
-          11: 'linear-gradient(135deg,#34d399,#06b6d4,#818cf8,#c084fc,#34d399)',
-          12: 'linear-gradient(135deg,#a78bfa,#c084fc,#f472b6,#a78bfa)',
-          13: 'linear-gradient(135deg,#f9a8d4,#ec4899,#f43f5e,#ef4444,#f9a8d4)',
-          14: 'linear-gradient(135deg,#fda4af,#f43f5e,#ef4444,#f97316,#fda4af)',
-          15: 'linear-gradient(135deg,#ffffff,#a5f3fc,#c4b5fd,#f9a8d4,#ffffff)',
-        };
-        const anim7_8  = 'name-fx-shimmer 4s linear infinite';
-        const anim9_10 = 'name-fx-shimmer 3s linear infinite, name-fx-rainbow 7s ease infinite';
-        const anim11_12= 'name-fx-shimmer 2.5s linear infinite, name-fx-rainbow 5s ease infinite';
-        const anim13_14= 'name-fx-shimmer 2s linear infinite, name-fx-fire 1.8s ease-in-out infinite';
-        const anim15   = 'name-fx-shimmer 1.8s linear infinite, name-fx-absolute 4s ease infinite';
-        const animMap: Record<number, string> = {
-          7: anim7_8, 8: anim7_8,
-          9: anim9_10, 10: anim9_10,
-          11: anim11_12, 12: anim11_12,
-          13: anim13_14, 14: anim13_14,
-          15: anim15,
+          5:  `linear-gradient(135deg, ${col}, #ffffff)`,
+          6:  `linear-gradient(135deg, ${col}, #ffffff)`,
+          7:  'linear-gradient(135deg,#c084fc,#a855f7,#7c3aed)',
+          8:  'linear-gradient(135deg,#fde68a,#f59e0b,#d97706)',
+          9:  'linear-gradient(135deg,#fde047,#eab308,#facc15)',
+          10: 'linear-gradient(135deg,#fb923c,#f59e0b,#fbbf24)',
+          11: 'linear-gradient(135deg,#34d399,#06b6d4,#818cf8)',
+          12: 'linear-gradient(135deg,#a78bfa,#c084fc,#f472b6)',
+          13: 'linear-gradient(135deg,#f9a8d4,#ec4899,#f43f5e)',
+          14: 'linear-gradient(135deg,#fda4af,#f43f5e,#ef4444)',
+          15: 'linear-gradient(135deg,#ffffff,#a5f3fc,#c4b5fd)',
         };
         return {
           background: grads[lvl] || `linear-gradient(135deg,${col},${col}88,${col})`,
-          backgroundSize: '200% auto',
           WebkitBackgroundClip: 'text',
           WebkitTextFillColor: 'transparent',
           backgroundClip: 'text',
-          animation: animMap[lvl] || anim7_8,
         } as React.CSSProperties;
       })();
 
@@ -15842,9 +15784,6 @@ export const StudentDashboard: React.FC<Props> = ({
               paddingBottom: 20,
             }}>
 
-              {/* Profile Card Animations & Effects Layer */}
-              <TopBarEffectsLayer effects={activeProfileEffects} />
-
               {/* Background mesh dots — decorative */}
               {!_light && (
                 <svg className="absolute inset-0 w-full h-full opacity-[0.05] pointer-events-none" xmlns="http://www.w3.org/2000/svg">
@@ -15865,25 +15804,30 @@ export const StudentDashboard: React.FC<Props> = ({
                   <div className="flex-1 min-w-0 flex flex-col justify-center">
                     <div
                       id="profile-recovery-card"
-                      className="rounded-2xl overflow-hidden h-full flex flex-col justify-between transition-all duration-300"
+                      className="rounded-2xl overflow-hidden h-full flex flex-col justify-between transition-all duration-300 relative group"
                       style={{
-                        background: _light ? 'rgba(255,255,255,0.85)' : 'rgba(18, 27, 51, 0.85)',
-                        backdropFilter: 'blur(16px)',
-                        border: _light ? `1px solid ${tierTheme.primary}25` : '1px solid rgba(255, 255, 255, 0.10)',
-                        boxShadow: `0 8px 32px rgba(0,0,0,0.36), inset 0 1px 0 rgba(255,255,255,0.06)`,
+                        background: _light
+                          ? 'rgba(255,255,255,0.92)'
+                          : 'linear-gradient(165deg, rgba(234, 179, 8, 0.10) 0%, rgba(15, 23, 44, 0.95) 45%, rgba(10, 15, 30, 0.98) 100%)',
+                        backdropFilter: 'blur(20px)',
+                        border: _light ? `1px solid ${tierTheme.primary}35` : '1px solid rgba(234, 179, 8, 0.35)',
+                        boxShadow: `0 10px 32px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.12)`,
                       }}
                     >
+                      {/* Top Specular Glow Line */}
+                      <div className="absolute top-0 inset-x-0 h-[1px] bg-gradient-to-r from-transparent via-amber-400/50 to-transparent pointer-events-none" />
+
                       {/* Header */}
-                      <div className="flex items-center justify-between gap-1.5 px-3 py-2" style={{ borderBottom: _light ? `1px solid ${tierTheme.primary}15` : '1px solid rgba(255, 255, 255, 0.08)' }}>
+                      <div className="flex items-center justify-between gap-1.5 px-3 py-2 bg-black/20" style={{ borderBottom: _light ? `1px solid ${tierTheme.primary}20` : '1px solid rgba(234, 179, 8, 0.20)' }}>
                         <div className="flex items-center gap-1.5 min-w-0">
-                          <div className="w-5.5 h-5.5 rounded-md flex items-center justify-center shrink-0" style={{
-                            background: _light ? `${tierTheme.primary}15` : 'rgba(234, 179, 8, 0.15)',
-                            border: _light ? `1px solid ${tierTheme.primary}30` : '1px solid rgba(234, 179, 8, 0.35)',
+                          <div className="w-5.5 h-5.5 rounded-md flex items-center justify-center shrink-0 shadow-[0_0_10px_rgba(245,158,11,0.25)]" style={{
+                            background: _light ? `${tierTheme.primary}20` : 'rgba(234, 179, 8, 0.20)',
+                            border: _light ? `1px solid ${tierTheme.primary}40` : '1px solid rgba(234, 179, 8, 0.50)',
                           }}>
                             <ShieldCheck size={12} className={_light ? "text-amber-600" : "text-amber-400"} />
                           </div>
                           <div className="min-w-0">
-                            <p className="font-black uppercase tracking-wider text-[9px] truncate" style={{ color: _light ? _pTxtColor : '#fbbf24' }}>
+                            <p className="font-black uppercase tracking-wider text-[9px] truncate drop-shadow-xs" style={{ color: _light ? _pTxtColor : '#fbbf24' }}>
                               Recovery Data
                             </p>
                           </div>
@@ -15899,11 +15843,11 @@ export const StudentDashboard: React.FC<Props> = ({
                             });
                             setShowRecoveryModal(true);
                           }}
-                          className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-md font-bold active:scale-95 transition-transform text-[8.5px] cursor-pointer"
+                          className="shrink-0 flex items-center gap-1 px-2.5 py-0.5 rounded-md font-black active:scale-95 transition-transform text-[8.5px] cursor-pointer shadow-xs"
                           style={{
-                            background: _light ? `${tierTheme.primary}15` : 'rgba(234, 179, 8, 0.15)',
-                            color: _light ? tierTheme.primary : '#fde047',
-                            border: _light ? `1px solid ${tierTheme.primary}30` : '1px solid rgba(234, 179, 8, 0.35)'
+                            background: 'linear-gradient(135deg, rgba(234, 179, 8, 0.30), rgba(234, 179, 8, 0.15))',
+                            color: '#fde047',
+                            border: '1px solid rgba(234, 179, 8, 0.50)'
                           }}
                         >
                           <Edit3 size={9} />
@@ -15926,7 +15870,7 @@ export const StudentDashboard: React.FC<Props> = ({
                           </div>
                           {(user as any).mobile ? (
                             <span className="inline-flex items-center gap-1 text-[8px] font-bold text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded-full border border-emerald-500/25 shrink-0">
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block animate-pulse" />
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
                               Set
                             </span>
                           ) : (
@@ -16031,27 +15975,27 @@ export const StudentDashboard: React.FC<Props> = ({
                     <div className="relative flex items-center justify-center">
                       {/* Ambient Halo / Glow behind the card */}
                       <div
-                        className="absolute inset-0 rounded-2xl blur-lg pointer-events-none opacity-40"
+                        className="absolute inset-0 rounded-2xl blur-xl pointer-events-none opacity-50"
                         style={{
-                          background: `radial-gradient(circle, ${_pLvl.color}50 0%, transparent 75%)`,
-                          transform: 'scale(1.10)',
+                          background: `radial-gradient(circle, rgba(234, 179, 8, 0.35) 0%, transparent 75%)`,
+                          transform: 'scale(1.20)',
                         }}
                       />
 
-                      {/* Portrait Container: 3:4 aspect ratio (Width: 102px, Height: 136px) */}
+                      {/* Portrait Container: 3:4 aspect ratio (Width: 104px, Height: 138px) */}
                       <div
                         id="profile-avatar-circle"
                         onClick={() => setShowPhotoFullscreen(true)}
                         title="Photo fullscreen dekhne ke liye click karein"
-                        className="relative rounded-2xl overflow-hidden flex items-center justify-center cursor-pointer group active:scale-95 transition-all select-none shadow-2xl border"
+                        className="relative rounded-2xl overflow-hidden flex items-center justify-center cursor-pointer group active:scale-95 transition-all select-none shadow-[0_12px_36px_rgba(0,0,0,0.6),0_0_20px_rgba(234,179,8,0.15)] border"
                         style={{
                           width: 104,
                           height: 138,
                           background: _light
                             ? `linear-gradient(145deg, ${_pLvl.color}25 0%, rgba(255,255,255,0.9) 100%)`
-                            : `linear-gradient(145deg, ${_pLvl.color}25 0%, rgba(18,27,51,0.95) 100%)`,
-                          borderColor: 'rgba(255, 255, 255, 0.20)',
-                          boxShadow: `0 10px 30px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.15)`,
+                            : `linear-gradient(145deg, rgba(234, 179, 8, 0.15) 0%, rgba(18,27,51,0.98) 100%)`,
+                          borderColor: 'rgba(234, 179, 8, 0.40)',
+                          boxShadow: `0 12px 36px rgba(0,0,0,0.6), 0 0 16px rgba(234, 179, 8, 0.12), inset 0 1px 0 rgba(255,255,255,0.20)`,
                         }}
                       >
                         {user.photoURL && (user.avatarChoice === 'gmail' || user.avatarChoice === 'custom' || !user.avatarChoice) ? (
@@ -16204,23 +16148,23 @@ export const StudentDashboard: React.FC<Props> = ({
                   setStoreInitialTier(settings?.showDiamondsStore === true ? 'DIAMONDS' : 'SUBSCRIPTION');
                   onTabChange("STORE");
                 }}
-                className="rounded-xl py-2 px-1 flex flex-col items-center justify-center active:scale-95 transition-transform cursor-pointer w-full text-center border"
+                className="rounded-xl py-2 px-1 flex flex-col items-center justify-center active:scale-95 transition-all cursor-pointer w-full text-center border group"
                 style={{
                   background: _light
-                    ? 'linear-gradient(145deg, rgba(6,182,212,0.12), rgba(6,182,212,0.04))'
-                    : 'linear-gradient(145deg, rgba(6,182,212,0.14), rgba(15, 23, 44, 0.85))',
-                  borderColor: _light ? 'rgba(6,182,212,0.32)' : 'rgba(6,182,212,0.30)',
-                  boxShadow: _light ? '0 2px 6px rgba(6,182,212,0.10)' : '0 2px 6px rgba(0,0,0,0.3)',
+                    ? 'linear-gradient(145deg, rgba(6,182,212,0.18), rgba(6,182,212,0.06))'
+                    : 'linear-gradient(145deg, rgba(6,182,212,0.22) 0%, rgba(12, 22, 42, 0.95) 100%)',
+                  borderColor: 'rgba(6,182,212,0.45)',
+                  boxShadow: '0 4px 14px rgba(6,182,212,0.18), inset 0 1px 0 rgba(255,255,255,0.12)',
                 }}
                 title="Diamonds Store kholein"
               >
                 <div className="flex items-center gap-1 mb-0.5">
-                  <span className="text-xs leading-none">💎</span>
-                  <span className="font-black tabular-nums leading-none text-xs sm:text-sm" style={{ color: _light ? '#0891b2' : '#38bdf8' }}>
+                  <span className="text-xs leading-none drop-shadow-[0_0_6px_rgba(56,189,248,0.7)]">💎</span>
+                  <span className="font-black tabular-nums leading-none text-xs sm:text-sm text-cyan-300 drop-shadow-xs">
                     {(user.diamonds ?? 0).toLocaleString('en-IN')}
                   </span>
                 </div>
-                <div className="font-black uppercase tracking-wider text-[8px] leading-tight" style={{ color: _light ? '#0e7490' : '#7dd3fc' }}>Diamonds</div>
+                <div className="font-black uppercase tracking-wider text-[8px] leading-tight text-cyan-400">Diamonds</div>
               </button>
 
               <button
@@ -16229,40 +16173,40 @@ export const StudentDashboard: React.FC<Props> = ({
                   setStoreInitialTier(settings?.showCreditsStore === true ? 'CREDITS' : 'SUBSCRIPTION');
                   onTabChange("STORE");
                 }}
-                className="rounded-xl py-2 px-1 flex flex-col items-center justify-center active:scale-95 transition-transform cursor-pointer w-full text-center border"
+                className="rounded-xl py-2 px-1 flex flex-col items-center justify-center active:scale-95 transition-all cursor-pointer w-full text-center border group"
                 style={{
                   background: _light
-                    ? `linear-gradient(145deg, ${tierTheme.primary}12, ${tierTheme.primary}04)`
-                    : 'linear-gradient(145deg, rgba(234, 179, 8, 0.12), rgba(15, 23, 44, 0.85))',
-                  borderColor: _light ? `${tierTheme.primary}32` : 'rgba(234, 179, 8, 0.25)',
-                  boxShadow: _light ? `0 2px 6px ${tierTheme.primary}10` : '0 2px 6px rgba(0,0,0,0.3)',
+                    ? `linear-gradient(145deg, ${tierTheme.primary}18, ${tierTheme.primary}06)`
+                    : 'linear-gradient(145deg, rgba(234, 179, 8, 0.22) 0%, rgba(18, 27, 51, 0.95) 100%)',
+                  borderColor: 'rgba(234, 179, 8, 0.45)',
+                  boxShadow: '0 4px 14px rgba(234, 179, 8, 0.20), inset 0 1px 0 rgba(255,255,255,0.12)',
                 }}
                 title="Credits Store kholein"
               >
                 <div className="flex items-center gap-1 mb-0.5">
-                  <Coins size={12.5} style={{ color: _light ? tierTheme.primary : '#fbbf24' }} />
-                  <span className="font-black tabular-nums leading-none text-xs sm:text-sm" style={{ color: _light ? '#1e293b' : '#f8fafc' }}>
+                  <Coins size={13} className="text-amber-400 drop-shadow-[0_0_6px_rgba(251,191,36,0.7)]" />
+                  <span className="font-black tabular-nums leading-none text-xs sm:text-sm text-amber-200 drop-shadow-xs">
                     {(user.credits ?? 0).toLocaleString('en-IN')}
                   </span>
                 </div>
-                <div className="font-black uppercase tracking-wider text-[8px] leading-tight" style={{ color: _light ? '#64748b' : '#cbd5e1' }}>Credits</div>
+                <div className="font-black uppercase tracking-wider text-[8px] leading-tight text-amber-400">Credits</div>
               </button>
 
               <button
                 id="profile-streak-btn"
                 onClick={() => setShowStreakPopup(true)}
-                className="rounded-xl py-2 px-1 flex flex-col items-center justify-center active:scale-95 transition-transform cursor-pointer w-full text-center border"
+                className="rounded-xl py-2 px-1 flex flex-col items-center justify-center active:scale-95 transition-all cursor-pointer w-full text-center border group"
                 style={{
                   background: _light
-                    ? 'linear-gradient(145deg, rgba(251,146,60,0.12), rgba(251,146,60,0.04))'
-                    : 'linear-gradient(145deg, rgba(251,146,60,0.16), rgba(15, 23, 44, 0.85))',
-                  borderColor: _light ? 'rgba(251,146,60,0.32)' : 'rgba(251, 146, 60, 0.35)',
-                  boxShadow: _light ? '0 2px 6px rgba(251,146,60,0.10)' : '0 2px 6px rgba(0,0,0,0.3)',
+                    ? 'linear-gradient(145deg, rgba(251,146,60,0.18), rgba(251,146,60,0.06))'
+                    : 'linear-gradient(145deg, rgba(251,146,60,0.22) 0%, rgba(24, 20, 36, 0.95) 100%)',
+                  borderColor: 'rgba(251, 146, 60, 0.45)',
+                  boxShadow: '0 4px 14px rgba(251,146,60,0.18), inset 0 1px 0 rgba(255,255,255,0.12)',
                 }}
               >
                 <div className="flex items-center gap-1 mb-0.5">
-                  <Flame size={12.5} style={{ color: '#fb923c' }} />
-                  <span className="font-black tabular-nums leading-none text-xs sm:text-sm" style={{ color: _pTxtColor }}>
+                  <Flame size={13} className="text-orange-400 drop-shadow-[0_0_6px_rgba(251,146,60,0.7)]" />
+                  <span className="font-black tabular-nums leading-none text-xs sm:text-sm text-orange-200 drop-shadow-xs">
                     {user.streak > 0 ? user.streak : '0'}
                   </span>
                 </div>
@@ -16272,17 +16216,17 @@ export const StudentDashboard: React.FC<Props> = ({
               <div
                 id="profile-xp-btn"
                 onClick={() => setShowScorePanel(true)}
-                className="rounded-xl py-2 px-1 flex flex-col items-center justify-center active:scale-95 transition-transform cursor-pointer w-full text-center border"
+                className="rounded-xl py-2 px-1 flex flex-col items-center justify-center active:scale-95 transition-all cursor-pointer w-full text-center border group"
                 style={{
                   background: _light
-                    ? 'linear-gradient(145deg, rgba(234,179,8,0.12), rgba(234,179,8,0.04))'
-                    : 'linear-gradient(145deg, rgba(234, 179, 8, 0.16), rgba(15, 23, 44, 0.85))',
-                  borderColor: _light ? 'rgba(234,179,8,0.32)' : 'rgba(234, 179, 8, 0.30)',
-                  boxShadow: _light ? '0 2px 6px rgba(234,179,8,0.10)' : '0 2px 6px rgba(0,0,0,0.3)',
+                    ? 'linear-gradient(145deg, rgba(234,179,8,0.18), rgba(234,179,8,0.06))'
+                    : 'linear-gradient(145deg, rgba(234, 179, 8, 0.22) 0%, rgba(18, 25, 45, 0.95) 100%)',
+                  borderColor: 'rgba(234, 179, 8, 0.45)',
+                  boxShadow: '0 4px 14px rgba(234,179,8,0.20), inset 0 1px 0 rgba(255,255,255,0.12)',
                 }}
               >
                 <div className="flex items-center gap-1 mb-0.5">
-                  <Star size={12.5} style={{ color: '#eab308' }} />
+                  <Star size={13} className="text-yellow-400 drop-shadow-[0_0_6px_rgba(250,204,21,0.7)]" />
                   {(() => {
                     const _s = _pRawScore >= 1_000_000
                       ? `${(_pRawScore / 1_000_000).toFixed(1)}M`
@@ -16292,7 +16236,7 @@ export const StudentDashboard: React.FC<Props> = ({
                       ? `${(_pRawScore / 1000).toFixed(1)}k`
                       : String(_pRawScore);
                     return (
-                      <span className="font-black tabular-nums leading-none text-xs sm:text-sm" style={{ color: _light ? _pTxtColor : '#fde047' }}>
+                      <span className="font-black tabular-nums leading-none text-xs sm:text-sm text-yellow-200 drop-shadow-xs">
                         {_s}
                       </span>
                     );
@@ -16318,21 +16262,25 @@ export const StudentDashboard: React.FC<Props> = ({
                 return (
                   <div className="px-3 mb-2">
                     <div
-                      className="rounded-xl px-2.5 py-2 relative overflow-hidden transition-all duration-200 border shadow-xs flex items-center justify-between gap-2 select-none"
+                      className="rounded-xl px-2.5 py-2 relative overflow-hidden transition-all duration-200 border shadow-md flex items-center justify-between gap-2 select-none group"
                       style={{
                         background: hasSub
                           ? (isUrgent
-                              ? 'linear-gradient(135deg, rgba(234, 179, 8, 0.16) 0%, rgba(15, 23, 42, 0.95) 100%)'
-                              : 'linear-gradient(135deg, rgba(234, 179, 8, 0.18) 0%, rgba(18, 27, 51, 0.95) 100%)')
-                          : 'linear-gradient(135deg, rgba(234, 179, 8, 0.12) 0%, rgba(15, 23, 42, 0.95) 100%)',
+                              ? 'linear-gradient(135deg, rgba(239, 68, 68, 0.20) 0%, rgba(15, 23, 42, 0.95) 100%)'
+                              : 'linear-gradient(135deg, rgba(234, 179, 8, 0.25) 0%, rgba(18, 27, 51, 0.98) 50%, rgba(245, 158, 11, 0.18) 100%)')
+                          : 'linear-gradient(135deg, rgba(234, 179, 8, 0.15) 0%, rgba(15, 23, 42, 0.95) 100%)',
                         borderColor: hasSub
-                          ? 'rgba(234, 179, 8, 0.45)'
-                          : 'rgba(234, 179, 8, 0.30)',
+                          ? 'rgba(234, 179, 8, 0.50)'
+                          : 'rgba(234, 179, 8, 0.35)',
+                        boxShadow: '0 8px 24px rgba(0,0,0,0.5), 0 0 16px rgba(234, 179, 8, 0.15), inset 0 1px 0 rgba(255,255,255,0.12)',
                       }}
                     >
+                      {/* Top Specular Gold Shine */}
+                      <div className="absolute top-0 inset-x-0 h-[1px] bg-gradient-to-r from-transparent via-amber-300/60 to-transparent pointer-events-none" />
+
                       <div className="flex items-center gap-2 min-w-0">
                         <div
-                          className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 shadow-xs"
+                          className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_10px_rgba(245,158,11,0.4)]"
                           style={{
                             background: 'linear-gradient(135deg, #fde68a, #d97706)',
                             color: '#1a1300',
@@ -16464,185 +16412,6 @@ export const StudentDashboard: React.FC<Props> = ({
                 </button>
               </div>
 
-              {/* ── 3. FULL-WIDTH LEVEL PROGRESS CARD (1 TO 15 CARDS ROADMAP — INSIDE CARD 1) ── */}
-              {(() => {
-                const _curLvl = _pLvl.level;
-                const _lvlAchievements: { lvl: number; emoji: string; label: string; perk: string }[] = [
-                  { lvl: 1,  emoji: '🌱', label: 'Beginner', perk: 'Joined' },
-                  { lvl: 2,  emoji: '🌿', label: 'Learner', perk: '1k XP' },
-                  { lvl: 3,  emoji: '🔍', label: 'Active', perk: '2% OFF' },
-                  { lvl: 4,  emoji: '✨', label: 'Consistent', perk: '3% OFF' },
-                  { lvl: 5,  emoji: '⚡', label: 'Dedicated', perk: '5% OFF' },
-                  { lvl: 6,  emoji: '🔥', label: 'Achiever', perk: '8% OFF' },
-                  { lvl: 7,  emoji: '💫', label: 'Expert', perk: '10% OFF' },
-                  { lvl: 8,  emoji: '💎', label: 'Master', perk: '13% OFF' },
-                  { lvl: 9,  emoji: '🌟', label: 'Elite', perk: '17% OFF' },
-                  { lvl: 10, emoji: '👑', label: 'Champion', perk: '20% OFF' },
-                  { lvl: 11, emoji: '🏆', label: 'Legend', perk: '20% OFF' },
-                  { lvl: 12, emoji: '🔮', label: 'Mythic', perk: '22% OFF' },
-                  { lvl: 13, emoji: '⚜️', label: 'Supreme', perk: '25% OFF' },
-                  { lvl: 14, emoji: '🌠', label: 'Eternal', perk: '28% OFF' },
-                  { lvl: 15, emoji: '💠', label: 'Absolute', perk: '30% OFF' },
-                ];
-                const _lvlColors: Record<number, string> = {
-                  1:'#94a3b8',2:'#6ee7b7',3:'#38bdf8',4:'#06b6d4',5:'#3b82f6',
-                  6:'#f97316',7:'#a855f7',8:'#f59e0b',9:'#eab308',10:'#f59e0b',
-                  11:'#10b981',12:'#8b5cf6',13:'#ec4899',14:'#f43f5e',15:'#a5f3fc',
-                };
-                return (
-                  <div className="px-3 mb-2">
-                    <div className="rounded-xl overflow-hidden shadow-xs select-none border" style={{
-                      background: _pCard,
-                      borderColor: _light ? `${tierTheme.primary}25` : 'rgba(234, 179, 8, 0.30)',
-                    }}>
-                      <div className="px-2.5 py-1.5 sm:px-3 sm:py-2 border-b" style={{
-                        background: _light
-                          ? `linear-gradient(135deg, ${_pLvl.color}0a, transparent 60%)`
-                          : 'linear-gradient(135deg, rgba(234, 179, 8, 0.14), transparent 60%)',
-                        borderColor: _light ? `${tierTheme.primary}15` : 'rgba(234, 179, 8, 0.18)',
-                      }}>
-                        <div className="flex items-center justify-between gap-1.5">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{
-                              background: 'linear-gradient(135deg, rgba(234, 179, 8, 0.35), rgba(234, 179, 8, 0.15))',
-                              border: '1px solid rgba(234, 179, 8, 0.50)',
-                              fontSize: 13,
-                            }}>
-                              {_pLvl.emoji}
-                            </div>
-                            <div className="min-w-0">
-                              <p className="font-black uppercase tracking-wider text-[9px] leading-tight" style={{ color: _light ? _pTxtColor : '#fbbf24' }}>
-                                Level Roadmap (1 - 15)
-                              </p>
-                              <p className="text-[8px] leading-tight truncate" style={{ color: _pTxtSubColor }}>
-                                {_curLvl}/15 Unlocked · Tap cards for perks
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-1 shrink-0">
-                            {/* Ranks (Unlocked for all levels) */}
-                            <button
-                              onClick={() => setShowLevelLeaderboard(true)}
-                              className="px-1.5 py-0.5 rounded-md font-bold flex items-center gap-1 text-[8.5px] active:scale-95 transition-transform cursor-pointer"
-                              style={{
-                                background: 'rgba(245,158,11,0.18)',
-                                color: '#fbbf24',
-                                border: '1px solid rgba(245,158,11,0.40)',
-                              }}
-                              title="Open Level Leaderboard"
-                            >
-                              <Trophy size={9} className="text-amber-400" />
-                              <span>Ranks</span>
-                            </button>
-                            <div className="px-1.5 py-0.5 rounded-md font-black text-[9px] text-slate-950 font-bold" style={{
-                              background: 'linear-gradient(135deg, #fde68a, #eab308)',
-                              boxShadow: '0 1px 6px rgba(234, 179, 8, 0.45)',
-                            }}>
-                              L{_curLvl}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="mt-1.5 flex items-center gap-0.5">
-                          {Array.from({ length: 15 }, (_, i) => {
-                            const segLvl = i + 1;
-                            const done = _curLvl >= segLvl;
-                            const cur  = _curLvl === segLvl;
-                            const c    = _lvlColors[segLvl] ?? tierTheme.primary;
-                            return (
-                              <div key={segLvl} className="flex-1 rounded-full transition-all duration-500" style={{
-                                height: cur ? 3.5 : 2,
-                                background: done
-                                  ? `linear-gradient(90deg, ${c}bb, ${c})`
-                                  : (_light ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.08)'),
-                                boxShadow: cur ? `0 0 5px ${c}90` : 'none',
-                              }} />
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      <div className="flex gap-1.5 p-2 overflow-x-auto scrollbar-none" style={{ scrollbarWidth: 'none' }}>
-                        {_lvlAchievements.map(({ lvl, emoji, label, perk }) => {
-                          const _isDone   = _curLvl > lvl;
-                          const _isCur    = _curLvl === lvl;
-                          const _isLocked = _curLvl < lvl;
-                          const _c = _isLocked ? (_light ? '#94a3b8' : '#475569') : (_lvlColors[lvl] ?? tierTheme.primary);
-
-                          return (
-                            <div
-                              key={lvl}
-                              onClick={() => setShowScorePanel(true)}
-                              className="shrink-0 flex flex-col items-center justify-between rounded-xl py-1.5 px-1 text-center cursor-pointer active:scale-95 transition-all select-none border"
-                              style={{
-                                width: 50,
-                                height: 72,
-                                background: _isCur
-                                  ? 'linear-gradient(145deg, rgba(234, 179, 8, 0.28), rgba(234, 179, 8, 0.10))'
-                                  : _isDone ? `${_lvlColors[lvl]}0c`
-                                  : _light ? 'rgba(0,0,0,0.025)' : 'rgba(255,255,255,0.02)',
-                                borderColor: _isCur
-                                  ? '#eab308'
-                                  : _isDone ? `${_lvlColors[lvl]}35`
-                                  : (_light ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.05)'),
-                                borderWidth: _isCur ? 1.8 : 1,
-                                boxShadow: _isCur ? '0 0 12px rgba(234, 179, 8, 0.45)' : 'none',
-                              }}
-                            >
-                              <div className="flex items-center justify-between w-full px-0.5 leading-none">
-                                <span className="font-black text-[7.5px] font-mono leading-none" style={{ color: _isCur ? _c : _pTxtSubColor }}>
-                                  L{lvl}
-                                </span>
-                                {_isDone && (
-                                  <span className="text-[7px] font-black text-emerald-400 leading-none">✓</span>
-                                )}
-                                {_isCur && (
-                                  <span className="text-[7px] font-black text-amber-400 leading-none animate-pulse">★</span>
-                                )}
-                                {_isLocked && (
-                                  <span className="text-[6.5px] text-slate-500 leading-none">🔒</span>
-                                )}
-                              </div>
-
-                              <div className="relative flex items-center justify-center w-6 h-6 rounded-md" style={{
-                                background: _isCur ? `${_c}25` : 'transparent',
-                              }}>
-                                <span style={{
-                                  fontSize: 15,
-                                  lineHeight: 1,
-                                  opacity: _isLocked ? 0.35 : 1,
-                                  filter: _isCur ? `drop-shadow(0 1px 4px ${_c}80)` : 'none'
-                                }}>
-                                  {emoji}
-                                </span>
-                              </div>
-
-                              <div className="font-bold truncate w-full text-[7.5px] leading-tight" style={{
-                                color: _isCur ? (_light ? '#0f172a' : '#ffffff') : _pTxtColor,
-                                opacity: _isLocked ? 0.5 : 1,
-                              }}>
-                                {label}
-                              </div>
-
-                              <div className="w-full rounded py-0.2 text-[6.5px] font-black truncate leading-tight" style={{
-                                background: _isCur
-                                  ? `${_c}25`
-                                  : _isDone ? `${_c}15`
-                                  : (_light ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.04)'),
-                                color: _isLocked ? (_light ? '#94a3b8' : '#64748b') : _c,
-                                border: `1px solid ${_isLocked ? 'transparent' : `${_c}30`}`,
-                              }}>
-                                {perk}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })()}
 
               {/* Bottom shimmer line of CARD 1 */}
               <div className="absolute bottom-0 left-0 right-0 h-[1px]" style={{
@@ -16683,145 +16452,156 @@ export const StudentDashboard: React.FC<Props> = ({
             </div>
           )}
 
-          {/* ── UNIFIED CARD: Refer & Earn (VIP), Theme Studio, Score History, Link Google Account ── */}
-          <div className="mx-3 mb-3 rounded-2xl overflow-hidden shadow-lg border" style={{ background: _pCard, border: _pBdrSoft }}>
-            {/* 1. Refer & Earn (VIP) Section */}
-            {(() => {
-              const refStats = getReferralStats(user);
-              const activeInvites = refStats.activeCount || 0;
-              const effectiveMilestones = getEffectiveReferralMilestones(settings?.referralMilestones);
-              const nextMilestone = effectiveMilestones.find(m => activeInvites < m.target) || effectiveMilestones[effectiveMilestones.length - 1];
-              const nextTarget = nextMilestone.target;
-              const canClaimAny = effectiveMilestones.some(m => activeInvites >= m.target && !(user.claimedReferralMilestones || []).includes(m.target));
+          {/* ── 1. DEDICATED REFER & EARN (VIP) CARD (ALAG SE) ── */}
+          {(() => {
+            const refStats = getReferralStats(user);
+            const activeInvites = refStats.activeCount || 0;
+            const effectiveMilestones = getEffectiveReferralMilestones(settings?.referralMilestones);
+            const nextMilestone = effectiveMilestones.find(m => activeInvites < m.target) || effectiveMilestones[effectiveMilestones.length - 1];
+            const nextTarget = nextMilestone.target;
+            const canClaimAny = effectiveMilestones.some(m => activeInvites >= m.target && !(user.claimedReferralMilestones || []).includes(m.target));
 
-              return (
+            return (
+              <div
+                className="mx-3.5 sm:mx-4 mb-3.5 rounded-2xl overflow-hidden shadow-lg border relative select-none"
+                style={{
+                  background: _light
+                    ? 'linear-gradient(135deg, rgba(254, 240, 138, 0.35) 0%, rgba(255, 255, 255, 0.98) 60%, rgba(253, 230, 138, 0.25) 100%)'
+                    : 'linear-gradient(135deg, rgba(234, 179, 8, 0.16) 0%, rgba(18, 27, 51, 0.96) 50%, rgba(11, 18, 34, 0.98) 100%)',
+                  borderColor: _light ? 'rgba(234, 179, 8, 0.45)' : 'rgba(234, 179, 8, 0.35)',
+                  boxShadow: '0 4px 18px rgba(234, 179, 8, 0.14)',
+                }}
+              >
+                {/* Golden top shimmer line */}
                 <div
-                  className="p-3 sm:p-3.5 relative overflow-hidden transition-all select-none border-b"
+                  className="h-[1.5px] w-full"
                   style={{
-                    background: _light
-                      ? 'linear-gradient(135deg, rgba(234, 179, 8, 0.10) 0%, rgba(255, 255, 255, 0.90) 100%)'
-                      : 'linear-gradient(135deg, rgba(234, 179, 8, 0.14) 0%, rgba(18, 27, 51, 0.96) 50%, rgba(11, 18, 34, 0.98) 100%)',
-                    borderColor: _pSep,
+                    background: 'linear-gradient(90deg, transparent 0%, rgba(250, 204, 21, 0.85) 50%, transparent 100%)',
                   }}
-                >
-                  <div className="relative z-10 flex items-center justify-between gap-2 mb-1.5">
-                    <div className="flex items-center gap-1.5 min-w-0">
+                />
+
+                <div className="p-3.5 sm:p-4">
+                  {/* Header row */}
+                  <div className="relative z-10 flex items-center justify-between gap-2 mb-2">
+                    <div className="flex items-center gap-2 min-w-0">
                       <div
-                        className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 shadow-xs relative border"
+                        className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 shadow-xs relative border"
                         style={{
                           background: 'linear-gradient(135deg, #fde68a 0%, #eab308 50%, #b45309 100%)',
-                          borderColor: 'rgba(253, 230, 138, 0.6)',
+                          borderColor: 'rgba(253, 230, 138, 0.7)',
+                          boxShadow: '0 2px 8px rgba(234, 179, 8, 0.35)',
                         }}
                       >
-                        <Gift size={13} className="text-slate-950" />
-                        <span className="absolute -top-1 -right-1 text-[7px]">👑</span>
+                        <Gift size={15} className="text-slate-950" />
+                        <span className="absolute -top-1 -right-1 text-[8px]">👑</span>
                       </div>
                       <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           <h3 className={`text-xs font-black ${_pTxt} tracking-tight`}>
-                            Refer & Earn (VIP)
+                            Refer &amp; Earn (VIP)
                           </h3>
-                          <span className="text-[7px] font-black px-1.5 py-0.2 rounded-full bg-gradient-to-r from-amber-400 to-amber-500 text-slate-950 uppercase tracking-wider font-mono shadow-xs">
+                          <span className="text-[7.5px] font-black px-1.5 py-0.2 rounded-full bg-gradient-to-r from-amber-400 to-amber-500 text-slate-950 uppercase tracking-wider font-mono shadow-xs">
                             FREE PASSES ⚡
                           </span>
                         </div>
-                        <p className="text-[9px] font-medium leading-tight text-amber-200/90 truncate">
-                          Doston ko invite karein aur paayein VIP Passes & Coins!
+                        <p className="text-[9.5px] font-medium leading-tight text-amber-200/90 truncate mt-0.5">
+                          Doston ko invite karein aur paayein VIP Passes &amp; Coins!
                         </p>
                       </div>
                     </div>
 
-                    <span className="text-[9px] font-black px-2 py-0.2 rounded-md bg-amber-400/15 text-amber-300 border border-amber-400/35 shrink-0 font-mono">
+                    <span className="text-[9.5px] font-black px-2.5 py-0.5 rounded-full bg-amber-400/15 text-amber-300 border border-amber-400/35 shrink-0 font-mono">
                       {activeInvites.toLocaleString('en-IN')} Active
                     </span>
                   </div>
 
+                  {/* Prize box card */}
                   <div
-                    className="relative z-10 p-1.5 sm:p-2 rounded-lg mb-1.5 flex items-center justify-between gap-2 border"
+                    className="relative z-10 p-2 sm:p-2.5 rounded-xl mb-2.5 flex items-center justify-between gap-2 border"
                     style={{
-                      background: _light ? 'rgba(0, 0, 0, 0.03)' : 'rgba(11, 18, 36, 0.85)',
+                      background: _light ? 'rgba(255, 255, 255, 0.85)' : 'rgba(11, 18, 36, 0.85)',
                       borderColor: 'rgba(234, 179, 8, 0.30)',
+                      boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)',
                     }}
                   >
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <div className="w-6 h-6 rounded-md bg-gradient-to-tr from-amber-400 via-amber-300 to-yellow-500 flex items-center justify-center shrink-0 text-slate-950 font-black text-xs border border-amber-200">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-amber-400 via-amber-300 to-yellow-500 flex items-center justify-center shrink-0 text-slate-950 font-black text-sm border border-amber-200 shadow-xs">
                         🎁
                       </div>
                       <div className="min-w-0">
-                        <div className="flex items-center gap-1">
-                          <span className="text-[7px] font-black uppercase text-amber-300 bg-amber-400/15 px-1 py-0.2 rounded border border-amber-400/30">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[7.5px] font-black uppercase text-amber-300 bg-amber-400/15 px-1.5 py-0.2 rounded border border-amber-400/30 font-mono">
                             Prize Box
                           </span>
-                          <span className="text-[8.5px] text-amber-200/90 font-semibold">Target: {nextTarget} Active</span>
+                          <span className="text-[9px] text-amber-200/90 font-bold">Target: {nextTarget} Active</span>
                         </div>
-                        <p className="text-[10px] font-black text-white mt-0.2 truncate">
+                        <p className="text-[10.5px] font-black text-white mt-0.5 truncate">
                           {nextMilestone.title} ({nextMilestone.rewardDescription})
                         </p>
                       </div>
                     </div>
 
                     <div className="shrink-0 hidden xs:block text-right">
-                      <span className="text-[7.5px] text-slate-400 block">Status</span>
-                      <span className="text-[9px] font-black text-amber-300">
+                      <span className="text-[7.5px] text-slate-400 block font-mono">Status</span>
+                      <span className="text-[9.5px] font-black text-amber-300">
                         {canClaimAny ? 'Claim Ready!' : `${activeInvites}/${nextTarget}`}
                       </span>
                     </div>
                   </div>
 
-                  <div className="relative z-10 flex items-center gap-1.5">
+                  {/* Actions buttons */}
+                  <div className="relative z-10 flex items-center gap-2">
                     <button
                       onClick={() => setShowReferralPopup(true)}
-                      className="flex-1 py-1.5 px-2.5 rounded-lg font-black text-[10px] flex items-center justify-center gap-1 transition-all active:scale-[0.98] cursor-pointer shadow-xs tracking-wide border border-amber-300"
+                      className="flex-1 py-2 px-3 rounded-xl font-black text-[11px] flex items-center justify-center gap-1.5 transition-all active:scale-[0.98] cursor-pointer shadow-md tracking-wide border border-amber-300/80"
                       style={{
                         background: 'linear-gradient(135deg, #fde68a 0%, #eab308 50%, #b45309 100%)',
                         color: '#0f172a',
                         boxShadow: '0 2px 10px rgba(234, 179, 8, 0.40)',
                       }}
                     >
-                      <Gift size={11} strokeWidth={2.6} className="text-slate-950" />
+                      <Gift size={13} strokeWidth={2.6} className="text-slate-950" />
                       <span>{canClaimAny ? 'Claim VIP Prize Now 🎁' : 'Claim Prizes & Invite 🎁'}</span>
                     </button>
 
                     <button
                       onClick={() => setShowReferralPopup(true)}
-                      className="py-1.5 px-2 rounded-lg font-black text-[10px] flex items-center justify-center gap-0.5 bg-amber-400/15 hover:bg-amber-400/25 text-amber-200 border border-amber-400/35 transition-all active:scale-95 cursor-pointer shrink-0"
+                      className="py-2 px-3 rounded-xl font-black text-[11px] flex items-center justify-center gap-1 bg-amber-400/15 hover:bg-amber-400/25 text-amber-200 border border-amber-400/35 transition-all active:scale-95 cursor-pointer shrink-0"
                     >
                       <span>Details</span>
-                      <ChevronRight size={11} />
+                      <ChevronRight size={13} />
                     </button>
                   </div>
                 </div>
-              );
-            })()}
+              </div>
+            );
+          })()}
 
-            {/* 2. Theme Studio Row (Unlocked for Level 1) */}
+
+          {/* ── 3. SEPARATE CARD: THEME STUDIO, SCORE HISTORY, LEADERBOARD, GOOGLE ── */}
+          <div className="mx-3.5 sm:mx-4 mb-3.5 rounded-2xl overflow-hidden shadow-lg border" style={{ background: _pCard, border: _pBdrSoft }}>
+            {/* 1. Theme Studio Row */}
             <button
               onClick={() => {
                 themeOpenerRef.current = 'PROFILE';
                 onTabChange('THEME_CUSTOMIZER' as any);
               }}
-              className={`w-full px-4 py-3.5 flex items-center gap-3.5 ${_pHovCls} transition-colors cursor-pointer text-left`}
+              className={`w-full px-4 py-3 flex items-center gap-3.5 ${_pHovCls} transition-colors cursor-pointer text-left`}
               style={{ borderBottom: _pSep }}
             >
               <div
-                className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 shadow-xs"
+                className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 shadow-xs border border-violet-400/30"
                 style={{
-                  background: _light ? `${tierTheme.primary}18` : 'rgba(234, 179, 8, 0.15)',
-                  border: _light ? `1.5px solid ${tierTheme.primary}40` : '1.5px solid rgba(234, 179, 8, 0.40)',
+                  background: _light ? 'rgba(139, 92, 246, 0.15)' : 'linear-gradient(135deg, rgba(139, 92, 246, 0.25), rgba(168, 85, 247, 0.12))',
                 }}
               >
-                <Palette size={19} style={{ color: _light ? tierTheme.primary : '#fbbf24' }} />
+                <Palette size={18} className="text-violet-400" />
               </div>
               <div className="flex-1 text-left min-w-0">
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  <p className={`text-sm font-bold ${_pTxt}`}>Theme Studio</p>
+                  <p className={`text-xs font-black ${_pTxt}`}>Theme Studio</p>
                   <span
-                    className="text-[8.5px] font-black px-1.5 py-0.2 rounded-full uppercase tracking-wide font-mono"
-                    style={{
-                      background: _light ? `${tierTheme.primary}20` : 'rgba(234, 179, 8, 0.15)',
-                      color: _light ? tierTheme.primary : '#fde047',
-                      border: _light ? `1px solid ${tierTheme.primary}35` : '1px solid rgba(234, 179, 8, 0.35)',
-                    }}
+                    className="text-[8px] font-black px-1.5 py-0.2 rounded-full uppercase tracking-wide font-mono bg-violet-500/20 text-violet-300 border border-violet-500/30"
                   >
                     {user.personalTheme ? '🎨 Custom Active' : 'Studio'}
                   </span>
@@ -16831,146 +16611,54 @@ export const StudentDashboard: React.FC<Props> = ({
                 </p>
               </div>
               <div className="flex items-center gap-1 shrink-0">
-                <span className="text-[10px] font-bold text-amber-400/90 hidden sm:inline">Customize</span>
+                <span className="text-[9.5px] font-bold text-violet-400/90 hidden sm:inline">Customize</span>
                 <ChevronRight size={15} style={{ color: _pTxtMutedColor }} />
               </div>
             </button>
 
-            {/* ── Padhai Ka Tareeqa (Study Mode Rules) Row (Unlocked for Level 1) ── */}
-            {(() => {
-              const currentMode = user.studyMode || 'CREDIT';
-              const isCredit = currentMode === 'CREDIT';
-              return (
-                <div style={{ borderBottom: _pSep }}>
-                  <button
-                    type="button"
-                    onClick={() => setShowStudyModeModal(true)}
-                    className={`w-full px-4 py-3.5 flex items-center gap-3.5 ${_pHovCls} transition-colors cursor-pointer text-left`}
-                  >
-                    <div
-                      className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 shadow-xs"
-                      style={{
-                        background: _light ? (isCredit ? 'rgba(59,130,246,0.15)' : 'rgba(16,185,129,0.15)') : 'rgba(234, 179, 8, 0.15)',
-                        border: _light ? `1.5px solid ${isCredit ? 'rgba(59,130,246,0.35)' : 'rgba(16,185,129,0.35)'}` : '1.5px solid rgba(234, 179, 8, 0.40)',
-                      }}
-                    >
-                      {isCredit ? (
-                        <span className="text-base leading-none">💰</span>
-                      ) : (
-                        <GraduationCap size={19} className={_light ? "text-emerald-600" : "text-emerald-400"} />
-                      )}
-                    </div>
-                    <div className="flex-1 text-left min-w-0">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <p className={`text-sm font-bold ${_pTxt}`}>Study Mode Rules</p>
-                        <span className="text-[9px] font-bold px-2 py-0.5 rounded-full font-mono" style={{
-                          background: _light ? 'rgba(99,102,241,0.12)' : 'rgba(234,179,8,0.15)',
-                          color: _light ? '#4f46e5' : '#fbbf24',
-                          border: `1px solid ${_light ? 'rgba(99,102,241,0.25)' : 'rgba(234,179,8,0.35)'}`,
-                        }}>
-                          Official Guide
-                        </span>
-                        <span
-                          className="text-[8.5px] font-black px-1.5 py-0.5 rounded-full uppercase tracking-wide font-mono"
-                          style={{
-                            background: _light ? (isCredit ? 'rgba(59,130,246,0.20)' : 'rgba(16,185,129,0.20)') : 'rgba(234,179,8,0.18)',
-                            color: _light ? (isCredit ? '#3b82f6' : '#10b981') : '#fde047',
-                            border: `1px solid ${_light ? (isCredit ? 'rgba(59,130,246,0.35)' : 'rgba(16,185,129,0.35)') : 'rgba(234,179,8,0.40)'}`,
-                          }}
-                        >
-                          {isCredit ? '💰 Credit Mode' : '🎓 Without Credit'}
-                        </span>
-                      </div>
-                      <p className={`text-[10px] mt-0.5 truncate ${_pTxtSub}`}>
-                        {isCredit
-                          ? '100% Freedom! Credit spend & earn economy ke sabhi niyam'
-                          : '0 Credits! Sequential reading (Mandatory 5 steps) ke sabhi niyam'}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <span className="text-[10px] font-bold text-amber-400/90 hidden sm:inline">Niyam Dekhein</span>
-                      <ChevronRight size={15} style={{ color: _pTxtMutedColor }} />
-                    </div>
-                  </button>
-
-                  {/* Sleek compact step sequence preview bar */}
-                  <div className="px-4 pb-3 pt-0">
-                    <button
-                      type="button"
-                      onClick={() => setShowStudyModeModal(true)}
-                      className="w-full text-left rounded-xl p-2.5 transition-all flex items-center justify-between gap-2 border cursor-pointer active:scale-[0.99]"
-                      style={{
-                        background: _light
-                          ? (isCredit ? 'rgba(239, 246, 255, 0.85)' : 'rgba(236, 253, 245, 0.85)')
-                          : 'rgba(11, 18, 36, 0.75)',
-                        borderColor: _light
-                          ? (isCredit ? 'rgba(191, 219, 254, 0.8)' : 'rgba(167, 243, 208, 0.8)')
-                          : 'rgba(234, 179, 8, 0.25)',
-                      }}
-                    >
-                      {!isCredit ? (
-                        <div className="flex items-center gap-1.5 flex-wrap text-[9px] w-full justify-between">
-                          <span className="font-bold text-emerald-400 flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block animate-pulse" />
-                            5-Step Sequence:
-                          </span>
-                          <span className="text-slate-300 font-medium">1. Read → 2. MCQ → 3. Same Rev → 4. Today Rev → 5. Mistake Rev</span>
-                          <span className="text-amber-400 font-bold ml-auto shrink-0">Details →</span>
-                        </div>
-                      ) : (
-                        <div className="flex items-center justify-between text-[9.5px] w-full">
-                          <span className="text-blue-300 font-medium">100% Direct Freedom · 1st Lesson of every subject Free</span>
-                          <span className="text-amber-400 font-bold shrink-0">Details →</span>
-                        </div>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* 3. Score History Row (Unlocked for Level 1) */}
+            {/* 3. Score History Row */}
             <button
               onClick={() => {
                 setShowScoreHistoryDirect(true);
               }}
-              className={`w-full px-4 py-3.5 flex items-center gap-3.5 ${_pHovCls} transition-colors cursor-pointer text-left`}
+              className={`w-full px-4 py-3 flex items-center gap-3.5 ${_pHovCls} transition-colors cursor-pointer text-left`}
               style={{ borderBottom: _pSep }}
             >
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{
-                background: _light ? _pIconBg : 'rgba(234, 179, 8, 0.15)',
-                border: _light ? _pIconBdr : '1px solid rgba(234, 179, 8, 0.40)',
-              }}>
-                <TrendingUp size={19} style={{ color: _light ? tierTheme.primary : '#fbbf24' }} />
+              <div
+                className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 shadow-xs border border-cyan-400/30"
+                style={{
+                  background: _light ? 'rgba(6, 182, 212, 0.15)' : 'linear-gradient(135deg, rgba(6, 182, 212, 0.25), rgba(14, 165, 233, 0.12))',
+                }}
+              >
+                <TrendingUp size={18} className="text-cyan-400" />
               </div>
               <div className="flex-1 text-left min-w-0">
                 <div className="flex items-center gap-1.5">
-                  <p className={`text-sm font-bold ${_pTxt}`}>Score History</p>
+                  <p className={`text-xs font-black ${_pTxt}`}>Score History</p>
                 </div>
                 <p className={`text-[10px] mt-0.5 truncate ${_pTxtSub}`}>Apna activity score ka pura record</p>
               </div>
               <ChevronRight size={15} style={{ color: _pTxtMutedColor }} className="shrink-0" />
             </button>
 
-            {/* 4. Leaderboard Row (Unlocked for Level 1) */}
+            {/* 4. Leaderboard Row */}
             <button
               onClick={() => setShowLevelLeaderboard(true)}
-              className={`w-full px-4 py-3.5 flex items-center gap-3.5 ${_pHovCls} transition-colors cursor-pointer text-left`}
+              className={`w-full px-4 py-3 flex items-center gap-3.5 ${_pHovCls} transition-colors cursor-pointer text-left`}
               style={{ borderBottom: _pSep }}
             >
               <div
-                className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 shadow-xs"
+                className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 shadow-xs border border-amber-400/40"
                 style={{
-                  background: _light ? 'rgba(245,158,11,0.18)' : 'rgba(234, 179, 8, 0.15)',
-                  border: _light ? '1.5px solid rgba(245,158,11,0.40)' : '1.5px solid rgba(234, 179, 8, 0.40)',
+                  background: _light ? 'rgba(245, 158, 11, 0.18)' : 'linear-gradient(135deg, rgba(245, 158, 11, 0.25), rgba(234, 179, 8, 0.12))',
                 }}
               >
-                <Trophy size={19} className="text-amber-400" />
+                <Trophy size={18} className="text-amber-400" />
               </div>
               <div className="flex-1 text-left min-w-0">
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  <p className={`text-sm font-bold ${_pTxt}`}>Leaderboard</p>
-                  <span className="text-[8.5px] font-black px-1.5 py-0.2 rounded-full uppercase tracking-wide font-mono bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                  <p className={`text-xs font-black ${_pTxt}`}>Leaderboard</p>
+                  <span className="text-[8px] font-black px-1.5 py-0.2 rounded-full uppercase tracking-wide font-mono bg-amber-500/20 text-amber-400 border border-amber-500/30">
                     Official
                   </span>
                 </div>
@@ -16979,12 +16667,12 @@ export const StudentDashboard: React.FC<Props> = ({
                 </p>
               </div>
               <div className="flex items-center gap-1 shrink-0">
-                <span className="text-[10px] font-bold text-amber-400/90 hidden sm:inline">Rank Dekhein</span>
+                <span className="text-[9.5px] font-bold text-amber-400/90 hidden sm:inline">Rank Dekhein</span>
                 <ChevronRight size={15} style={{ color: _pTxtMutedColor }} />
               </div>
             </button>
 
-            {/* 4. Link Google Account Row */}
+            {/* 5. Link Google Account Row */}
             <button
               onClick={async () => {
                 try {
@@ -17008,23 +16696,25 @@ export const StudentDashboard: React.FC<Props> = ({
                   }
                 }
               }}
-              className={`w-full px-4 py-3.5 flex items-center gap-3.5 ${_pHovCls} transition-colors cursor-pointer text-left`}
+              className={`w-full px-4 py-3 flex items-center gap-3.5 ${_pHovCls} transition-colors cursor-pointer text-left`}
             >
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{
-                background: _light ? _pIconBg : 'rgba(234, 179, 8, 0.15)',
-                border: _light ? _pIconBdr : '1px solid rgba(234, 179, 8, 0.40)',
-              }}>
-                <Link2 size={18} className={_light ? "text-blue-600" : "text-blue-400"} />
+              <div
+                className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border border-blue-400/30"
+                style={{
+                  background: _light ? 'rgba(59, 130, 246, 0.15)' : 'linear-gradient(135deg, rgba(59, 130, 246, 0.25), rgba(79, 70, 229, 0.12))',
+                }}
+              >
+                <Link2 size={18} className="text-blue-400" />
               </div>
               <div className="flex-1 text-left min-w-0">
-                <p className={`text-sm font-bold ${_pTxt}`}>Link Google Account</p>
+                <p className={`text-xs font-black ${_pTxt}`}>Link Google Account</p>
                 {user.linkedGoogleEmail
                   ? <p className="text-[10px] text-emerald-400 font-semibold mt-0.5 truncate">✓ Linked: {user.linkedGoogleEmail}</p>
                   : <p className={`text-[10px] mt-0.5 truncate ${_pTxtSub}`}>Google se bhi login kar sako ek hi account pe</p>
                 }
               </div>
               {user.linkedGoogleEmail ? (
-                <span className="text-[8.5px] font-black px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 shrink-0">
+                <span className="text-[8px] font-black px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 shrink-0">
                   Linked
                 </span>
               ) : (
@@ -17497,47 +17187,6 @@ export const StudentDashboard: React.FC<Props> = ({
                     </div>
                   </button>
 
-                  {/* 6. Level Animation */}
-                  <button
-                    type="button"
-                    id="profile-level-anim-toggle-btn"
-                    onClick={() => {
-                      const next = !levelAnimOff;
-                      setLevelAnimOff(next);
-                      try {
-                        localStorage.setItem('nst_level_anim_off', next ? '1' : '0');
-                        window.dispatchEvent(new Event('nst-level-anim-change'));
-                      } catch {}
-                      showAlert(next ? '⏸️ Top Bar aur Profile Card animation off (Static)' : '⚡ Level animation on', 'SUCCESS');
-                    }}
-                    className="p-2.5 rounded-xl border flex flex-col justify-between text-left active:scale-[0.97] transition-all cursor-pointer group"
-                    style={{
-                      background: _light ? 'rgba(255,255,255,0.85)' : '#141e36',
-                      borderColor: _light ? 'rgba(0,0,0,0.08)' : 'rgba(234, 179, 8, 0.28)',
-                      boxShadow: _light ? 'none' : '0 2px 10px rgba(0,0,0,0.30)',
-                    }}
-                  >
-                    <div className="flex items-center justify-between gap-1 mb-1.5 w-full">
-                      <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 shadow-xs" style={{
-                        background: !levelAnimOff ? `${_displayLvl.color}22` : _pIconBg,
-                        border: `1px solid ${!levelAnimOff ? _displayLvl.color + '55' : 'rgba(255,255,255,0.10)'}`,
-                      }}>
-                        <Zap size={13.5} className={!levelAnimOff ? "text-amber-400" : "text-slate-400"} />
-                      </div>
-                      <span className={`text-[7.5px] font-black px-1.5 py-0.5 rounded font-mono shrink-0 ${
-                        !levelAnimOff ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'bg-slate-500/20 text-slate-400 border border-slate-500/30'
-                      }`}>
-                        {!levelAnimOff ? 'ACTIVE' : 'STATIC'}
-                      </span>
-                    </div>
-                    <div className="w-full min-w-0">
-                      <p className={`text-[11.5px] font-bold ${_pTxt} truncate leading-tight`}>Level Anim</p>
-                      <p className={`text-[9px] ${_pTxtSub} truncate mt-0.5 leading-tight`}>
-                        {levelAnimOff ? 'Static mode' : 'Top bar & Card anim'}
-                      </p>
-                    </div>
-                  </button>
-
                   {/* 7. Haptic Vibration */}
                   <button
                     type="button"
@@ -17571,81 +17220,6 @@ export const StudentDashboard: React.FC<Props> = ({
                       <p className={`text-[11.5px] font-bold ${_pTxt} truncate leading-tight`}>Haptic Touch</p>
                       <p className={`text-[9px] ${_pTxtSub} truncate mt-0.5 leading-tight`}>
                         {hapticEnabled ? 'Vibration on tap' : 'Silent feedback'}
-                      </p>
-                    </div>
-                  </button>
-
-                  {/* 8. Card Border Animation */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const next = !cardBorderAnimOff;
-                      setCardBorderAnimOff(next);
-                      try {
-                        localStorage.setItem('nst_card_border_anim_off', next ? '1' : '0');
-                        if (next) {
-                          document.documentElement.classList.remove('global-rotating-border-cards');
-                        } else {
-                          document.documentElement.classList.add('global-rotating-border-cards');
-                        }
-                        window.dispatchEvent(new Event('nst-card-border-anim-change'));
-                      } catch {}
-                      showAlert(next ? '✨ Card rotating border off' : '✨ Card rotating border on', 'SUCCESS');
-                    }}
-                    className="p-2.5 rounded-xl border flex flex-col justify-between text-left active:scale-[0.97] transition-all cursor-pointer group"
-                    style={{
-                      background: _light ? 'rgba(255,255,255,0.85)' : '#141e36',
-                      borderColor: _light ? 'rgba(0,0,0,0.08)' : 'rgba(234, 179, 8, 0.28)',
-                      boxShadow: _light ? 'none' : '0 2px 10px rgba(0,0,0,0.30)',
-                    }}
-                  >
-                    <div className="flex items-center justify-between gap-1 mb-1.5 w-full">
-                      <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 shadow-xs" style={{
-                        background: !cardBorderAnimOff ? 'rgba(59,130,246,0.15)' : _pIconBg,
-                        border: `1px solid ${!cardBorderAnimOff ? 'rgba(59,130,246,0.45)' : 'rgba(255,255,255,0.10)'}`,
-                      }}>
-                        <Sparkles size={13.5} className={!cardBorderAnimOff ? "text-blue-400" : "text-slate-400"} />
-                      </div>
-                      <span className={`text-[7.5px] font-black px-1.5 py-0.5 rounded font-mono shrink-0 ${
-                        !cardBorderAnimOff ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' : 'bg-slate-500/20 text-slate-400 border border-slate-500/30'
-                      }`}>
-                        {!cardBorderAnimOff ? 'ACTIVE' : 'OFF'}
-                      </span>
-                    </div>
-                    <div className="w-full min-w-0">
-                      <p className={`text-[11.5px] font-bold ${_pTxt} truncate leading-tight`}>Border Glow</p>
-                      <p className={`text-[9px] ${_pTxtSub} truncate mt-0.5 leading-tight`}>
-                        {!cardBorderAnimOff ? 'Rotating glow' : 'Static border'}
-                      </p>
-                    </div>
-                  </button>
-
-                  {/* 9. Level Style (Unlocked for Level 1) */}
-                  <button
-                    type="button"
-                    onClick={() => setShowLevelChooser(true)}
-                    className="p-2.5 rounded-xl border flex flex-col justify-between text-left active:scale-[0.97] transition-all cursor-pointer group"
-                    style={{
-                      background: _light ? 'rgba(255,255,255,0.85)' : '#141e36',
-                      borderColor: _light ? 'rgba(0,0,0,0.08)' : 'rgba(234, 179, 8, 0.28)',
-                      boxShadow: _light ? 'none' : '0 2px 10px rgba(0,0,0,0.30)',
-                    }}
-                  >
-                    <div className="flex items-center justify-between gap-1 mb-1.5 w-full">
-                      <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 shadow-xs" style={{
-                        background: `${_displayLvl.color}22`,
-                        border: `1px solid ${_displayLvl.color}55`,
-                      }}>
-                        <Trophy size={13.5} className="text-amber-400" />
-                      </div>
-                      <span className="text-[7.5px] font-black px-1.5 py-0.5 rounded font-mono shrink-0 bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                        L{_displayLvl.level}
-                      </span>
-                    </div>
-                    <div className="w-full min-w-0">
-                      <p className={`text-[11.5px] font-bold ${_pTxt} truncate leading-tight`}>Level Style</p>
-                      <p className={`text-[9px] ${_pTxtSub} truncate mt-0.5 leading-tight`}>
-                        {displayLevel && displayLevel !== _pLvl.level ? `${_displayLvl.label}` : 'Badge customize'}
                       </p>
                     </div>
                   </button>
@@ -17713,249 +17287,214 @@ export const StudentDashboard: React.FC<Props> = ({
             </div>
 
            {/* Contact & Support — icon-only app links */}
-           <div className="px-4 pt-3.5 pb-4">
+           <div className="px-4 pt-3 pb-3">
              <span className="text-[9px] font-black uppercase tracking-widest" style={{ color: _light ? '#64748b' : '#fbbf24' }}>
                Connect &amp; Support
              </span>
-             <div className="grid grid-cols-4 gap-2 mt-2.5">
+             <div className="grid grid-cols-5 gap-1.5 mt-2">
                <a
                  href="https://wa.me/918227070298?text=Hello%20Support,%20I%20need%20help%20with%20NSTA%20App"
                  target="_blank"
                  rel="noopener noreferrer"
                  aria-label="WhatsApp support"
-                 className="flex flex-col items-center justify-center py-2.5 rounded-xl transition-all active:scale-95 shadow-xs"
-                  style={{ background: _light ? 'rgba(16,185,129,0.09)' : 'rgba(11, 18, 36, 0.85)', border: _light ? '1px solid rgba(16,185,129,0.22)' : '1px solid rgba(234, 179, 8, 0.20)' }}
+                 className="flex flex-col items-center justify-center py-2 rounded-xl transition-all active:scale-95 shadow-xs"
+                 style={{ background: _light ? 'rgba(16,185,129,0.09)' : 'rgba(11, 18, 36, 0.85)', border: _light ? '1px solid rgba(16,185,129,0.22)' : '1px solid rgba(234, 179, 8, 0.20)' }}
                >
-                  <span className="w-9 h-9 rounded-full flex items-center justify-center mb-1" style={{ background: 'rgba(16,185,129,0.18)', color: '#34d399' }}>
-                   <FaWhatsapp size={18} />
+                 <span className="w-8 h-8 rounded-full flex items-center justify-center mb-0.5" style={{ background: 'rgba(16,185,129,0.18)', color: '#34d399' }}>
+                   <FaWhatsapp size={16} />
                  </span>
-                 <span className="text-[10px] font-bold" style={{ color: _pTxtSubColor }}>WhatsApp</span>
+                 <span className="text-[9px] font-bold truncate max-w-full" style={{ color: _pTxtSubColor }}>WhatsApp</span>
                </a>
                <a
                  href="https://instagram.com/thenadimanwarx"
                  target="_blank"
                  rel="noopener noreferrer"
                  aria-label="Instagram profile @thenadimanwarx"
-                 className="flex flex-col items-center justify-center py-2.5 rounded-xl transition-all active:scale-95 shadow-xs"
-                  style={{ background: _light ? "rgba(225,48,108,0.09)" : 'rgba(11, 18, 36, 0.85)', border: _light ? "1px solid rgba(225,48,108,0.22)" : '1px solid rgba(234, 179, 8, 0.20)' }}
+                 className="flex flex-col items-center justify-center py-2 rounded-xl transition-all active:scale-95 shadow-xs"
+                 style={{ background: _light ? "rgba(225,48,108,0.09)" : 'rgba(11, 18, 36, 0.85)', border: _light ? "1px solid rgba(225,48,108,0.22)" : '1px solid rgba(234, 179, 8, 0.20)' }}
                >
-                  <span className="w-9 h-9 rounded-full flex items-center justify-center mb-1" style={{ background: "rgba(225,48,108,0.18)", color: "#e1306c" }}>
-                   <FaInstagram size={18} />
+                 <span className="w-8 h-8 rounded-full flex items-center justify-center mb-0.5" style={{ background: "rgba(225,48,108,0.18)", color: "#e1306c" }}>
+                   <FaInstagram size={16} />
                  </span>
-                 <span className="text-[10px] font-bold" style={{ color: _pTxtSubColor }}>Instagram</span>
+                 <span className="text-[9px] font-bold truncate max-w-full" style={{ color: _pTxtSubColor }}>Instagram</span>
+               </a>
+               <a
+                 href="https://instagram.com/thenadimanwar"
+                 target="_blank"
+                 rel="noopener noreferrer"
+                 aria-label="Personal Instagram profile @thenadimanwar"
+                 className="flex flex-col items-center justify-center py-2 rounded-xl transition-all active:scale-95 shadow-xs"
+                 style={{ background: _light ? "rgba(234,179,8,0.09)" : 'rgba(11, 18, 36, 0.85)', border: _light ? "1px solid rgba(234,179,8,0.25)" : '1px solid rgba(234, 179, 8, 0.35)' }}
+               >
+                 <span className="w-8 h-8 rounded-full flex items-center justify-center mb-0.5" style={{ background: "linear-gradient(135deg, rgba(245,158,11,0.25), rgba(225,48,108,0.25))", color: "#fbbf24" }}>
+                   <FaInstagram size={16} />
+                 </span>
+                 <span className="text-[9px] font-black truncate max-w-full text-amber-300">Nadim IG</span>
                </a>
                <a
                  href="https://youtube.com/@iic_apk?si=7dxoZZ8-vV6YoitR"
                  target="_blank"
                  rel="noopener noreferrer"
                  aria-label="IIC YouTube channel"
-                 className="flex flex-col items-center justify-center py-2.5 rounded-xl transition-all active:scale-95 shadow-xs"
-                  style={{ background: _light ? 'rgba(244,63,94,0.08)' : 'rgba(11, 18, 36, 0.85)', border: _light ? '1px solid rgba(244,63,94,0.22)' : '1px solid rgba(234, 179, 8, 0.20)' }}
+                 className="flex flex-col items-center justify-center py-2 rounded-xl transition-all active:scale-95 shadow-xs"
+                 style={{ background: _light ? 'rgba(244,63,94,0.08)' : 'rgba(11, 18, 36, 0.85)', border: _light ? '1px solid rgba(244,63,94,0.22)' : '1px solid rgba(234, 179, 8, 0.20)' }}
                >
-                  <span className="w-9 h-9 rounded-full flex items-center justify-center mb-1" style={{ background: 'rgba(244,63,94,0.18)', color: '#fb7185' }}>
-                   <FaYoutube size={18} />
+                 <span className="w-8 h-8 rounded-full flex items-center justify-center mb-0.5" style={{ background: 'rgba(244,63,94,0.18)', color: '#fb7185' }}>
+                   <FaYoutube size={16} />
                  </span>
-                 <span className="text-[10px] font-bold" style={{ color: _pTxtSubColor }}>YouTube</span>
+                 <span className="text-[9px] font-bold truncate max-w-full" style={{ color: _pTxtSubColor }}>YouTube</span>
                </a>
                <a
                  href={`mailto:${SUPPORT_EMAIL}?subject=Support%20Request`}
                  aria-label="Email developer"
-                 className="flex flex-col items-center justify-center py-2.5 rounded-xl transition-all active:scale-95 shadow-xs"
-                  style={{ background: _light ? 'rgba(59,130,246,0.08)' : 'rgba(11, 18, 36, 0.85)', border: _light ? '1px solid rgba(59,130,246,0.22)' : '1px solid rgba(234, 179, 8, 0.20)' }}
+                 className="flex flex-col items-center justify-center py-2 rounded-xl transition-all active:scale-95 shadow-xs"
+                 style={{ background: _light ? 'rgba(59,130,246,0.08)' : 'rgba(11, 18, 36, 0.85)', border: _light ? '1px solid rgba(59,130,246,0.22)' : '1px solid rgba(234, 179, 8, 0.20)' }}
                >
-                  <span className="w-9 h-9 rounded-full flex items-center justify-center mb-1" style={{ background: 'rgba(59,130,246,0.18)', color: '#60a5fa' }}>
-                   <SiGmail size={17} />
+                 <span className="w-8 h-8 rounded-full flex items-center justify-center mb-0.5" style={{ background: 'rgba(59,130,246,0.18)', color: '#60a5fa' }}>
+                   <SiGmail size={15} />
                  </span>
-                 <span className="text-[10px] font-bold" style={{ color: _pTxtSubColor }}>Email</span>
+                 <span className="text-[9px] font-bold truncate max-w-full" style={{ color: _pTxtSubColor }}>Email</span>
                </a>
              </div>
            </div>
 
-          {/* ── ADMIN SUPPORT (SAB SE NICHE PROFILE PAGE ME) ── */}
-          {/* ── ADMIN SUPPORT CARD ON PROFILE PAGE ── */}
-          <div className="mx-3 sm:mx-4 mb-8">
-            <button
-                type="button"
-                onClick={() => {
-                  hapticStrong();
-                  setChatMode('SUPPORT');
-                  setShowChat(true);
-                }}
-                className="w-full p-4 rounded-2xl flex items-center justify-between text-left active:scale-[0.98] transition-all shadow-xl cursor-pointer relative overflow-hidden group"
-                style={{
-                  background: _light
-                    ? 'linear-gradient(135deg, rgba(234, 179, 8, 0.12) 0%, rgba(255, 255, 255, 0.96) 60%, rgba(202, 138, 4, 0.10) 100%)'
-                    : 'linear-gradient(135deg, rgba(234, 179, 8, 0.18) 0%, rgba(18, 27, 51, 0.96) 50%, rgba(202, 138, 4, 0.14) 100%)',
-                  border: '1.5px solid rgba(234, 179, 8, 0.55)',
-                  boxShadow: '0 0 25px rgba(234, 179, 8, 0.22), 0 8px 24px rgba(0, 0, 0, 0.35)',
-                }}
-              >
-                <div
-                  className="absolute inset-0 rounded-2xl pointer-events-none"
-                  style={{
-                    boxShadow: 'inset 0 0 15px rgba(234, 179, 8, 0.15)',
-                  }}
-                />
-                <div className="absolute -top-8 -left-8 w-24 h-24 rounded-full bg-amber-500/15 blur-xl pointer-events-none group-hover:bg-amber-500/25 transition-all" />
-                <div className="absolute -bottom-8 -right-8 w-24 h-24 rounded-full bg-yellow-500/15 blur-xl pointer-events-none group-hover:bg-yellow-500/25 transition-all" />
+            {/* Divider */}
+            <div className="mx-4 h-[1px]" style={{ background: _light ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.07)' }} />
 
-                <div className="flex items-center gap-3.5 relative z-10">
-                  <div
-                    className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 shadow-md relative"
-                    style={{
-                      background: 'linear-gradient(135deg, #fde68a, #eab308, #b45309)',
-                      color: '#0f172a',
-                      boxShadow: '0 4px 14px rgba(234, 179, 8, 0.45)',
-                    }}
-                  >
-                    <Headphones size={22} className="text-slate-950 drop-shadow-sm" />
-                    <span className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-400 rounded-full border-2 border-slate-900 animate-pulse" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h4 className={`text-sm font-black ${_pTxt}`}>Admin Support</h4>
-                      <span
-                        className="px-2 py-0.5 rounded-full text-[8.5px] font-black uppercase tracking-wider text-slate-950 font-mono shadow-xs"
-                        style={{
-                          background: 'linear-gradient(90deg, #fde68a, #eab308)',
-                        }}
-                      >
-                        Direct 24/7 Help
-                      </span>
-                    </div>
-                    <p className={`text-[11px] mt-0.5 ${_pTxtSub}`}>
-                      Admin se direct chat karein ya query poochein
-                    </p>
-                  </div>
-                </div>
-                <div
-                  className="w-8 h-8 rounded-xl flex items-center justify-center text-xs font-black shadow-md shrink-0 relative z-10 transition-transform group-hover:translate-x-0.5"
+            {/* ── ACTION BUTTONS (WHATSAPP & INSTAGRAM JAISA COMPACT GRID) ── */}
+            <div className="px-4 pt-3 pb-4">
+              <span className="text-[9px] font-black uppercase tracking-widest" style={{ color: _light ? '#64748b' : '#fbbf24' }}>
+                Account Actions
+              </span>
+              <div className="grid grid-cols-4 gap-2 mt-2">
+                {/* 1. Admin Support */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    hapticStrong();
+                    setChatMode('SUPPORT');
+                    setShowChat(true);
+                  }}
+                  aria-label="Admin Support"
+                  className="flex flex-col items-center justify-center py-2.5 px-1 rounded-xl transition-all active:scale-95 shadow-xs cursor-pointer relative"
                   style={{
-                    background: 'linear-gradient(135deg, rgba(234, 179, 8, 0.20), rgba(202, 138, 4, 0.25))',
-                    color: _light ? '#854d0e' : '#fde047',
-                    border: '1px solid rgba(234, 179, 8, 0.45)',
+                    background: _light ? 'rgba(234, 179, 8, 0.09)' : 'rgba(11, 18, 36, 0.85)',
+                    border: _light ? '1px solid rgba(234, 179, 8, 0.28)' : '1px solid rgba(234, 179, 8, 0.25)',
                   }}
                 >
-                  <ChevronRight size={16} />
-                </div>
-              </button>
-            </div>
-
-          {/* ── MERA LOGIN QR CODE CARD ── */}
-          <div
-            className="mx-4 rounded-2xl overflow-hidden mb-3 relative select-none shadow-xl transition-all duration-200 group border"
-            style={{
-              background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.16) 0%, rgba(15, 23, 42, 0.94) 50%, rgba(99, 102, 241, 0.22) 100%)',
-              borderColor: 'rgba(99, 102, 241, 0.45)',
-              boxShadow: '0 6px 25px rgba(59, 130, 246, 0.18)',
-            }}
-          >
-            <button
-              type="button"
-              onClick={() => {
-                hapticMedium();
-                setShowUserLoginQrModal(true);
-              }}
-              className="w-full px-4 py-3.5 flex items-center justify-between gap-3 text-left transition-all active:scale-[0.98] cursor-pointer"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div
-                  className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border border-blue-400/40 shadow-lg relative overflow-hidden"
-                  style={{
-                    background: 'linear-gradient(135deg, #2563eb, #4f46e5)',
-                    boxShadow: '0 0 14px rgba(37, 99, 235, 0.5)',
-                  }}
-                >
-                  <QrCode size={18} className="text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.7)]" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[13px] font-black text-white tracking-wide">
-                      Mera Login QR Code
-                    </span>
-                    <span className="px-2 py-0.5 rounded-full text-[8.5px] font-black uppercase tracking-wider bg-blue-500/30 text-blue-300 border border-blue-400/30">
-                      Bina Password
-                    </span>
-                  </div>
-                  <p className="text-[10.5px] font-medium text-slate-300 truncate mt-0.5">
-                    Kisi bhi phone me QR scan karke bina password login karein
-                  </p>
-                </div>
-              </div>
-              <div className="w-8 h-8 rounded-xl flex items-center justify-center text-xs font-black shadow-md shrink-0 bg-blue-500/20 text-blue-300 border border-blue-400/30">
-                <ChevronRight size={16} />
-              </div>
-            </button>
-          </div>
-
-          {/* ── RARE MYTHIC LOGOUT CARD (SAB SE LAST ME PROFILE PAGE ME) ── */}
-          {(settings?.isLogoutEnabled !== false || user.role === 'ADMIN' || isImpersonating) && (
-            <div
-              className="mx-4 rounded-2xl overflow-hidden mb-12 relative select-none shadow-xl transition-all duration-200 group"
-              style={{
-                background: 'linear-gradient(135deg, rgba(225, 29, 72, 0.22) 0%, rgba(15, 23, 42, 0.96) 50%, rgba(136, 19, 55, 0.30) 100%)',
-                border: '1.5px solid rgba(244, 63, 94, 0.55)',
-                boxShadow: '0 6px 25px rgba(225, 29, 72, 0.28), inset 0 0 20px rgba(244, 63, 94, 0.10)',
-              }}
-            >
-              {/* Holographic obsidian shimmer line */}
-              <div
-                className="absolute top-0 left-0 right-0 h-[1.5px] pointer-events-none"
-                style={{
-                  background: 'linear-gradient(90deg, transparent 0%, rgba(251, 113, 133, 0.9) 50%, transparent 100%)',
-                }}
-              />
-
-              <button
-                type="button"
-                onClick={() => setConfirmDialog({
-                  isOpen: true,
-                  message: 'Kya aap logout karna chahte hain?',
-                  onConfirm: () => {
-                    setConfirmDialog(null);
-                    handlePerformLogout();
-                  }
-                })}
-                className="w-full px-4 py-3.5 flex items-center justify-between gap-3 text-left transition-all active:scale-[0.98] cursor-pointer"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <div
-                    className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border border-rose-400/40 shadow-lg relative overflow-hidden"
+                  <span
+                    className="w-9 h-9 rounded-full flex items-center justify-center mb-1 relative"
                     style={{
-                      background: 'linear-gradient(135deg, #e11d48, #9f1239)',
-                      boxShadow: '0 0 14px rgba(225, 29, 72, 0.5)',
+                      background: 'linear-gradient(135deg, rgba(234, 179, 8, 0.30), rgba(202, 138, 4, 0.15))',
+                      color: '#fbbf24',
+                      border: '1px solid rgba(234, 179, 8, 0.40)',
                     }}
                   >
-                    <LogOut size={18} className="text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.7)]" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-sm font-black tracking-wide text-rose-200 drop-shadow-[0_0_8px_rgba(244,63,94,0.4)]">
-                        Logout Account
-                      </span>
-                      <span className="text-[7.5px] font-black px-1.5 py-0.2 rounded-full uppercase tracking-widest font-mono bg-rose-500/25 text-rose-300 border border-rose-500/40">
-                        ⚡ RARE EXIT
-                      </span>
-                    </div>
-                    <p className="text-[10px] text-rose-300/70 mt-0.5 truncate">
-                      Sign out &amp; end active session safely
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <span className="text-[9.5px] font-black text-rose-400/90 uppercase tracking-wider font-mono hidden xs:inline">
-                    Sign Out
+                    <Headphones size={18} />
+                    <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-400 rounded-full border-2 border-slate-900" />
                   </span>
-                  <div
-                    className="w-7 h-7 rounded-lg flex items-center justify-center border border-rose-400/30 text-rose-300 bg-rose-500/15 group-hover:translate-x-0.5 transition-transform"
+                  <span className="text-[10px] font-bold truncate max-w-full" style={{ color: _pTxtColor }}>
+                    Support
+                  </span>
+                </button>
+
+                {/* 2. Daily Master Pack */}
+                <button
+                  type="button"
+                  onClick={async () => {
+                    showAlert('Refreshing Daily Master Pack from Firebase...', 'INFO');
+                    const res = await performDailyMasterSync(user, { force: true });
+                    if (res.success) {
+                      showAlert('⚡ Daily Master Pack updated! Pure din zero reads lagenge.', 'SUCCESS');
+                    }
+                  }}
+                  aria-label="Daily Master Pack Sync"
+                  className="flex flex-col items-center justify-center py-2.5 px-1 rounded-xl transition-all active:scale-95 shadow-xs cursor-pointer relative"
+                  style={{
+                    background: _light ? 'rgba(16, 185, 129, 0.09)' : 'rgba(11, 18, 36, 0.85)',
+                    border: _light ? '1px solid rgba(16, 185, 129, 0.28)' : '1px solid rgba(16, 185, 129, 0.25)',
+                  }}
+                >
+                  <span
+                    className="w-9 h-9 rounded-full flex items-center justify-center mb-1 relative"
+                    style={{
+                      background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.30), rgba(5, 150, 105, 0.15))',
+                      color: '#34d399',
+                      border: '1px solid rgba(16, 185, 129, 0.40)',
+                    }}
                   >
-                    <ChevronRight size={14} />
-                  </div>
-                </div>
-              </button>
+                    <Zap size={18} />
+                  </span>
+                  <span className="text-[10px] font-bold truncate max-w-full" style={{ color: _pTxtColor }}>
+                    Master Pack
+                  </span>
+                </button>
+
+                {/* 3. Mera Login QR Code */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    hapticMedium();
+                    setShowUserLoginQrModal(true);
+                  }}
+                  aria-label="Mera Login QR Code"
+                  className="flex flex-col items-center justify-center py-2.5 px-1 rounded-xl transition-all active:scale-95 shadow-xs cursor-pointer relative"
+                  style={{
+                    background: _light ? 'rgba(59, 130, 246, 0.09)' : 'rgba(11, 18, 36, 0.85)',
+                    border: _light ? '1px solid rgba(59, 130, 246, 0.28)' : '1px solid rgba(99, 102, 241, 0.25)',
+                  }}
+                >
+                  <span
+                    className="w-9 h-9 rounded-full flex items-center justify-center mb-1 relative"
+                    style={{
+                      background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.30), rgba(79, 70, 229, 0.15))',
+                      color: '#60a5fa',
+                      border: '1px solid rgba(59, 130, 246, 0.40)',
+                    }}
+                  >
+                    <QrCode size={18} />
+                  </span>
+                  <span className="text-[10px] font-bold truncate max-w-full" style={{ color: _pTxtColor }}>
+                    Login QR
+                  </span>
+                </button>
+
+                {/* 4. Logout Account */}
+                {(settings?.isLogoutEnabled !== false || user.role === 'ADMIN' || isImpersonating) && (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDialog({
+                      isOpen: true,
+                      message: 'Kya aap logout karna chahte hain?',
+                      onConfirm: () => {
+                        setConfirmDialog(null);
+                        handlePerformLogout();
+                      }
+                    })}
+                    aria-label="Logout Account"
+                    className="flex flex-col items-center justify-center py-2.5 px-1 rounded-xl transition-all active:scale-95 shadow-xs cursor-pointer relative"
+                    style={{
+                      background: _light ? 'rgba(225, 29, 72, 0.09)' : 'rgba(11, 18, 36, 0.85)',
+                      border: _light ? '1px solid rgba(244, 63, 94, 0.28)' : '1px solid rgba(244, 63, 94, 0.25)',
+                    }}
+                  >
+                    <span
+                      className="w-9 h-9 rounded-full flex items-center justify-center mb-1 relative"
+                      style={{
+                        background: 'linear-gradient(135deg, rgba(225, 29, 72, 0.30), rgba(159, 18, 57, 0.15))',
+                        color: '#fb7185',
+                        border: '1px solid rgba(244, 63, 94, 0.40)',
+                      }}
+                    >
+                      <LogOut size={18} />
+                    </span>
+                    <span className="text-[10px] font-bold truncate max-w-full text-rose-400">
+                      Logout
+                    </span>
+                  </button>
+                )}
+              </div>
             </div>
-          )}
           </div>
           {/* ── Level Style Chooser Sheet ── */}
           {showLevelChooser && (
@@ -25776,7 +25315,7 @@ export const StudentDashboard: React.FC<Props> = ({
                 });
                 if (recentHistory.length === 0) return (
                   <div className="text-center py-14 flex flex-col items-center">
-                    <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4 text-slate-300 text-3xl">������</div>
+                    <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4 text-slate-300 text-3xl">📜</div>
                     <p className="text-slate-500 font-bold text-sm">No history yet</p>
                     <p className="text-slate-400 text-xs mt-1">Claimed rewards appear here for 7 days</p>
                   </div>
