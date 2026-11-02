@@ -7,9 +7,10 @@ import {
   Clock, ArrowRight, ExternalLink, ReceiptText
 } from "lucide-react";
 import { getStudentFees, getMonthlyAttendance, currentMonthStr, saveFee, markFeePaid, updateStudent } from "../../school-firebase";
-import type { School, SchoolClass, SchoolStudent, MonthlyFee, AttendanceRecord } from "../../school-types";
 import { BLOOD_GROUPS } from "../../school-types";
+import type { School, SchoolClass, SchoolStudent, MonthlyFee, AttendanceRecord } from "../../school-types";
 import { OfficialFeeReceiptModal } from "./OfficialFeeReceiptModal";
+import { getSavedSchoolLogo } from "./feeReceiptUtils";
 
 interface Props {
   isOpen: boolean;
@@ -880,11 +881,12 @@ export const StudentQuickActionModal: React.FC<Props> = ({
         <OfficialFeeReceiptModal
           isOpen={Boolean(dpsReceiptFee)}
           onClose={() => setDpsReceiptFee(null)}
-          school={school || {
+          school={{
+            ...(school || {}),
             id: school?.id || "school",
-            name: schoolName,
-            address: school?.address || "",
-            logoUrl: school?.logoUrl,
+            name: school?.name || schoolName || "School",
+            address: school?.address || "Institutional Academic Campus, Educational Zone",
+            logoUrl: getSavedSchoolLogo(school?.logoUrl),
             principalSignatureUrl: school?.principalSignatureUrl,
           } as any}
           fee={dpsReceiptFee}

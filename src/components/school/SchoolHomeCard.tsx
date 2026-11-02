@@ -6,6 +6,7 @@ import {
   CheckCircle2, Clock, Sparkles, School as SchoolIcon, Building2, Globe, UserPlus
 } from "lucide-react";
 import { checkTodayStudentAttendance } from "../../school-firebase";
+import { getSavedSchoolLogo, isAppLogo } from "./feeReceiptUtils";
 
 interface Props {
   school: School;
@@ -92,22 +93,31 @@ export const SchoolHomeCard: React.FC<Props> = ({
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             {/* School Logo or Initials */}
-            <div
-              className="w-12 h-12 rounded-2xl flex-shrink-0 flex items-center justify-center shadow-xs overflow-hidden border"
-              style={{ background: `${accent}15`, borderColor: `${accent}35` }}
-            >
-              {school.logoUrl ? (
-                <img
-                  src={school.logoUrl}
-                  alt={school.name}
-                  className="w-full h-full object-cover"
-                />
-              ) : (
-                <span className="font-black text-sm tracking-tight" style={{ color: accent }}>
-                  {initial}
-                </span>
-              )}
-            </div>
+            {(() => {
+              const savedLogo = getSavedSchoolLogo(school.logoUrl);
+              const hasCustomLogo = Boolean(savedLogo && !isAppLogo(savedLogo));
+              return (
+                <div
+                  className="w-12 h-12 rounded-2xl flex-shrink-0 flex items-center justify-center shadow-xs overflow-hidden border"
+                  style={{ background: `${accent}15`, borderColor: `${accent}35` }}
+                >
+                  {hasCustomLogo ? (
+                    <img
+                      src={savedLogo}
+                      alt={school.name}
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = 'none';
+                      }}
+                    />
+                  ) : (
+                    <span className="font-black text-sm tracking-tight" style={{ color: accent }}>
+                      {initial}
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* School Name & Meta */}
             <div className="min-w-0 flex-1">

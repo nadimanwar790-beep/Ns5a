@@ -7,7 +7,7 @@ import {
   updateSchool, updateSession, updateClass, updateTeacher,
   generateId, getSchool, getSessions, setSchoolLockCode,
   assignSchoolSubAdminByEmail, getSchoolAdmins, removeSchoolUserByUid,
-  getAllMonthlyFees, currentMonthStr, saveFee, markFeePaid
+  getAllMonthlyFees, currentMonthStr, saveFee, markFeePaid, isStudentInClass
 } from "../../school-firebase";
 import type { SchoolUserProfile } from "../../school-types";
 import type {
@@ -38,6 +38,7 @@ import { getStaffEmployees } from "../../school-firebase";
 import type { MonthlyFee, StaffEmployee } from "../../school-types";
 import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeaderEditorModal";
 import { DigitalSignatureModal } from "./DigitalSignatureModal";
+import { getSavedSchoolLogo, isAppLogo, cleanLogoUrl } from "./feeReceiptUtils";
 import {
   Users, BookOpen, Calendar, IndianRupee, Plus, Trash2, Settings,
   ChevronRight, ChevronLeft, X, Edit3, FileText, Award,
@@ -198,6 +199,25 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
       isCurrentView = false;
     };
   }, [schoolId, view]);
+
+  useEffect(() => {
+    const handleSchoolUpdated = (e: any) => {
+      const detail = e?.detail;
+      if (detail?.logoUrl !== undefined || detail?.data) {
+        setSchool(prev => {
+          if (!prev) return prev;
+          const nextLogo = detail.logoUrl !== undefined ? detail.logoUrl : (detail?.data?.logoUrl || prev.logoUrl);
+          return {
+            ...prev,
+            ...(detail?.data || {}),
+            logoUrl: nextLogo,
+          };
+        });
+      }
+    };
+    window.addEventListener("school-profile-updated", handleSchoolUpdated);
+    return () => window.removeEventListener("school-profile-updated", handleSchoolUpdated);
+  }, []);
 
   useEffect(() => {
     if (!activeSession) return;
@@ -1212,7 +1232,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                 </div>
               ) : (
                 filteredClasses.map((cls, idx) => {
-                  const classStudents = students.filter(s => s.classId === cls.id);
+                  const classStudents = students.filter(s => isStudentInClass(s, cls.id, cls.name));
                   const classSubjects = subjects.filter(s => s.classId === cls.id);
                   const defaultFee = Number((cls as any).defaultFee) || 0;
                   const isToolsExpanded = expandedToolsClassId === cls.id;
@@ -1750,7 +1770,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
     }
 
     if (view === "students") {
-      const classStudents = selectedClass ? students.filter(s => s.classId === selectedClass.id) : students;
+      const classStudents = selectedClass ? students.filter(s => isStudentInClass(s, selectedClass.id, selectedClass.name)) : students;
       return (
         <div className="p-4 space-y-3 max-w-2xl mx-auto">
           {selectedClass && <p className="text-sm text-slate-500">Students in <strong className="text-slate-700 dark:text-slate-200">{selectedClass.name}</strong></p>}
@@ -1993,7 +2013,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
           {feeSummaryLoading ? (
             <div className="text-center py-10 text-slate-400 text-sm">Loading fees...</div>
           ) : sortedClasses.map((cls, idx) => {
-            const classStudents = students.filter(s => s.classId === cls.id);
+            const classStudents = students.filter(s => isStudentInClass(s, cls.id, cls.name));
             const classFees = allFees.filter(f => f.classId === cls.id);
             const expected = classStudents.reduce((sum, s) => sum + (s.monthlyFee || 0), 0);
             const collected = classFees.filter(f => f.paid).reduce((sum, f) => sum + (f.amount || 0), 0);
@@ -2103,31 +2123,40 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                 <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                   <div className="flex items-start gap-3.5 min-w-0">
                     {/* Logo / Crest frame */}
-                    <div className="relative group flex-shrink-0">
-                      <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 p-1 flex items-center justify-center shadow-inner overflow-hidden">
-                        {school.logoUrl ? (
-                          <img
-                            src={school.logoUrl}
-                            alt={school.name}
-                            className="w-full h-full object-contain rounded-xl bg-white"
-                          />
-                        ) : (
-                          <div className="w-full h-full rounded-xl bg-gradient-to-br from-amber-400 to-amber-600 flex flex-col items-center justify-center text-slate-950 font-black shadow">
-                            <Building2 className="w-6 h-6 text-slate-950 mb-0.5" />
-                            <span className="text-[10px] uppercase font-bold tracking-wider">
-                              {(school.name || "SC").slice(0, 3)}
-                            </span>
+                    {(() => {
+                      const displaySchoolLogo = getSavedSchoolLogo(school.logoUrl);
+                      return (
+                        <div className="relative group flex-shrink-0">
+                          <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 p-1 flex items-center justify-center shadow-inner overflow-hidden">
+                            {displaySchoolLogo ? (
+                              <img
+                                src={displaySchoolLogo}
+                                alt={school.name}
+                                className="w-full h-full object-contain rounded-xl bg-white p-0.5"
+                                onError={(e) => {
+                                  (e.target as HTMLElement).style.display = 'none';
+                                  const fb = (e.target as HTMLElement).parentElement?.querySelector('.admin-logo-fallback') as HTMLElement;
+                                  if (fb) fb.style.display = 'flex';
+                                }}
+                              />
+                            ) : null}
+                            <div className={`w-full h-full rounded-xl bg-gradient-to-br from-amber-400 to-amber-600 flex flex-col items-center justify-center text-slate-950 font-black shadow admin-logo-fallback ${displaySchoolLogo ? 'hidden' : 'flex'}`}>
+                              <Building2 className="w-6 h-6 text-slate-950 mb-0.5" />
+                              <span className="text-[10px] uppercase font-bold tracking-wider">
+                                {(school.name || "SC").slice(0, 3)}
+                              </span>
+                            </div>
                           </div>
-                        )}
-                      </div>
-                      <button
-                        onClick={() => setShowFullSchoolProfileEditor(true)}
-                        title="Change Logo"
-                        className="absolute -bottom-1 -right-1 p-1 rounded-full bg-blue-600 hover:bg-blue-500 text-white shadow text-[10px] border border-white/40"
-                      >
-                        <Edit3 className="w-3 h-3" />
-                      </button>
-                    </div>
+                          <button
+                            onClick={() => setShowFullSchoolProfileEditor(true)}
+                            title="Change School Logo"
+                            className="absolute -bottom-1 -right-1 p-1 rounded-full bg-blue-600 hover:bg-blue-500 text-white shadow text-[10px] border border-white/40 cursor-pointer"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      );
+                    })()}
 
                     {/* School titles, code & affiliation */}
                     <div className="flex-1 min-w-0">
@@ -2757,7 +2786,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
           schoolName={school?.name || "School"}
           classId={qrModalClass.id}
           className={qrModalClass.name}
-          totalStudents={students.filter(s => s.classId === qrModalClass.id).length}
+          totalStudents={students.filter(s => isStudentInClass(s, qrModalClass.id, qrModalClass.name)).length}
         />
       )}
       {school && showFullSchoolProfileEditor && (
@@ -2773,7 +2802,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
             address: school.address || "",
             phone: school.mobile || school.phone || "",
             email: school.email || "",
-            logoUrl: school.logoUrl || "",
+            logoUrl: getSavedSchoolLogo(school.logoUrl),
             principalName: school.principalName || "",
             principalTitle: "Principal / Head of Institution",
             code: school.code || "",

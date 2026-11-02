@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from "react";
 import QRCode from "react-qr-code";
 import type { School, SchoolClass, SchoolStudent, SchoolSession, ExamEntry } from "../../school-types";
-import { getExams, promoteStudents } from "../../school-firebase";
+import { getExams, promoteStudents, isStudentInClass } from "../../school-firebase";
 import {
   FileSpreadsheet, Printer, ChevronLeft, Plus, Trash2, Award, Calendar,
   CheckCircle2, Sparkles, RefreshCw, User, BookOpen, Layers, Edit3, Shield,
@@ -11,7 +11,7 @@ import {
 import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeaderEditorModal";
 import { schoolPrintFieldEnabled } from "../../school-types";
 import { QuickAddStudentModal } from "./QuickAddStudentModal";
-import { cleanLogoUrl } from "./feeReceiptUtils";
+import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo } from "./feeReceiptUtils";
 
 interface Props {
   school: School;
@@ -52,7 +52,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
 }) => {
   const [studentList, setStudentList] = useState<SchoolStudent[]>(initialStudents);
   const [selectedClassId, setSelectedClassId] = useState<string>(classes[0]?.id || "");
-  const classStudents = studentList.filter(s => !selectedClassId || s.classId === selectedClassId);
+  const classStudents = studentList.filter(s => !selectedClassId || isStudentInClass(s, selectedClassId));
   const [selectedStudentId, setSelectedStudentId] = useState<string>(classStudents[0]?.id || studentList[0]?.id || "");
 
   // School Header Customization State (can be edited on the fly)
@@ -129,7 +129,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
     address: school?.address || "",
     phone: school?.mobile || school?.phone || "",
     email: school?.email || "",
-    logoUrl: school?.logoUrl || "",
+    logoUrl: getSavedSchoolLogo(school?.logoUrl),
     principalName: school?.principalName || "",
     principalTitle: "Principal / Headmaster",
     code: school?.code || "",
@@ -150,7 +150,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
       address: school.address || "",
       phone: school.mobile || school.phone || "",
       email: school.email || "",
-      logoUrl: school.logoUrl || "",
+      logoUrl: getSavedSchoolLogo(school.logoUrl || previous.logoUrl),
       principalName: school.principalName || "",
       code: school.code || "",
       principalPhone: school.principalPhone || "",
@@ -546,9 +546,9 @@ export const MarksheetGenerator: React.FC<Props> = ({
         <div className={`border-b-2 border-slate-900 ${isCompact ? "pb-2.5 mb-2.5" : "pb-4 mb-4"}`}>
           <div className="flex items-start justify-between gap-4">
             <div className="flex items-center gap-3">
-              {schoolDetails.logoUrl ? (
+              {getSavedSchoolLogo(schoolDetails.logoUrl) ? (
                 <img
-                  src={cleanLogoUrl(schoolDetails.logoUrl)}
+                  src={cleanLogoUrl(getSavedSchoolLogo(schoolDetails.logoUrl))}
                   alt="School Logo"
                   className={`${isCompact ? "w-13 h-13" : "w-16 h-16"} object-contain rounded-xl border border-slate-300 shadow-sm bg-white p-0.5`}
                   onError={(e) => {
@@ -559,7 +559,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                 />
               ) : null}
               <div
-                className={`${isCompact ? "w-13 h-13" : "w-16 h-16"} rounded-xl bg-slate-900 text-amber-300 font-black text-2xl items-center justify-center shadow-sm marksheet-logo-fallback ${schoolDetails.logoUrl ? 'hidden' : 'flex'}`}
+                className={`${isCompact ? "w-13 h-13" : "w-16 h-16"} rounded-xl bg-slate-900 text-amber-300 font-black text-2xl items-center justify-center shadow-sm marksheet-logo-fallback ${getSavedSchoolLogo(schoolDetails.logoUrl) ? 'hidden' : 'flex'}`}
               >
                 {(schoolDetails.schoolName || "SC").slice(0, 2).toUpperCase()}
               </div>

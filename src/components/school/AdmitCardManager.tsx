@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeaderEditorModal";
 import { QuickAddStudentModal } from "./QuickAddStudentModal";
-import { cleanLogoUrl } from "./feeReceiptUtils";
+import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo } from "./feeReceiptUtils";
 
 interface Props {
   school: School;
@@ -52,7 +52,7 @@ export const AdmitCardManager: React.FC<Props> = ({
     address: school?.address || "Main Campus Examination Center",
     phone: school?.mobile || school?.phone || "+91 98765 43210",
     email: school?.email || "info@school.org",
-    logoUrl: school?.logoUrl || "",
+    logoUrl: getSavedSchoolLogo(school?.logoUrl),
     principalName: school?.principalName || "Dr. Rajeshwar Sharma",
     principalTitle: "Principal / Authorized Signatory",
     code: school?.code || "SCH-001",
@@ -70,7 +70,7 @@ export const AdmitCardManager: React.FC<Props> = ({
       address: school.address || prev.address,
       phone: school.mobile || school.phone || prev.phone,
       email: school.email || prev.email,
-      logoUrl: school.logoUrl || prev.logoUrl,
+      logoUrl: getSavedSchoolLogo(school.logoUrl || prev.logoUrl),
       principalName: school.principalName || prev.principalName,
       code: school.code || prev.code,
       principalSignatureUrl: school.principalSignatureUrl || "",
@@ -262,9 +262,9 @@ export const AdmitCardManager: React.FC<Props> = ({
         {/* School Header */}
         <div className="border-b-2 border-slate-900 pb-3 mb-4 text-center relative">
           <div className="flex items-center justify-center gap-3.5 mb-1">
-            {schoolDetails.logoUrl ? (
+            {getSavedSchoolLogo(schoolDetails.logoUrl) ? (
               <img
-                src={cleanLogoUrl(schoolDetails.logoUrl)}
+                src={cleanLogoUrl(getSavedSchoolLogo(schoolDetails.logoUrl))}
                 alt="School Logo"
                 className="w-14 h-14 object-contain rounded-xl border border-slate-300 bg-white p-0.5"
                 onError={(e) => {
@@ -275,7 +275,7 @@ export const AdmitCardManager: React.FC<Props> = ({
               />
             ) : null}
             <div
-              className={`w-14 h-14 rounded-xl bg-slate-900 text-amber-300 font-black text-xl items-center justify-center admit-logo-fallback ${schoolDetails.logoUrl ? 'hidden' : 'flex'}`}
+              className={`w-14 h-14 rounded-xl bg-slate-900 text-amber-300 font-black text-xl items-center justify-center admit-logo-fallback ${getSavedSchoolLogo(schoolDetails.logoUrl) ? 'hidden' : 'flex'}`}
             >
               {(schoolDetails.schoolName || "SC").slice(0, 2).toUpperCase()}
             </div>

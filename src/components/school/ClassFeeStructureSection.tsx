@@ -6,7 +6,7 @@ import {
   Sliders, ShieldCheck, ArrowRight, Check, Info, Users
 } from "lucide-react";
 import type { SchoolClass, ClassFeeStructure } from "../../school-types";
-import { updateClassFeeStructure, getClasses, updateStudent, subscribeToAllStudents } from "../../school-firebase";
+import { updateClassFeeStructure, getClasses, updateStudent, subscribeToAllStudents, isStudentInClass } from "../../school-firebase";
 
 interface Props {
   schoolId: string;
@@ -134,7 +134,7 @@ export const ClassFeeStructureSection: React.FC<Props> = ({
     try {
       await updateClassFeeStructure(schoolId, cls.id, current);
       // Sync students monthlyFee if tuitionFee changed
-      const classStudents = allStudents.filter(s => s.classId === cls.id);
+      const classStudents = allStudents.filter(s => isStudentInClass(s, cls.id, cls.name));
       if (current.tuitionFee && classStudents.length > 0) {
         for (const st of classStudents) {
           if (st.monthlyFee !== current.tuitionFee) {
@@ -158,7 +158,7 @@ export const ClassFeeStructureSection: React.FC<Props> = ({
         const current = feeForms[cls.id];
         if (current) {
           await updateClassFeeStructure(schoolId, cls.id, current);
-          const classStudents = allStudents.filter(s => s.classId === cls.id);
+          const classStudents = allStudents.filter(s => isStudentInClass(s, cls.id, cls.name));
           for (const st of classStudents.slice(0, 15)) {
             if (st.monthlyFee !== current.tuitionFee) {
               await updateStudent(schoolId, st.id, { monthlyFee: current.tuitionFee });
@@ -221,10 +221,10 @@ export const ClassFeeStructureSection: React.FC<Props> = ({
             <button
               onClick={handleApplyPresetToAll}
               className="px-3.5 py-2.5 rounded-xl bg-white/15 hover:bg-white/25 border border-white/20 text-xs font-bold flex items-center gap-1.5 transition active:scale-95 cursor-pointer shadow-sm"
-              title="Delhi Public School Receipt Preset: Admission 65K, Tuition 19.1K, Caution 60K, Annual 23.3K, Bus 10.3K"
+              title="Standard School Receipt Preset: Admission 65K, Tuition 19.1K, Caution 60K, Annual 23.3K, Bus 10.3K"
             >
               <Sparkles className="w-4 h-4 text-amber-300" />
-              <span>Apply DPS Preset to All</span>
+              <span>Apply Standard Preset to All</span>
             </button>
             <button
               onClick={handleSaveAll}
@@ -256,7 +256,7 @@ export const ClassFeeStructureSection: React.FC<Props> = ({
               <ShieldCheck className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">DPS Standard Preset</p>
+              <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">Standard Fee Preset</p>
               <p className="text-lg font-black text-emerald-600 dark:text-emerald-400">₹1,77,820 Total</p>
             </div>
           </div>
@@ -289,7 +289,7 @@ export const ClassFeeStructureSection: React.FC<Props> = ({
               };
               const totalAmount = calculateTotal(currentStructure);
               const isSavingThis = savingClassId === cls.id;
-              const classStudentCount = allStudents.filter(s => s.classId === cls.id).length;
+              const classStudentCount = allStudents.filter(s => isStudentInClass(s, cls.id, cls.name)).length;
 
               return (
                 <div
@@ -330,10 +330,10 @@ export const ClassFeeStructureSection: React.FC<Props> = ({
                         type="button"
                         onClick={() => handleApplyPresetToClass(cls.id)}
                         className="px-3 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-300/40 hover:bg-amber-100 text-xs font-bold transition flex items-center gap-1 cursor-pointer"
-                        title="Delhi Public School Receipt Template Values"
+                        title="Standard School Receipt Template Values"
                       >
                         <Sparkles className="w-3.5 h-3.5" />
-                        <span>DPS Preset</span>
+                        <span>Standard Preset</span>
                       </button>
 
                       <button

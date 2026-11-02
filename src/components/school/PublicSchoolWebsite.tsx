@@ -7,7 +7,7 @@ import {
   Search, FileSpreadsheet, CreditCard, Sparkles, Send, X, ExternalLink, ChevronLeft
 } from "lucide-react";
 import { saveSchoolPublicInquiry, generateId } from "../../school-firebase";
-import { cleanLogoUrl } from "./feeReceiptUtils";
+import { cleanLogoUrl, getSavedSchoolLogo, isAppLogo } from "./feeReceiptUtils";
 
 interface Props {
   school: School;
@@ -136,26 +136,30 @@ export const PublicSchoolWebsite: React.FC<Props> = ({
       {/* Main Header / Navigation */}
       <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-40 shadow-xs">
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            {school.logoUrl ? (
-              <img
-                src={cleanLogoUrl(school.logoUrl)}
-                alt={school.name}
-                className="w-12 h-12 object-contain rounded-xl shadow-xs bg-white p-0.5 border border-slate-200"
-                onError={(e) => {
-                  (e.target as HTMLElement).style.display = 'none';
-                  const fb = (e.target as HTMLElement).parentElement?.querySelector('.web-logo-fallback') as HTMLElement;
-                  if (fb) fb.style.display = 'flex';
-                }}
-              />
-            ) : null}
-            <div
-              className={`w-12 h-12 rounded-xl text-white font-black text-xl items-center justify-center shadow-xs web-logo-fallback ${school.logoUrl ? 'hidden' : 'flex'}`}
-              style={{ backgroundColor: bannerColor }}
-            >
-              {(school.name || "SC").slice(0, 2).toUpperCase()}
-            </div>
-            <div>
+          {(() => {
+            const savedLogo = getSavedSchoolLogo(school.logoUrl);
+            const hasValidLogo = Boolean(savedLogo && !isAppLogo(savedLogo));
+            return (
+              <div className="flex items-center gap-3">
+                {hasValidLogo ? (
+                  <img
+                    src={savedLogo}
+                    alt={school.name}
+                    className="w-12 h-12 object-contain rounded-xl shadow-xs bg-white p-0.5 border border-slate-200"
+                    onError={(e) => {
+                      (e.target as HTMLElement).style.display = 'none';
+                      const fb = (e.target as HTMLElement).parentElement?.querySelector('.web-logo-fallback') as HTMLElement;
+                      if (fb) fb.style.display = 'flex';
+                    }}
+                  />
+                ) : null}
+                <div
+                  className={`w-12 h-12 rounded-xl text-white font-black text-xl items-center justify-center shadow-xs web-logo-fallback ${hasValidLogo ? 'hidden' : 'flex'}`}
+                  style={{ backgroundColor: bannerColor }}
+                >
+                  {(school.name || "SC").slice(0, 2).toUpperCase()}
+                </div>
+                <div>
               <h1 className="text-lg sm:text-xl font-black text-slate-950 dark:text-white leading-tight">
                 {school.name}
               </h1>
@@ -164,6 +168,8 @@ export const PublicSchoolWebsite: React.FC<Props> = ({
               </p>
             </div>
           </div>
+            );
+          })()}
 
           <nav className="hidden md:flex items-center gap-1">
             <button

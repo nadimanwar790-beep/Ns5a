@@ -4,7 +4,7 @@ import { Building2, X, Save, CheckCircle2, Image as ImageIcon, Phone, Mail, MapP
 import { DirectUploadButton } from "../DirectUploadButton";
 import { updateSchool } from "../../school-firebase";
 import { DigitalSignatureModal } from "./DigitalSignatureModal";
-import { cleanLogoUrl } from "./feeReceiptUtils";
+import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo } from "./feeReceiptUtils";
 import {
   DEFAULT_SCHOOL_DOCUMENT_PRINT_FIELDS,
   type School,
@@ -59,25 +59,29 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
   title = "School Details & Template Customizer",
   subtitle = "Apne school ka naam, logo, address aur principal details yahan se likhein aur customize karein"
 }) => {
-  const createDefaultData = (): SchoolHeaderDetails => ({
-    schoolName: currentDetails?.schoolName || initialDetails?.schoolName || school?.name || "",
-    tagline: currentDetails?.tagline || initialDetails?.tagline || school?.tagline || "",
-    affiliation: currentDetails?.affiliation || initialDetails?.affiliation || school?.affiliation || "",
-    address: currentDetails?.address || initialDetails?.address || school?.address || "",
-    phone: currentDetails?.phone || initialDetails?.phone || school?.mobile || school?.phone || "",
-    email: currentDetails?.email || initialDetails?.email || school?.email || "",
-    logoUrl: currentDetails?.logoUrl || initialDetails?.logoUrl || school?.logoUrl || "",
-    principalName: currentDetails?.principalName || initialDetails?.principalName || school?.principalName || "",
-    principalTitle: currentDetails?.principalTitle || initialDetails?.principalTitle || "Principal / Authorized Signatory",
-    code: currentDetails?.code || initialDetails?.code || school?.code || "",
-    principalPhone: currentDetails?.principalPhone || initialDetails?.principalPhone || school?.principalPhone || "",
-    directorName: currentDetails?.directorName || initialDetails?.directorName || school?.directorName || "",
-    directorPhone: currentDetails?.directorPhone || initialDetails?.directorPhone || school?.directorPhone || "",
-    principalSignatureUrl: currentDetails?.principalSignatureUrl || initialDetails?.principalSignatureUrl || school?.principalSignatureUrl || "",
-    directorSignatureUrl: currentDetails?.directorSignatureUrl || initialDetails?.directorSignatureUrl || school?.directorSignatureUrl || "",
-    customFields: currentDetails?.customFields || initialDetails?.customFields || school?.customFields || [],
-    documentPrintFields: currentDetails?.documentPrintFields || initialDetails?.documentPrintFields || school?.documentPrintFields || {},
-  });
+  const createDefaultData = (): SchoolHeaderDetails => {
+    const rawLogo = currentDetails?.logoUrl || initialDetails?.logoUrl || school?.logoUrl;
+    const resolvedLogo = getSavedSchoolLogo(rawLogo);
+    return {
+      schoolName: currentDetails?.schoolName || initialDetails?.schoolName || school?.name || "",
+      tagline: currentDetails?.tagline || initialDetails?.tagline || school?.tagline || "",
+      affiliation: currentDetails?.affiliation || initialDetails?.affiliation || school?.affiliation || "",
+      address: currentDetails?.address || initialDetails?.address || school?.address || "",
+      phone: currentDetails?.phone || initialDetails?.phone || school?.mobile || school?.phone || "",
+      email: currentDetails?.email || initialDetails?.email || school?.email || "",
+      logoUrl: resolvedLogo,
+      principalName: currentDetails?.principalName || initialDetails?.principalName || school?.principalName || "",
+      principalTitle: currentDetails?.principalTitle || initialDetails?.principalTitle || "Principal / Authorized Signatory",
+      code: currentDetails?.code || initialDetails?.code || school?.code || "",
+      principalPhone: currentDetails?.principalPhone || initialDetails?.principalPhone || school?.principalPhone || "",
+      directorName: currentDetails?.directorName || initialDetails?.directorName || school?.directorName || "",
+      directorPhone: currentDetails?.directorPhone || initialDetails?.directorPhone || school?.directorPhone || "",
+      principalSignatureUrl: currentDetails?.principalSignatureUrl || initialDetails?.principalSignatureUrl || school?.principalSignatureUrl || "",
+      directorSignatureUrl: currentDetails?.directorSignatureUrl || initialDetails?.directorSignatureUrl || school?.directorSignatureUrl || "",
+      customFields: currentDetails?.customFields || initialDetails?.customFields || school?.customFields || [],
+      documentPrintFields: currentDetails?.documentPrintFields || initialDetails?.documentPrintFields || school?.documentPrintFields || {},
+    };
+  };
 
   const [details, setDetails] = useState<SchoolHeaderDetails>(createDefaultData);
   const [savingDefault, setSavingDefault] = useState(false);
@@ -97,10 +101,20 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
 
   if (isOpen === false) return null;
 
-  const targetSchoolId = schoolId || school?.id;
+  const targetSchoolId = schoolId || school?.id || "dps_gurgaon_sector45";
 
   const saveToFirebase = async (dataToSave: SchoolHeaderDetails) => {
-    if (!targetSchoolId) return;
+    const cleanedLogo = cleanLogoUrl(dataToSave.logoUrl);
+    if (typeof localStorage !== "undefined") {
+      if (cleanedLogo && !isAppLogo(cleanedLogo)) {
+        localStorage.setItem("nst_active_school_logo", cleanedLogo);
+        localStorage.setItem("nst_school_logo", cleanedLogo);
+      } else if (!cleanedLogo) {
+        localStorage.removeItem("nst_active_school_logo");
+        localStorage.removeItem("nst_school_logo");
+      }
+    }
+
     await updateSchool(targetSchoolId, {
       name: dataToSave.schoolName,
       tagline: dataToSave.tagline,
@@ -109,7 +123,7 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
       phone: dataToSave.phone,
       mobile: dataToSave.phone,
       email: dataToSave.email,
-      logoUrl: dataToSave.logoUrl,
+      logoUrl: cleanedLogo,
       principalName: dataToSave.principalName,
       principalTitle: dataToSave.principalTitle || "Principal / Authorized Signatory",
       principalPhone: dataToSave.principalPhone || "",
@@ -342,10 +356,10 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
           {/* Logo Section */}
           <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row items-center gap-4">
             <div className="w-16 h-16 rounded-xl bg-white dark:bg-slate-700 border-2 border-indigo-200 dark:border-slate-600 overflow-hidden flex items-center justify-center shrink-0 shadow-xs">
-              {details.logoUrl ? (
+              {details.logoUrl && !isAppLogo(details.logoUrl) ? (
                 <img
                   src={cleanLogoUrl(details.logoUrl)}
-                  alt="Logo"
+                  alt="School Logo"
                   className="w-full h-full object-contain p-0.5"
                   onError={(e) => {
                     (e.target as HTMLElement).style.display = 'none';
@@ -354,28 +368,61 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
                   }}
                 />
               ) : null}
-              <div className={`text-xs font-black text-indigo-700 dark:text-indigo-300 uppercase header-logo-fallback ${details.logoUrl ? 'hidden' : 'flex'}`}>
+              <div className={`text-xs font-black text-indigo-700 dark:text-indigo-300 uppercase header-logo-fallback ${details.logoUrl && !isAppLogo(details.logoUrl) ? 'hidden' : 'flex'}`}>
                 {details.schoolName.slice(0, 2) || "LOGO"}
               </div>
             </div>
             <div className="flex-1 min-w-0 space-y-1.5 w-full">
-              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
-                School Logo (Direct Upload / Web URL):
-              </label>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
+                  School Logo (Upload Photo / Image URL):
+                </label>
+                {details.logoUrl && !isAppLogo(details.logoUrl) && (
+                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">
+                    ✓ School Logo Active
+                  </span>
+                )}
+              </div>
               <div className="flex items-center gap-2 flex-wrap">
                 <DirectUploadButton
                   kind="image"
                   compact
                   currentUrl={details.logoUrl}
-                  onUploaded={url => setDetails(p => ({ ...p, logoUrl: cleanLogoUrl(url) }))}
-                  onClear={() => setDetails(p => ({ ...p, logoUrl: "" }))}
-                  label="Upload Logo Photo"
+                  onUploaded={url => {
+                    const cleaned = cleanLogoUrl(url);
+                    setDetails(p => ({ ...p, logoUrl: cleaned }));
+                    if (cleaned && !isAppLogo(cleaned) && typeof localStorage !== 'undefined') {
+                      localStorage.setItem("nst_active_school_logo", cleaned);
+                      localStorage.setItem("nst_school_logo", cleaned);
+                    }
+                    if (targetSchoolId) {
+                      updateSchool(targetSchoolId, { logoUrl: cleaned }).catch(() => {});
+                    }
+                  }}
+                  onClear={() => {
+                    setDetails(p => ({ ...p, logoUrl: "" }));
+                    if (typeof localStorage !== 'undefined') {
+                      localStorage.removeItem("nst_active_school_logo");
+                      localStorage.removeItem("nst_school_logo");
+                    }
+                    if (targetSchoolId) {
+                      updateSchool(targetSchoolId, { logoUrl: "" }).catch(() => {});
+                    }
+                  }}
+                  label="Upload School Logo"
                 />
                 <input
                   type="text"
                   value={details.logoUrl}
-                  onChange={e => setDetails(p => ({ ...p, logoUrl: cleanLogoUrl(e.target.value) }))}
-                  placeholder="Ya logo image ka URL yahan paste karein"
+                  onChange={e => {
+                    const cleaned = cleanLogoUrl(e.target.value);
+                    setDetails(p => ({ ...p, logoUrl: cleaned }));
+                    if (cleaned && !isAppLogo(cleaned) && typeof localStorage !== 'undefined') {
+                      localStorage.setItem("nst_active_school_logo", cleaned);
+                      localStorage.setItem("nst_school_logo", cleaned);
+                    }
+                  }}
+                  placeholder="Ya school logo image ka direct link paste karein"
                   className="flex-1 min-w-[180px] px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-white"
                 />
               </div>

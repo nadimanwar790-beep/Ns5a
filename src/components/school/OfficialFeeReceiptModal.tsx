@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   X, Printer, Download, MessageCircle, Edit3, Plus, Trash2,
   CheckCircle2, Building2, Sparkles, Shield, RotateCcw, Copy
@@ -15,11 +15,13 @@ import {
   DPS_RECEIPT_CSS,
   numberToIndianWords,
   cleanLogoUrl,
+  isAppLogo,
+  getSavedSchoolLogo,
   type FeeReceiptItem,
   type DpsReceiptData,
   type PayModeInfo
 } from "./feeReceiptUtils";
-import { downloadFeeDocument } from "./feeDocument";
+import { downloadFeeDocument, shareFeeReceiptOnWhatsApp } from "./feeDocument";
 
 interface Props {
   isOpen: boolean;
@@ -40,8 +42,6 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
   className = "Class 6-B",
   sessionName = "2026-2027",
 }) => {
-  if (!isOpen) return null;
-
   // Format month name for installment
   const initialInstallment = useMemo(() => {
     if (!fee.month) return "CURRENT INSTALLMENT";
@@ -78,31 +78,54 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
   });
   const [session, setSession] = useState(sessionName);
   const [resolvedClass, setResolvedClass] = useState(className);
-  const [counterNo, setCounterNo] = useState("DPS-RECEIPT");
+  const [counterNo, setCounterNo] = useState("FEE-RECEIPT");
   const [note, setNote] = useState(() => fee.note || String(Math.floor(100 + Math.random() * 900)));
   const [showDigitalSign, setShowDigitalSign] = useState(Boolean(school?.principalSignatureUrl));
 
-  // School identity & logo state
-  const [schoolLogoUrl, setSchoolLogoUrl] = useState(() => cleanLogoUrl(school?.logoUrl || ""));
+  // School identity & logo state: explicitly passed -> locally cached active logo
+  const [schoolLogoUrl, setSchoolLogoUrl] = useState(() => {
+    return getSavedSchoolLogo(school?.logoUrl);
+  });
   const [schoolNameState, setSchoolNameState] = useState(() => school?.name || "School");
   const [schoolAddressState, setSchoolAddressState] = useState(() => school?.address || "");
   const [savingLogo, setSavingLogo] = useState(false);
   const [logoSaveNotice, setLogoSaveNotice] = useState<string | null>(null);
 
+  // Sync state if school prop updates asynchronously
+  useEffect(() => {
+    if (school) {
+      const bestLogo = getSavedSchoolLogo(school.logoUrl);
+      if (bestLogo) {
+        setSchoolLogoUrl(bestLogo);
+      }
+      if (school.name) setSchoolNameState(school.name);
+      if (school.address) setSchoolAddressState(school.address);
+    }
+  }, [school]);
+
   const handleLogoUploaded = async (url: string) => {
     const cleaned = cleanLogoUrl(url);
-    setSchoolLogoUrl(cleaned);
-    if (school?.id) {
-      setSavingLogo(true);
-      try {
-        await updateSchool(school.id, { logoUrl: cleaned });
-        setLogoSaveNotice("✓ School Logo update ho gaya!");
-        setTimeout(() => setLogoSaveNotice(null), 3500);
-      } catch (err) {
-        console.error("Error updating school logo:", err);
-      } finally {
-        setSavingLogo(false);
+    const finalLogo = (cleaned && !isAppLogo(cleaned)) ? cleaned : "";
+    setSchoolLogoUrl(finalLogo);
+    try {
+      if (finalLogo) {
+        localStorage.setItem("nst_active_school_logo", finalLogo);
+        localStorage.setItem("nst_school_logo", finalLogo);
+      } else {
+        localStorage.removeItem("nst_active_school_logo");
+        localStorage.removeItem("nst_school_logo");
       }
+    } catch {}
+    const targetId = school?.id || "dps_gurgaon_sector45";
+    setSavingLogo(true);
+    try {
+      await updateSchool(targetId, { logoUrl: finalLogo });
+      setLogoSaveNotice("✓ School Logo update ho gaya!");
+      setTimeout(() => setLogoSaveNotice(null), 3500);
+    } catch (err) {
+      console.error("Error updating school logo:", err);
+    } finally {
+      setSavingLogo(false);
     }
   };
 
@@ -114,14 +137,37 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
   const [chequeNumber, setChequeNumber] = useState<string>(() => fee.payModeInfo?.number || "689870,06,07");
   const [payDate, setPayDate] = useState<string>(() => fee.payModeInfo?.date || receiptDate);
 
-  // Fee items breakdown (All 5 fee heads matching Delhi Public School screenshot)
+  // Fee items breakdown (All fee heads matching school receipt structure)
   const [items, setItems] = useState<FeeReceiptItem[]>(() => {
+    const arrears = Number(fee.arrearsAmount || 0);
+    const formattedMonths = fee.arrearsMonths && fee.arrearsMonths.length > 0
+      ? ` (${fee.arrearsMonths.map(m => {
+          const [y, mo] = m.split("-").map(Number);
+          const d = new Date(y, (mo || 1) - 1, 1);
+          return isNaN(d.getTime()) ? m : d.toLocaleDateString("en-IN", { month: "short", year: "numeric" });
+        }).join(", ")})`
+      : "";
+
     if (fee.items && fee.items.length > 0) {
+      const hasArrearsItem = fee.items.some(it => it.id === "arrears" || it.description.toLowerCase().includes("arrears") || it.description.toLowerCase().includes("back due"));
+      if (arrears > 0 && !hasArrearsItem) {
+        return [
+          ...fee.items,
+          {
+            id: "arrears",
+            slNo: fee.items.length + 1,
+            description: `Back Due / Previous Arrears${formattedMonths}`,
+            due: arrears,
+            con: 0,
+            paid: fee.paid ? arrears : (fee.paidAmount && fee.paidAmount > (fee.monthlyAmount || 0) ? Math.min(arrears, fee.paidAmount - (fee.monthlyAmount || 0)) : 0)
+          }
+        ];
+      }
       return fee.items;
     }
-    const baseFee = Number(fee.monthlyAmount ?? fee.amount ?? 0) || 19140;
+
+    const baseFee = Number(fee.monthlyAmount ?? fee.amount ?? 0) || 2000;
     const effectivePaid = fee.paidAmount !== undefined ? Number(fee.paidAmount) : (fee.paid ? baseFee : 0);
-    const arrears = Number(fee.arrearsAmount || 0);
 
     const initialList: FeeReceiptItem[] = [];
     let sl = 1;
@@ -164,24 +210,25 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
         paid: fee.paid ? 23320 : 0
       });
     }
-    if (fee.includeBusFee) {
+    if (fee.includeBusFee || student?.usesBus) {
+      const busAmount = Number(fee.busFeeAmount !== undefined ? fee.busFeeAmount : (student?.busFee !== undefined ? student.busFee : 1000));
       initialList.push({
         id: "bus",
         slNo: sl++,
-        description: "Bus Fee",
-        due: 10360,
+        description: student?.busRoute ? `Bus Fee (${student.busRoute})` : "Bus Fee / Transport",
+        due: busAmount,
         con: 0,
-        paid: fee.paid ? 10360 : 0
+        paid: fee.paid ? busAmount : 0
       });
     }
     if (arrears > 0) {
       initialList.push({
         id: "arrears",
         slNo: sl++,
-        description: "Back Due / Previous Arrears",
+        description: `Back Due / Previous Arrears${formattedMonths}`,
         due: arrears,
         con: 0,
-        paid: fee.paid ? arrears : 0
+        paid: fee.paid ? arrears : (fee.paidAmount && fee.paidAmount > baseFee ? Math.min(arrears, fee.paidAmount - baseFee) : 0)
       });
     }
 
@@ -274,7 +321,7 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
     setReceiptDate("14/07/2016");
     setSession("2016-2017");
     setResolvedClass("6 - B");
-    setCounterNo("DPS-RECEIPT");
+    setCounterNo("FEE-RECEIPT");
     setPayMode("Cheque");
     setBank("HDFC BANK");
     setChequeNumber("689870,06,07");
@@ -318,15 +365,17 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
   // Build current receipt data object
   const receiptData: DpsReceiptData = {
     schoolName: schoolNameState || school?.name || "School",
-    schoolId: school?.id || "dps_gurgaon_sector45",
-    schoolAddress: schoolAddressState || school?.address || "",
-    schoolLogoUrl: schoolLogoUrl || cleanLogoUrl(school?.logoUrl || ""),
+    schoolId: school?.id || "school_campus",
+    schoolAddress: schoolAddressState || school?.address || "Institutional Academic Campus, Educational Zone",
+    schoolLogoUrl: getSavedSchoolLogo(schoolLogoUrl || school?.logoUrl),
     schoolPhone: school?.mobile || school?.phone,
     schoolEmail: school?.email,
     schoolAffiliation: school?.affiliation,
-    receiptTitle: receiptCategory === "admission"
-      ? "OFFICIAL ADMISSION FEE RECEIPT / प्रवेश शुल्क रसीद"
-      : "OFFICIAL MONTHLY FEE RECEIPT / मासिक शुल्क रसीद",
+    receiptTitle: !fee.paid && totalPaid === 0
+      ? "FEE DUE SLIP / DEMAND NOTE (बकाया शुल्क विवरण)"
+      : (receiptCategory === "admission"
+        ? "OFFICIAL ADMISSION FEE RECEIPT / प्रवेश शुल्क रसीद"
+        : "OFFICIAL MONTHLY FEE RECEIPT / मासिक शुल्क रसीद"),
     receiptNo,
     admissionNo,
     studentName,
@@ -340,6 +389,8 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
     className: resolvedClass,
     counterNo,
     items,
+    balanceDue: fee.balanceDue !== undefined ? Number(fee.balanceDue) : Math.max(0, totalDue - totalPaid),
+    fifoSummary: fee.note || undefined,
     payModeInfo: {
       payMode,
       date: payDate,
@@ -364,32 +415,45 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
     printDpsReceiptDirect(receiptData, "full");
   };
 
-  // WhatsApp share
-  const handleWhatsApp = () => {
-    const rawPhone = student?.phone || "";
-    const digits = rawPhone.replace(/\D/g, "");
-    const targetPhone = digits.length === 10 ? `91${digits}` : digits;
+  const [isSharingWhatsApp, setIsSharingWhatsApp] = useState(false);
 
-    const message = [
-      `*🏛️ ${receiptData.schoolName}*`,
-      `*OFFICIAL FEE RECEIPT*`,
-      `━━━━━━━━━━━━━━━━━━━━`,
-      `📄 Receipt No: ${receiptNo}`,
-      `👤 Student: ${studentName}`,
-      `🎓 Class: ${resolvedClass} | Adm No: ${admissionNo}`,
-      `📅 Installment: ${installment} (${session})`,
-      `💰 Total Received: ₹${grandTotal.toLocaleString("en-IN")}`,
-      `📝 In Words: ${wordsAmount}`,
-      `💳 Pay Mode: ${payMode} ${bank ? `(${bank})` : ""}`,
-      `📅 Date: ${receiptDate}`,
-      `━━━━━━━━━━━━━━━━━━━━`,
-      `Note: Computer generated receipt. Thank you!`,
-    ].join("\n");
-
-    const url = targetPhone
-      ? `https://wa.me/${targetPhone}?text=${encodeURIComponent(message)}`
-      : `https://wa.me/?text=${encodeURIComponent(message)}`;
-    window.open(url, "_blank", "noopener,noreferrer");
+  // WhatsApp share with authentic printable PDF document
+  const handleWhatsApp = async () => {
+    setIsSharingWhatsApp(true);
+    try {
+      await shareFeeReceiptOnWhatsApp({
+        fee: {
+          ...fee,
+          receiptNo,
+          amount: grandTotal,
+          monthlyAmount: grandTotal,
+          studentName,
+          note,
+          paidDate: fee.paidDate || new Date().toISOString(),
+          paidAmount: totalPaid > 0 ? totalPaid : (fee.paid ? grandTotal : 0),
+          arrearsAmount: fee.arrearsAmount,
+        },
+        student,
+        schoolName: receiptData.schoolName,
+        className: resolvedClass,
+        schoolDetails: {
+          schoolName: receiptData.schoolName,
+          address: receiptData.schoolAddress,
+          phone: receiptData.schoolPhone,
+          email: receiptData.schoolEmail,
+          affiliation: receiptData.schoolAffiliation,
+          logoUrl: receiptData.schoolLogoUrl,
+          principalSignatureUrl: receiptData.principalSignatureUrl,
+          directorSignatureUrl: receiptData.directorSignatureUrl,
+          principalName: receiptData.signatoryTitle,
+        },
+        isDueDemand: !fee.paid && totalPaid === 0,
+      });
+    } catch (err) {
+      console.error("WhatsApp share error:", err);
+    } finally {
+      setIsSharingWhatsApp(false);
+    }
   };
 
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
@@ -432,6 +496,8 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
   // Active view on mobile: "edit" or "preview"
   const [mobileTab, setMobileTab] = useState<"preview" | "edit">("preview");
 
+  if (!isOpen) return null;
+
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-2 sm:p-4 bg-slate-950/80 backdrop-blur-xs animate-in fade-in duration-150">
       <div className="w-full max-w-6xl bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[96vh]">
@@ -447,7 +513,7 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
                   Official School Fee Receipt
                 </h2>
                 <span className="text-[10px] bg-amber-400 text-slate-950 font-black px-2 py-0.5 rounded-full">
-                  DPS Layout
+                  Official 4-in-1 Layout
                 </span>
               </div>
               <p className="text-xs text-slate-300">
@@ -529,7 +595,7 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
                   className="px-2 py-0.5 text-[10px] font-bold bg-amber-500/15 text-amber-800 dark:text-amber-300 hover:bg-amber-500/25 border border-amber-400/30 rounded-lg transition flex items-center gap-1"
                 >
                   <Sparkles className="w-3 h-3 text-amber-500" />
-                  <span>DPS Sample</span>
+                  <span>Sample Format</span>
                 </button>
               </div>
 
@@ -584,8 +650,8 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
 
               <div className="flex items-center gap-3">
                 <div className="w-14 h-14 rounded-xl border-2 border-indigo-200 dark:border-indigo-700 bg-white dark:bg-slate-800 flex items-center justify-center p-1 shrink-0 overflow-hidden shadow-xs">
-                  {schoolLogoUrl ? (
-                    <img src={schoolLogoUrl} alt="Logo" className="w-full h-full object-contain" />
+                  {schoolLogoUrl && !isAppLogo(schoolLogoUrl) ? (
+                    <img src={schoolLogoUrl} alt="School Logo" className="w-full h-full object-contain" />
                   ) : (
                     <span className="text-xs font-black text-indigo-400 text-center">
                       {(schoolNameState || "SC").slice(0, 3).toUpperCase()}

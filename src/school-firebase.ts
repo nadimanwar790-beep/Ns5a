@@ -33,6 +33,8 @@ import type {
   SchoolTeacher, SchoolStudent, AttendanceRecord, ExamEntry, MonthlyFee,
   SchoolHomework, SchoolMCQResult, SchoolUserProfile
 } from "./school-types";
+import { getDemoSchoolDataset } from "./components/school/demoDataStore";
+import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo } from "./components/school/feeReceiptUtils";
 
 const col = (path: string) => collection(db, path);
 const d = (path: string) => doc(db, path);
@@ -42,19 +44,20 @@ const LOCAL_SCHOOLS_KEY = "nst_schools_local_cache";
 
 export const DEFAULT_DPS_SCHOOL: School = {
   id: "dps_gurgaon_sector45",
-  name: "Delhi Public School",
-  code: "DPS_DEL",
-  address: "Site No.1, Sector-45, Urban Estate, Gurgaon, Haryana",
+  name: "Nstz",
+  code: "NSTZ",
+  address: "Institutional Academic Campus, Educational Zone",
   phone: "0124-4125800",
-  email: "dpsgurgaon45@dps.edu.in",
-  affiliation: "CBSE Affiliated • Affiliation No. 530025",
-  adminEmail: "admin@dps.edu.in",
+  email: "contact@nstz.app",
+  affiliation: "Affiliated Education Center",
+  adminEmail: "admin@nstz.app",
+  logoUrl: "",
   principalName: "Dr. Arvind Swaminathan",
   principalPhone: "9811023450",
   directorName: "Mrs. Shashi Sharma",
   directorPhone: "9811023451",
   mobile: "0124-4125800",
-  tagline: "Service Before Self",
+  tagline: "Knowledge & Excellence",
   bannerColor: "#047857",
   subscription: {
     reading: true,
@@ -75,12 +78,33 @@ export const DEFAULT_DPS_SCHOOL: School = {
 export const getLocalSchools = (): School[] => {
   try {
     const raw = localStorage.getItem(LOCAL_SCHOOLS_KEY);
+    const activeLogo = getSavedSchoolLogo();
+
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.map((s: School) => {
+          let updated = { ...s };
+          if (updated.name === "Delhi Public School" && (!updated.code || updated.code === "DPS_DEL")) {
+            updated = { ...updated, name: "Nstz", code: "NSTZ" };
+          }
+          // If the cached school has an app logo or empty logo, but user saved a custom school logo, apply it!
+          if (activeLogo && (!updated.logoUrl || isAppLogo(updated.logoUrl))) {
+            updated.logoUrl = activeLogo;
+          } else if (isAppLogo(updated.logoUrl)) {
+            // Strip app logo so it doesn't masquerade as school logo
+            updated.logoUrl = "";
+          }
+          return updated;
+        });
+      }
     }
-    // Return default school if empty
-    return [DEFAULT_DPS_SCHOOL];
+    // Return default school if empty, with saved logo if present
+    const def = { ...DEFAULT_DPS_SCHOOL };
+    if (activeLogo) {
+      def.logoUrl = activeLogo;
+    }
+    return [def];
   } catch {
     return [DEFAULT_DPS_SCHOOL];
   }
@@ -124,25 +148,43 @@ export const saveSchool = async (school: School) => {
 };
 
 export const getSchool = async (schoolId: string): Promise<School | null> => {
+  const sanitize = (sc: School | null): School | null => {
+    if (!sc) return null;
+    const updated = { ...sc };
+    if (updated.name === "Delhi Public School" && (!updated.code || updated.code === "DPS_DEL")) {
+      updated.name = "Nstz";
+      updated.code = "NSTZ";
+    }
+    if (updated.address && updated.address.includes("Sector-45, Urban Estate, Gurgaon")) {
+      updated.address = "Institutional Academic Campus, Educational Zone";
+    }
+    if (updated.adminEmail === "admin@dps.edu.in") {
+      updated.adminEmail = "admin@nstz.app";
+    }
+    // Always resolve the authentic school logo, preferring saved custom logo and stripping app logo
+    updated.logoUrl = getSavedSchoolLogo(updated.logoUrl);
+    return updated;
+  };
+
   const local = getLocalSchools().find(s => s.id === schoolId);
-  if (local) return local;
+  if (local) return sanitize(local);
 
   if (rtdb) {
     try {
       const snap = await withTimeout(get(ref(rtdb, `schools/${schoolId}`)), 2000);
       const val = (snap as any)?.val?.();
-      if (val) return val as School;
+      if (val) return sanitize(val as School);
     } catch {}
   }
 
   if (db) {
     try {
       const snap = await withTimeout(getDoc(d(`schools/${schoolId}`)), 2500);
-      if (snap.exists()) return snap.data() as School;
+      if (snap.exists()) return sanitize(snap.data() as School);
     } catch {}
   }
 
-  return null;
+  return sanitize(getLocalSchools()[0] || DEFAULT_DPS_SCHOOL);
 };
 
 export const getAllSchools = async (): Promise<School[]> => {
@@ -268,10 +310,41 @@ export const subscribeToAllSchools = (
 export const updateSchool = async (schoolId: string, data: Partial<School>) => {
   const sanitized = sanitizeForFirestore(data);
 
-  // Local cache
+  // Local cache & persistent active school logo
+  if (sanitized?.logoUrl !== undefined) {
+    const cleaned = cleanLogoUrl(sanitized.logoUrl);
+    try {
+      if (cleaned && !isAppLogo(cleaned)) {
+        localStorage.setItem("nst_active_school_logo", cleaned);
+        localStorage.setItem("nst_school_logo", cleaned);
+      } else if (!cleaned) {
+        localStorage.removeItem("nst_active_school_logo");
+        localStorage.removeItem("nst_school_logo");
+      }
+    } catch {}
+    sanitized.logoUrl = cleaned;
+  }
+
   const current = getLocalSchools();
-  const next = current.map(s => s.id === schoolId ? { ...s, ...sanitized } : s);
+  let matched = false;
+  const next = current.map(s => {
+    if (s.id === schoolId || !schoolId || current.length === 1) {
+      matched = true;
+      return { ...s, ...sanitized };
+    }
+    return s;
+  });
+  if (!matched && schoolId) {
+    next.push({ id: schoolId, name: sanitized.name || "School", ...sanitized } as School);
+  }
   setLocalSchools(next);
+
+  // Instantly notify any active school screens
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("school-profile-updated", {
+      detail: { schoolId, data: sanitized, logoUrl: sanitized?.logoUrl }
+    }));
+  }
 
   // RTDB
   if (rtdb) {
@@ -331,13 +404,20 @@ export const getSessions = async (schoolId: string): Promise<SchoolSession[]> =>
   }
   try {
     const snap = await withTimeout(getDocs(col(`schools/${schoolId}/sessions`)), 2500);
-    return (snap as any).docs.map((doc: any) => doc.data() as SchoolSession);
-  } catch {
-    return [];
-  }
+    const list = (snap as any).docs.map((doc: any) => doc.data() as SchoolSession);
+    if (list.length > 0) return list;
+  } catch {}
+
+  const demo = getDemoSchoolDataset();
+  if (demo && demo.session) return [demo.session];
+  return [];
 };
 
 export const subscribeToSessions = (schoolId: string, cb: (sessions: SchoolSession[]) => void) => {
+  const demo = getDemoSchoolDataset();
+  if (demo && demo.session) {
+    cb([demo.session]);
+  }
   let rtdbUnsub: any = null;
   if (rtdb) {
     try {
@@ -352,7 +432,11 @@ export const subscribeToSessions = (schoolId: string, cb: (sessions: SchoolSessi
     try {
       fsUnsub = onSnapshot(
         col(`schools/${schoolId}/sessions`),
-        snap => cb(snap.docs.map(doc => doc.data() as SchoolSession)),
+        snap => {
+          if (!snap.empty) {
+            cb(snap.docs.map(doc => doc.data() as SchoolSession));
+          }
+        },
         err => { console.warn(`[school-firebase] subscribeToSessions error:`, err?.code || err); }
       );
     } catch {}
@@ -437,14 +521,30 @@ export const getClasses = async (schoolId: string, sessionId?: string): Promise<
   try {
     const snap = await withTimeout(getDocs(col(`schools/${schoolId}/classes`)), 2500);
     const all = (snap as any).docs.map((doc: any) => doc.data() as SchoolClass);
-    if (all.length > 0) setLocalClasses(schoolId, all);
-    return sessionId ? all.filter((c: any) => c.sessionId === sessionId) : all;
-  } catch {
-    return [];
+    if (all.length > 0) {
+      setLocalClasses(schoolId, all);
+      return sessionId ? all.filter((c: any) => c.sessionId === sessionId) : all;
+    }
+  } catch {}
+
+  const demo = getDemoSchoolDataset();
+  if (demo && demo.classes && demo.classes.length > 0) {
+    return sessionId ? demo.classes.filter(c => c.sessionId === sessionId || !c.sessionId) : demo.classes;
   }
+  return [];
 };
 
 export const subscribeToClasses = (schoolId: string, sessionId: string, cb: (classes: SchoolClass[]) => void) => {
+  const local = getLocalClasses(schoolId);
+  if (local && local.length > 0) {
+    cb(sessionId ? local.filter(c => c.sessionId === sessionId) : local);
+  } else {
+    const demo = getDemoSchoolDataset();
+    if (demo && demo.classes && demo.classes.length > 0) {
+      cb(sessionId ? demo.classes.filter(c => c.sessionId === sessionId || !c.sessionId) : demo.classes);
+    }
+  }
+
   let rtdbUnsub: any = null;
   if (rtdb) {
     try {
@@ -462,7 +562,11 @@ export const subscribeToClasses = (schoolId: string, sessionId: string, cb: (cla
     try {
       fsUnsub = onSnapshot(
         query(col(`schools/${schoolId}/classes`), where("sessionId", "==", sessionId)),
-        snap => cb(snap.docs.map(doc => doc.data() as SchoolClass)),
+        snap => {
+          if (!snap.empty) {
+            cb(snap.docs.map(doc => doc.data() as SchoolClass));
+          }
+        },
         err => { console.warn(`[school-firebase] subscribeToClasses error:`, err?.code || err); }
       );
     } catch {}
@@ -518,18 +622,42 @@ export const getSubjects = async (schoolId: string, classId?: string): Promise<S
   try {
     const snap = await withTimeout(getDocs(col(`schools/${schoolId}/subjects`)), 2500);
     const all = (snap as any).docs.map((doc: any) => doc.data() as SchoolSubject);
-    return classId ? all.filter((s: any) => s.classId === classId) : all;
-  } catch {
-    return [];
+    if (all.length > 0) {
+      return classId ? all.filter((s: any) => s.classId === classId) : all;
+    }
+  } catch {}
+
+  const demo = getDemoSchoolDataset();
+  if (demo && demo.subjects && demo.subjects.length > 0) {
+    return classId ? demo.subjects.filter(s => s.classId === classId) : demo.subjects;
   }
+  return [];
 };
 
-export const subscribeToSubjects = (schoolId: string, classId: string, cb: (subjects: SchoolSubject[]) => void) =>
-  onSnapshot(
-    query(col(`schools/${schoolId}/subjects`), where("classId", "==", classId)),
-    snap => cb(snap.docs.map(d => d.data() as SchoolSubject)),
-    err => { console.warn(`[school-firebase] subscribeToSubjects error:`, err?.code || err); cb([]); }
-  );
+export const subscribeToSubjects = (schoolId: string, classId: string, cb: (subjects: SchoolSubject[]) => void) => {
+  const demo = getDemoSchoolDataset();
+  if (demo && demo.subjects && demo.subjects.length > 0) {
+    cb(classId ? demo.subjects.filter(s => s.classId === classId) : demo.subjects);
+  }
+
+  let fsUnsub: any = null;
+  if (db) {
+    try {
+      fsUnsub = onSnapshot(
+        query(col(`schools/${schoolId}/subjects`), where("classId", "==", classId)),
+        snap => {
+          if (!snap.empty) {
+            cb(snap.docs.map(d => d.data() as SchoolSubject));
+          }
+        },
+        err => { console.warn(`[school-firebase] subscribeToSubjects error:`, err?.code || err); }
+      );
+    } catch {}
+  }
+  return () => {
+    if (typeof fsUnsub === "function") fsUnsub();
+  };
+};
 
 export const deleteSubject = async (schoolId: string, subjectId: string) => {
   if (rtdb) {
@@ -715,7 +843,7 @@ export const getStudentOrAdmissionRecord = async (
       classId: "cls_nursery",
       className: "NURSERY",
       schoolName: "Nstz",
-      monthlyFee: 0
+      monthlyFee: 1800
     };
   }
 
@@ -826,40 +954,189 @@ export const getStudentOrAdmissionRecord = async (
     }
   } catch {}
 
+  // 4. Fallback to comprehensive demo students dataset (910 students)
+  const demo = getDemoSchoolDataset();
+  if (demo && demo.students) {
+    const found = demo.students.find(s => {
+      const sAdm = (s.admissionNo || "").trim().toLowerCase();
+      const sName = (s.name || "").trim().toLowerCase();
+      const sId = (s.id || "").toLowerCase();
+      const sPhone = (s.phone || "").replace(/\D/g, "");
+      return (cleanAdm && sAdm === cleanAdm) ||
+             (cleanName && sName === cleanName) ||
+             (cleanId && sId === cleanId) ||
+             (cleanPhone && sPhone && sPhone.endsWith(cleanPhone));
+    });
+    if (found) return found;
+  }
+
   return null;
 };
 
-export const getStudents = async (schoolId: string, classId?: string): Promise<SchoolStudent[]> => {
-  try {
-    const local = getLocalStudents(schoolId);
-    if (local.length > 0) {
-      return classId ? local.filter((s: any) => s.classId === classId && s.active) : local.filter((s: any) => s.active);
-    }
-    const snap = await withTimeout(getDocs(col(`schools/${schoolId}/students`)), 2500);
-    const all = (snap as any).docs.map((doc: any) => doc.data() as SchoolStudent).filter((s: any) => s.active);
-    setLocalStudents(schoolId, all);
-    return classId ? all.filter((s: any) => s.classId === classId) : all;
-  } catch {
-    return getLocalStudents(schoolId);
+export const isStudentInClass = (
+  student: { classId?: string; className?: string; id?: string },
+  targetClassId?: string,
+  targetClassName?: string
+): boolean => {
+  if (!targetClassId && !targetClassName) return true;
+
+  const sClassId = (student.classId || "").toLowerCase().trim();
+  const sClassName = (student.className || "").toLowerCase().trim();
+  const tClassId = (targetClassId || "").toLowerCase().trim();
+  const tClassName = (targetClassName || "").toLowerCase().trim();
+
+  // 1. Exact match
+  if (tClassId && sClassId === tClassId) return true;
+
+  // 2. Prefix / Sectional match (e.g. target "demo_class_kg1", student "demo_class_kg1_sec_a" or "demo_class_kg1_sec_b")
+  if (tClassId && (sClassId.startsWith(`${tClassId}_`) || sClassId.startsWith(tClassId))) return true;
+  if (sClassId && (tClassId.startsWith(`${sClassId}_`) || tClassId.startsWith(sClassId))) return true;
+
+  // 3. Normalized grade key match (e.g. "kg1", "nur", "c1" / "1", "c10" / "10")
+  const extractGradeKey = (str: string) => {
+    return str
+      .replace(/^(demo_class_|cls_|class_|std_|demo_std_)/i, "")
+      .replace(/(_sec_[ab]|_section_[ab]|_a|_b)$/i, "")
+      .replace(/[^a-z0-9]/g, "")
+      .toLowerCase();
+  };
+
+  const sKey = extractGradeKey(sClassId);
+  const tKey = extractGradeKey(tClassId);
+  if (sKey && tKey && (sKey === tKey || sKey.replace(/^c/i, "") === tKey.replace(/^c/i, ""))) {
+    return true;
   }
+
+  // 4. Match by class name if available
+  if (tClassName && sClassName) {
+    const cleanT = tClassName.replace(/[^a-z0-9]/g, "");
+    const cleanS = sClassName.replace(/[^a-z0-9]/g, "");
+    if (cleanT && cleanS && (cleanS.includes(cleanT) || cleanT.includes(cleanS))) {
+      return true;
+    }
+  }
+
+  // 5. Match student ID prefix (e.g. demo_std_kg1_... or demo_student_kg1_...)
+  if (student.id && tKey) {
+    const stdIdClean = student.id.toLowerCase();
+    if (stdIdClean.includes(`_${tKey}_`) || stdIdClean.includes(`_${tKey.replace(/^c/i, "")}_`)) {
+      return true;
+    }
+  }
+
+  return false;
 };
 
-export const subscribeToStudents = (schoolId: string, classId: string, cb: (students: SchoolStudent[]) => void) =>
-  onSnapshot(
-    query(col(`schools/${schoolId}/students`), where("classId", "==", classId), where("active", "==", true)),
-    snap => cb(snap.docs.map(d => d.data() as SchoolStudent).sort((a, b) => a.rollNo.localeCompare(b.rollNo, undefined, { numeric: true }))),
-    err => { console.warn(`[school-firebase] subscribeToStudents error:`, err?.code || err); cb([]); }
-  );
+export const getStudents = async (schoolId: string, classId?: string, className?: string): Promise<SchoolStudent[]> => {
+  const local = getLocalStudents(schoolId);
+  const matchingLocal = classId
+    ? local.filter((s: any) => isStudentInClass(s, classId, className) && s.active !== false)
+    : local.filter((s: any) => s.active !== false);
 
-export const subscribeToAllStudents = (schoolId: string, cb: (students: SchoolStudent[]) => void) =>
-  onSnapshot(
+  if (matchingLocal.length > 0) {
+    return matchingLocal;
+  }
+
+  if (db) {
+    try {
+      const snap = await withTimeout(getDocs(col(`schools/${schoolId}/students`)), 2500);
+      const all = (snap as any).docs.map((doc: any) => doc.data() as SchoolStudent).filter((s: any) => s.active !== false);
+      if (all.length > 0) {
+        setLocalStudents(schoolId, all);
+        const filtered = classId ? all.filter((s: any) => isStudentInClass(s, classId, className)) : all;
+        if (filtered.length > 0) return filtered;
+      }
+    } catch {}
+  }
+
+  const demo = getDemoSchoolDataset();
+  if (demo && demo.students && demo.students.length > 0) {
+    const filteredDemo = classId
+      ? demo.students.filter(s => isStudentInClass(s, classId, className) && s.active !== false)
+      : demo.students.filter(s => s.active !== false);
+
+    if (filteredDemo.length > 0) {
+      const demoIds = new Set(filteredDemo.map(s => s.id));
+      const extraLocal = matchingLocal.filter(s => !demoIds.has(s.id));
+      return [...filteredDemo, ...extraLocal];
+    }
+    return classId ? filteredDemo : demo.students;
+  }
+  return matchingLocal;
+};
+
+export const subscribeToStudents = (schoolId: string, classId: string, cb: (students: SchoolStudent[]) => void) => {
+  const local = getLocalStudents(schoolId);
+  const matchingLocal = classId ? local.filter(s => isStudentInClass(s, classId) && s.active !== false) : local.filter(s => s.active !== false);
+  if (matchingLocal.length > 0) {
+    cb(matchingLocal);
+  } else {
+    const demo = getDemoSchoolDataset();
+    if (demo && demo.students && demo.students.length > 0) {
+      cb(classId ? demo.students.filter(s => isStudentInClass(s, classId)) : demo.students);
+    }
+  }
+
+  return onSnapshot(
     query(col(`schools/${schoolId}/students`), where("active", "==", true)),
-    snap => cb(snap.docs.map(d => d.data() as SchoolStudent)),
-    err => { console.warn(`[school-firebase] subscribeToAllStudents error:`, err?.code || err); cb([]); }
+    snap => {
+      if (!snap.empty) {
+        const all = snap.docs.map(d => d.data() as SchoolStudent);
+        const filtered = classId ? all.filter(s => isStudentInClass(s, classId)) : all;
+        if (filtered.length > 0) {
+          cb(filtered.sort((a, b) => a.rollNo.localeCompare(b.rollNo, undefined, { numeric: true })));
+        }
+      }
+    },
+    err => { console.warn(`[school-firebase] subscribeToStudents error:`, err?.code || err); }
   );
+};
+
+export const subscribeToAllStudents = (schoolId: string, cb: (students: SchoolStudent[]) => void) => {
+  const local = getLocalStudents(schoolId);
+  const demo = getDemoSchoolDataset();
+  if (local.length >= (demo?.students?.length || 50)) {
+    cb(local.filter(s => s.active !== false));
+  } else if (demo && demo.students && demo.students.length > 0) {
+    const localMap = new Map(local.map(s => [s.id, s]));
+    const merged = demo.students.map(s => localMap.get(s.id) || s);
+    local.forEach(s => {
+      if (!merged.some(m => m.id === s.id)) merged.push(s);
+    });
+    cb(merged.filter(s => s.active !== false));
+  } else if (local.length > 0) {
+    cb(local.filter(s => s.active !== false));
+  }
+
+  return onSnapshot(
+    query(col(`schools/${schoolId}/students`), where("active", "==", true)),
+    snap => {
+      if (!snap.empty) {
+        cb(snap.docs.map(d => d.data() as SchoolStudent));
+      }
+    },
+    err => { console.warn(`[school-firebase] subscribeToAllStudents error:`, err?.code || err); }
+  );
+};
 
 export const updateStudent = async (schoolId: string, studentId: string, data: Partial<SchoolStudent>) => {
   const sanitized = sanitizeForFirestore(data);
+  try {
+    const local = getLocalStudents(schoolId);
+    if (local && local.length > 0) {
+      const next = local.map((s: any) => (s.id === studentId ? { ...s, ...sanitized } : s));
+      setLocalStudents(schoolId, next);
+    }
+    const demoRaw = localStorage.getItem("nst_demo_school_dataset");
+    if (demoRaw) {
+      const parsed = JSON.parse(demoRaw);
+      if (parsed?.students) {
+        parsed.students = parsed.students.map((s: any) => (s.id === studentId ? { ...s, ...sanitized } : s));
+        localStorage.setItem("nst_demo_school_dataset", JSON.stringify(parsed));
+      }
+    }
+  } catch (e) {}
+
   if (rtdb) {
     try { await withTimeout(update(ref(rtdb, `schools/${schoolId}/students/${studentId}`), sanitized), 2000); } catch {}
   }
@@ -1233,10 +1510,20 @@ const LOCAL_FEES_PREFIX = "nst_school_fees_";
 export const getLocalFees = (schoolId: string): MonthlyFee[] => {
   try {
     const raw = localStorage.getItem(`${LOCAL_FEES_PREFIX}${schoolId}`);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch {}
+
+  const demo = getDemoSchoolDataset();
+  if (demo && demo.fees && Array.isArray(demo.fees) && demo.fees.length > 0) {
+    try {
+      localStorage.setItem(`${LOCAL_FEES_PREFIX}${schoolId}`, JSON.stringify(demo.fees));
+    } catch {}
+    return demo.fees;
   }
+  return [];
 };
 
 export const setLocalFees = (schoolId: string, fees: MonthlyFee[]) => {
@@ -1249,10 +1536,21 @@ export const saveFee = async (fee: MonthlyFee) => {
   const sanitized = sanitizeForFirestore(fee);
   const id = `${fee.studentId}_${fee.month || fee.receiptNo || Date.now()}`;
 
-  // 1. Cache locally
+  // 1. Cache locally with proper (studentId, month) matching
   try {
     const current = getLocalFees(fee.schoolId);
-    const updated = [sanitized, ...current.filter((f: any) => `${f.studentId}_${f.month}` !== `${fee.studentId}_${fee.month}` && f.receiptNo !== fee.receiptNo)];
+    const updated = [
+      sanitized,
+      ...current.filter((f: any) => {
+        if (f.studentId && fee.studentId && f.month && fee.month) {
+          return !(f.studentId === fee.studentId && f.month === fee.month);
+        }
+        if (f.receiptNo && fee.receiptNo) {
+          return f.receiptNo !== fee.receiptNo;
+        }
+        return true;
+      })
+    ];
     setLocalFees(fee.schoolId, updated);
   } catch {}
 
@@ -1284,7 +1582,7 @@ export const getStudentFees = async (schoolId: string, studentId: string): Promi
         .sort((a, b) => (b.month || "").localeCompare(a.month || ""));
       if (all.length > 0) {
         const cur = getLocalFees(schoolId);
-        const merged = [...all, ...cur.filter(c => !all.some(a => a.receiptNo === c.receiptNo))];
+        const merged = [...all, ...cur.filter(c => !all.some(a => a.studentId === c.studentId && a.month === c.month))];
         setLocalFees(schoolId, merged);
         return all;
       }
@@ -1294,33 +1592,58 @@ export const getStudentFees = async (schoolId: string, studentId: string): Promi
 };
 
 export const getMonthlyFees = async (schoolId: string, month: string, classId?: string): Promise<MonthlyFee[]> => {
-  const local = getLocalFees(schoolId).filter(f => f.month === month && (!classId || f.classId === classId));
-  if (local.length > 0) return local;
+  const local = getLocalFees(schoolId).filter(f => f.month === month && (!classId || isStudentInClass(f, classId)));
+  const demo = getDemoSchoolDataset();
+  const demoFees = (demo && demo.fees && demo.fees.length > 0)
+    ? demo.fees.filter(f => f.month === month && (!classId || isStudentInClass(f, classId)))
+    : [];
+
+  const map = new Map<string, MonthlyFee>();
+  demoFees.forEach(f => map.set(f.studentId, f));
+  local.forEach(f => map.set(f.studentId, f)); // Local changes override demo fees
 
   if (db) {
     try {
       const snap = await withTimeout(getDocs(col(`schools/${schoolId}/fees`)), 2500);
       let all = snap.docs.map(d => d.data() as MonthlyFee).filter(f => f.month === month);
-      if (classId) all = all.filter(f => f.classId === classId);
-      return all.sort((a, b) => (a.studentName || "").localeCompare(b.studentName || ""));
+      if (classId) all = all.filter(f => isStudentInClass(f, classId));
+      all.forEach(f => {
+        if (!map.has(f.studentId)) map.set(f.studentId, f);
+      });
     } catch {}
   }
-  return local;
+
+  return Array.from(map.values()).sort((a, b) => (a.studentName || "").localeCompare(b.studentName || ""));
 };
 
 export const getSchoolFeeHistory = async (schoolId: string): Promise<MonthlyFee[]> => {
   const local = getLocalFees(schoolId);
-  if (local.length > 0) return local;
+  const demo = getDemoSchoolDataset();
+  const demoFees: MonthlyFee[] = (demo && demo.fees) ? demo.fees : [];
+
+  const feeMap = new Map<string, MonthlyFee>();
+  demoFees.forEach((df: any) => {
+    if (df.studentId && df.month) feeMap.set(`${df.studentId}_${df.month}`, df);
+  });
+  local.forEach((lf: any) => {
+    if (lf.studentId && lf.month) feeMap.set(`${lf.studentId}_${lf.month}`, lf);
+    else feeMap.set(lf.receiptNo || lf.id || String(Math.random()), lf);
+  });
 
   if (db) {
     try {
       const snap = await withTimeout(getDocs(col(`schools/${schoolId}/fees`)), 2500);
-      return snap.docs
-        .map(d => d.data() as MonthlyFee)
-        .sort((a, b) => (b.month || "").localeCompare(a.month || ""));
+      const all = snap.docs.map(d => d.data() as MonthlyFee);
+      all.forEach((af: any) => {
+        const key = `${af.studentId}_${af.month}`;
+        if (af.studentId && af.month && !local.some(l => l.studentId === af.studentId && l.month === af.month)) {
+          feeMap.set(key, af);
+        }
+      });
     } catch {}
   }
-  return local;
+
+  return Array.from(feeMap.values()).sort((a, b) => (b.month || "").localeCompare(a.month || ""));
 };
 
 export const subscribeToClassFees = (schoolId: string, month: string, classId: string, cb: (fees: MonthlyFee[]) => void) => {

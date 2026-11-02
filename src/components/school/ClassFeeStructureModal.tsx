@@ -19,8 +19,6 @@ export const ClassFeeStructureModal: React.FC<Props> = ({
   schoolId,
   onUpdated,
 }) => {
-  if (!isOpen) return null;
-
   const [selectedClassId, setSelectedClassId] = useState<string>(() => classes[0]?.id || "");
   const currentClass = classes.find(c => c.id === selectedClassId) || classes[0];
 
@@ -35,13 +33,13 @@ export const ClassFeeStructureModal: React.FC<Props> = ({
         customHeads: c.feeStructure.customHeads || [],
       };
     }
-    // Standard defaults matching DPS layout
+    // Standard defaults matching school layout
     return {
       admissionFee: 65000,
-      tuitionFee: Number(c?.defaultFee || 19140),
+      tuitionFee: Number(c?.defaultFee || 2000),
       cautionMoney: 60000,
       annualCharges: 23320,
-      busFee: 10360,
+      busFee: Number(c?.feeStructure?.busFee ?? 1000),
       customHeads: [],
     };
   };
@@ -51,6 +49,8 @@ export const ClassFeeStructureModal: React.FC<Props> = ({
   const [successMsg, setSuccessMsg] = useState("");
   const [newHeadName, setNewHeadName] = useState("");
   const [newHeadAmount, setNewHeadAmount] = useState<number | "">("");
+
+  if (!isOpen) return null;
 
   const handleClassChange = (newClassId: string) => {
     setSelectedClassId(newClassId);
@@ -81,17 +81,17 @@ export const ClassFeeStructureModal: React.FC<Props> = ({
     }));
   };
 
-  const handleApplyDpsPreset = () => {
-    // Exact values from Delhi Public School receipt image uploaded by user
+  const handleApplyStandardPreset = () => {
+    // Standard authentic values matching official receipt structure
     setStructure({
       admissionFee: 65000,
       tuitionFee: 19140,
       cautionMoney: 60000,
       annualCharges: 23320,
-      busFee: 10360,
+      busFee: 1000,
       customHeads: [],
     });
-    setSuccessMsg("DPS Receipt photo preset apply ho gaya!");
+    setSuccessMsg("Standard receipt preset apply ho gaya!");
   };
 
   const handleSave = async () => {
@@ -163,12 +163,12 @@ export const ClassFeeStructureModal: React.FC<Props> = ({
             </div>
             <button
               type="button"
-              onClick={handleApplyDpsPreset}
+              onClick={handleApplyStandardPreset}
               className="px-3.5 py-2 text-xs font-bold bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-lg flex items-center justify-center gap-1.5 shadow transition shrink-0 self-end sm:self-auto"
-              title="Delhi Public School Receipt ke standard heads load karein"
+              title="Standard School Receipt ke heads load karein"
             >
               <Sparkles className="w-3.5 h-3.5" />
-              Load DPS Receipt Preset
+              Load Standard Preset
             </button>
           </div>
 
@@ -275,12 +275,27 @@ export const ClassFeeStructureModal: React.FC<Props> = ({
 
               {/* 5. Bus Fee */}
               <div className="col-span-1 sm:col-span-2 bg-slate-50 dark:bg-slate-800/40 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
-                <div className="flex justify-between items-center mb-1.5">
+                <div className="flex justify-between items-center mb-1.5 flex-wrap gap-1">
                   <span className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
                     <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-300 text-[10px] font-black flex items-center justify-center">5</span>
                     Bus Fee (Transport)
                   </span>
-                  <span className="text-[10px] bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 rounded font-bold">Transport Facility</span>
+                  <div className="flex items-center gap-1">
+                    {[0, 500, 800, 1000, 1200, 1500, 2000].map(amt => (
+                      <button
+                        key={amt}
+                        type="button"
+                        onClick={() => setStructure({ ...structure, busFee: amt })}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold cursor-pointer transition ${
+                          structure.busFee === amt
+                            ? "bg-emerald-600 text-white"
+                            : "bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-300"
+                        }`}
+                      >
+                        ₹{amt}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <div className="relative">
                   <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">₹</span>
@@ -289,7 +304,7 @@ export const ClassFeeStructureModal: React.FC<Props> = ({
                     value={structure.busFee}
                     onChange={e => setStructure({ ...structure, busFee: Number(e.target.value) || 0 })}
                     className="w-full pl-7 pr-3 py-2 text-sm font-black bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white"
-                    placeholder="10360"
+                    placeholder="e.g. 800 ya 1200"
                   />
                 </div>
               </div>

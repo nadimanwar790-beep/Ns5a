@@ -112,11 +112,13 @@ export default defineConfig(({ command }) => {
     server: {
       port: 3000,
       host: '0.0.0.0',
+      allowedHosts: true,
       hmr: false,
     },
     preview: {
       port: 3000,
       host: '0.0.0.0',
+      allowedHosts: true,
     },
   };
 });

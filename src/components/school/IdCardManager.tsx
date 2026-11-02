@@ -12,8 +12,8 @@ import {
 import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeaderEditorModal";
 import { QuickAddStudentModal } from "./QuickAddStudentModal";
 import { DirectUploadButton } from "../DirectUploadButton";
-import { updateSchool } from "../../school-firebase";
-import { cleanLogoUrl } from "./feeReceiptUtils";
+import { updateSchool, isStudentInClass } from "../../school-firebase";
+import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo } from "./feeReceiptUtils";
 
 interface Props {
   school: School;
@@ -63,7 +63,7 @@ export const IdCardManager: React.FC<Props> = ({
     address: school?.address || "",
     phone: school?.mobile || school?.phone || "",
     email: school?.email || "",
-    logoUrl: school?.logoUrl || "",
+    logoUrl: getSavedSchoolLogo(school?.logoUrl),
     principalName: school?.principalName || "",
     principalTitle: "Principal / Authorized Signatory",
     code: school?.code || "",
@@ -86,7 +86,7 @@ export const IdCardManager: React.FC<Props> = ({
       address: school.address || "",
       phone: school.mobile || school.phone || "",
       email: school.email || "",
-      logoUrl: school.logoUrl || "",
+      logoUrl: getSavedSchoolLogo(school.logoUrl || previous.logoUrl),
       principalName: school.principalName || "",
       code: school.code || "",
       principalPhone: school.principalPhone || "",
@@ -119,7 +119,7 @@ export const IdCardManager: React.FC<Props> = ({
 
   // Filtered lists
   const filteredStudents = students.filter(s => {
-    const classMatch = selectedClassId === "all" || s.classId === selectedClassId;
+    const classMatch = selectedClassId === "all" || isStudentInClass(s, selectedClassId);
     const searchMatch = !search.trim() ||
       s.name.toLowerCase().includes(search.toLowerCase()) ||
       (s.rollNo && s.rollNo.toLowerCase().includes(search.toLowerCase())) ||
@@ -296,13 +296,21 @@ export const IdCardManager: React.FC<Props> = ({
           {/* Top School Brand Header */}
           <div className={`${currentTheme.headerBg} px-2.5 py-1 text-white flex items-center justify-between shrink-0`}>
             <div className="flex items-center gap-1.5 min-w-0">
-              {schoolDetails.logoUrl ? (
-                <img src={schoolDetails.logoUrl} alt="Logo" className="w-5 h-5 rounded-full bg-white object-contain p-0.5 shrink-0" />
-              ) : (
-                <div className="w-5 h-5 rounded-full bg-white/20 flex items-center justify-center font-black text-[8.5px] text-white shrink-0">
-                  {(schoolDetails.schoolName || "SC").slice(0, 2).toUpperCase()}
-                </div>
-              )}
+              {getSavedSchoolLogo(schoolDetails.logoUrl) ? (
+                <img
+                  src={cleanLogoUrl(getSavedSchoolLogo(schoolDetails.logoUrl))}
+                  alt="School Logo"
+                  className="w-5 h-5 rounded-full bg-white object-contain p-0.5 shrink-0"
+                  onError={(e) => {
+                    (e.target as HTMLElement).style.display = 'none';
+                    const fb = (e.target as HTMLElement).parentElement?.querySelector('.id-h-logo-fallback') as HTMLElement;
+                    if (fb) fb.style.display = 'flex';
+                  }}
+                />
+              ) : null}
+              <div className={`w-5 h-5 rounded-full bg-white/20 items-center justify-center font-black text-[8.5px] text-white shrink-0 id-h-logo-fallback ${getSavedSchoolLogo(schoolDetails.logoUrl) ? 'hidden' : 'flex'}`}>
+                {(schoolDetails.schoolName || "SC").slice(0, 2).toUpperCase()}
+              </div>
               <div className="min-w-0 leading-tight">
                 {showSchoolDetail("schoolName") && <h3 className="font-black text-[10.5px] tracking-tight truncate max-w-[200px] text-white">{schoolDetails.schoolName}</h3>}
                 {showSchoolDetail("affiliation") && <p className="text-[6.5px] text-indigo-100 truncate max-w-[200px]">{schoolDetails.affiliation || schoolDetails.tagline}</p>}
@@ -478,10 +486,10 @@ export const IdCardManager: React.FC<Props> = ({
         {/* Header with School Branding */}
         <div className={`${currentTheme.headerBg} pt-3 pb-1.5 px-2 text-center text-white relative shrink-0`}>
           <div className="flex items-center justify-center gap-1.5 mb-0.5">
-            {schoolDetails.logoUrl ? (
+            {getSavedSchoolLogo(schoolDetails.logoUrl) ? (
               <img
-                src={cleanLogoUrl(schoolDetails.logoUrl)}
-                alt="Logo"
+                src={cleanLogoUrl(getSavedSchoolLogo(schoolDetails.logoUrl))}
+                alt="School Logo"
                 className="w-5 h-5 rounded-full bg-white p-0.5 object-contain shrink-0"
                 onError={(e) => {
                   (e.target as HTMLElement).style.display = 'none';
@@ -490,7 +498,7 @@ export const IdCardManager: React.FC<Props> = ({
                 }}
               />
             ) : null}
-            <div className={`w-5 h-5 rounded-full bg-white/20 items-center justify-center font-black text-[8px] text-white shrink-0 id-logo-fallback ${schoolDetails.logoUrl ? 'hidden' : 'flex'}`}>
+            <div className={`w-5 h-5 rounded-full bg-white/20 items-center justify-center font-black text-[8px] text-white shrink-0 id-logo-fallback ${getSavedSchoolLogo(schoolDetails.logoUrl) ? 'hidden' : 'flex'}`}>
               {(schoolDetails.schoolName || "SC").slice(0, 2).toUpperCase()}
             </div>
             {showSchoolDetail("schoolName") && <h3 className="font-black text-[11px] tracking-tight leading-tight line-clamp-1">{schoolDetails.schoolName}</h3>}
@@ -924,12 +932,31 @@ export const IdCardManager: React.FC<Props> = ({
                   kind="image"
                   compact
                   currentUrl={schoolDetails.logoUrl}
-                  onUploaded={url => setSchoolDetails(p => ({ ...p, logoUrl: url }))}
-                  onClear={() => setSchoolDetails(p => ({ ...p, logoUrl: "" }))}
-                  label="Upload Logo Image"
+                  onUploaded={url => {
+                    const cleaned = cleanLogoUrl(url);
+                    setSchoolDetails(p => ({ ...p, logoUrl: cleaned }));
+                    if (cleaned && !isAppLogo(cleaned) && typeof localStorage !== 'undefined') {
+                      localStorage.setItem("nst_active_school_logo", cleaned);
+                      localStorage.setItem("nst_school_logo", cleaned);
+                    }
+                    if (school?.id) {
+                      updateSchool(school.id, { logoUrl: cleaned }).catch(() => {});
+                    }
+                  }}
+                  onClear={() => {
+                    setSchoolDetails(p => ({ ...p, logoUrl: "" }));
+                    if (typeof localStorage !== 'undefined') {
+                      localStorage.removeItem("nst_active_school_logo");
+                      localStorage.removeItem("nst_school_logo");
+                    }
+                    if (school?.id) {
+                      updateSchool(school.id, { logoUrl: "" }).catch(() => {});
+                    }
+                  }}
+                  label="Upload School Logo"
                 />
-                {schoolDetails.logoUrl && (
-                  <img src={schoolDetails.logoUrl} alt="Logo preview" className="w-6 h-6 rounded-full object-cover border" />
+                {schoolDetails.logoUrl && !isAppLogo(schoolDetails.logoUrl) && (
+                  <img src={cleanLogoUrl(schoolDetails.logoUrl)} alt="Logo preview" className="w-6 h-6 rounded-full object-contain p-0.5 bg-white border border-slate-300" />
                 )}
               </div>
               <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold">

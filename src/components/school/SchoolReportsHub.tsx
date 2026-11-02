@@ -5,6 +5,7 @@ import {
   FileSpreadsheet, Printer, ChevronLeft, Download, Users, IndianRupee,
   Calendar, Award, CheckCircle, AlertTriangle, Filter, Search
 } from "lucide-react";
+import { getSavedSchoolLogo, isAppLogo } from "./feeReceiptUtils";
 
 interface Props {
   school: School;
@@ -127,19 +128,25 @@ export const SchoolReportsHub: React.FC<Props> = ({
         <div className="bg-white rounded-2xl border border-slate-300 p-8 shadow-xl text-slate-900 print:shadow-none print:border-none print:p-0">
           {/* Header */}
           <div className="border-b-2 border-slate-900 pb-4 mb-6 text-center">
-            <div className="flex items-center justify-center gap-3 mb-1">
-              {school.logoUrl ? (
-                <img src={school.logoUrl} alt="Logo" className="w-12 h-12 object-cover rounded-xl" />
-              ) : (
-                <div className="w-12 h-12 rounded-xl bg-slate-900 text-white font-black text-base flex items-center justify-center">
-                  {school.name.slice(0, 2).toUpperCase()}
+            {(() => {
+              const savedLogo = getSavedSchoolLogo(school.logoUrl);
+              const hasCustomLogo = Boolean(savedLogo && !isAppLogo(savedLogo));
+              return (
+                <div className="flex items-center justify-center gap-3 mb-1">
+                  {hasCustomLogo ? (
+                    <img src={savedLogo} alt="Logo" className="w-12 h-12 object-contain rounded-xl border border-slate-200 bg-white p-0.5" />
+                  ) : (
+                    <div className="w-12 h-12 rounded-xl bg-slate-900 text-white font-black text-base flex items-center justify-center">
+                      {(school.name || "SC").slice(0, 2).toUpperCase()}
+                    </div>
+                  )}
+                  <div>
+                    <h2 className="text-2xl font-black uppercase text-slate-900">{school.name}</h2>
+                    {school.address && <p className="text-xs text-slate-600">{school.address}</p>}
+                  </div>
                 </div>
-              )}
-              <div>
-                <h2 className="text-2xl font-black uppercase text-slate-900">{school.name}</h2>
-                {school.address && <p className="text-xs text-slate-600">{school.address}</p>}
-              </div>
-            </div>
+              );
+            })()}
             <div className="inline-block px-4 py-1 rounded-full bg-slate-900 text-white font-black text-xs uppercase tracking-wider mt-2">
               {reportType === "student_directory" && "OFFICIAL STUDENT MASTER DIRECTORY"}
               {reportType === "fee_defaulters" && "FEE OUTSTANDING & DEFAULTERS STATEMENT"}

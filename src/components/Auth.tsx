@@ -410,8 +410,8 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
           const realPhone = embeddedPhone || foundStaff?.phone || (realTeacherName.toLowerCase().includes('anjali') ? '9871234005' : '9811023460');
           const realDesignation = embeddedTitle || foundStaff?.designation || (realTeacherName.toLowerCase().includes('anjali') ? 'PRT PRIMARY TEACHER' : 'Teacher');
           const realDept = cleanClassOrDept || foundStaff?.department || (realTeacherName.toLowerCase().includes('anjali') ? 'Primary' : 'Academic');
-          const realSchoolName = embeddedSchoolName || foundStaff?.schoolName || (cleanSchoolId.includes('nstz') || realTeacherName.toLowerCase().includes('anjali') ? 'Nstz' : 'Delhi Public School');
-          const realEmail = foundStaff?.email || `${realTeacherName.toLowerCase().replace(/[^a-z0-9]/g, '')}@teacher.${cleanSchoolId}.edu.in`;
+          const realSchoolName = embeddedSchoolName || foundStaff?.schoolName || 'Nstz';
+          const realEmail = foundStaff?.email || `${realTeacherName.toLowerCase().replace(/[^a-z0-9]/g, '')}@teacher.nstz.edu.in`;
 
           matchedTeacherUser = {
             id: realTeacherId,
@@ -475,9 +475,11 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
           const realBlood = embeddedBloodGroup || found?.bloodGroup || (realName.toLowerCase().includes('nadim') ? 'O+' : '');
           const realDob = embeddedDob || found?.dateOfBirth || (realName.toLowerCase().includes('nadim') ? '2002-11-01' : '');
           const realAddress = embeddedAddress || found?.address || (realName.toLowerCase().includes('nadim') ? 'Chapra' : '');
-          const realFee = embeddedMonthlyFee !== undefined ? embeddedMonthlyFee : (found?.monthlyFee !== undefined ? found.monthlyFee : 0);
-          const realSchoolName = embeddedSchoolName || found?.schoolName || (cleanSchoolId.includes('nstz') || realName.toLowerCase().includes('nadim') ? 'Nstz' : 'Delhi Public School');
-          const realEmail = found?.email || (realAdmissionNo ? `${realAdmissionNo.toLowerCase().replace(/[^a-z0-9]/g, '')}@student.dps.edu.in` : `student_${realStudentId.slice(-6)}@dps.edu.in`);
+          const realFee = (embeddedMonthlyFee !== undefined && embeddedMonthlyFee > 0)
+            ? embeddedMonthlyFee
+            : ((found?.monthlyFee !== undefined && found.monthlyFee > 0) ? found.monthlyFee : 1800);
+          const realSchoolName = embeddedSchoolName || found?.schoolName || 'Nstz';
+          const realEmail = found?.email || (realAdmissionNo ? `${realAdmissionNo.toLowerCase().replace(/[^a-z0-9]/g, '')}@student.nstz.edu.in` : `student_${realStudentId.slice(-6)}@nstz.app`);
 
           matchedStudentUser = {
             id: realStudentId,
@@ -597,6 +599,7 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
           subscriptionTier: 'PRO',
           provider: 'qr_student_id',
           isQrLogin: true,
+          monthlyFee: 1800,
           admissionNo: realAdm,
           photoURL: found?.photoUrl || ''
         };
@@ -652,6 +655,7 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
           subscriptionTier: 'PRO',
           provider: 'qr_student_id',
           isQrLogin: true,
+          monthlyFee: 1800,
           admissionNo: realAdm,
           bloodGroup: blood || found?.bloodGroup
         };
@@ -681,7 +685,7 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
           mobile: foundStaff?.phone || '9811023460',
           role: 'TEACHER',
           schoolId: schoolId,
-          schoolName: foundStaff?.schoolName || (schoolId.includes('nstz') ? 'Nstz' : 'Delhi Public School'),
+          schoolName: foundStaff?.schoolName || 'Nstz',
           department: foundStaff?.department || 'Primary',
           designation: foundStaff?.designation || 'Teacher',
           credits: 500,
@@ -837,6 +841,7 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
             profileCompleted: true,
             provider: 'qr_student_id',
             isQrLogin: true,
+            monthlyFee: 1800,
             admissionNo: found.admissionNo
           };
         }
@@ -844,6 +849,11 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
 
       // ── EXECUTE STUDENT LOGIN (INSTANT & NON-BLOCKING) ──
       if (matchedStudentUser) {
+        // Ensure student has valid monthlyFee default
+        if (!matchedStudentUser.monthlyFee || matchedStudentUser.monthlyFee <= 0) {
+          matchedStudentUser.monthlyFee = 1800;
+        }
+
         // 1. Immediately cache locally to localStorage so login never fails and has 0ms latency
         localStorage.setItem('nst_current_user', JSON.stringify(matchedStudentUser));
         localStorage.setItem('nsta_cached_user', JSON.stringify(matchedStudentUser));
@@ -870,6 +880,7 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
             admissionNo: matchedStudentUser.admissionNo || '',
             phone: matchedStudentUser.mobile || '',
             classId: matchedStudentUser.classLevel || 'cls_10',
+            monthlyFee: 1800,
             active: true,
             createdAt: new Date().toISOString()
           };
@@ -1493,35 +1504,6 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
           {/* ═══════════════════════════════════════════════════════════════════ */}
           {showManualAuth && (
             <div className="w-full flex flex-col items-center">
-              {/* Segmented Switcher Pill: Login / Create Account */}
-              {view !== 'RECOVERY' && view !== 'SUCCESS_ID' && (
-                <div className="w-full mb-3 p-1 bg-slate-200/80 dark:bg-slate-800/80 rounded-2xl flex items-center shadow-inner border border-slate-300/40 dark:border-slate-700/50">
-                  <button
-                    type="button"
-                    onClick={() => { setView('LOGIN'); setError(null); }}
-                    className={`flex-1 py-2 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                      view === 'LOGIN'
-                        ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                    }`}
-                  >
-                    <UserIcon size={14} />
-                    <span>Login</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setView('SIGNUP'); setError(null); }}
-                    className={`flex-1 py-2 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                      view === 'SIGNUP'
-                        ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/30'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                    }`}
-                  >
-                    <Sparkles size={14} />
-                    <span>Create Account</span>
-                  </button>
-                </div>
-              )}
 
               {/* SUB-VIEW: RECOVERY */}
               {view === 'RECOVERY' && (
@@ -1704,29 +1686,6 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
                       </svg>
                       <span>Google Sign In</span>
                     </button>
-
-                    {/* Quick School Admin / Principal Login */}
-                    <button
-                      type="button"
-                      onClick={handleQuickAdminLogin}
-                      disabled={loading}
-                      className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black flex items-center justify-center gap-2 shadow-sm transition active:scale-[0.99] cursor-pointer"
-                    >
-                      <School className="w-4 h-4 text-emerald-200" />
-                      <span>School Admin / Principal Quick Login</span>
-                    </button>
-
-                    {/* Guest study room */}
-                    {onOpenGuestStudyRoom && (
-                      <button
-                        type="button"
-                        onClick={onOpenGuestStudyRoom}
-                        className="w-full py-2 rounded-xl bg-transparent text-slate-500 hover:text-slate-800 dark:hover:text-white text-xs font-bold flex items-center justify-center gap-1.5 transition"
-                      >
-                        <Users className="w-3.5 h-3.5" />
-                        <span>Guest Study Room Join Karein</span>
-                      </button>
-                    )}
                   </form>
 
                   {/* Switch to Signup */}

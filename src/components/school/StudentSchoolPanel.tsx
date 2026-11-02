@@ -23,7 +23,9 @@ import {
   FileText,
   AlertTriangle,
   Sparkles,
-  ExternalLink
+  ExternalLink,
+  LogOut,
+  MessageCircle,
 } from "lucide-react";
 import QRCode from "react-qr-code";
 import {
@@ -42,9 +44,11 @@ import {
   updateStudentPhoto,
   getHomework,
 } from "../../school-firebase";
+import { getSavedSchoolLogo, isAppLogo } from "./feeReceiptUtils";
 import { getDemoSchoolDataset, isHolidayDate } from "./demoDataStore";
 import { OfficialFeeReceiptModal } from "./OfficialFeeReceiptModal";
 import { QrAttendanceScannerModal } from "./QrAttendanceScannerModal";
+import { downloadFeeDocument, shareFeeReceiptOnWhatsApp } from "./feeDocument";
 import type { School, SchoolStudent } from "../../school-types";
 
 interface Props {
@@ -55,6 +59,7 @@ interface Props {
   sessionId?: string;
   onOpenPlatformContent?: () => void;
   onBack?: () => void;
+  onLogout?: () => void;
   // Backward compatibility props
   students?: any[];
   onAddStudent?: any;
@@ -71,8 +76,25 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   sessionId,
   onOpenPlatformContent,
   onBack,
+  onLogout,
 }) => {
   const [activeTab, setActiveTab] = useState<TabType>("overview");
+
+  const handleStudentLogout = () => {
+    try {
+      localStorage.removeItem("nst_current_user");
+      localStorage.removeItem("nsta_cached_user");
+      localStorage.removeItem("nst_is_guest");
+      localStorage.setItem("nst_logged_out", "true");
+    } catch (e) {}
+    if (onLogout) {
+      onLogout();
+    } else if (onBack) {
+      onBack();
+    } else {
+      window.location.reload();
+    }
+  };
   const [school, setSchool] = useState<School | null>(null);
   const [selectedFeeForReceipt, setSelectedFeeForReceipt] = useState<any | null>(null);
   const [showQrAttendanceScanner, setShowQrAttendanceScanner] = useState(false);
@@ -176,6 +198,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
       const safeStudent: SchoolStudent = {
         id: matchId || `std_${Date.now()}`,
         schoolId: sessionUser?.schoolId || schoolId,
+        schoolName: sessionUser?.schoolName || (sessionUser as any)?.school || (isNadim ? "Nstz" : (sessionUser?.schoolName || "Nstz")),
         sessionId: sessionId || "demo_session_2026_27",
         classId: (sessionUser as any)?.classId || classId || sessionUser?.classLevel || (isNadim ? "cls_nursery" : "cls_10"),
         className: (sessionUser as any)?.className || (isNadim ? "NURSERY" : undefined),
@@ -188,7 +211,9 @@ export const StudentSchoolPanel: React.FC<Props> = ({
         bloodGroup: sessionUser?.bloodGroup || (isNadim ? "O+" : undefined),
         dateOfBirth: (sessionUser as any)?.dateOfBirth || (isNadim ? "2002-11-01" : undefined),
         address: (sessionUser as any)?.address || (isNadim ? "Chapra" : undefined),
-        monthlyFee: typeof sessionUser?.monthlyFee === "number" ? sessionUser.monthlyFee : (isNadim ? 0 : 0),
+        monthlyFee: (typeof sessionUser?.monthlyFee === "number" && sessionUser.monthlyFee > 0)
+          ? sessionUser.monthlyFee
+          : (isNadim ? 1800 : 1500),
         photoUrl: sessionUser?.photoURL || sessionUser?.photoUrl || "",
         active: true,
         createdAt: new Date().toISOString(),
@@ -470,8 +495,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
     if (cls && typeof cls.defaultFee === "number" && cls.defaultFee > 0) {
       return cls.defaultFee;
     }
-    if (activeStudent.monthlyFee === 0) return 0;
-    return 1500;
+    return 1800;
   }, [activeStudent, dataset, school, schoolId, studentClassLabel]);
 
   const tuitionFee = Math.round(studentMonthlyFee * 0.7);
@@ -518,17 +542,99 @@ export const StudentSchoolPanel: React.FC<Props> = ({
     }));
   }, [liveFees, currentStudent, dataset, studentMonthlyFee, schoolId]);
 
-  const pendingDues = useMemo(() => {
-    return allStudentFees
-      .filter((f: any) => {
-        if (typeof f?.paid === "boolean") return !f.paid;
-        return f?.status === "pending" || f?.status === "due" || f?.status === "partial";
-      })
-      .reduce((sum: number, f: any) => {
-        const amt = f?.balanceDue ?? f?.amount ?? f?.monthlyAmount ?? studentMonthlyFee;
-        return sum + Number(amt || 0);
-      }, 0);
+  const feeSummary = useMemo(() => {
+    let totalBilled = 0;
+    let totalDeposited = 0;
+    let totalRemaining = 0;
+
+    allStudentFees.forEach((f: any) => {
+      const isPaid = typeof f.paid === "boolean" ? f.paid : f.status === "paid";
+      const billed = Number(f.monthlyAmount ?? f.amount ?? studentMonthlyFee);
+      const paid = Number(f.paidAmount !== undefined ? f.paidAmount : (isPaid ? billed : 0));
+      const remaining = Number(f.balanceDue !== undefined ? f.balanceDue : (isPaid ? 0 : Math.max(0, billed - paid)));
+
+      totalBilled += billed;
+      totalDeposited += paid;
+      totalRemaining += remaining;
+    });
+
+    return { totalBilled, totalDeposited, totalRemaining };
   }, [allStudentFees, studentMonthlyFee]);
+
+  const pendingDues = feeSummary.totalRemaining;
+
+  const [downloadingFeeId, setDownloadingFeeId] = useState<string | null>(null);
+
+  const formatPaymentDateTime = (dateStr?: string) => {
+    if (!dateStr) return { date: "—", time: "" };
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return { date: dateStr, time: "" };
+      const date = d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+      const hasTime = dateStr.includes("T") || dateStr.includes(":");
+      const time = hasTime
+        ? d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true })
+        : "";
+      return { date, time };
+    } catch {
+      return { date: dateStr, time: "" };
+    }
+  };
+
+  const handleDownloadStudentPdf = async (f: any) => {
+    setDownloadingFeeId(f.id || f.month || "active");
+    try {
+      await downloadFeeDocument({
+        fee: f,
+        student: activeStudent,
+        schoolName: school?.name || "School",
+        className: `Class ${studentClassLabel}`,
+        schoolDetails: {
+          schoolName: school?.name || "School",
+          address: school?.address || "",
+          phone: school?.mobile || school?.phone || "",
+          email: school?.email || "",
+          affiliation: school?.affiliation || "",
+          code: school?.code || "",
+          logoUrl: getSavedSchoolLogo(school?.logoUrl),
+          principalSignatureUrl: school?.principalSignatureUrl || "",
+          directorSignatureUrl: school?.directorSignatureUrl || "",
+          principalName: school?.principalName || "",
+        },
+      });
+    } catch (err) {
+      console.error("Error downloading student PDF:", err);
+    } finally {
+      setDownloadingFeeId(null);
+    }
+  };
+
+  const handleShareStudentWhatsApp = async (f: any) => {
+    const isPaid = typeof f.paid === "boolean" ? f.paid : f.status === "paid";
+    try {
+      await shareFeeReceiptOnWhatsApp({
+        fee: f,
+        student: activeStudent,
+        schoolName: school?.name || "School",
+        className: `Class ${studentClassLabel}`,
+        schoolDetails: {
+          schoolName: school?.name || "School",
+          address: school?.address || "",
+          phone: school?.mobile || school?.phone || "",
+          email: school?.email || "",
+          affiliation: school?.affiliation || "",
+          code: school?.code || "",
+          logoUrl: getSavedSchoolLogo(school?.logoUrl),
+          principalSignatureUrl: school?.principalSignatureUrl || "",
+          directorSignatureUrl: school?.directorSignatureUrl || "",
+          principalName: school?.principalName || "",
+        },
+        isDueDemand: !isPaid,
+      });
+    } catch (err) {
+      console.error("Error sharing fee on WhatsApp:", err);
+    }
+  };
 
   // Load real exams
   useEffect(() => {
@@ -708,29 +814,49 @@ export const StudentSchoolPanel: React.FC<Props> = ({
     encodeURIComponent(school?.name || (activeStudent as any)?.schoolName || "")
   ].join(":")}`;
 
-  const schoolDisplayName = school?.name || (activeStudent as any)?.schoolName || "Nstz";
+  const schoolDisplayName = useMemo(() => {
+    // 1. Explicit student record schoolName
+    const studentRecordSchoolName =
+      (activeStudent as any)?.schoolName ||
+      (currentStudent as any)?.schoolName ||
+      enrichedData?.schoolName;
+
+    if (studentRecordSchoolName && studentRecordSchoolName.trim() && studentRecordSchoolName.trim().toLowerCase() !== "delhi public school") {
+      return studentRecordSchoolName.trim();
+    }
+
+    // 2. Logged-in session user schoolName
+    try {
+      const rawUser = localStorage.getItem("nst_current_user") || localStorage.getItem("nsta_cached_user");
+      if (rawUser) {
+        const parsed = JSON.parse(rawUser);
+        if (parsed?.schoolName && typeof parsed.schoolName === "string" && parsed.schoolName.trim() && parsed.schoolName.trim().toLowerCase() !== "delhi public school") {
+          return parsed.schoolName.trim();
+        }
+      }
+    } catch {}
+
+    // 3. School profile name if custom / not old mock
+    if (school?.name && school.name.trim() && school.name.trim().toLowerCase() !== "delhi public school") {
+      return school.name.trim();
+    }
+
+    // 4. Fallback to student's school or Nstz
+    return (studentRecordSchoolName && studentRecordSchoolName.trim()) || "Nstz";
+  }, [school?.name, activeStudent, currentStudent, enrichedData]);
+
   const schoolInitials = (schoolDisplayName || "NS").slice(0, 2).toUpperCase();
+  const resolvedSchoolLogo = getSavedSchoolLogo(school?.logoUrl || (activeStudent as any)?.schoolLogo);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
       {/* ── TOP NAV HEADER ─────────────────────────────────────────────────── */}
       <header className="sticky top-0 z-30 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 px-3 sm:px-6 py-2.5 flex items-center justify-between gap-3 shadow-lg">
         <div className="flex items-center gap-3">
-          {onBack && (
-            <button
-              onClick={onBack}
-              className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition flex items-center gap-1 text-xs font-bold"
-              title="Wapas NSTA Study Hub par jayein"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              <span className="hidden sm:inline">Back to Study App</span>
-            </button>
-          )}
-
           <div className="flex items-center gap-2.5">
-            {school?.logoUrl ? (
+            {resolvedSchoolLogo && !isAppLogo(resolvedSchoolLogo) ? (
               <img
-                src={school.logoUrl}
+                src={resolvedSchoolLogo}
                 alt="Logo"
                 className="w-9 h-9 rounded-xl object-contain bg-white p-0.5 border border-slate-700 shadow-md shadow-emerald-600/20"
               />
@@ -768,10 +894,20 @@ export const StudentSchoolPanel: React.FC<Props> = ({
 
           <button
             onClick={() => setActiveTab("idcard")}
-            className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-indigo-400 border border-slate-700 transition"
-            title="View Digital ID Card"
+            className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-indigo-400 border border-slate-700 transition cursor-pointer"
+            title="View Digital ID Card (QR Code)"
           >
             <QrCode className="w-4 h-4" />
+          </button>
+
+          {/* Logout button directly following QR code */}
+          <button
+            onClick={handleStudentLogout}
+            className="px-2.5 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-400 hover:text-rose-300 transition flex items-center gap-1.5 text-xs font-bold active:scale-95 cursor-pointer shadow-sm shadow-rose-950/40"
+            title="Logout (लॉगआउट)"
+          >
+            <LogOut className="w-3.5 h-3.5 text-rose-400" />
+            <span>Logout</span>
           </button>
         </div>
       </header>
@@ -1257,37 +1393,86 @@ export const StudentSchoolPanel: React.FC<Props> = ({
         {/* TAB 3: FEES & RECEIPTS ─────────────────────────────────────────── */}
         {activeTab === "fees" && (
           <div className="space-y-6">
-            <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-              <div>
-                <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <CreditCard className="w-5 h-5 text-emerald-400" />
-                  Fee History &amp; Official DPS Receipts (Session 2026-27)
-                </h3>
-                <p className="text-xs text-slate-400 mt-1">
-                  View and print official A4 &amp; 4-in-1 receipts with tuition, computer, sports &amp; exam breakdown
-                </p>
+            {/* Summary Metrics Bar */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-sm flex items-center justify-between">
+                <div>
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">कुल सत्र शुल्क (Total Fee)</span>
+                  <span className="text-xl sm:text-2xl font-black text-white font-mono tabular-nums mt-1 block">
+                    ₹{feeSummary.totalBilled.toLocaleString("en-IN")}
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-medium mt-0.5 block">Session 2026-27</span>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300">
+                  <CreditCard className="w-5 h-5 text-indigo-400" />
+                </div>
               </div>
 
-              <div className="text-right">
-                <span className="text-[10px] text-slate-400 block font-bold uppercase">Total Dues</span>
-                <span className={`text-xl font-black ${pendingDues === 0 ? "text-emerald-400" : "text-amber-400"}`}>
-                  {pendingDues === 0 ? "All Fees Cleared" : `₹${pendingDues.toLocaleString()}`}
+              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-sm flex items-center justify-between">
+                <div>
+                  <span className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider block">जमा राशि (Total Deposited)</span>
+                  <span className="text-xl sm:text-2xl font-black text-emerald-400 font-mono tabular-nums mt-1 block">
+                    ₹{feeSummary.totalDeposited.toLocaleString("en-IN")}
+                  </span>
+                  <span className="text-[10px] text-emerald-500/80 font-medium mt-0.5 block">सफलतापूर्वक प्राप्त (Verified)</span>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                </div>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-sm flex items-center justify-between">
+                <div>
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">शेष बकाया (Net Balance Due)</span>
+                  <span className={`text-xl sm:text-2xl font-black font-mono tabular-nums mt-1 block ${feeSummary.totalRemaining === 0 ? "text-emerald-400" : "text-amber-400"}`}>
+                    {feeSummary.totalRemaining === 0 ? "₹0 (Cleared)" : `₹${feeSummary.totalRemaining.toLocaleString("en-IN")}`}
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-medium mt-0.5 block">
+                    {feeSummary.totalRemaining === 0 ? "कोई बकाया नहीं" : "अगले देय माह में जुड़ेगा"}
+                  </span>
+                </div>
+                <div className={`w-10 h-10 rounded-xl border flex items-center justify-center ${feeSummary.totalRemaining === 0 ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400" : "bg-amber-500/10 border-amber-500/30 text-amber-400"}`}>
+                  <Clock className="w-5 h-5" />
+                </div>
+              </div>
+            </div>
+
+            {/* School Info Header */}
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+                  <CreditCard className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">
+                    {schoolDisplayName} • छात्र शुल्क पासबुक (Student Fee Ledger)
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    छात्र: <strong className="text-slate-200">{activeStudent.name}</strong> • अनुक्रमांक: <strong className="text-slate-200">{activeStudent.rollNo || "—"}</strong> • कक्षा: <strong className="text-slate-200">Class {studentClassLabel}</strong>
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-slate-400">
+                  {allStudentFees.filter((f: any) => f.paid).length} of {allStudentFees.length} Entries Paid
                 </span>
               </div>
             </div>
 
-            {/* Fee Table */}
-            <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
+            {/* Fee Ledger Table */}
+            <div className="p-4 sm:p-5 rounded-2xl bg-slate-900 border border-slate-800 shadow-sm overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-xs text-left text-slate-300">
-                  <thead className="bg-slate-800/80 text-slate-400 uppercase text-[10px] font-bold">
+                  <thead className="bg-slate-800/90 text-slate-400 uppercase text-[10px] font-bold">
                     <tr>
-                      <th className="py-2.5 px-3 rounded-l-lg">Fee Description</th>
-                      <th className="py-2.5 px-3">Receipt No</th>
-                      <th className="py-2.5 px-3">Amount</th>
-                      <th className="py-2.5 px-3">Status</th>
-                      <th className="py-2.5 px-3">Payment Mode</th>
-                      <th className="py-2.5 px-3 text-right rounded-r-lg">Official Receipt</th>
+                      <th className="py-3 px-3 rounded-l-lg">विवरण / माह</th>
+                      <th className="py-3 px-3">जमा तिथि व समय</th>
+                      <th className="py-3 px-3">रसीद सं.</th>
+                      <th className="py-3 px-3 text-right">कुल देय (Billed)</th>
+                      <th className="py-3 px-3 text-right">जमा (Paid)</th>
+                      <th className="py-3 px-3 text-right">शेष (Due)</th>
+                      <th className="py-3 px-3 text-center">स्थिति</th>
+                      <th className="py-3 px-3 text-right rounded-r-lg">आधिकारिक दस्तावेज</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60 font-medium">
@@ -1296,48 +1481,106 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                       const monthCode = f.month || "2026-04";
                       let monthDisplay = monthCode;
                       if (f.feeType === "admission" || f.receiptCategory === "admission") {
-                        monthDisplay = "Admission & Student Kit Fee";
+                        monthDisplay = "प्रवेश शुल्क व किट (Admission & Kit)";
                       } else if (/^\d{4}-\d{2}$/.test(monthCode)) {
                         const d = new Date(`${monthCode}-01T00:00:00`);
                         if (!isNaN(d.getTime())) {
                           monthDisplay = d.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
                         }
                       }
-                      const rNo = isPaid ? (f.receiptNo || `DPS-26-${String(idx + 1).padStart(4, "0")}`) : "—";
-                      const amount = f.amount || f.monthlyAmount || studentMonthlyFee;
-                      const mode = isPaid ? (f.payModeInfo?.mode || f.payModeInfo?.payMode || f.paymentMode || "UPI / QR") : "Pending";
-                      const date = isPaid ? (f.paidDate || f.paymentDate || `${monthCode}-05`) : "Due";
+
+                      const billed = Number(f.monthlyAmount ?? f.amount ?? studentMonthlyFee);
+                      const paid = Number(f.paidAmount !== undefined ? f.paidAmount : (isPaid ? billed : 0));
+                      const remaining = Number(f.balanceDue !== undefined ? f.balanceDue : (isPaid ? 0 : Math.max(0, billed - paid)));
+
+                      const isPartial = !isPaid && paid > 0 && remaining > 0;
+                      const rNo = isPaid || paid > 0 ? (f.receiptNo || `DPS-26-${String(idx + 1).padStart(4, "0")}`) : "—";
+
+                      const dtInfo = formatPaymentDateTime(f.paidDate || f.paymentDate);
 
                       return (
-                        <tr key={f.id || f.receiptNo || `${monthCode}_${idx}`} className="hover:bg-slate-800/40">
-                          <td className="py-3 px-3 font-bold text-white flex items-center gap-1.5">
-                            {f.feeType === "admission" && <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
-                            <span>{monthDisplay}</span>
-                          </td>
-                          <td className="py-3 px-3 font-mono text-slate-400">{rNo}</td>
-                          <td className="py-3 px-3 font-black text-white">₹{Number(amount).toLocaleString()}</td>
-                          <td className="py-3 px-3">
-                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${
-                              isPaid ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30" : "bg-amber-500/20 text-amber-400 border border-amber-500/30"
-                            }`}>
-                              {isPaid ? "Paid" : "Due"}
+                        <tr key={f.id || f.receiptNo || `${monthCode}_${idx}`} className="hover:bg-slate-800/40 transition">
+                          <td className="py-3.5 px-3">
+                            <div className="font-bold text-white flex items-center gap-1.5">
+                              {f.feeType === "admission" && <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
+                              <span>{monthDisplay}</span>
+                            </div>
+                            <span className="text-[10px] text-slate-500 font-mono">
+                              {f.payModeInfo?.payMode || f.paymentMode || (isPaid ? "Cash / Counter" : "Fee Counter")}
                             </span>
                           </td>
-                          <td className="py-3 px-3 text-slate-400">{mode}</td>
-                          <td className="py-3 px-3 text-right">
-                            {isPaid ? (
-                              <button
-                                onClick={() => {
-                                  setSelectedFeeForReceipt(f);
-                                }}
-                                className="px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white border border-emerald-500/30 text-[11px] font-bold transition flex items-center gap-1.5 ml-auto"
-                              >
-                                <FileText className="w-3.5 h-3.5" />
-                                View Receipt
-                              </button>
+                          <td className="py-3.5 px-3">
+                            {isPaid || paid > 0 ? (
+                              <div>
+                                <span className="font-medium text-slate-200 block">{dtInfo.date}</span>
+                                {dtInfo.time ? (
+                                  <span className="text-[10px] text-emerald-400/90 font-mono flex items-center gap-1">
+                                    <Clock className="w-2.5 h-2.5" /> {dtInfo.time}
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] text-slate-500 font-mono">Official Hours</span>
+                                )}
+                              </div>
                             ) : (
-                              <span className="text-slate-500 text-[11px] font-bold">Unpaid</span>
+                              <span className="text-slate-500 italic">देय (Unpaid)</span>
                             )}
+                          </td>
+                          <td className="py-3.5 px-3 font-mono text-slate-400 font-bold">{rNo}</td>
+                          <td className="py-3.5 px-3 text-right font-mono font-bold text-slate-300 tabular-nums">
+                            ₹{billed.toLocaleString("en-IN")}
+                          </td>
+                          <td className="py-3.5 px-3 text-right font-mono font-black text-emerald-400 tabular-nums">
+                            ₹{paid.toLocaleString("en-IN")}
+                          </td>
+                          <td className="py-3.5 px-3 text-right font-mono font-black tabular-nums">
+                            <span className={remaining > 0 ? "text-amber-400" : "text-slate-500"}>
+                              ₹{remaining.toLocaleString("en-IN")}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-3 text-center">
+                            {isPaid ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                                <CheckCircle2 className="w-2.5 h-2.5" /> पूर्ण जमा
+                              </span>
+                            ) : isPartial ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                                <Clock className="w-2.5 h-2.5" /> आंशिक
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                                बकाया (Due)
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3.5 px-3 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => setSelectedFeeForReceipt(f)}
+                                className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-[11px] font-bold transition flex items-center gap-1"
+                                title="View Official Receipt"
+                              >
+                                <FileText className="w-3 h-3 text-indigo-400" />
+                                <span>देखें</span>
+                              </button>
+
+                              <button
+                                onClick={() => handleDownloadStudentPdf(f)}
+                                disabled={downloadingFeeId === (f.id || f.month)}
+                                className="px-2 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white border border-emerald-500/30 text-[11px] font-bold transition flex items-center gap-1 disabled:opacity-50"
+                                title="Download Official PDF Document"
+                              >
+                                <Download className="w-3 h-3" />
+                                <span>PDF</span>
+                              </button>
+
+                              <button
+                                onClick={() => handleShareStudentWhatsApp(f)}
+                                className="px-2 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[11px] font-bold transition flex items-center gap-1"
+                                title="Share on WhatsApp"
+                              >
+                                <MessageCircle className="w-3 h-3 text-emerald-400" />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -1635,8 +1878,8 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                 {/* Header */}
                 <div className="bg-gradient-to-r from-emerald-800 to-teal-800 px-3 py-2 text-white flex items-center justify-between shrink-0">
                   <div className="flex items-center gap-2">
-                    {school?.logoUrl ? (
-                      <img src={school.logoUrl} alt="Logo" className="w-6 h-6 rounded-full bg-white object-contain p-0.5" />
+                    {resolvedSchoolLogo && !isAppLogo(resolvedSchoolLogo) ? (
+                      <img src={resolvedSchoolLogo} alt="Logo" className="w-6 h-6 rounded-full bg-white object-contain p-0.5" />
                     ) : (
                       <div className="w-6 h-6 rounded-full bg-white text-emerald-900 flex items-center justify-center font-black text-[9px]">
                         {schoolInitials}
@@ -1716,7 +1959,15 @@ export const StudentSchoolPanel: React.FC<Props> = ({
         <OfficialFeeReceiptModal
           isOpen={true}
           onClose={() => setSelectedFeeForReceipt(null)}
-          school={school || ({ id: schoolId, name: "Delhi Public School", code: "DPS_DEL", affiliation: "CBSE Affiliated" } as any)}
+          school={{
+            ...(school || {}),
+            id: schoolId,
+            name: schoolDisplayName,
+            logoUrl: resolvedSchoolLogo,
+            address: school?.address || "Institutional Academic Campus, Educational Zone",
+            affiliation: school?.affiliation || "Affiliated School Campus",
+            code: school?.code || "NSTZ"
+          } as any}
           fee={selectedFeeForReceipt}
           student={currentStudent}
           className={`Class ${studentClassLabel}`}

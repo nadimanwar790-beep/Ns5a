@@ -157,17 +157,24 @@ const getInitialSettings = () => {
 
 export function App() {
   const [user, setUser] = useState<any>(getInitialUser);
-  // Auto route School Admin / Principals directly to School ERP; students to Student Dashboard
+  // Auto route based on user role:
+  // - App Super Admin / Admin -> Direct to Admin Dashboard (ADMIN)
+  // - School Admin / Principal -> School Admin Portal (SCHOOL_ERP)
+  // - Teacher -> Teacher Portal (SCHOOL_ERP)
+  // - School Student (QR / School ID) -> Student Portal (SCHOOL_ERP)
+  // - General Student -> Student Dashboard (STUDENT)
   const [view, setView] = useState<AppViewMode>(() => {
     const initial = getInitialUser();
+    if (initial?.role === 'SUPERADMIN' || initial?.role === 'ADMIN') {
+      return 'ADMIN';
+    }
     if (
       initial?.role === 'SCHOOL_ADMIN' ||
-      initial?.role === 'ADMIN' ||
-      initial?.role === 'SUPERADMIN' ||
       initial?.role === 'PRINCIPAL' ||
       initial?.role === 'TEACHER' ||
       initial?.role === 'STAFF' ||
       initial?.provider === 'qr_teacher_id' ||
+      initial?.provider === 'qr_student_id' ||
       isSchoolAdminEmail(initial?.email)
     ) {
       return 'SCHOOL_ERP';
@@ -220,17 +227,25 @@ export function App() {
       localStorage.setItem('nst_current_user', JSON.stringify(newUser));
     } catch (e) {}
     setUser(newUser);
-    const isSchoolStaffOrAdmin =
+    // Direct Role Routing:
+    // 1. App ka Super Admin / Admin -> Direct to Admin Dashboard
+    if (newUser?.role === 'SUPERADMIN' || newUser?.role === 'ADMIN') {
+      setView('ADMIN');
+      return;
+    }
+
+    // 2. School Admin / Principal -> School Admin Portal
+    // 3. Teacher -> Teacher Portal
+    // 4. Student (via School QR or school ID) -> Student Portal
+    if (
       newUser?.role === 'SCHOOL_ADMIN' ||
-      newUser?.role === 'ADMIN' ||
-      newUser?.role === 'SUPERADMIN' ||
       newUser?.role === 'PRINCIPAL' ||
       newUser?.role === 'TEACHER' ||
       newUser?.role === 'STAFF' ||
       newUser?.provider === 'qr_teacher_id' ||
-      isSchoolAdminEmail(newUser?.email);
-
-    if (isSchoolStaffOrAdmin) {
+      newUser?.provider === 'qr_student_id' ||
+      isSchoolAdminEmail(newUser?.email)
+    ) {
       setView('SCHOOL_ERP');
     } else {
       setView('STUDENT');
@@ -458,122 +473,6 @@ export function App() {
 
   return (
     <div className={`min-h-screen min-h-[100dvh] w-full flex flex-col ${appBgClass}`}>
-      {/* ── TOP PORTAL SWITCHER BAR — Shown for Admins or in Admin/School ERP modes, hidden for regular students ────── */}
-      {!isFullScreen && (view !== 'STUDENT' || isSchoolAdminEmail(user?.email) || user?.role === 'SCHOOL_ADMIN' || user?.role === 'ADMIN' || user?.role === 'SUPERADMIN' || user?.role === 'PRINCIPAL') && (
-        <header className={`sticky top-0 z-40 backdrop-blur-md px-3 py-2 flex items-center justify-between gap-2 shadow-sm transition-colors ${
-          isDarkMode
-            ? 'bg-slate-900/95 border-b border-slate-800 text-white shadow-slate-950/50'
-            : 'bg-white/95 border-b border-slate-200 text-slate-800 shadow-slate-100'
-        }`}>
-          {/* Logo & Current Portal */}
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center font-black text-white text-xs shadow-md shadow-indigo-600/30">
-              NSTA
-            </div>
-            <div>
-              <div className="flex items-center gap-1.5">
-                <span className={`font-bold text-xs ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>NSTA Learning Portal</span>
-                <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-full border ${
-                  view === 'SCHOOL_ERP'
-                    ? 'bg-rose-500/20 text-rose-600 dark:text-rose-400 border-rose-500/30'
-                    : view === 'ADMIN'
-                      ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400 border-amber-500/30'
-                      : 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'
-                }`}>
-                  {view === 'STUDENT'
-                    ? ((isSchoolAdminEmail(user?.email) || user?.role === 'SCHOOL_ADMIN' || user?.role === 'PRINCIPAL')
-                        ? 'Admin Preview: Student Mode'
-                        : 'Student Mode')
-                    : view === 'SCHOOL_ERP'
-                      ? 'School ERP'
-                      : 'Super Admin'}
-                </span>
-              </div>
-              <p className={`text-[10px] hidden sm:block ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                {view === 'STUDENT'
-                  ? 'Study notes, MCQs, Video lessons & Leaderboard'
-                  : view === 'SCHOOL_ERP'
-                    ? '13 Classes, 910 Students, Fees, Attendance & HRM'
-                    : 'Super Admin System Controls'}
-              </p>
-            </div>
-          </div>
-
-          {/* Right side: Portal Switcher Pills & Logout Action */}
-          <div className="flex items-center gap-1.5">
-            {/* Quick Return to School ERP for admins in student mode */}
-            {view === 'STUDENT' && (isSchoolAdminEmail(user?.email) || user?.role === 'SCHOOL_ADMIN' || user?.role === 'PRINCIPAL') && (
-              <button
-                onClick={() => setView('SCHOOL_ERP')}
-                className="px-3 py-1.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white shadow-md shadow-rose-600/30 flex items-center gap-1.5 transition-all cursor-pointer active:scale-95"
-              >
-                <School className="w-3.5 h-3.5" />
-                <span>Return to School ERP</span>
-              </button>
-            )}
-
-            <div className={`flex items-center gap-1 p-1 rounded-xl border ${
-              isDarkMode ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-200'
-            }`}>
-              <button
-                onClick={() => setView('STUDENT')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-                  view === 'STUDENT'
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                    : isDarkMode
-                      ? 'text-slate-400 hover:text-white hover:bg-slate-900'
-                      : 'text-slate-600 hover:text-slate-900 hover:bg-white'
-                }`}
-              >
-                <GraduationCap className="w-3.5 h-3.5" />
-                <span>Student</span>
-              </button>
-
-              <button
-                onClick={() => setView('SCHOOL_ERP')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-                  view === 'SCHOOL_ERP'
-                    ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30'
-                    : isDarkMode
-                      ? 'text-slate-400 hover:text-white hover:bg-slate-900'
-                      : 'text-slate-600 hover:text-slate-900 hover:bg-white'
-                }`}
-              >
-                <School className="w-3.5 h-3.5" />
-                <span>{user?.role === 'TEACHER' ? 'Teacher Portal' : 'School ERP'}</span>
-              </button>
-
-              {/* Only show Admin tab button if user is genuinely ADMIN or SUPERADMIN */}
-              {(user?.role === 'ADMIN' || user?.role === 'SUPERADMIN') && (
-                <button
-                  onClick={() => setView('ADMIN')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-                    view === 'ADMIN'
-                      ? 'bg-amber-600 text-white shadow-md shadow-amber-600/30'
-                      : isDarkMode
-                        ? 'text-slate-400 hover:text-white hover:bg-slate-900'
-                        : 'text-slate-600 hover:text-slate-900 hover:bg-white'
-                  }`}
-                >
-                  <Shield className="w-3.5 h-3.5" />
-                  <span>Admin</span>
-                </button>
-              )}
-            </div>
-
-            {/* Quick Logout Button */}
-            <button
-              onClick={handleLogout}
-              title="Logout Account (लॉगआउट)"
-              className="px-2.5 py-1.5 rounded-xl text-xs font-bold text-rose-500 hover:text-white hover:bg-rose-600 border border-rose-400/40 transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Logout</span>
-            </button>
-          </div>
-        </header>
-      )}
-
       {/* ── MAIN DASHBOARD VIEWPORT WITH SUSPENSE ───────────────────────── */}
       <div className="flex-1 flex flex-col">
         <Suspense
@@ -623,6 +522,7 @@ export function App() {
               defaultSchoolId={user.schoolId || 'dps_gurgaon_sector45'}
               forceAdminView={isSchoolAdminEmail(user.email) || user.role === 'SCHOOL_ADMIN' || user.role === 'ADMIN' || user.role === 'SUPERADMIN' || user.role === 'PRINCIPAL'}
               onBack={() => setView('STUDENT')}
+              onLogout={handleLogout}
             />
           )}
 

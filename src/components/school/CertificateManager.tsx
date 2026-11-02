@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeaderEditorModal";
 import { QuickAddStudentModal } from "./QuickAddStudentModal";
-import { cleanLogoUrl } from "./feeReceiptUtils";
+import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo } from "./feeReceiptUtils";
 
 interface Props {
   school: School;
@@ -47,7 +47,7 @@ export const CertificateManager: React.FC<Props> = ({
     address: school?.address || "",
     phone: school?.mobile || school?.phone || "",
     email: school?.email || "",
-    logoUrl: school?.logoUrl || "",
+    logoUrl: getSavedSchoolLogo(school?.logoUrl),
     principalName: school?.principalName || "",
     principalTitle: "Principal / Head of Institution",
     code: school?.code || "",
@@ -68,7 +68,7 @@ export const CertificateManager: React.FC<Props> = ({
       address: school.address || "",
       phone: school.mobile || school.phone || "",
       email: school.email || "",
-      logoUrl: school.logoUrl || "",
+      logoUrl: getSavedSchoolLogo(school.logoUrl || previous.logoUrl),
       principalName: school.principalName || "",
       code: school.code || "",
       principalPhone: school.principalPhone || "",
@@ -669,9 +669,9 @@ export const CertificateManager: React.FC<Props> = ({
             {/* School Header */}
             <div className="certificate-school-header text-center border-b-2 border-amber-900/30 pb-5 mb-5 relative">
               <div className="flex items-center justify-center gap-4 mb-2">
-                {schoolDetails.logoUrl ? (
+                {getSavedSchoolLogo(schoolDetails.logoUrl) ? (
                   <img
-                    src={cleanLogoUrl(schoolDetails.logoUrl)}
+                    src={cleanLogoUrl(getSavedSchoolLogo(schoolDetails.logoUrl))}
                     alt="School Logo"
                     className="w-18 h-18 object-contain rounded-full border border-amber-900/30 p-1 shadow-sm bg-white shrink-0"
                     onError={(e) => {
@@ -682,7 +682,7 @@ export const CertificateManager: React.FC<Props> = ({
                   />
                 ) : null}
                 <div
-                  className={`w-18 h-18 rounded-full bg-gradient-to-br from-amber-900 to-slate-900 text-amber-200 font-black text-2xl items-center justify-center shadow-sm shrink-0 cert-logo-fallback ${schoolDetails.logoUrl ? 'hidden' : 'flex'}`}
+                  className={`w-18 h-18 rounded-full bg-gradient-to-br from-amber-900 to-slate-900 text-amber-200 font-black text-2xl items-center justify-center shadow-sm shrink-0 cert-logo-fallback ${getSavedSchoolLogo(schoolDetails.logoUrl) ? 'hidden' : 'flex'}`}
                 >
                   {(schoolDetails.schoolName || "SC").slice(0, 2).toUpperCase()}
                 </div>

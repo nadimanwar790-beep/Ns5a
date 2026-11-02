@@ -5,18 +5,18 @@
 import type { Student, SchoolConfig } from '../../types';
 
 export const DEFAULT_SCHOOL_CONFIG: SchoolConfig = {
-  name: "DELHI PUBLIC SCHOOL",
-  tagline: "Service Before Self",
+  name: "Nstz Smart Academy",
+  tagline: "Knowledge, Discipline & Excellence",
   affiliationNo: "CBSE/AFF/330169",
-  schoolCode: "DPS-PAT-01",
+  schoolCode: "NSTZ-01",
   board: "CBSE, New Delhi",
-  address: "Village Chandmari, Danapur Cantonment",
+  address: "Institutional Academic Campus, Educational Zone",
   cityStateZip: "Patna, Bihar 801503",
-  phone: "+91 612 2999 555 / 8227070298",
-  email: "accounts@dpspatna.edu.in",
-  website: "www.dpspatna.edu.in",
-  upiId: "dpspatna@sbi",
-  logoUrl: "https://images.unsplash.com/photo-1546410531-bb4caa6b424d?w=160&auto=format&fit=crop&q=80",
+  phone: "+91 98765 43210",
+  email: "contact@nstz.app",
+  website: "www.nstz.app",
+  upiId: "school@upi",
+  logoUrl: "",
 };
 
 export const INITIAL_STUDENTS: Student[] = [
@@ -201,6 +201,11 @@ export interface DpsReceiptData {
   // Fee items
   items: FeeReceiptItem[];
 
+  // Balance due & Next Billing details (FIFO multi-month support)
+  balanceDue?: number;
+  nextMonthEstimatedFee?: number;
+  fifoSummary?: string;
+
   // Payment info
   payModeInfo: PayModeInfo;
 
@@ -290,9 +295,9 @@ export const DPS_DEFAULT_CREST_SVG = `
   <path d="M 50 9 C 72 9 88 20 88 39 C 88 72 65 98 50 109 C 35 98 12 72 12 39 C 12 20 28 9 50 9 Z" 
         fill="#ffffff" stroke="#15803d" stroke-width="1.2" />
   
-  <!-- Ribbon banner at top: SERVICE BEFORE SELF -->
-  <path d="M 22 22 Q 50 16 78 22 L 75 27 Q 50 21 25 27 Z" fill="#15803d" />
-  <text x="50" y="25.5" font-family="Arial, sans-serif" font-size="4" font-weight="900" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">SERVICE BEFORE SELF</text>
+  <!-- Ribbon banner at top: KNOWLEDGE & EXCELLENCE -->
+  <path d="M 16 22 Q 50 16 84 22 L 81 27 Q 50 21 19 27 Z" fill="#15803d" />
+  <text x="50" y="25.5" font-family="Arial, sans-serif" font-size="3.5" font-weight="900" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">KNOWLEDGE &amp; EXCELLENCE</text>
   
   <!-- Laurel Wreath Leaves on sides -->
   <g fill="none" stroke="#15803d" stroke-width="1.2" stroke-linecap="round">
@@ -327,12 +332,41 @@ export const DPS_DEFAULT_CREST_SVG = `
 `;
 
 /**
+ * Checks if a URL points to the NSTA platform app's own logo (to prevent app branding from replacing school branding)
+ */
+export function isAppLogo(url?: string | null): boolean {
+  if (!url || typeof url !== "string") return false;
+  const lower = url.trim().toLowerCase();
+  return (
+    lower.includes("nsta-logo") ||
+    lower.includes("nsta_logo") ||
+    lower.includes("branding/nsta") ||
+    lower.includes("favicon.svg") ||
+    lower.endsWith("/icons/icon-192.png") ||
+    lower.endsWith("/icons/icon-512.png") ||
+    lower.endsWith("/icon-192.png") ||
+    lower.endsWith("/icon-512.png") ||
+    lower.endsWith("/apple-touch-icon.png") ||
+    lower === "/branding/nsta-logo.png" ||
+    lower === "/branding/nsta-logo.svg" ||
+    lower === "branding/nsta-logo.png" ||
+    lower === "branding/nsta-logo.svg"
+  );
+}
+
+/**
  * Normalizes and cleans image URLs (including Google Drive links) so browsers can render them in <img> tags.
  */
 export function cleanLogoUrl(url?: string): string {
   if (!url || typeof url !== "string") return "";
-  const trimmed = url.trim();
+  let trimmed = url.trim();
   if (!trimmed) return "";
+  if (trimmed.startsWith("branding/")) {
+    trimmed = "/" + trimmed;
+  }
+  if (trimmed.startsWith("icons/")) {
+    trimmed = "/" + trimmed;
+  }
   // Google Drive format 1: /file/d/ID/view
   const dMatch = trimmed.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
   if (dMatch) {
@@ -344,6 +378,52 @@ export function cleanLogoUrl(url?: string): string {
     return `https://drive.google.com/uc?export=view&id=${idMatch[1]}`;
   }
   return trimmed;
+}
+
+/**
+ * Resolves the user's authentic saved school logo.
+ * Always prefers the user's saved school logo over any platform app logo.
+ * Never returns the NSTA app logo for a school.
+ */
+export function getSavedSchoolLogo(preferredLogo?: string | null): string {
+  // 1. If preferredLogo is provided and is a valid custom school logo (NOT an app logo), use it!
+  if (preferredLogo && typeof preferredLogo === "string") {
+    const cleaned = cleanLogoUrl(preferredLogo);
+    if (cleaned && !isAppLogo(cleaned)) {
+      return cleaned;
+    }
+  }
+
+  // 2. Check localStorage for user's saved school logo
+  if (typeof localStorage !== "undefined") {
+    const active = localStorage.getItem("nst_active_school_logo") || localStorage.getItem("nst_school_logo");
+    if (active && typeof active === "string") {
+      const cleaned = cleanLogoUrl(active);
+      if (cleaned && !isAppLogo(cleaned)) {
+        return cleaned;
+      }
+    }
+
+    // 3. Check cached schools list in localStorage
+    try {
+      const rawSchools = localStorage.getItem("nst_schools_local_cache");
+      if (rawSchools) {
+        const schools = JSON.parse(rawSchools);
+        if (Array.isArray(schools)) {
+          for (const s of schools) {
+            if (s?.logoUrl && typeof s.logoUrl === "string") {
+              const cleaned = cleanLogoUrl(s.logoUrl);
+              if (cleaned && !isAppLogo(cleaned)) {
+                return cleaned;
+              }
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
+  return "";
 }
 
 /**
@@ -419,9 +499,10 @@ export function generateDpsReceiptHtml(
   const totalPaid = data.items.reduce((s, it) => s + (Number(it.paid) || 0), 0);
   const grandTotal = totalPaid > 0 ? totalPaid : totalDue;
   const totalWords = numberToIndianWords(grandTotal);
+  const calculatedBalDue = data.balanceDue !== undefined ? Number(data.balanceDue) : Math.max(0, totalDue - totalPaid);
 
   // Generate Ultra High-Definition Vector SVG / High-Res QR Code URL with NSTA-SCHOOL prefix for instant student login
-  const cleanSchoolId = data.schoolId || 'dps_gurgaon_sector45';
+  const cleanSchoolId = data.schoolId || 'school_campus';
   const cleanStudentId = data.studentId || '';
   const cleanRollNo = data.rollNo || '';
   const cleanClassId = data.className || '';
@@ -439,15 +520,17 @@ export function generateDpsReceiptHtml(
     encodeURIComponent(cleanPhone)
   ].join(":")}`;
 
-  const qrVerificationData = `${qrLoginPrefix}\nDPS-RECEIPT\nReceiptNo: ${data.receiptNo}\nAdmNo: ${data.admissionNo}\nStudent: ${data.studentName}\nClass: ${data.className}\nSession: ${data.session}\nTotalPaid: ₹${grandTotal}\nDate: ${data.receiptDate}`;
+  const qrVerificationData = `${qrLoginPrefix}\nFEE-RECEIPT\nReceiptNo: ${data.receiptNo}\nAdmNo: ${data.admissionNo}\nStudent: ${data.studentName}\nClass: ${data.className}\nSession: ${data.session}\nTotalPaid: ₹${grandTotal}\nDate: ${data.receiptDate}`;
   const qrSvgUrl = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&format=svg&qzone=1&margin=1&data=${encodeURIComponent(qrVerificationData)}`;
   const qrHighResPngUrl = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&qzone=1&margin=1&data=${encodeURIComponent(qrVerificationData)}`;
 
-  const cleanedLogo = cleanLogoUrl(data.schoolLogoUrl);
+  // Resolve the actual school's logo: explicitly passed -> cached active school logo
+  const effectiveLogo = getSavedSchoolLogo(data.schoolLogoUrl);
+
   const fallbackSvg = generateSchoolCrestSvg(data.schoolName, isMini);
 
-  const logoMarkup = cleanedLogo
-    ? `<img src="${escapeHtml(cleanedLogo)}" alt="${escapeHtml(data.schoolName || 'Logo')}" class="dps-logo-img" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='block';" />
+  const logoMarkup = effectiveLogo
+    ? `<img src="${escapeHtml(effectiveLogo)}" alt="${escapeHtml(data.schoolName || 'Logo')}" class="dps-logo-img" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='block';" />
        <div class="dps-logo-fallback" style="display:none;width:100%;height:100%;">${fallbackSvg}</div>`
     : fallbackSvg;
 
@@ -461,8 +544,8 @@ export function generateDpsReceiptHtml(
         ${logoMarkup}
       </div>
       <div class="dps-school-info">
-        <h1 class="dps-school-name">${escapeHtml(data.schoolName || "Delhi Public School")}</h1>
-        <p class="dps-school-address">${escapeHtml(data.schoolAddress || "Site No.1, Sector-45, Urban Estate, Gurgaon, Haryana")}</p>
+        <h1 class="dps-school-name">${escapeHtml(data.schoolName || "Nstz")}</h1>
+        <p class="dps-school-address">${escapeHtml(data.schoolAddress || "Institutional Academic Campus, Educational Zone")}</p>
       </div>
     </div>
 
@@ -518,7 +601,7 @@ export function generateDpsReceiptHtml(
         <div class="dps-meta-row">
           <span class="dps-label">CounterNo</span>
           <span class="dps-colon">:</span>
-          <span class="dps-val uppercase">${escapeHtml(data.counterNo || "DPS-RECEIPT")}</span>
+          <span class="dps-val uppercase">${escapeHtml(data.counterNo || "FEE-RECEIPT")}</span>
         </div>
       </div>
 
@@ -618,14 +701,32 @@ export function generateDpsReceiptHtml(
 
     <!-- Grand Total Bar -->
     <div class="dps-grand-total-row">
-      <span class="grand-label">Total :</span>
+      <span class="grand-label">${calculatedBalDue > 0 ? "Total Paid (कुल जमा) :" : "Total :"}</span>
       <span class="grand-val">${grandTotal.toLocaleString("en-IN")}</span>
     </div>
+
+    ${calculatedBalDue > 0 ? `
+    <!-- Net Balance Due Bar (अगला बकाया) -->
+    <div class="dps-grand-total-row" style="background:#fff1f2;border-top:1px solid #fecdd3;color:#9f1239;display:flex;justify-content:space-between;align-items:center;padding:2px 8px;">
+      <span class="grand-label" style="font-weight:800;color:#9f1239;font-size:${isCompact ? '7.5px' : '9.5px'};">Balance Due (शेष अगला बकाया) :</span>
+      <span class="grand-val" style="font-weight:900;color:#be123c;font-size:${isCompact ? '8.5px' : '11px'};">₹${calculatedBalDue.toLocaleString("en-IN")}</span>
+    </div>
+    ` : ""}
 
     <!-- Total in Words Box -->
     <div class="dps-words-box">
       <strong>Total in Words:</strong>
       <span>${escapeHtml(totalWords)}</span>
+      ${calculatedBalDue > 0 ? `
+        <div style="margin-top:2px;font-size:${isCompact ? '6.5px' : '8px'};color:#b91c1c;font-weight:700;">
+          * शेष बकाया ₹${calculatedBalDue.toLocaleString("en-IN")} अगले महीने के बिल प्रिंट में जुड़ेगा (Balance will carry forward to next billing)
+        </div>
+      ` : ""}
+      ${data.fifoSummary ? `
+        <div style="margin-top:1.5px;font-size:${isCompact ? '6px' : '7.5px'};color:#475569;font-style:italic;">
+          ${escapeHtml(data.fifoSummary)}
+        </div>
+      ` : ""}
     </div>
 
     <!-- Footer: High-Definition Vector QR Code, Note, and Disclaimer -->

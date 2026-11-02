@@ -12,6 +12,7 @@ import {
   Cloud,
 } from 'lucide-react';
 import { uploadToTelegramStorage, resolveTelegramUrl } from '../services/telegramStorageService';
+import { uploadImageToImgBB, compressImage } from '../services/imgbbService';
 import type { CloudinaryMediaKind } from '../services/cloudinaryService';
 
 interface DirectUploadButtonProps {
@@ -89,21 +90,42 @@ export const DirectUploadButton: React.FC<DirectUploadButtonProps> = (props) => 
     setJustUploaded(false);
 
     try {
-      const tgRes = await uploadToTelegramStorage(file, {
-        fileName: file.name,
-        caption: `App Content ${kind.toUpperCase()}: ${file.name}`,
-        onProgress: (pct) => setProgress(pct),
-      });
+      let finalUrl = '';
+      if (kind === 'image') {
+        finalUrl = await uploadImageToImgBB(file, file.name);
+      } else {
+        const tgRes = await uploadToTelegramStorage(file, {
+          fileName: file.name,
+          caption: `App Content ${kind.toUpperCase()}: ${file.name}`,
+          onProgress: (pct) => setProgress(pct),
+        });
+        finalUrl = tgRes?.url || '';
+      }
 
-      if (tgRes?.url) {
+      if (finalUrl) {
         setProgress(100);
-        onUploaded(tgRes.url, file);
+        onUploaded(finalUrl, file);
         setJustUploaded(true);
         setTimeout(() => setJustUploaded(false), 4000);
       } else {
         throw new Error('Upload server se link prapt nahi hua.');
       }
     } catch (err: any) {
+      // Guaranteed offline & local fallback for images (e.g. logos, stamps, signatures)
+      if (kind === 'image' && file) {
+        try {
+          const fallbackDataUrl = await compressImage(file, 1600, 1600, 0.88);
+          if (fallbackDataUrl) {
+            setProgress(100);
+            onUploaded(fallbackDataUrl, file);
+            setJustUploaded(true);
+            setTimeout(() => setJustUploaded(false), 4000);
+            return;
+          }
+        } catch (cErr) {
+          console.warn('[DirectUploadButton] Fallback compression failed:', cErr);
+        }
+      }
       setErrorMsg(err?.message || 'Upload fail ho gaya. Kripya dobara try karein.');
     } finally {
       setUploading(false);

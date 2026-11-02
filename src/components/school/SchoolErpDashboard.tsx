@@ -24,7 +24,8 @@ import {
 } from "./demoDataStore";
 import { HolidayManager } from "./HolidayManager";
 import { StaffHRMManager } from "./StaffHRMManager";
-import { NoticeBoardManager } from "./NoticeBoardManager";
+import { getSchool } from "../../school-firebase";
+import { getSavedSchoolLogo, isAppLogo } from "./feeReceiptUtils";
 
 type MainTab =
   | "dashboard"
@@ -41,6 +42,35 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
   const [activeTab, setActiveTab] = useState<MainTab>("dashboard");
   const [showResetConfirm, setShowResetConfirm] = useState<boolean>(false);
   const [resetSuccessToast, setResetSuccessToast] = useState<boolean>(false);
+  const [activeSchool, setActiveSchool] = useState<any>(() => {
+    try {
+      const cached = localStorage.getItem("nst_schools_local_cache");
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed[0];
+        if (parsed && typeof parsed === "object") return Object.values(parsed)[0];
+      }
+    } catch {}
+    return null;
+  });
+
+  useEffect(() => {
+    getSchool("dps_gurgaon_sector45").then(s => {
+      if (s) setActiveSchool(s);
+    }).catch(() => {});
+
+    const handleProfileUpdate = (e?: Event) => {
+      const customEvent = e as CustomEvent<{ schoolId?: string; logoUrl?: string; name?: string }>;
+      const updatedLogo = customEvent?.detail?.logoUrl || getSavedSchoolLogo();
+      setActiveSchool((prev: any) => prev ? { ...prev, logoUrl: updatedLogo, name: customEvent?.detail?.name || prev.name } : { logoUrl: updatedLogo, name: customEvent?.detail?.name });
+    };
+    window.addEventListener("school-profile-updated", handleProfileUpdate);
+    return () => window.removeEventListener("school-profile-updated", handleProfileUpdate);
+  }, []);
+
+  const schoolName = activeSchool?.name || "NSTZ SMART ACADEMY";
+  const schoolLogo = getSavedSchoolLogo(activeSchool?.logoUrl);
+  const schoolAddress = activeSchool?.address || "Institutional Academic Campus, Educational Zone";
 
   // Guarantee pre-react splash dismissal on App component mount
   useEffect(() => {
@@ -141,13 +171,28 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
           <div className="flex items-center justify-between h-20 gap-3">
             {/* School Branding */}
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-rose-600 via-amber-600 to-indigo-600 flex items-center justify-center text-white font-black text-xl shadow-lg shadow-rose-950 border border-white/20">
-                🎓
+              <div className="w-12 h-12 rounded-2xl bg-slate-800 p-1 flex items-center justify-center shadow-lg shadow-rose-950/40 border border-white/20 overflow-hidden shrink-0">
+                {schoolLogo && !isAppLogo(schoolLogo) ? (
+                  <img
+                    src={schoolLogo}
+                    alt={schoolName}
+                    className="w-full h-full object-contain"
+                    onError={(e) => {
+                      const target = e.currentTarget as HTMLElement;
+                      target.style.display = 'none';
+                      if (target.parentElement) target.parentElement.textContent = '🎓';
+                    }}
+                  />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center font-black text-rose-300 text-sm">
+                    {schoolName.slice(0, 2).toUpperCase()}
+                  </div>
+                )}
               </div>
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
                   <h1 className="text-base sm:text-lg font-black text-white tracking-tight uppercase">
-                    DELHI PUBLIC SMART ACADEMY
+                    {schoolName}
                   </h1>
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/30">
                     CBSE AFFILIATED
@@ -718,9 +763,10 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
         {activeTab === "staff" && (
           <StaffHRMManager
             school={{
-              id: "demo_school",
-              name: "DELHI PUBLIC SMART ACADEMY",
-              address: "Sector-4, Institutional Area, Smart City",
+              id: activeSchool?.id || "demo_school",
+              name: schoolName,
+              address: schoolAddress,
+              logoUrl: schoolLogo,
             }}
             onBack={() => setActiveTab("dashboard")}
           />
@@ -893,9 +939,9 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
         {/* TAB 6: FESTIVAL HOLIDAYS & POWER TO ADD HOLIDAY */}
         {activeTab === "holidays" && (
           <HolidayManager
-            schoolId="demo_school"
+            schoolId={activeSchool?.id || "demo_school"}
             adminUid="admin"
-            schoolName="DELHI PUBLIC SMART ACADEMY"
+            schoolName={schoolName}
             onBack={() => setActiveTab("dashboard")}
           />
         )}
@@ -1065,11 +1111,24 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-in fade-in">
           <div className="bg-white text-slate-900 rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl max-h-[90vh] overflow-y-auto space-y-5">
             <div className="flex items-center justify-between border-b-2 border-slate-900 pb-4">
-              <div>
-                <h2 className="text-xl sm:text-2xl font-black uppercase text-slate-900">
-                  DELHI PUBLIC SMART ACADEMY
-                </h2>
-                <p className="text-xs text-slate-600">Institutional Progress & Examination Report Card</p>
+              <div className="flex items-center gap-3">
+                {schoolLogo && !isAppLogo(schoolLogo) ? (
+                  <img
+                    src={schoolLogo}
+                    alt={schoolName}
+                    className="w-12 h-12 object-contain rounded-xl border border-slate-200 bg-white p-1"
+                  />
+                ) : (
+                  <div className="w-12 h-12 rounded-xl bg-slate-900 text-white font-black flex items-center justify-center text-sm">
+                    {schoolName.slice(0, 2).toUpperCase()}
+                  </div>
+                )}
+                <div>
+                  <h2 className="text-xl sm:text-2xl font-black uppercase text-slate-900">
+                    {schoolName}
+                  </h2>
+                  <p className="text-xs text-slate-600">Institutional Progress & Examination Report Card</p>
+                </div>
               </div>
               <button
                 onClick={() => setReportCardStudent(null)}
@@ -1148,15 +1207,26 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
         </div>
       )}
 
-      {/* ── MODAL: OFFICIAL DPS FEE RECEIPT ─────────────────────────── */}
+      {/* ── MODAL: OFFICIAL FEE RECEIPT ─────────────────────────── */}
       {activeReceiptFee && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-in fade-in">
           <div className="bg-white text-slate-900 rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl space-y-4">
-            <div className="text-center border-b-2 border-slate-900 pb-3">
-              <h2 className="text-xl font-black uppercase text-slate-900">DELHI PUBLIC SMART ACADEMY</h2>
+            <div className="text-center border-b-2 border-slate-900 pb-3 flex flex-col items-center">
+              {schoolLogo && !isAppLogo(schoolLogo) ? (
+                <img
+                  src={schoolLogo}
+                  alt={schoolName}
+                  className="w-14 h-14 object-contain mb-2"
+                />
+              ) : (
+                <div className="w-14 h-14 rounded-2xl bg-slate-900 text-white font-black flex items-center justify-center text-base mb-2">
+                  {schoolName.slice(0, 2).toUpperCase()}
+                </div>
+              )}
+              <h2 className="text-xl font-black uppercase text-slate-900">{schoolName}</h2>
               <p className="text-xs text-slate-500">Official Monthly Fee Receipt</p>
               <span className="inline-block px-3 py-0.5 rounded-full bg-slate-900 text-white text-[10px] font-black uppercase mt-1">
-                Receipt No: {activeReceiptFee.fee?.receiptNo || "DPS-RCP-2026-001"}
+                Receipt No: {activeReceiptFee.fee?.receiptNo || "FEE-RCP-2026-001"}
               </span>
             </div>
 
@@ -1211,7 +1281,7 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span className="font-semibold text-slate-400">Delhi Public Smart Academy ERP</span>
+            <span className="font-semibold text-slate-400">{schoolName} ERP</span>
             <span>• Session 2026-27 (1-Year Auto-Filled Demo Mode)</span>
           </div>
           <div>
@@ -1229,7 +1299,7 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
               </div>
               <div>
                 <h3 className="text-base font-bold text-white">Reset 1-Year Demo Dataset?</h3>
-                <p className="text-xs text-slate-400">Delhi Public Smart Academy ERP</p>
+                <p className="text-xs text-slate-400">{schoolName} ERP</p>
               </div>
             </div>
             <p className="text-xs text-slate-300 leading-relaxed mb-6">

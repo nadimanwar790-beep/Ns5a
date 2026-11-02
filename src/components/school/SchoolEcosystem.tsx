@@ -40,6 +40,7 @@ interface Props {
   user?: any;
   onBack?: () => void;
   onOpenPlatformContent?: () => void;
+  onLogout?: () => void;
 }
 
 const isSchoolAdminEmail = (emailStr?: string | null): boolean => {
@@ -77,7 +78,8 @@ export const SchoolEcosystem: React.FC<Props> = ({
   userRole = "STUDENT",
   user,
   onBack,
-  onOpenPlatformContent
+  onOpenPlatformContent,
+  onLogout
 }) => {
   const [profile, setProfile] = useState<SchoolUserProfile | null | undefined>(undefined);
   const [loading, setLoading] = useState(true);
@@ -271,7 +273,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
           schoolId={effectiveSchoolId}
           teacherId={profile?.teacherRef || uid}
           teacherName={profile?.name || user?.name || displayName}
-          onBack={onBack}
+          onLogout={onLogout}
         />
       </Suspense>
     );
@@ -288,7 +290,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
           classId={user?.classLevel || profile?.classId || "cls_10"}
           sessionId={profile?.sessionId || "2026-27"}
           onOpenPlatformContent={onOpenPlatformContent}
-          onBack={onBack}
+          onLogout={onLogout}
         />
       </Suspense>
     );

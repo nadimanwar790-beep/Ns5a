@@ -210,6 +210,10 @@ export interface SchoolStudent {
   createdAt: string;
   photoUrl?: string; // base64 or Google Drive URL of student photo
   iicUid?: string; // linked IIC account UID
+  usesBus?: boolean; // whether student avails school bus / transport
+  busRoute?: string; // bus route or stop name
+  busStop?: string; // boarding / drop stop
+  busFee?: number; // custom bus fee if set individually
 }
 
 export const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"] as const;
@@ -290,6 +294,8 @@ export interface MonthlyFee {
   includeCautionMoney?: boolean;
   includeAnnualCharges?: boolean;
   includeBusFee?: boolean;
+  busFeeAmount?: number;
+  busRoute?: string;
   admissionBreakdown?: {
     admissionFee: number;
     registrationFee: number;
