@@ -42,6 +42,11 @@ import type { MonthlyFee, StaffEmployee } from "../../school-types";
 import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeaderEditorModal";
 import { DigitalSignatureModal } from "./DigitalSignatureModal";
 import { getSavedSchoolLogo, isAppLogo, cleanLogoUrl } from "./feeReceiptUtils";
+import { TimetableManager } from "./TimetableManager";
+import { HomeworkManager } from "./HomeworkManager";
+import { LibraryManager } from "./LibraryManager";
+import { ParentTeacherQueryManager } from "./ParentTeacherQueryManager";
+import { InventoryStoreManager } from "./InventoryStoreManager";
 import {
   Users, BookOpen, Calendar, IndianRupee, Plus, Trash2, Settings,
   ChevronRight, ChevronLeft, X, Edit3, FileText, Award,
@@ -50,7 +55,7 @@ import {
   CreditCard, Megaphone, TrendingUp, Briefcase, FileSpreadsheet,
   ClipboardList, Globe, UserPlus, QrCode, GraduationCap, CheckCircle2,
   Printer, Search, Sparkles, Mail, PenTool, Loader2, AlertCircle, LogOut,
-  Home, Image as ImageIcon
+  Home, Image as ImageIcon, Clock, Book, Package, MessageSquare
 } from "lucide-react";
 import { SchoolStore } from "./SchoolStore";
 import { SchoolPlanView } from "./SchoolPlanView";
@@ -75,7 +80,8 @@ type AdminView =
   | "content" | "attendance" | "fees" | "fee_class" | "fee_all" | "fee_structure" | "report_card" | "marks" | "results"
   | "store" | "subscription"
   | "id_cards" | "admit_cards" | "certificates" | "marksheet_hub" | "promotion" | "notices" | "holidays" | "staff_hrm" | "reports_hub"
-  | "public_website" | "online_admissions";
+  | "public_website" | "online_admissions"
+  | "timetable" | "homework" | "library" | "parent_queries" | "inventory_store";
 
 
 export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, onLogout }) => {
@@ -142,7 +148,17 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
   const [sessionForm, setSessionForm] = useState({ name: "", startDate: "", endDate: "" });
   const [classForm, setClassForm] = useState({ name: "", section: "", defaultFee: 0 });
   const [subjectForm, setSubjectForm] = useState({ name: "" });
-  const [teacherForm, setTeacherForm] = useState({ name: "", email: "", phone: "", employeeId: "" });
+  const [teacherForm, setTeacherForm] = useState({
+    name: "",
+    photoUrl: "",
+    designation: "Senior Faculty",
+    qualification: "",
+    experience: "",
+    subjects: "",
+    bio: "",
+    employeeId: "",
+    email: "",
+  });
   const [studentForm, setStudentForm] = useState<any>({
     name: "", rollNo: "", admissionNo: "", fatherName: "", motherName: "",
     phone: "", dateOfBirth: "", monthlyFee: 0, bloodGroup: ""
@@ -155,7 +171,17 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
   const [editingClassId, setEditingClassId] = useState<string | null>(null);
   const [editClassForm, setEditClassForm] = useState({ name: "", section: "", defaultFee: 0 });
   const [editingTeacherId, setEditingTeacherId] = useState<string | null>(null);
-  const [editTeacherForm, setEditTeacherForm] = useState({ name: "", email: "", phone: "", employeeId: "" });
+  const [editTeacherForm, setEditTeacherForm] = useState({
+    name: "",
+    photoUrl: "",
+    designation: "",
+    qualification: "",
+    experience: "",
+    subjects: "",
+    bio: "",
+    employeeId: "",
+    email: "",
+  });
   const [editingStudentId, setEditingStudentId] = useState<string | null>(null);
   const [editStudentForm, setEditStudentForm] = useState<any>({
     name: "", rollNo: "", admissionNo: "", fatherName: "", motherName: "",
@@ -166,7 +192,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
   const [admissionPrintPayload, setAdmissionPrintPayload] = useState<{
     student: SchoolStudent;
     fee?: MonthlyFee | null;
-    mode?: "combined" | "form_only";
+    mode?: "combined" | "form_only" | "receipt_only";
   } | null>(null);
 
   // Fee summary state
@@ -223,12 +249,41 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
   // Class preset names
   const CLASS_PRESETS = ["Play", "Nursery", "KG-1", "KG-2", "Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6", "Class 7", "Class 8", "Class 9", "Class 10", "Class 11", "Class 12"];
 
+  // 1-second live ticker for 48h live countdown and instant lockout on 00:00:00
+  const [nowTick, setNowTick] = useState<number>(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNowTick(Date.now());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Real-time Online Admission Notification alerts for School Admin
+  const [admissionAlerts, setAdmissionAlerts] = useState<any[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(`school_admission_alerts_${schoolId}`) || "[]");
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    const handleNewAdmission = () => {
+      try {
+        const list = JSON.parse(localStorage.getItem(`school_admission_alerts_${schoolId}`) || "[]");
+        setAdmissionAlerts(list);
+      } catch {}
+    };
+    window.addEventListener("school-admission-alert", handleNewAdmission);
+    return () => window.removeEventListener("school-admission-alert", handleNewAdmission);
+  }, [schoolId]);
+
   // 48-hour expiry warning — shown once per login session
   useEffect(() => {
     if (!school) return;
     const sessionKey = `iic_expiry_warned_${schoolId}`;
     if (sessionStorage.getItem(sessionKey)) return;
-    const expIso = school.subscription?.expiresAt || school.subscription?.paidUntil;
+    const expIso = school.subscription?.expiresAt || school.subscription?.paidUntil || '2027-04-24T23:59:59.000Z';
     if (!expIso) return;
     const msLeft = new Date(expIso).getTime() - Date.now();
     const hoursLeft = msLeft / 3600000;
@@ -361,14 +416,37 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
     if (!teacherForm.name.trim()) return;
     setSaving(true);
     const id = generateId();
+    const subArr = teacherForm.subjects
+      ? String(teacherForm.subjects).split(",").map((s: string) => s.trim()).filter(Boolean)
+      : [];
     await saveTeacher({
-      id, schoolId, name: teacherForm.name, email: teacherForm.email,
-      phone: teacherForm.phone, employeeId: teacherForm.employeeId,
-      subjects: [], classes: [], active: true,
+      id,
+      schoolId,
+      name: teacherForm.name.trim(),
+      email: teacherForm.email?.trim() || undefined,
+      photoUrl: teacherForm.photoUrl || undefined,
+      designation: teacherForm.designation?.trim() || "Faculty Member",
+      qualification: teacherForm.qualification?.trim() || undefined,
+      experience: teacherForm.experience?.trim() || undefined,
+      bio: teacherForm.bio?.trim() || undefined,
+      employeeId: teacherForm.employeeId?.trim() || undefined,
+      subjects: subArr,
+      classes: [],
+      active: true,
       joinDate: new Date().toISOString().split("T")[0],
       createdAt: new Date().toISOString()
     });
-    setTeacherForm({ name: "", email: "", phone: "", employeeId: "" });
+    setTeacherForm({
+      name: "",
+      photoUrl: "",
+      designation: "Senior Faculty",
+      qualification: "",
+      experience: "",
+      subjects: "",
+      bio: "",
+      employeeId: "",
+      email: "",
+    });
     setShowForm(null);
     setSaving(false);
   };
@@ -494,11 +572,19 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
   const saveEditTeacher = async () => {
     if (!editingTeacherId || !editTeacherForm.name.trim()) return;
     setSaving(true);
+    const subArr = typeof editTeacherForm.subjects === "string"
+      ? editTeacherForm.subjects.split(",").map((s: string) => s.trim()).filter(Boolean)
+      : (Array.isArray(editTeacherForm.subjects) ? editTeacherForm.subjects : []);
     await updateTeacher(schoolId, editingTeacherId, {
       name: editTeacherForm.name.trim(),
-      email: editTeacherForm.email,
-      phone: editTeacherForm.phone,
-      employeeId: editTeacherForm.employeeId,
+      email: editTeacherForm.email?.trim() || undefined,
+      photoUrl: editTeacherForm.photoUrl || undefined,
+      designation: editTeacherForm.designation?.trim() || undefined,
+      qualification: editTeacherForm.qualification?.trim() || undefined,
+      experience: editTeacherForm.experience?.trim() || undefined,
+      bio: editTeacherForm.bio?.trim() || undefined,
+      employeeId: editTeacherForm.employeeId?.trim() || undefined,
+      subjects: subArr,
     });
     setEditingTeacherId(null);
     setSaving(false);
@@ -604,10 +690,10 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
   };
 
   // ── Subscription access helpers ─────────────────────────────────────────
-  const subStatus  = school?.subscription?.status;
-  const subTier    = school?.subscription?.tier;
-  const _expiresAt = school?.subscription?.expiresAt || school?.subscription?.paidUntil;
-  const planExpired = _expiresAt ? new Date(_expiresAt) < new Date() : false;
+  const subStatus  = school?.subscription?.status || "active";
+  const subTier    = school?.subscription?.tier || "full";
+  const _expiresAt = school?.subscription?.expiresAt || school?.subscription?.paidUntil || '2027-04-24T23:59:59.000Z';
+  const planExpired = _expiresAt ? new Date(_expiresAt).getTime() <= nowTick : false;
   const subscriptionActive = subStatus === "active" && !planExpired;
   // Full tier (or legacy schools with no tier set — backwards compat) can manage content
   const canManageContent  = subscriptionActive && (subTier === "full" || subTier === undefined);
@@ -628,7 +714,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
             <p className="text-sm text-slate-600 dark:text-slate-300">School details could not be loaded.</p>
             <button
               onClick={() => setView("dashboard")}
-              className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold"
+              className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold cursor-pointer"
             >
               Back to dashboard
             </button>
@@ -638,12 +724,12 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
     );
   }
 
-  // ── Store view ─────────────────────────────────────────────────────────
+  // ── Store view (always accessible so admin can purchase/upgrade) ──────────
   if (view === "store" && school) {
     return <SchoolStore school={school} onBack={() => setView("dashboard")} />;
   }
 
-  // ── School Plan view ─────────────────────────────────────────────────────
+  // ── School Plan view (always accessible so admin can check details) ───────
   if (view === "subscription") {
     return (
       <SchoolPlanView
@@ -652,6 +738,118 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
         adminUid={adminUid}
         onBack={() => setView("dashboard")}
       />
+    );
+  }
+
+  // ── COMPLETE SUBSCRIPTION EXPIRED LOCKOUT SCREEN ──────────────────────────
+  // If subscription has expired (00:00:00 reached), completely lock all access
+  if (planExpired && !isSuperAdmin) {
+    const expiredFormattedDate = _expiresAt
+      ? new Date(_expiresAt).toLocaleDateString("en-IN", {
+          day: "numeric",
+          month: "long",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      : "24 April 2027";
+
+    return (
+      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-4 sm:p-6 relative overflow-hidden select-none">
+        {/* Ambient red alert glow */}
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[34rem] h-[34rem] bg-red-600/15 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute bottom-10 right-10 w-80 h-80 bg-amber-600/10 rounded-full blur-3xl pointer-events-none" />
+
+        <div className="relative w-full max-w-lg bg-slate-900/95 border-2 border-red-500/60 rounded-3xl p-6 sm:p-8 shadow-2xl shadow-red-950/60 backdrop-blur-xl text-center space-y-6">
+          {/* Animated Lock Icon */}
+          <div className="relative mx-auto w-24 h-24 flex items-center justify-center">
+            <span className="absolute inset-0 rounded-3xl bg-red-500/20 animate-ping opacity-75" />
+            <div className="relative w-20 h-20 rounded-3xl bg-gradient-to-br from-red-600 via-rose-700 to-red-800 flex items-center justify-center shadow-xl shadow-red-600/50 border border-red-400/50">
+              <Lock className="w-10 h-10 text-white" />
+            </div>
+          </div>
+
+          {/* Heading */}
+          <div className="space-y-2">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-red-500/20 border border-red-500/40 text-red-300 text-xs font-black uppercase tracking-wider">
+              <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
+              <span>Access Terminated · 00:00:00</span>
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight leading-snug">
+              Subscription Expired
+            </h1>
+            <p className="text-base font-black text-red-400">
+              सब कुछ लॉक हो गया (Complete Lockout)
+            </p>
+            <p className="text-xs sm:text-sm text-slate-300 leading-relaxed max-w-md mx-auto pt-1">
+              Aapke school ka subscription plan samapt ho chuka hai. Suraksha evam policy ke anusaar school ke sabhi modules (Students, Fees, Marksheet, Attendance, Notices) lock kar diye gaye hain. Kripya Super Admin se sampark karke plan renew karwayen.
+            </p>
+          </div>
+
+          {/* School & Expiry Info Box */}
+          <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 text-left space-y-2.5">
+            <div className="flex items-center justify-between text-xs pb-2 border-b border-slate-800/80">
+              <span className="text-slate-400 font-medium">School Name:</span>
+              <span className="font-bold text-white truncate max-w-[220px]">{school?.name || "School"}</span>
+            </div>
+            <div className="flex items-center justify-between text-xs pb-2 border-b border-slate-800/80">
+              <span className="text-slate-400 font-medium">School Code / ID:</span>
+              <span className="font-mono font-bold text-indigo-300">{school?.code || school?.id || schoolId}</span>
+            </div>
+            <div className="flex items-center justify-between text-xs pb-2 border-b border-slate-800/80">
+              <span className="text-slate-400 font-medium">Plan Status:</span>
+              <span className="font-bold text-red-400 flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
+                EXPIRED ({subTier === "full" ? "Pro Plan" : "Lite Plan"})
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-slate-400 font-medium">Expired On:</span>
+              <span className="font-bold text-red-400">{expiredFormattedDate}</span>
+            </div>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="space-y-2.5 pt-2">
+            <button
+              type="button"
+              onClick={() => setView("subscription")}
+              className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-orange-500/25 active:scale-[0.98] transition cursor-pointer"
+            >
+              <Crown className="w-4 h-4 text-white" />
+              <span>Plan Details & Renew (प्लान रिन्यू कराएं)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setView("store")}
+              className="w-full py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 active:scale-[0.98] transition cursor-pointer"
+            >
+              <ShoppingBag className="w-4 h-4" />
+              <span>Open Store & Plans</span>
+            </button>
+
+            <a
+              href={`https://wa.me/918227070298?text=${encodeURIComponent(`Hello Super Admin, hamare school (${school?.name || "School"}, ID: ${school?.id || schoolId}) ka subscription expire ho gaya hai. Kripya hamara plan turant renew karwayen.`)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="w-full py-2.5 px-4 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-300 font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
+            >
+              <MessageSquare className="w-4 h-4" />
+              <span>Contact Super Admin on WhatsApp</span>
+            </a>
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="w-full py-2 px-4 rounded-xl text-slate-400 hover:text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Logout / Switch Account</span>
+            </button>
+          </div>
+        </div>
+      </div>
     );
   }
 
@@ -668,54 +866,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
     );
   }
 
-  // Sub-panels
-  if (view === "content" && selectedClass && selectedSubject) {
-    if (!canManageContent) {
-      return (
-        <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex flex-col">
-          <div className="bg-gradient-to-r from-blue-900 to-indigo-900 px-4 py-5">
-            <button onClick={() => setView("subjects")} className="flex items-center gap-1 text-blue-300 text-sm mb-2 hover:text-white">
-              <ChevronLeft className="w-4 h-4" /> Back
-            </button>
-            <h1 className="text-xl font-bold text-white">Content Manager</h1>
-          </div>
-          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center gap-5">
-            <div className="w-16 h-16 rounded-2xl bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
-              <Lock className="w-8 h-8 text-amber-500" />
-            </div>
-            <div>
-              <h2 className="text-lg font-bold text-slate-800 dark:text-white mb-2">Content Feature Locked</h2>
-              <p className="text-sm text-slate-500 dark:text-slate-400 max-w-xs">
-                {!subscriptionActive
-                  ? "Aapka subscription inactive hai. Content manage karne ke liye Pro Plan lo."
-                  : "Content manage karne ke liye Pro Plan chahiye. Abhi Lite Plan active hai."}
-              </p>
-            </div>
-            <button
-              onClick={() => setView("store")}
-              className="flex items-center gap-2 px-6 py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold transition-colors shadow-sm"
-            >
-              <Crown className="w-4 h-4" /> Pro Plan Lo
-            </button>
-          </div>
-        </div>
-      );
-    }
-    return (
-      <ContentManager
-        schoolId={schoolId}
-        sessionId={activeSession?.id || ""}
-        classId={selectedClass.id}
-        subjectId={selectedSubject.id}
-        subjectName={selectedSubject.name}
-        className={selectedClass.name}
-        authorId={adminUid}
-        subscription={school?.subscription || { reading: true, writing: true, pdf: true, mcq: true }}
-        onBack={() => { setView("subjects"); }}
-        onOpenLesson={(lesson, mode) => { setSmartClassLesson(lesson); setSmartClassMode(mode); }}
-      />
-    );
-  }
+
 
   if (view === "attendance" && selectedClass) {
     return (
@@ -1034,8 +1185,96 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
     );
   }
 
+  if (view === "timetable") {
+    return (
+      <div className="pb-20">
+        <TimetableManager
+          school={school!}
+          classes={displayedClasses}
+          subjects={subjects}
+          teachers={displayedTeachers}
+          activeSession={activeSession}
+          isAdmin={true}
+          onBack={() => setView("dashboard")}
+        />
+        {renderAdminBottomNav()}
+      </div>
+    );
+  }
+
+  if (view === "homework") {
+    return (
+      <div className="pb-20">
+        <HomeworkManager
+          school={school!}
+          classes={displayedClasses}
+          subjects={subjects}
+          teachers={displayedTeachers}
+          currentRole="ADMIN"
+          currentTeacherName={school?.principalName || "Principal"}
+          onBack={() => setView("dashboard")}
+        />
+        {renderAdminBottomNav()}
+      </div>
+    );
+  }
+
+  if (view === "library") {
+    return (
+      <div className="pb-20">
+        <LibraryManager
+          school={school!}
+          students={displayedStudents}
+          teachers={displayedTeachers}
+          classes={displayedClasses}
+          isAdmin={true}
+          onBack={() => setView("dashboard")}
+        />
+        {renderAdminBottomNav()}
+      </div>
+    );
+  }
+
+  if (view === "parent_queries") {
+    return (
+      <div className="pb-20">
+        <ParentTeacherQueryManager
+          school={school!}
+          students={displayedStudents}
+          teachers={displayedTeachers}
+          classes={displayedClasses}
+          currentUserRole="ADMIN"
+          currentUserName={school?.principalName || "Principal / Admin"}
+          currentUserId={adminUid}
+          onBack={() => setView("dashboard")}
+        />
+        {renderAdminBottomNav()}
+      </div>
+    );
+  }
+
+  if (view === "inventory_store") {
+    return (
+      <div className="pb-20">
+        <InventoryStoreManager
+          school={school!}
+          students={displayedStudents}
+          classes={displayedClasses}
+          isAdmin={true}
+          onBack={() => setView("dashboard")}
+        />
+        {renderAdminBottomNav()}
+      </div>
+    );
+  }
+
   const menuItems = [
     { label: "School Community", subtitle: "Photo, Video & Chhutti Post", icon: <ImageIcon className="w-5 h-5 text-rose-500" />, view: "community", count: "LIVE", locked: false, featured: true },
+    { label: "Timetable & Routine", subtitle: "Weekly Periods & Routine", icon: <Clock className="w-5 h-5 text-amber-500" />, view: "timetable", count: "8 Periods", locked: false },
+    { label: "Daily Homework", subtitle: "Diary & Notebook Submission", icon: <BookOpen className="w-5 h-5 text-purple-600" />, view: "homework", count: "Diary", locked: false },
+    { label: "Library Management", subtitle: "Books Catalog & Issue/Return", icon: <Book className="w-5 h-5 text-emerald-600" />, view: "library", count: "Books", locked: false },
+    { label: "Parent-Teacher Query", subtitle: "Helpdesk & Leave Requests", icon: <MessageSquare className="w-5 h-5 text-blue-600" />, view: "parent_queries", count: "Helpdesk", locked: false },
+    { label: "School Store & Stock", subtitle: "Uniforms, Books & POS Bill", icon: <Package className="w-5 h-5 text-orange-500" />, view: "inventory_store", count: "Stock", locked: false },
     { label: "Students", subtitle: "Admissions & Profiles", icon: <Users className="w-5 h-5 text-orange-500" />, view: "students", count: displayedStudents.length, locked: false },
     { label: "Fee Collection", subtitle: "Monthly Ledger & Receipts", icon: <IndianRupee className="w-5 h-5 text-emerald-500" />, view: "fees", count: "Live Sync", locked: false },
     { label: "QR ID Cards", subtitle: "Print & Scan Student ID", icon: <CreditCard className="w-5 h-5 text-indigo-500" />, view: "id_cards", count: "Live QR", locked: false },
@@ -1053,22 +1292,6 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
     { label: "Sessions", subtitle: "Academic Years", icon: <Calendar className="w-5 h-5 text-blue-500" />, view: "sessions", count: displayedSessions.length, locked: false },
     { label: "Public Website", subtitle: "Live School Portal", icon: <Globe className="w-5 h-5 text-indigo-500" />, view: "public_website", count: "Live", locked: false },
     { label: "Online Admissions", subtitle: "New Enquiries", icon: <UserPlus className="w-5 h-5 text-amber-500" />, view: "online_admissions", count: "Portal", locked: false },
-    {
-      label: "Mera Plan",
-      subtitle: "Subscription Status",
-      icon: <Crown className="w-5 h-5 text-amber-500" />,
-      view: "subscription",
-      count: null,
-      locked: false,
-    },
-    {
-      label: "Store / Plans",
-      subtitle: "Upgrade Features",
-      icon: <ShoppingBag className="w-5 h-5 text-violet-500" />,
-      view: "store",
-      count: null,
-      locked: false,
-    },
   ];
 
   // List views
@@ -1810,16 +2033,29 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
                 </div>
               )}
               {subjects.map((sub, idx) => (
-                <div key={sub.id || `subject-${sub.name || idx}-${idx}`} className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm flex items-center gap-3">
-                  <div className="flex-1">
-                    <p className="font-bold text-slate-800 dark:text-white">{sub.name}</p>
+                <div key={sub.id || `subject-${sub.name || idx}-${idx}`} className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm flex items-center justify-between gap-3 border border-slate-100 dark:border-slate-700/80">
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <div className="w-9 h-9 rounded-xl bg-purple-50 dark:bg-purple-900/30 text-purple-600 dark:text-purple-300 font-black text-sm flex items-center justify-center shrink-0">
+                      {sub.name ? sub.name.charAt(0).toUpperCase() : "S"}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="font-bold text-slate-800 dark:text-white text-sm sm:text-base truncate">{sub.name}</p>
+                      <span className="inline-block text-[10px] font-bold px-2 py-0.2 rounded-full bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-800 mt-0.5">
+                        Academic Subject
+                      </span>
+                    </div>
                   </div>
-                  <button onClick={() => { setSelectedSubject(sub); setView("content"); }}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium">
-                    <BookOpen className="w-3.5 h-3.5" /> Lessons
-                  </button>
-                  <button onClick={() => deleteSubject(schoolId, sub.id)} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700">
-                    <Trash2 className="w-4 h-4 text-red-400" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (confirm(`Kya aap "${sub.name}" subject ko delete karna chahte hain?`)) {
+                        deleteSubject(schoolId, sub.id);
+                      }
+                    }}
+                    className="p-2 rounded-xl text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 transition cursor-pointer"
+                    title="Delete Subject"
+                  >
+                    <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
               ))}
@@ -1831,69 +2067,470 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
 
     if (view === "teachers") {
       return (
-        <div className="p-4 space-y-3 max-w-2xl mx-auto">
-          <button onClick={() => { setShowForm("teacher"); setEditingTeacherId(null); }}
-            className="w-full py-3 bg-blue-600 text-white rounded-xl font-medium flex items-center justify-center gap-2">
-            <Plus className="w-4 h-4" /> Add Teacher
-          </button>
+        <div className="p-4 space-y-4 max-w-3xl mx-auto">
+          {/* Header Banner */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-4 sm:p-5 border border-slate-200 dark:border-slate-700 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 flex items-center justify-center font-bold">
+                  <GraduationCap className="w-4 h-4" />
+                </div>
+                <h3 className="text-base font-black text-slate-800 dark:text-white">
+                  Faculty &amp; Teachers Directory (शिक्षक प्रबंधन)
+                </h3>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                Teachers ka photo, qualification, designation, subjects aur bio manage karein jo student dashboard me dikhega.
+              </p>
+              <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-[11px] font-bold text-emerald-700 dark:text-emerald-300">
+                <Shield className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                <span>🔒 Privacy Protection: Teachers ke personal mobile numbers student portal par nahi dikhaye jaate hain.</span>
+              </div>
+            </div>
+
+            <button
+              onClick={() => {
+                setShowForm(showForm === "teacher" ? null : "teacher");
+                setEditingTeacherId(null);
+              }}
+              className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs sm:text-sm flex items-center gap-2 shadow-sm transition active:scale-95 cursor-pointer shrink-0"
+            >
+              <Plus className="w-4 h-4" />
+              <span>+ Add Faculty / Teacher</span>
+            </button>
+          </div>
+
+          {/* Add Teacher Form */}
           {showForm === "teacher" && !editingTeacherId && (
-            <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm space-y-3">
-              {[
-                ["name", "Full Name *", "text"], ["email", "Email", "email"],
-                ["phone", "Phone", "tel"], ["employeeId", "Employee ID", "text"]
-              ].map(([k, label, type], idx) => (
-                <input key={`teacher-field-${k}-${idx}`} type={type} value={(teacherForm as any)[k]}
-                  onChange={e => setTeacherForm(p => ({ ...p, [k]: e.target.value }))}
-                  placeholder={label}
-                  className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
-              ))}
-              <div className="flex gap-2">
-                <button onClick={addTeacher} disabled={saving} className="flex-1 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-60">Save</button>
-                <button onClick={() => setShowForm(null)} className="flex-1 py-2 bg-slate-100 dark:bg-slate-700 rounded-lg text-sm">Cancel</button>
+            <div className="bg-white dark:bg-slate-800 rounded-2xl p-5 border-2 border-blue-500/30 shadow-md space-y-4 animate-in fade-in">
+              <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 pb-3">
+                <p className="text-sm font-black text-blue-600 dark:text-blue-400 flex items-center gap-2">
+                  <UserPlus className="w-4 h-4" />
+                  <span>New Teacher Profile (नया शिक्षक जोड़ें)</span>
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowForm(null)}
+                  className="text-slate-400 hover:text-slate-600 dark:hover:text-white text-xs font-bold"
+                >
+                  ✕ Close
+                </button>
+              </div>
+
+              {/* Photo Upload */}
+              <div className="p-3 bg-slate-50 dark:bg-slate-700/40 rounded-xl border border-slate-200 dark:border-slate-600 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-xl bg-slate-200 dark:bg-slate-600 flex items-center justify-center overflow-hidden border border-slate-300 dark:border-slate-500 shrink-0">
+                    {teacherForm.photoUrl ? (
+                      <img src={teacherForm.photoUrl} alt="Preview" className="w-full h-full object-cover" />
+                    ) : (
+                      <User className="w-6 h-6 text-slate-400" />
+                    )}
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-slate-700 dark:text-slate-200">Teacher Photo (तस्वीर)</p>
+                    <p className="text-[10px] text-slate-400">Student dashboard par card me dikhegi</p>
+                  </div>
+                </div>
+                <DirectUploadButton
+                  kind="image"
+                  compact
+                  currentUrl={teacherForm.photoUrl}
+                  onUploaded={(url) => setTeacherForm(p => ({ ...p, photoUrl: url }))}
+                  onClear={() => setTeacherForm(p => ({ ...p, photoUrl: "" }))}
+                />
+              </div>
+
+              {/* Basic Details */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">
+                    Full Name (पूरा नाम) *
+                  </label>
+                  <input
+                    value={teacherForm.name}
+                    onChange={e => setTeacherForm(p => ({ ...p, name: e.target.value }))}
+                    placeholder="e.g. Dr. Arvind Swaminathan"
+                    className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">
+                    Designation / Role (पद)
+                  </label>
+                  <input
+                    value={teacherForm.designation}
+                    onChange={e => setTeacherForm(p => ({ ...p, designation: e.target.value }))}
+                    placeholder="e.g. Senior Faculty - Mathematics, TGT Science"
+                    className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                  />
+                </div>
+              </div>
+
+              {/* Qualification & Experience */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">
+                    Highest Qualification (शैक्षणिक योग्यता)
+                  </label>
+                  <input
+                    value={teacherForm.qualification}
+                    onChange={e => setTeacherForm(p => ({ ...p, qualification: e.target.value }))}
+                    placeholder="e.g. M.Sc. (Mathematics), B.Ed, CTET"
+                    className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">
+                    Teaching Experience (शिक्षण अनुभव)
+                  </label>
+                  <input
+                    value={teacherForm.experience}
+                    onChange={e => setTeacherForm(p => ({ ...p, experience: e.target.value }))}
+                    placeholder="e.g. 8+ Years Experience"
+                    className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                  />
+                </div>
+              </div>
+
+              {/* Subjects */}
+              <div>
+                <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">
+                  Subjects Taught (पढ़ाने वाले विषय — अल्पविराम ',' से अलग करें)
+                </label>
+                <input
+                  value={teacherForm.subjects}
+                  onChange={e => setTeacherForm(p => ({ ...p, subjects: e.target.value }))}
+                  placeholder="e.g. Mathematics, Physics, Applied Math"
+                  className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                />
+              </div>
+
+              {/* Bio / Message */}
+              <div>
+                <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">
+                  Teacher Bio / Message for Students (शिक्षक का संदेश / परिचय)
+                </label>
+                <textarea
+                  rows={2}
+                  value={teacherForm.bio}
+                  onChange={e => setTeacherForm(p => ({ ...p, bio: e.target.value }))}
+                  placeholder="e.g. Dedicated to conceptual clarity and helping every student achieve academic excellence."
+                  className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                />
+              </div>
+
+              {/* Employee ID & Optional Official Email */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">
+                    Employee ID (कर्मचारी कोड — Optional)
+                  </label>
+                  <input
+                    value={teacherForm.employeeId}
+                    onChange={e => setTeacherForm(p => ({ ...p, employeeId: e.target.value }))}
+                    placeholder="e.g. EMP-2026-08"
+                    className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">
+                    Official Email (ईमेल — Optional)
+                  </label>
+                  <input
+                    type="email"
+                    value={teacherForm.email}
+                    onChange={e => setTeacherForm(p => ({ ...p, email: e.target.value }))}
+                    placeholder="e.g. teacher@school.edu.in"
+                    className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={addTeacher}
+                  disabled={saving || !teacherForm.name.trim()}
+                  className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-black disabled:opacity-60 shadow-md transition active:scale-95 cursor-pointer"
+                >
+                  {saving ? "Saving Teacher..." : "Save Teacher Profile"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowForm(null)}
+                  className="px-5 py-2.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl text-sm font-bold cursor-pointer"
+                >
+                  Cancel
+                </button>
               </div>
             </div>
           )}
-          {displayedTeachers.map((t, idx) => (
-            <div key={t.id || `teacher-${t.name || idx}-${idx}`} className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm">
-              {editingTeacherId === t.id ? (
-                <div className="space-y-3">
-                  <p className="text-xs font-semibold text-green-500 uppercase tracking-wider">Edit Teacher</p>
-                  {[
-                    ["name", "Full Name *", "text"], ["email", "Email", "email"],
-                    ["phone", "Phone", "tel"], ["employeeId", "Employee ID", "text"]
-                  ].map(([k, label, type], idx) => (
-                    <input key={`edit-teacher-field-${k}-${idx}`} type={type} value={(editTeacherForm as any)[k]}
-                      onChange={e => setEditTeacherForm(p => ({ ...p, [k]: e.target.value }))}
-                      placeholder={label}
-                      className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
-                  ))}
-                  <div className="flex gap-2">
-                    <button onClick={saveEditTeacher} disabled={saving} className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-green-600 text-white rounded-lg text-sm font-medium disabled:opacity-60">
-                      <Save className="w-3.5 h-3.5" /> {saving ? "Saving..." : "Save"}
-                    </button>
-                    <button onClick={() => setEditingTeacherId(null)} className="flex-1 py-2 bg-slate-100 dark:bg-slate-700 rounded-lg text-sm">Cancel</button>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center font-bold text-green-700 flex-shrink-0">
-                    {t.name[0]}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-bold text-slate-800 dark:text-white">{t.name}</p>
-                    <p className="text-xs text-slate-400 truncate">{t.email || "No email"} • {t.employeeId || "No ID"}</p>
-                  </div>
-                  <button onClick={() => { setEditingTeacherId(t.id); setEditTeacherForm({ name: t.name, email: t.email || "", phone: t.phone || "", employeeId: t.employeeId || "" }); setShowForm(null); }}
-                    className="p-1.5 rounded-lg hover:bg-green-50 dark:hover:bg-green-900/20 text-green-600">
-                    <Edit3 className="w-4 h-4" />
-                  </button>
-                  <button onClick={() => deleteTeacher(schoolId, t.id)} className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-red-400">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              )}
+
+          {/* Teachers Cards List */}
+          {displayedTeachers.length === 0 ? (
+            <div className="text-center py-12 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-6">
+              <GraduationCap className="w-10 h-10 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
+              <p className="text-base font-bold text-slate-700 dark:text-slate-300">
+                Abhi koi teacher add nahi kiya gaya
+              </p>
+              <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+                Upar diye "+ Add Faculty / Teacher" button par click karke apne school ke teachers ki photo, qualification aur subjects jodein.
+              </p>
             </div>
-          ))}
+          ) : (
+            displayedTeachers.map((t, idx) => {
+              const subjectsList = Array.isArray(t.subjects) ? t.subjects : (t.subjects ? [t.subjects] : []);
+              return (
+                <div
+                  key={t.id || `teacher-${t.name || idx}-${idx}`}
+                  className="bg-white dark:bg-slate-800 rounded-2xl p-4 sm:p-5 border border-slate-200/90 dark:border-slate-700 shadow-xs hover:shadow-md transition overflow-hidden"
+                >
+                  {editingTeacherId === t.id ? (
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 pb-2.5">
+                        <p className="text-xs font-black text-emerald-600 dark:text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                          <Edit3 className="w-3.5 h-3.5" />
+                          <span>Edit Faculty Profile</span>
+                        </p>
+                        <span className="text-[10px] text-slate-400 font-bold">ID: #{t.id.slice(0, 6)}</span>
+                      </div>
+
+                      {/* Edit Photo */}
+                      <div className="p-3 bg-slate-50 dark:bg-slate-700/40 rounded-xl border border-slate-200 dark:border-slate-600 flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-12 h-12 rounded-xl bg-slate-200 dark:bg-slate-600 flex items-center justify-center overflow-hidden border border-slate-300 dark:border-slate-500 shrink-0">
+                            {editTeacherForm.photoUrl ? (
+                              <img src={editTeacherForm.photoUrl} alt="Preview" className="w-full h-full object-cover" />
+                            ) : (
+                              <User className="w-6 h-6 text-slate-400" />
+                            )}
+                          </div>
+                          <div>
+                            <p className="text-xs font-bold text-slate-700 dark:text-slate-200">Teacher Photo</p>
+                            <p className="text-[10px] text-slate-400">Change portrait image</p>
+                          </div>
+                        </div>
+                        <DirectUploadButton
+                          kind="image"
+                          compact
+                          currentUrl={editTeacherForm.photoUrl}
+                          onUploaded={(url) => setEditTeacherForm(p => ({ ...p, photoUrl: url }))}
+                          onClear={() => setEditTeacherForm(p => ({ ...p, photoUrl: "" }))}
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">Full Name *</label>
+                          <input
+                            value={editTeacherForm.name}
+                            onChange={e => setEditTeacherForm(p => ({ ...p, name: e.target.value }))}
+                            placeholder="Full Name"
+                            className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">Designation / Role</label>
+                          <input
+                            value={editTeacherForm.designation}
+                            onChange={e => setEditTeacherForm(p => ({ ...p, designation: e.target.value }))}
+                            placeholder="Designation"
+                            className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">Highest Qualification</label>
+                          <input
+                            value={editTeacherForm.qualification}
+                            onChange={e => setEditTeacherForm(p => ({ ...p, qualification: e.target.value }))}
+                            placeholder="e.g. M.Sc., B.Ed"
+                            className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">Teaching Experience</label>
+                          <input
+                            value={editTeacherForm.experience}
+                            onChange={e => setEditTeacherForm(p => ({ ...p, experience: e.target.value }))}
+                            placeholder="e.g. 8+ Years"
+                            className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">Subjects Taught (comma separated)</label>
+                        <input
+                          value={editTeacherForm.subjects}
+                          onChange={e => setEditTeacherForm(p => ({ ...p, subjects: e.target.value }))}
+                          placeholder="e.g. Mathematics, Physics"
+                          className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">Teacher Bio / Message for Students</label>
+                        <textarea
+                          rows={2}
+                          value={editTeacherForm.bio}
+                          onChange={e => setEditTeacherForm(p => ({ ...p, bio: e.target.value }))}
+                          placeholder="Inspiring bio or message for students"
+                          className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">Employee ID</label>
+                          <input
+                            value={editTeacherForm.employeeId}
+                            onChange={e => setEditTeacherForm(p => ({ ...p, employeeId: e.target.value }))}
+                            placeholder="Employee ID"
+                            className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">Official Email</label>
+                          <input
+                            type="email"
+                            value={editTeacherForm.email}
+                            onChange={e => setEditTeacherForm(p => ({ ...p, email: e.target.value }))}
+                            placeholder="Email"
+                            className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={saveEditTeacher}
+                          disabled={saving || !editTeacherForm.name.trim()}
+                          className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-black disabled:opacity-60 shadow-md transition active:scale-95 cursor-pointer"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          <span>{saving ? "Saving Changes..." : "Save Changes"}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingTeacherId(null)}
+                          className="px-5 py-2.5 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-sm font-bold cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                      <div className="flex items-start gap-3.5 flex-1 min-w-0">
+                        {/* Portrait Photo */}
+                        <div className="w-14 h-16 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center font-black text-white text-lg overflow-hidden shrink-0 shadow-xs border border-slate-200 dark:border-slate-700">
+                          {t.photoUrl ? (
+                            <img src={t.photoUrl} alt={t.name} className="w-full h-full object-cover" />
+                          ) : (
+                            <span>{t.name ? t.name.charAt(0).toUpperCase() : "T"}</span>
+                          )}
+                        </div>
+
+                        {/* Teacher Details */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="font-black text-base text-slate-800 dark:text-white">
+                              {t.name}
+                            </h4>
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                              {t.designation || "Faculty"}
+                            </span>
+                            {t.experience && (
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-900">
+                                ⏳ {t.experience}
+                              </span>
+                            )}
+                          </div>
+
+                          {t.qualification && (
+                            <p className="text-xs font-semibold text-slate-600 dark:text-slate-300 mt-1 flex items-center gap-1">
+                              <span>🎓</span>
+                              <span>{t.qualification}</span>
+                            </p>
+                          )}
+
+                          {subjectsList.length > 0 && (
+                            <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+                              {subjectsList.map((subItem: string, sIdx: number) => (
+                                <span
+                                  key={`t-sub-${t.id}-${sIdx}`}
+                                  className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-700/80 text-slate-700 dark:text-slate-300"
+                                >
+                                  {subItem}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+
+                          {t.bio && (
+                            <p className="text-xs text-slate-500 dark:text-slate-400 italic mt-2 bg-slate-50 dark:bg-slate-900/40 p-2 rounded-lg border-l-2 border-blue-500">
+                              "{t.bio}"
+                            </p>
+                          )}
+
+                          <div className="flex items-center gap-3 text-[11px] text-slate-400 mt-2">
+                            {t.employeeId && <span>Code: {t.employeeId}</span>}
+                            {t.email && <span>{t.email}</span>}
+                            <span className="text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
+                              <Shield className="w-3 h-3" /> Mobile Hidden
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Action buttons */}
+                      <div className="flex sm:flex-col items-center gap-1.5 shrink-0 self-end sm:self-center">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingTeacherId(t.id);
+                            setEditTeacherForm({
+                              name: t.name || "",
+                              photoUrl: t.photoUrl || "",
+                              designation: t.designation || "",
+                              qualification: t.qualification || "",
+                              experience: t.experience || "",
+                              subjects: Array.isArray(t.subjects) ? t.subjects.join(", ") : (t.subjects || ""),
+                              bio: t.bio || "",
+                              employeeId: t.employeeId || "",
+                              email: t.email || "",
+                            });
+                            setShowForm(null);
+                          }}
+                          className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          <span>Edit</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (window.confirm(`Kya aap sach me "${t.name}" ko remove karna chahte hain?`)) {
+                              deleteTeacher(schoolId, t.id);
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 dark:text-rose-400 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Delete</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
         </div>
       );
     }
@@ -2258,6 +2895,62 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
 
       {view === "dashboard" ? (
         <div className="p-4 max-w-2xl mx-auto space-y-4">
+          {/* ── LIVE ONLINE ADMISSION NOTIFICATION BANNER ── */}
+          {admissionAlerts.length > 0 && (
+            <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-700 text-white rounded-3xl p-4 sm:p-5 shadow-xl border border-emerald-400/40 animate-in fade-in slide-in-from-top-2 duration-300">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-white/20 backdrop-blur-xs flex items-center justify-center shrink-0 mt-0.5 shadow-inner">
+                    <Sparkles className="w-5 h-5 text-amber-300 animate-pulse" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="px-2.5 py-0.5 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black uppercase tracking-wider shadow-xs">
+                        🔔 New Online Admission ({admissionAlerts.length})
+                      </span>
+                    </div>
+                    <h4 className="font-black text-sm sm:text-base text-white mt-1 leading-snug">
+                      {admissionAlerts[0].studentName} ne {admissionAlerts[0].className} me online admission liya hai!
+                    </h4>
+                    <p className="text-xs text-white/90 mt-1">
+                      आवंटित रोल नंबर: <strong className="text-amber-300 font-mono text-sm">#{admissionAlerts[0].rollNo}</strong> • जमा शुल्क: <strong>₹{admissionAlerts[0].amount}</strong> (प्रवेश: ₹{admissionAlerts[0].admissionCharge} + वार्षिक: ₹{admissionAlerts[0].annualCharge})
+                    </p>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setView("online_admissions")}
+                        className="px-3.5 py-2 rounded-xl bg-white text-slate-900 text-xs font-black hover:bg-slate-100 transition shadow-md active:scale-95 cursor-pointer flex items-center gap-1.5"
+                      >
+                        <UserPlus className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>आवेदन व पेमेंट स्क्रीनशॉट देखें</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          localStorage.removeItem(`school_admission_alerts_${schoolId}`);
+                          setAdmissionAlerts([]);
+                        }}
+                        className="px-3 py-2 rounded-xl bg-black/25 hover:bg-black/35 text-white/90 text-xs font-bold transition cursor-pointer"
+                      >
+                        Dismiss All
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    localStorage.removeItem(`school_admission_alerts_${schoolId}`);
+                    setAdmissionAlerts([]);
+                  }}
+                  className="p-1.5 text-white/70 hover:text-white rounded-lg hover:bg-white/10 cursor-pointer"
+                  title="Dismiss Alert"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* ── UNIFIED ALL-IN-ONE INSTITUTIONAL MASTER CARD (Identity + Dataset + Controls in 1 Place) ── */}
           {school && (
@@ -2790,99 +3483,167 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
             )}
           </div>
 
-          {/* ── Plan timer card ─────────────────────────────── */}
+          {/* ── UNIFIED PREMIUM SUBSCRIPTION CARD (Problem 1 & 2) ────────────────── */}
           {school && (() => {
-            const expIso = school.subscription.expiresAt || school.subscription.paidUntil;
-            const daysLeft = expIso
-              ? Math.ceil((new Date(expIso).getTime() - Date.now()) / 86400000)
-              : null;
-            const isExpired = daysLeft !== null && daysLeft <= 0;
-            const warnSoon  = daysLeft !== null && !isExpired && daysLeft <= 7;
-            const warnMid   = daysLeft !== null && !isExpired && daysLeft <= 30;
+            const expIso = school.subscription?.expiresAt || school.subscription?.paidUntil || '2027-04-24T23:59:59.000Z';
+            const expTime = expIso ? new Date(expIso).getTime() : 0;
+            const msLeft = expTime ? expTime - nowTick : null;
+            const isExpired = msLeft !== null && msLeft <= 0;
+            const isWithin48Hours = msLeft !== null && msLeft > 0 && msLeft <= 48 * 3600 * 1000;
+            const daysLeft = msLeft !== null ? Math.ceil(msLeft / 86400000) : null;
             const planLabel = subTier === "full" ? "Pro Plan" : subTier === "lite" ? "Lite Plan" : "School Plan";
-            const tierColor = subTier === "full"
-              ? { bg: "from-amber-500 to-orange-500", light: "bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800", badge: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300" }
-              : subTier === "lite"
-              ? { bg: "from-blue-500 to-indigo-600", light: "bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800", badge: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" }
-              : { bg: "from-slate-400 to-slate-500", light: "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700", badge: "bg-slate-100 text-slate-500" };
-            const timerColor = isExpired || !subscriptionActive
-              ? "text-red-600 dark:text-red-400"
-              : warnSoon ? "text-red-500"
-              : warnMid  ? "text-amber-600 dark:text-amber-400"
-              : "text-green-600 dark:text-green-400";
+
+            // Exact formatted expiry date (e.g. 24 April 2027)
+            const formattedExpiryDate = expIso
+              ? new Date(expIso).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })
+              : "24 April 2027";
+
+            // Live 48-hour ticking countdown string (Hour : Min : Sec)
+            let liveCountdownText = "";
+            if (isWithin48Hours && msLeft !== null) {
+              const totalSec = Math.max(0, Math.floor(msLeft / 1000));
+              const hrs = Math.floor(totalSec / 3600);
+              const mins = Math.floor((totalSec % 3600) / 60);
+              const secs = totalSec % 60;
+              liveCountdownText = `${hrs.toString().padStart(2, "0")} Hours : ${mins.toString().padStart(2, "0")} Mins : ${secs.toString().padStart(2, "0")} Secs remaining`;
+            }
 
             return (
-              <div className={`rounded-2xl border p-4 mb-4 shadow-sm ${isExpired || !subscriptionActive ? "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800" : tierColor.light}`}>
-                <div className="flex items-center gap-3">
-                  {/* Icon */}
-                  <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${tierColor.bg} flex items-center justify-center shrink-0 shadow`}>
-                    {subTier === "full" ? <Crown className="w-6 h-6 text-white" /> : subTier === "lite" ? <Shield className="w-6 h-6 text-white" /> : <Lock className="w-6 h-6 text-white" />}
-                  </div>
-                  {/* Info */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-black text-base text-slate-800 dark:text-white">{planLabel}</span>
-                      {subscriptionActive && !isExpired
-                        ? <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300">✅ Active</span>
-                        : <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300">{isExpired ? "❌ Expired" : "❌ Inactive"}</span>
-                      }
+              <div className={`rounded-3xl border-2 p-5 mb-5 shadow-lg relative overflow-hidden transition-all ${
+                isExpired
+                  ? "bg-gradient-to-br from-red-950/40 via-slate-900 to-red-950/30 border-red-500/50 text-white"
+                  : subTier === "full"
+                  ? "bg-gradient-to-br from-amber-500/10 via-white to-orange-500/10 dark:from-amber-950/40 dark:via-slate-900 dark:to-orange-950/30 border-amber-400/60 dark:border-amber-500/40 shadow-amber-500/5"
+                  : "bg-gradient-to-br from-blue-500/10 via-white to-indigo-500/10 dark:from-blue-950/40 dark:via-slate-900 dark:to-indigo-950/30 border-blue-400/60 dark:border-blue-500/40 shadow-blue-500/5"
+              }`}>
+                {/* Decorative background glow */}
+                <div className="absolute -top-12 -right-12 w-36 h-36 bg-amber-400/10 dark:bg-amber-400/5 rounded-full blur-2xl pointer-events-none" />
+
+                {/* Top Header Row: Icon + Plan Status + Active Badge */}
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-13 h-13 rounded-2xl flex items-center justify-center shrink-0 shadow-md ${
+                      isExpired
+                        ? "bg-red-600 text-white"
+                        : subTier === "full"
+                        ? "bg-gradient-to-br from-amber-400 via-amber-500 to-orange-500 text-white shadow-amber-500/30 ring-2 ring-amber-300/50"
+                        : "bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-blue-500/30"
+                    }`}>
+                      {isExpired ? <Lock className="w-6 h-6 text-white" /> : subTier === "full" ? <Crown className="w-7 h-7 text-white" /> : <Shield className="w-6 h-6 text-white" />}
                     </div>
-                    {daysLeft !== null && (
-                      <p className={`text-sm font-black mt-0.5 ${timerColor}`}>
-                        {isExpired
-                          ? `${Math.abs(daysLeft)} din pehle expire hua`
-                          : warnSoon
-                          ? `⚠️ Sirf ${daysLeft} din baaki!`
-                          : `${daysLeft} din baaki`
-                        }
-                      </p>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="font-black text-lg text-slate-800 dark:text-white tracking-tight">
+                          {planLabel}
+                        </h3>
+                        {subscriptionActive && !isExpired ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] px-2.5 py-0.5 rounded-full font-black bg-emerald-500 text-white shadow-sm shadow-emerald-500/30">
+                            <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                            [ACTIVE]
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[10px] px-2.5 py-0.5 rounded-full font-black bg-red-600 text-white shadow-sm shadow-red-600/30">
+                            <span className="w-1.5 h-1.5 rounded-full bg-white" />
+                            [EXPIRED]
+                          </span>
+                        )}
+                      </div>
+                      {/* Exact Expiry Date */}
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-slate-600 dark:text-slate-300 mt-1">
+                        <Calendar className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                        <span>📅 Valid Till: <strong className="text-slate-900 dark:text-white font-black">{formattedExpiryDate}</strong></span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Days count or Expired badge */}
+                  <div className="text-right">
+                    {!isExpired && daysLeft !== null && !isWithin48Hours && (
+                      <span className="inline-flex items-center px-3 py-1 rounded-xl text-xs font-black bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300">
+                        {daysLeft} Days Remaining
+                      </span>
                     )}
-                    {expIso && (
-                      <p className="text-[10px] text-slate-400 mt-0.5">
-                        {isExpired ? "Expired" : "Valid till"}: {new Date(expIso).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
-                      </p>
+                    {isExpired && (
+                      <span className="inline-flex items-center px-3 py-1 rounded-xl text-xs font-black bg-red-100 dark:bg-red-950/60 border border-red-300 dark:border-red-800 text-red-700 dark:text-red-300">
+                        Expired
+                      </span>
                     )}
                   </div>
-                  {/* View plan button */}
-                  <button onClick={() => setView("subscription")} className={`shrink-0 text-[11px] font-bold px-2.5 py-1.5 rounded-xl ${tierColor.badge} flex items-center gap-1`}>
-                    <Crown className="w-3 h-3" /> Plan
-                  </button>
                 </div>
 
-                {/* Day progress bar */}
-                {daysLeft !== null && !isExpired && subscriptionActive && school.subscription.assignedAt && (() => {
-                  const totalDays = Math.ceil((new Date(expIso!).getTime() - new Date(school.subscription.assignedAt!).getTime()) / 86400000);
-                  const pct = totalDays > 0 ? Math.max(0, Math.min(100, Math.round((daysLeft / totalDays) * 100))) : 0;
-                  return (
-                    <div className="mt-3">
-                      <div className="h-1.5 bg-white/60 dark:bg-slate-700 rounded-full overflow-hidden">
-                        <div
-                          className={`h-full rounded-full transition-all ${warnSoon ? "bg-red-500" : warnMid ? "bg-amber-500" : "bg-green-500"}`}
-                          style={{ width: `${pct}%` }}
-                        />
+                {/* 48-Hour Live Ticking Countdown Bar */}
+                {isWithin48Hours && (
+                  <div className="mt-3.5 p-3 rounded-2xl bg-amber-500/15 dark:bg-amber-950/50 border-2 border-amber-500/50 shadow-sm animate-pulse">
+                    <div className="flex items-center gap-2.5">
+                      <span className="relative flex h-3 w-3 shrink-0">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-black text-amber-800 dark:text-amber-300 flex items-center gap-1.5 flex-wrap">
+                          <span>⚠️ Expiring Soon:</span>
+                          <span className="font-mono tracking-tight text-amber-900 dark:text-amber-100 bg-amber-100 dark:bg-amber-900/60 px-2 py-0.5 rounded-lg border border-amber-400/50 font-black">
+                            {liveCountdownText}
+                          </span>
+                        </p>
+                        <p className="text-[10px] font-semibold text-amber-700 dark:text-amber-400 mt-0.5">
+                          Subscription expire hote hi sabhi school modules lock ho jayenge. Turant renew karwayen!
+                        </p>
                       </div>
-                      <p className="text-[10px] text-slate-400 mt-1">{pct}% time remaining</p>
                     </div>
-                  );
-                })()}
-
-                {/* Feature chips (Pro only) */}
-                {subscriptionActive && subTier === "full" && (
-                  <div className="flex flex-wrap gap-1.5 mt-3">
-                    {school.subscription.reading && <span className="px-2 py-0.5 bg-white/60 dark:bg-slate-700/60 text-blue-700 dark:text-blue-300 rounded-full text-[10px] font-bold">📖 Reading</span>}
-                    {school.subscription.writing && <span className="px-2 py-0.5 bg-white/60 dark:bg-slate-700/60 text-purple-700 dark:text-purple-300 rounded-full text-[10px] font-bold">✏️ Writing</span>}
-                    {school.subscription.pdf     && <span className="px-2 py-0.5 bg-white/60 dark:bg-slate-700/60 text-orange-700 dark:text-orange-300 rounded-full text-[10px] font-bold">📄 PDF</span>}
-                    {school.subscription.mcq     && <span className="px-2 py-0.5 bg-white/60 dark:bg-slate-700/60 text-green-700 dark:text-green-300 rounded-full text-[10px] font-bold">❓ MCQ</span>}
                   </div>
                 )}
-                {/* Lite info */}
-                {subscriptionActive && subTier === "lite" && (
-                  <p className="text-xs text-blue-600 dark:text-blue-400 mt-2">Student data management active. Content ke liye Pro Plan lo.</p>
-                )}
-                {/* Expired info */}
-                {(!subscriptionActive || isExpired) && (
-                  <p className="text-xs text-red-600 dark:text-red-400 mt-2">Plan expire ho gaya — data entry aur content editing band hai. Super Admin se renew karao.</p>
-                )}
+
+                {/* Enabled Features List */}
+                <div className="mt-4 pt-3.5 border-t border-slate-200/70 dark:border-slate-800">
+                  <p className="text-[10px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+                    ✨ Features Enabled:
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    <span className="px-2.5 py-1 bg-white/80 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-lg text-[11px] font-bold text-slate-700 dark:text-slate-200 shadow-xs">
+                      📖 Reading Notes
+                    </span>
+                    <span className="px-2.5 py-1 bg-white/80 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-lg text-[11px] font-bold text-slate-700 dark:text-slate-200 shadow-xs">
+                      ✏️ Writing Notes
+                    </span>
+                    <span className="px-2.5 py-1 bg-white/80 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-lg text-[11px] font-bold text-slate-700 dark:text-slate-200 shadow-xs">
+                      📄 Smart PDF
+                    </span>
+                    <span className="px-2.5 py-1 bg-white/80 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-lg text-[11px] font-bold text-slate-700 dark:text-slate-200 shadow-xs">
+                      ❓ MCQ Engine
+                    </span>
+                    <span className="px-2.5 py-1 bg-white/80 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-lg text-[11px] font-bold text-slate-700 dark:text-slate-200 shadow-xs">
+                      👥 Student ERP
+                    </span>
+                    <span className="px-2.5 py-1 bg-white/80 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-lg text-[11px] font-bold text-slate-700 dark:text-slate-200 shadow-xs">
+                      🧾 Official Fee Receipts
+                    </span>
+                    <span className="px-2.5 py-1 bg-white/80 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-lg text-[11px] font-bold text-slate-700 dark:text-slate-200 shadow-xs">
+                      🪪 Live QR ID Cards
+                    </span>
+                  </div>
+                </div>
+
+                {/* Integrated Action Buttons: View Plan Details & Upgrade / Store */}
+                <div className="mt-4 pt-3 border-t border-slate-200/70 dark:border-slate-800 flex items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setView("subscription")}
+                    className="flex-1 py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white dark:bg-white dark:hover:bg-slate-100 dark:text-slate-900 text-xs font-black flex items-center justify-center gap-1.5 transition active:scale-[0.98] shadow-sm cursor-pointer"
+                  >
+                    <Crown className="w-3.5 h-3.5 text-amber-400" />
+                    <span>View Plan Details</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setView("store")}
+                    className="flex-1 py-2.5 px-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white text-xs font-black flex items-center justify-center gap-1.5 transition active:scale-[0.98] shadow-md shadow-orange-500/20 cursor-pointer"
+                  >
+                    <ShoppingBag className="w-3.5 h-3.5" />
+                    <span>Upgrade / Store</span>
+                  </button>
+                </div>
               </div>
             );
           })()}

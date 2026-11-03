@@ -76,7 +76,7 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
       logoUrl: resolvedLogo,
       principalName: currentDetails?.principalName || initialDetails?.principalName || school?.principalName || "",
       principalTitle: currentDetails?.principalTitle || initialDetails?.principalTitle || "Principal",
-      code: currentDetails?.code || initialDetails?.code || school?.code || "",
+      code: currentDetails?.code || initialDetails?.code || (school?.code && school?.code !== (school as any)?.lockCode && school?.code !== "0002" ? school.code : "") || "",
       principalPhone: currentDetails?.principalPhone || initialDetails?.principalPhone || school?.principalPhone || "",
       directorName: currentDetails?.directorName || initialDetails?.directorName || school?.directorName || "",
       directorPhone: currentDetails?.directorPhone || initialDetails?.directorPhone || school?.directorPhone || "",
@@ -317,15 +317,16 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
             </div>
             <div>
               <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                School Code / Registration No
+                School Registration / U-DISE / Affiliation No. (Optional)
               </label>
               <input
                 type="text"
                 value={details.code}
                 onChange={e => setDetails(p => ({ ...p, code: e.target.value }))}
-                placeholder="e.g. SCH-0042 / AFF-2130"
+                placeholder="e.g. 1042 / UDISE-2130 (या खाली रहने दें)"
                 className="w-full px-3 py-2 text-xs font-mono font-bold rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-hidden"
               />
+              <p className="text-[10px] text-slate-500 mt-1">यह पब्लिक डॉक्यूमेंट्स पर दिखने वाला रजिस्ट्रेशन नंबर है। स्कूल लॉक कोड यहाँ न डालें।</p>
             </div>
           </div>
 

@@ -575,7 +575,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
         {/* Decorative Watermark */}
         <div className="absolute inset-0 flex items-center justify-center opacity-[0.03] pointer-events-none select-none">
           <span className="text-[140px] font-black tracking-widest text-slate-900 uppercase">
-            {schoolDetails.code || school?.code || (schoolDetails.schoolName || "SCHL").slice(0, 4)}
+            {(schoolDetails.schoolName || school?.name || "ACADEMY").slice(0, 6).toUpperCase()}
           </span>
         </div>
 
@@ -605,7 +605,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                 {showSchoolDetail("address") && schoolDetails.address && <p className="text-[11px] text-slate-600 mt-0.5 font-medium">{schoolDetails.address}</p>}
                 <p className="text-[9.5px] text-slate-600 font-bold tracking-wide uppercase mt-0.5">
                   {showSchoolDetail("affiliation") ? (cleanCurriculumLine || "CBSE Pattern Curriculum") : "CBSE Pattern Curriculum"}
-                  {(showSchoolDetail("code") && (schoolDetails.code || school?.code)) ? ` • School Code: ${schoolDetails.code || school?.code}` : ""}
+                  {(showSchoolDetail("code") && schoolDetails.code && schoolDetails.code !== (school as any)?.lockCode && schoolDetails.code !== "0002") ? ` • Reg. No: ${schoolDetails.code}` : ""}
                 </p>
                 {((showSchoolDetail("phone") && schoolDetails.phone) || (showSchoolDetail("email") && schoolDetails.email)) ? (
                   <p className="text-[9px] text-slate-600 mt-0.5">
@@ -830,7 +830,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* 3 Official Signatures: Class Teacher, Exam Controller, and Principal (with School Round Stamp) */}
+        {/* 3 Official Signatures: Class Teacher, Exam Controller, and Principal */}
         <div className={`${isCompact ? "pt-3" : "pt-4"} border-t-2 border-slate-900 grid grid-cols-3 gap-6 items-end text-center text-xs`}>
           {/* 1. Class Teacher */}
           <div>
@@ -852,27 +852,22 @@ export const MarksheetGenerator: React.FC<Props> = ({
             <p className="font-black text-slate-800 uppercase tracking-wider text-[10.5px]">Exam Controller</p>
           </div>
 
-          {/* 3. Principal + School Round Stamp Space */}
-          <div className="flex items-end justify-center gap-3">
-            <div className="w-12 h-12 rounded-full border border-dashed border-slate-400 flex items-center justify-center text-[7px] font-bold uppercase text-slate-400 leading-tight p-1 shrink-0">
-              School<br />Stamp
+          {/* 3. Principal */}
+          <div>
+            <div className="h-10 border-b border-slate-400 mb-1 flex items-end justify-center">
+              {schoolDetails.principalSignatureUrl ? (
+                <img
+                  src={schoolDetails.principalSignatureUrl}
+                  alt="Principal Signature"
+                  className="max-h-8 max-w-[110px] object-contain mb-0.5"
+                />
+              ) : principalName ? (
+                <span className="italic font-serif font-black text-indigo-900 text-xs mb-0.5">{principalName}</span>
+              ) : null}
             </div>
-            <div className="flex-1">
-              <div className="h-10 border-b border-slate-400 mb-1 flex items-end justify-center">
-                {schoolDetails.principalSignatureUrl ? (
-                  <img
-                    src={schoolDetails.principalSignatureUrl}
-                    alt="Principal Signature"
-                    className="max-h-8 max-w-[110px] object-contain mb-0.5"
-                  />
-                ) : principalName ? (
-                  <span className="italic font-serif font-black text-indigo-900 text-xs mb-0.5">{principalName}</span>
-                ) : null}
-              </div>
-              <p className="font-black text-slate-950 uppercase tracking-wider text-[10.5px]">
-                {schoolDetails.principalTitle || "Principal"}
-              </p>
-            </div>
+            <p className="font-black text-slate-950 uppercase tracking-wider text-[10.5px]">
+              {schoolDetails.principalTitle || "Principal"}
+            </p>
           </div>
         </div>
       </div>

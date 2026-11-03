@@ -15,6 +15,9 @@ import {
   getSchool,
   subscribeToAllSchools,
   shouldUseDemoForSchool,
+  getLocalSchools,
+  getLocalClasses,
+  isDemoRecord,
 } from "../../school-firebase";
 import { getDemoSchoolDataset, isDemoDataEnabled, setDemoDataEnabled } from "./demoDataStore";
 import { syncLinkedStudentsToPushSubscription } from "../../utils/schoolPushClient";
@@ -91,11 +94,14 @@ function lazyWithRetry<T extends React.ComponentType<any>>(
   });
 }
 
-// Lazy load individual role panels with automatic retry
 const SuperAdminPanel = lazyWithRetry(() => import("./SuperAdminPanel"), "SuperAdminPanel");
 const SchoolAdminPanel = lazyWithRetry(() => import("./SchoolAdminPanel"), "SchoolAdminPanel");
 const TeacherPanel = lazyWithRetry(() => import("./TeacherPanel"), "TeacherPanel");
 const StudentSchoolPanel = lazyWithRetry(() => import("./StudentSchoolPanel"), "StudentSchoolPanel");
+const OnlineAdmissionManager = lazyWithRetry(
+  () => import("./OnlineAdmissionManager").then(m => ({ default: m.OnlineAdmissionManager || (m as any).default })),
+  "OnlineAdmissionManager"
+);
 
 interface PanelErrorBoundaryProps {
   fallbackTitle?: string;
@@ -211,7 +217,14 @@ export const SchoolEcosystem: React.FC<Props> = ({
   const [loading, setLoading] = useState(true);
   const [adminPreviewRole, setAdminPreviewRole] = useState<"ADMIN" | "TEACHER" | "STUDENT">("ADMIN");
   const [demoEnabled, setDemoEnabled] = useState<boolean>(() => isDemoDataEnabled());
-  const [allSchools, setAllSchools] = useState<School[]>([]);
+  const [allSchools, setAllSchools] = useState<School[]>(() => {
+    try {
+      const list = getLocalSchools();
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    }
+  });
   const [selectedAdminSchoolId, setSelectedAdminSchoolId] = useState<string>("");
   const [showSuperAdminHub, setShowSuperAdminHub] = useState<boolean>(false);
 
@@ -239,6 +252,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
   const [qrScanMode, setQrScanMode] = useState<"STUDENT" | "TEACHER">("STUDENT");
   const [manualInput, setManualInput] = useState("");
   const [linkError, setLinkError] = useState<string | null>(null);
+  const [showOnlineAdmission, setShowOnlineAdmission] = useState(false);
 
   const effectiveEmail = (email || user?.email || "").trim().toLowerCase();
   const rawRole = (userRole || user?.role || "").toUpperCase();
@@ -481,12 +495,17 @@ export const SchoolEcosystem: React.FC<Props> = ({
     Boolean(forceAdminView || isSuperAdmin || rawRole === "ADMIN" || rawRole === "SUPERADMIN" || uid === "admin_uid");
 
   useEffect(() => {
-    if (!canManageMultiSchools) return;
     const unsub = subscribeToAllSchools((list) => {
-      setAllSchools(Array.isArray(list) ? list : []);
+      const arr = Array.isArray(list) ? list : [];
+      if (arr.length > 0) {
+        setAllSchools(arr);
+      } else {
+        const local = getLocalSchools();
+        if (local.length > 0) setAllSchools(local);
+      }
     });
     return () => unsub();
-  }, [canManageMultiSchools]);
+  }, []);
 
   const fetchProfile = () => {
     if (isSuperAdmin || user?.provider === "qr_teacher_id") {
@@ -718,6 +737,13 @@ export const SchoolEcosystem: React.FC<Props> = ({
       });
       setActiveStudentKey(recordCompositeKey);
       setIsQrModalOpen(false);
+
+      if (finalRecord.schoolName) {
+        localStorage.setItem('nst_last_school_name', finalRecord.schoolName);
+      }
+      try {
+        window.dispatchEvent(new CustomEvent('user-signed-up-prompt-notifications'));
+      } catch {}
 
       // Live Remote Enrichment from Firebase (if scanned on a fresh phone with empty local cache)
       void Promise.all([
@@ -959,6 +985,38 @@ export const SchoolEcosystem: React.FC<Props> = ({
     );
   }
 
+  // ── 2.5 ONLINE ADMISSION VIEW (FOR NEW APPLICANTS) ──
+  if (showOnlineAdmission) {
+    const demoData = getDemoSchoolDataset();
+    const currentSchool =
+      allSchools.find((s) => s.id === effectiveSchoolId) ||
+      getLocalSchools().find((s) => s.id === effectiveSchoolId) ||
+      allSchools[0] ||
+      getLocalSchools()[0] ||
+      demoData?.school || { id: effectiveSchoolId, name: "School" };
+
+    const schoolClasses = getLocalClasses(currentSchool.id);
+    const realClasses = schoolClasses.filter((c: any) => !isDemoRecord(c));
+    const activeClasses = realClasses.length > 0
+      ? realClasses
+      : (shouldUseDemoForSchool(currentSchool.id) ? (schoolClasses.length > 0 ? schoolClasses : (demoData?.classes || [])) : []);
+
+    return (
+      <div className="min-h-screen bg-slate-950 text-white flex flex-col">
+        <Suspense fallback={<PanelLoadingFallback title="Online Admission Form" />}>
+          <OnlineAdmissionManager
+            school={currentSchool as any}
+            classes={activeClasses}
+            sessions={demoData?.sessions || []}
+            activeSession={demoData?.sessions?.[0] || null}
+            isAdmin={false}
+            onBack={() => setShowOnlineAdmission(false)}
+          />
+        </Suspense>
+      </div>
+    );
+  }
+
   // ── 3. IF NON-ADMIN USER HAS NOT LINKED AN ID CARD YET: SHOW SCAN/CONNECT GATEWAY ──
   if (!linkedEntity) {
     return (
@@ -1060,49 +1118,30 @@ export const SchoolEcosystem: React.FC<Props> = ({
               </div>
               <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-purple-400 group-hover:translate-x-1 transition-all" />
             </button>
-          </div>
 
-          {/* Manual Entry Fallback */}
-          <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-3">
-            <span className="text-[11px] font-bold text-slate-300 block uppercase tracking-wider">
-              या Admission No. से खोजें:
-            </span>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={manualInput}
-                onChange={e => setManualInput(e.target.value)}
-                placeholder="e.g. ADM-2026-6616 या Roll No"
-                className="flex-1 px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700/80 text-white placeholder-slate-500 text-xs focus:outline-none focus:border-emerald-500 font-mono"
-              />
-              <button
-                onClick={() => handleLinkSuccess(manualInput, "STUDENT")}
-                disabled={!manualInput.trim()}
-                className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-xs font-bold text-white transition cursor-pointer flex items-center gap-1.5"
-              >
-                <Search className="w-3.5 h-3.5" />
-                Link
-              </button>
-            </div>
-          </div>
-
-          {/* Guest / Demo Option */}
-          <div className="text-center pt-2">
+            {/* Apply for Online Admission */}
             <button
-              onClick={() => {
-                const demoStudent = getDemoSchoolDataset()?.students?.[0] || {
-                  id: "demo_std_c10_a_01",
-                  name: "Aarav Sharma",
-                  rollNo: "01",
-                  admissionNo: "ADM-26-C10A01",
-                  classId: "cls_10",
-                  schoolId: effectiveSchoolId
-                };
-                handleLinkSuccess(demoStudent.id, "STUDENT");
-              }}
-              className="text-xs text-slate-500 hover:text-slate-300 underline font-medium transition cursor-pointer"
+              type="button"
+              onClick={() => setShowOnlineAdmission(true)}
+              className="w-full p-4 rounded-2xl bg-gradient-to-r from-amber-950/40 via-slate-900 to-orange-950/30 border border-amber-600/40 hover:border-amber-400 hover:bg-slate-900/90 transition-all text-left flex items-center justify-between group shadow-lg cursor-pointer active:scale-[0.99]"
             >
-              Demo Student Profile देखें (Guest Mode)
+              <div className="flex items-center gap-3.5">
+                <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center group-hover:scale-105 transition-transform text-amber-400">
+                  <UserPlus className="w-6 h-6 text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-white flex items-center gap-1.5">
+                    Apply for Online Admission
+                    <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-amber-500 text-slate-950">
+                      New
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    नया दाखिला / ऑनलाइन एडमिशन फॉर्म भरें व रसीद पाएं
+                  </p>
+                </div>
+              </div>
+              <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-amber-400 group-hover:translate-x-1 transition-all" />
             </button>
           </div>
         </div>

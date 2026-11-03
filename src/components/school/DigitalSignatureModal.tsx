@@ -250,8 +250,133 @@ export const DigitalSignatureModal: React.FC<Props> = ({
     handleClear();
   };
 
-  // Upload signature from file / photo
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Helper: auto-remove white/grey paper OR black JPEG rectangle background to produce a clean transparent PNG
+  const removeWhiteBackground = (dataUrl: string): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const w = img.width;
+        const h = img.height;
+        if (!w || !h) {
+          resolve(dataUrl);
+          return;
+        }
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(dataUrl);
+          return;
+        }
+        ctx.drawImage(img, 0, 0);
+        try {
+          const imgData = ctx.getImageData(0, 0, w, h);
+          const data = imgData.data;
+
+          // Detect if image has a solid near-black rectangular background (from prior JPEG flattening)
+          const cornerCoords = [
+            0,
+            (w - 1) * 4,
+            (h - 1) * w * 4,
+            ((h - 1) * w + (w - 1)) * 4,
+          ];
+          let darkCorners = 0;
+          for (const idx of cornerCoords) {
+            const r = data[idx];
+            const g = data[idx + 1];
+            const b = data[idx + 2];
+            const a = data[idx + 3];
+            if (a > 200 && r < 35 && g < 35 && b < 42) {
+              darkCorners++;
+            }
+          }
+
+          if (darkCorners >= 3) {
+            // Flood-fill from outer border through connected near-black neutral pixels, preserving blue/colored ink
+            const totalPixels = w * h;
+            const visited = new Uint8Array(totalPixels);
+            const queue = new Int32Array(totalPixels);
+            let head = 0;
+            let tail = 0;
+
+            const isDarkBg = (pIdx: number) => {
+              const i = pIdx * 4;
+              const a = data[i + 3];
+              if (a === 0) return true;
+              const r = data[i];
+              const g = data[i + 1];
+              const b = data[i + 2];
+              // Preserve Royal Blue (#1e3a8a) & Indigo (#312e81) strokes where blue channel stands out
+              if (b - r >= 22 || b > 55) return false;
+              return r < 38 && g < 38 && b < 44;
+            };
+
+            const enqueue = (pIdx: number) => {
+              if (!visited[pIdx] && isDarkBg(pIdx)) {
+                visited[pIdx] = 1;
+                queue[tail++] = pIdx;
+              }
+            };
+
+            for (let x = 0; x < w; x++) {
+              enqueue(x);
+              enqueue((h - 1) * w + x);
+            }
+            for (let y = 0; y < h; y++) {
+              enqueue(y * w);
+              enqueue(y * w + (w - 1));
+            }
+
+            while (head < tail) {
+              const curr = queue[head++];
+              data[curr * 4 + 3] = 0;
+              const cx = curr % w;
+              const cy = (curr - cx) / w;
+              if (cx > 0) enqueue(curr - 1);
+              if (cx < w - 1) enqueue(curr + 1);
+              if (cy > 0) enqueue(curr - w);
+              if (cy < h - 1) enqueue(curr + w);
+            }
+          }
+
+          // Strip white / light-grey paper background & convert white-on-black strokes if any
+          for (let i = 0; i < data.length; i += 4) {
+            if (data[i + 3] === 0) continue;
+            const r = data[i];
+            const g = data[i + 1];
+            const b = data[i + 2];
+            const brightness = (r + g + b) / 3;
+            if (darkCorners >= 3 && brightness > 160) {
+              // White ink on former black background -> convert to crisp royal blue ink
+              data[i] = 30;
+              data[i + 1] = 58;
+              data[i + 2] = 138;
+              data[i + 3] = 255;
+            } else if (darkCorners < 3) {
+              if (brightness > 205) {
+                data[i + 3] = 0; // transparent
+              } else if (brightness > 165) {
+                const alpha = 255 - Math.round(((brightness - 165) / 40) * 255);
+                data[i + 3] = Math.min(data[i + 3], Math.max(0, alpha));
+              }
+            }
+          }
+
+          ctx.putImageData(imgData, 0, 0);
+          resolve(canvas.toDataURL("image/png"));
+        } catch (e) {
+          resolve(dataUrl);
+        }
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    });
+  };
+
+  // Upload signature from file / photo with auto white-background removal
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setErrorMsg(null);
@@ -262,13 +387,15 @@ export const DigitalSignatureModal: React.FC<Props> = ({
     }
 
     const reader = new FileReader();
-    reader.onload = (event) => {
-      const result = event.target?.result as string;
-      if (result) {
+    reader.onload = async (event) => {
+      const rawResult = event.target?.result as string;
+      if (rawResult) {
+        // Automatically convert paper white background into clean transparent PNG
+        const transparentResult = await removeWhiteBackground(rawResult);
         if (activeTab === "principal") {
-          setPrincipalSig(result);
+          setPrincipalSig(transparentResult);
         } else {
-          setDirectorSig(result);
+          setDirectorSig(transparentResult);
         }
       }
     };
@@ -276,7 +403,22 @@ export const DigitalSignatureModal: React.FC<Props> = ({
     e.target.value = "";
   };
 
-  // Save to Firebase & School profile (auto-uploading Base64 to Cloud CDN so Firestore doc stays ~1KB)
+  const handleMakeActiveTransparent = async () => {
+    const current = activeTab === "principal" ? principalSig : directorSig;
+    if (!current) return;
+    setSaving(true);
+    try {
+      const cleaned = await removeWhiteBackground(current);
+      if (activeTab === "principal") setPrincipalSig(cleaned);
+      else setDirectorSig(cleaned);
+      setSavedSuccessMsg("✨ White background successfully removed! Signature transparent ho gaya.");
+      setTimeout(() => setSavedSuccessMsg(null), 2500);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Save to Firebase & School profile (strictly lossless transparent PNG)
   const handleSaveEverywhere = async () => {
     setErrorMsg(null);
     let finalPrincipal = principalSig;
@@ -294,7 +436,11 @@ export const DigitalSignatureModal: React.FC<Props> = ({
     try {
       if (finalPrincipal && finalPrincipal.startsWith("data:image/")) {
         try {
-          finalPrincipal = await uploadImageToImgBB(finalPrincipal, `sig_principal_${schoolId}_${Date.now()}.png`);
+          finalPrincipal = await uploadImageToImgBB(
+            finalPrincipal,
+            `sig_principal_${schoolId}_${Date.now()}.png`,
+            { preservePng: true }
+          );
           setPrincipalSig(finalPrincipal);
         } catch (uploadErr) {
           console.warn("[DigitalSignatureModal] Principal sig CDN upload fallback:", uploadErr);
@@ -302,7 +448,11 @@ export const DigitalSignatureModal: React.FC<Props> = ({
       }
       if (finalDirector && finalDirector.startsWith("data:image/")) {
         try {
-          finalDirector = await uploadImageToImgBB(finalDirector, `sig_director_${schoolId}_${Date.now()}.png`);
+          finalDirector = await uploadImageToImgBB(
+            finalDirector,
+            `sig_director_${schoolId}_${Date.now()}.png`,
+            { preservePng: true }
+          );
           setDirectorSig(finalDirector);
         } catch (uploadErr) {
           console.warn("[DigitalSignatureModal] Director sig CDN upload fallback:", uploadErr);
@@ -416,7 +566,7 @@ export const DigitalSignatureModal: React.FC<Props> = ({
           {/* Current Saved Signature Card */}
           <div className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row items-center justify-between gap-3">
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-xl bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 flex items-center justify-center p-1 overflow-hidden shrink-0 shadow-inner">
+              <div className="w-16 h-12 rounded-xl bg-white border border-slate-300 flex items-center justify-center p-1 overflow-hidden shrink-0 shadow-inner">
                 {currentActiveSig ? (
                   <img src={currentActiveSig} alt="Signature" className="max-w-full max-h-full object-contain filter contrast-125" />
                 ) : (
@@ -445,16 +595,26 @@ export const DigitalSignatureModal: React.FC<Props> = ({
             </div>
 
             {currentActiveSig && (
-              <button
-                type="button"
-                onClick={() => {
-                  if (activeTab === "principal") setPrincipalSig("");
-                  else setDirectorSig("");
-                }}
-                className="text-xs text-rose-600 hover:text-rose-700 font-bold flex items-center gap-1 px-3 py-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-rose-200 transition"
-              >
-                <Trash2 className="w-3.5 h-3.5" /> Remove
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleMakeActiveTransparent}
+                  className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 font-bold flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 border border-indigo-200 dark:border-indigo-800 transition cursor-pointer"
+                  title="Photo ka white background hatakar transparent PNG banayein"
+                >
+                  <Sparkles className="w-3.5 h-3.5" /> Background Hatayein (Transparent)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (activeTab === "principal") setPrincipalSig("");
+                    else setDirectorSig("");
+                  }}
+                  className="text-xs text-rose-600 hover:text-rose-700 font-bold flex items-center gap-1 px-3 py-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-rose-200 transition cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" /> Remove
+                </button>
+              </div>
             )}
           </div>
 
@@ -500,22 +660,22 @@ export const DigitalSignatureModal: React.FC<Props> = ({
               </div>
             </div>
 
-            {/* Canvas Box */}
-            <div className="relative rounded-2xl border-2 border-dashed border-blue-400 dark:border-blue-600 bg-white dark:bg-slate-950 overflow-hidden shadow-inner touch-none select-none">
+            {/* Canvas Box (Always crisp white paper surface so blue/black ink stays clearly visible in dark mode) */}
+            <div className="relative rounded-2xl border-2 border-dashed border-blue-400 dark:border-blue-500 bg-white overflow-hidden shadow-inner touch-none select-none">
               <canvas
                 ref={canvasRef}
                 onPointerDown={handlePointerDown}
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
                 onPointerCancel={handlePointerUp}
-                className="w-full h-[180px] cursor-crosshair block"
+                className="w-full h-[180px] cursor-crosshair block bg-white"
               />
 
               {strokes.length === 0 && !isDrawing && (
-                <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center text-slate-300 dark:text-slate-700">
+                <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center text-slate-400">
                   <PenTool className="w-8 h-8 opacity-40 mb-1" />
                   <span className="text-xs font-semibold">Ungli ya Stylus se yahan sign karein</span>
-                  <span className="text-[10px] text-slate-400">Touch &amp; Mouse supported</span>
+                  <span className="text-[10px] text-slate-400">Transparent PNG • Touch &amp; Mouse supported</span>
                 </div>
               )}
             </div>

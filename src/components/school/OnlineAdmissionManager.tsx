@@ -1,5 +1,6 @@
 // @ts-nocheck
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
+import QRCode from "react-qr-code";
 import {
   ChevronLeft,
   UserPlus,
@@ -23,7 +24,19 @@ import {
   Scissors,
   AlertCircle,
   FileCheck2,
+  Upload,
+  Camera,
+  Sparkles,
+  Copy,
+  Smartphone,
+  BadgeCheck,
+  ExternalLink,
+  QrCode,
+  Image as ImageIcon,
+  CheckCheck,
+  Lock,
 } from "lucide-react";
+import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 import type {
   School,
   SchoolClass,
@@ -50,11 +63,93 @@ import {
   getLocalFees,
   saveSchoolUserProfile,
   isStudentInClass,
+  getLocalClasses,
+  subscribeToClasses,
+  shouldUseDemoForSchool,
+  isDemoRecord,
 } from "../../school-firebase";
 import { saveUserToLive } from "../../firebase";
 import { DirectUploadButton } from "../DirectUploadButton";
 import { OfficialFeeReceiptModal } from "./OfficialFeeReceiptModal";
 import { AdmissionFormPrintModal, type AdmissionPrintMode } from "./AdmissionFormPrintModal";
+
+// Clean class label helper: prevents duplicate "(B)" if the class name already contains "Section B"
+export const formatClassLabel = (c?: SchoolClass | null): string => {
+  if (!c) return "";
+  const name = (c.name || "").trim();
+  const sec = (c.section || "").trim();
+  if (!sec) return name;
+  const nameLower = name.toLowerCase();
+  const secLower = sec.toLowerCase();
+  if (
+    nameLower.includes(`section ${secLower}`) ||
+    nameLower.includes(`sec ${secLower}`) ||
+    nameLower.includes(`(${secLower})`) ||
+    nameLower.endsWith(` ${secLower}`) ||
+    nameLower.endsWith(`-${secLower}`)
+  ) {
+    return name;
+  }
+  return `${name} (Section ${sec})`;
+};
+
+// Real official fee extractor for a class (No mock / hardcoded fallbacks to 1500 & 800!)
+export const getClassFees = (cls?: SchoolClass | null) => {
+  if (!cls) {
+    return {
+      admissionFee: 0,
+      annualCharges: 0,
+      tuitionFee: 0,
+      cautionMoney: 0,
+      customHeads: [] as any[],
+      totalPayable: 0,
+    };
+  }
+
+  const fs = cls.feeStructure;
+  // Exact real admission fee configured by school admin:
+  const admissionFee = fs?.admissionFee !== undefined
+    ? Math.max(0, Number(fs.admissionFee))
+    : (cls as any)?.admissionFee !== undefined
+    ? Math.max(0, Number((cls as any).admissionFee))
+    : 0;
+
+  // Exact real annual / development charges configured:
+  const annualCharges = fs?.annualCharges !== undefined
+    ? Math.max(0, Number(fs.annualCharges))
+    : fs?.developmentFee !== undefined
+    ? Math.max(0, Number(fs.developmentFee))
+    : (cls as any)?.annualCharges !== undefined
+    ? Math.max(0, Number((cls as any).annualCharges))
+    : 0;
+
+  // Exact real tuition fee / monthly fee:
+  const tuitionFee = fs?.tuitionFee !== undefined
+    ? Math.max(0, Number(fs.tuitionFee))
+    : cls.defaultFee !== undefined
+    ? Math.max(0, Number(cls.defaultFee))
+    : 0;
+
+  const cautionMoney = fs?.cautionMoney !== undefined ? Math.max(0, Number(fs.cautionMoney)) : 0;
+  const customHeads = Array.isArray(fs?.customHeads) ? fs.customHeads : [];
+  const customHeadsTotal = customHeads.reduce((s, h) => s + (Math.max(0, Number(h.amount)) || 0), 0);
+
+  // Exact total payable at admission
+  let totalPayable = admissionFee + annualCharges + cautionMoney + customHeadsTotal;
+  // If no admission or annual charges were configured, but a monthly tuition fee exists:
+  if (totalPayable === 0 && tuitionFee > 0) {
+    totalPayable = tuitionFee;
+  }
+
+  return {
+    admissionFee,
+    annualCharges,
+    tuitionFee,
+    cautionMoney,
+    customHeads,
+    totalPayable,
+  };
+};
 
 interface Props {
   school: School;
@@ -73,12 +168,73 @@ interface FeeItemRow {
 
 export const OnlineAdmissionManager: React.FC<Props> = ({
   school,
-  classes,
+  classes: propClasses,
   sessions,
   activeSession,
   isAdmin = true,
   onBack,
 }) => {
+  // Live classes list: strictly shows only classes created for this school!
+  const [classesList, setClassesList] = useState<SchoolClass[]>(() => {
+    try {
+      const local = getLocalClasses(school.id);
+      const realLocal = local.filter((c: any) => !isDemoRecord(c));
+      if (realLocal.length > 0) return realLocal;
+      if (propClasses && propClasses.length > 0) {
+        const realProp = propClasses.filter((c: any) => !isDemoRecord(c));
+        if (realProp.length > 0) return realProp;
+      }
+      if (shouldUseDemoForSchool(school.id)) {
+        return local.length > 0 ? local : (propClasses || []);
+      }
+      return [];
+    } catch {
+      return propClasses || [];
+    }
+  });
+
+  // Alias classes so all existing references use the live real classes of this school
+  const classes = classesList;
+
+  // Real-time synchronization: when school admin creates/updates/deletes a class, it updates immediately!
+  useEffect(() => {
+    const syncClasses = () => {
+      const local = getLocalClasses(school.id);
+      const realLocal = local.filter((c: any) => !isDemoRecord(c));
+      if (realLocal.length > 0) {
+        setClassesList(realLocal);
+        return;
+      }
+      if (shouldUseDemoForSchool(school.id)) {
+        setClassesList(local.length > 0 ? local : (propClasses || []));
+      } else {
+        setClassesList([]);
+      }
+    };
+    syncClasses();
+
+    const unsub = subscribeToClasses(school.id, activeSession?.id || "", (latest) => {
+      const real = latest.filter((c: any) => !isDemoRecord(c));
+      if (real.length > 0) {
+        setClassesList(real);
+      } else if (shouldUseDemoForSchool(school.id)) {
+        setClassesList(latest);
+      } else {
+        setClassesList([]);
+      }
+    });
+
+    if (typeof window !== "undefined") {
+      window.addEventListener("school-idb-hydrated", syncClasses);
+    }
+    return () => {
+      if (typeof unsub === "function") unsub();
+      if (typeof window !== "undefined") {
+        window.removeEventListener("school-idb-hydrated", syncClasses);
+      }
+    };
+  }, [school.id, activeSession?.id]);
+
   const [activeTab, setActiveTab] = useState<"applications" | "new_form">(
     isAdmin ? "applications" : "new_form"
   );
@@ -117,6 +273,25 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
   const [enrollError, setEnrollError] = useState<string | null>(null);
   const [successToast, setSuccessToast] = useState<string | null>(null);
 
+  // Online Payment Screenshot & Next Sequential Roll No state
+  const [paymentScreenshot, setPaymentScreenshot] = useState<string | null>(null);
+  const [transactionRef, setTransactionRef] = useState<string>("");
+  const [submittingScreenshot, setSubmittingScreenshot] = useState<boolean>(false);
+  const [screenshotError, setScreenshotError] = useState<string | null>(null);
+  const [copiedUpi, setCopiedUpi] = useState<boolean>(false);
+  const [viewScreenshotUrl, setViewScreenshotUrl] = useState<string | null>(null);
+  const [confirmedAdmission, setConfirmedAdmission] = useState<{
+    student: SchoolStudent;
+    assignedRollNo: string;
+    existingCount: number;
+    totalPayable: number;
+    admissionCharge: number;
+    annualCharge: number;
+    receiptNo: string;
+    feeRecord?: MonthlyFee | null;
+  } | null>(null);
+  const screenshotFileInputRef = useRef<HTMLInputElement | null>(null);
+
   // Inline Reject Confirmation State (Replaces window.confirm)
   const [rejectingAppId, setRejectingAppId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState<string>("Criteria / Documents incomplete");
@@ -139,10 +314,13 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
 
   // Form State
   const [form, setForm] = useState({
+    admissionType: "NEW" as "NEW" | "READMISSION",
     studentName: "",
     dateOfBirth: "",
     gender: "male" as "male" | "female" | "other",
     category: "General",
+    religion: "Hindu",
+    nationality: "Indian",
     bloodGroup: "",
     apaarId: "",
     photoUrl: "",
@@ -153,6 +331,12 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
     fatherOccupation: "",
     motherName: "",
     motherOccupation: "",
+    annualIncome: "",
+    emergencyContact: "",
+    emergencyPhone: "",
+    emergencyRelation: "Parent / Guardian",
+    identificationMark: "",
+    medicalHistory: "Fit / No major condition",
     aadhaarNo: "",
     fatherAadhaar: "",
     motherAadhaar: "",
@@ -170,6 +354,19 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
       "Passport Photos (पासपोर्ट फोटो)",
     ] as string[],
   });
+
+  // Keep form.classId pointing to a valid class in classesList
+  useEffect(() => {
+    if (classesList.length > 0) {
+      setForm((prev) => {
+        const exists = classesList.some((c) => c.id === prev.classId);
+        if (!exists || !prev.classId) {
+          return { ...prev, classId: classesList[0].id };
+        }
+        return prev;
+      });
+    }
+  }, [classesList]);
 
   useEffect(() => {
     fetchApplications();
@@ -214,18 +411,21 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
     }
 
     if (rows.length === 0) {
-      const defTuition = Number(cls?.defaultFee || 0);
-      rows.push(
-        { id: "adm_1", description: "Admission Fee (नामांकन / प्रवेश शुल्क)", due: 1500 },
-        { id: "adm_2", description: "Registration & Form Fee (पंजीकरण फॉर्म)", due: 250 },
-        { id: "adm_3", description: "Annual / Development Fund (वार्षिक विकास कोष)", due: 800 },
-        { id: "adm_4", description: "Student Kit, ID Card & Diary (आईडी कार्ड व डायरी)", due: 350 }
-      );
-      if (defTuition > 0) {
-        rows.push({ id: "adm_tui", description: "1st Month Tuition Fee (प्रथम माह शुल्क)", due: defTuition });
+      const fees = getClassFees(cls);
+      if (fees.admissionFee > 0) {
+        rows.push({ id: "adm_1", description: "Admission Fee (प्रवेश शुल्क)", due: fees.admissionFee });
+      }
+      if (fees.annualCharges > 0) {
+        rows.push({ id: "adm_2", description: "Annual / Development Fund (वार्षिक विकास कोष)", due: fees.annualCharges });
+      }
+      if (fees.tuitionFee > 0) {
+        rows.push({ id: "adm_tui", description: "1st Month Tuition Fee (प्रथम माह शुल्क)", due: fees.tuitionFee });
       }
       if (withBus && (customBusAmt || 0) > 0) {
         rows.push({ id: "fs_bus", description: "Transport / Bus Fee (वाहन शुल्क)", due: Number(customBusAmt) });
+      }
+      if (rows.length === 0) {
+        rows.push({ id: "adm_0", description: "Admission Fee (प्रवेश शुल्क)", due: 0 });
       }
     }
     return rows;
@@ -315,11 +515,20 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
         dateOfBirth: form.dateOfBirth,
         gender: form.gender,
         category: form.category,
+        religion: form.religion,
+        nationality: form.nationality,
+        annualIncome: form.annualIncome.trim() || undefined,
+        emergencyContact: form.emergencyContact.trim() || undefined,
+        emergencyPhone: form.emergencyPhone.trim() || undefined,
+        emergencyRelation: form.emergencyRelation.trim() || undefined,
+        identificationMark: form.identificationMark.trim() || undefined,
+        medicalHistory: form.medicalHistory.trim() || undefined,
+        admissionType: form.admissionType || "NEW",
         bloodGroup: form.bloodGroup || undefined,
         apaarId: form.apaarId.trim() || undefined,
         photoUrl: form.photoUrl || undefined,
         classId: form.classId,
-        className: selectedCls ? `${selectedCls.name} ${selectedCls.section || ""}`.trim() : "General",
+        className: selectedCls ? formatClassLabel(selectedCls) : "General",
         previousSchool: form.previousSchool.trim() || undefined,
         previousMarks: form.previousMarks.trim() || undefined,
         fatherName: form.fatherName.trim(),
@@ -345,6 +554,10 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
 
       await saveAdmissionApplication(school.id, newApp);
       setSubmittedApp(newApp);
+      setPaymentScreenshot(null);
+      setTransactionRef("");
+      setConfirmedAdmission(null);
+      setScreenshotError(null);
       fetchApplications();
     } catch (err: any) {
       setFormError("आवेदन जमा करने में त्रुटि: " + (err?.message || "पुनः प्रयास करें"));
@@ -376,6 +589,15 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
         admissionNo: enrollingApp.applicationNo,
         gender: enrollingApp.gender,
         category: enrollingApp.category || "General",
+        religion: enrollingApp.religion || "Hindu",
+        nationality: enrollingApp.nationality || "Indian",
+        annualIncome: enrollingApp.annualIncome,
+        emergencyContact: enrollingApp.emergencyContact,
+        emergencyPhone: enrollingApp.emergencyPhone,
+        emergencyRelation: enrollingApp.emergencyRelation,
+        identificationMark: enrollingApp.identificationMark,
+        medicalHistory: enrollingApp.medicalHistory,
+        admissionType: enrollingApp.admissionType || "NEW",
         apaarId: enrollApaarId.trim() || enrollingApp.apaarId || undefined,
         fatherName: enrollingApp.fatherName,
         fatherOccupation: enrollingApp.fatherOccupation,
@@ -561,6 +783,242 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
     }
   };
 
+  const handleScreenshotFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) {
+      setScreenshotError("फ़ाइल का साइज़ 8MB से कम होना चाहिए।");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      setPaymentScreenshot(dataUrl);
+      setScreenshotError(null);
+    };
+    reader.onerror = () => {
+      setScreenshotError("फ़ाइल पढ़ने में त्रुटि हुई, कृपया पुनः प्रयास करें।");
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSendPaymentScreenshot = async () => {
+    if (!submittedApp) return;
+    if (!paymentScreenshot && !transactionRef.trim()) {
+      setScreenshotError("कृपया भुगतान का स्क्रीनशॉट अपलोड करें या UTR / Transaction No. दर्ज करें।");
+      return;
+    }
+    setSubmittingScreenshot(true);
+    setScreenshotError(null);
+    try {
+      const selectedCls = classes.find((c) => c.id === submittedApp.classId);
+      const fees = getClassFees(selectedCls);
+      const admissionFee = fees.admissionFee;
+      const annualCharges = fees.annualCharges;
+      const totalPayable = fees.totalPayable;
+
+      // 1. Roll number sequential calculation: "jitna hoga student ushke baad wala"
+      const localStudents = getLocalStudents(school.id);
+      const targetClsId = selectedCls?.id || submittedApp.classId || "";
+      const clsStudents = localStudents.filter((s) =>
+        isStudentInClass(s, targetClsId, selectedCls?.name || submittedApp.className)
+      );
+      const maxRoll = clsStudents.reduce((m, s) => {
+        const n = parseInt(String(s.rollNo || "").replace(/\D/g, ""), 10);
+        return !isNaN(n) && n > m ? n : m;
+      }, 0);
+      const nextRollNo = String(Math.max(clsStudents.length + 1, maxRoll + 1));
+
+      const studentId = generateId();
+      const receiptNo = `ADM-${Math.floor(10000 + Math.random() * 90000)}`;
+      const paidIso = new Date().toISOString();
+      const tuitionFee = fees.tuitionFee;
+
+      // 2. Save new enrolled student
+      const newStudent: SchoolStudent = {
+        id: studentId,
+        schoolId: school.id,
+        sessionId: activeSession?.id || sessions[0]?.id || "2026-27",
+        classId: targetClsId,
+        className: selectedCls ? formatClassLabel(selectedCls) : submittedApp.className,
+        name: submittedApp.studentName,
+        rollNo: nextRollNo,
+        admissionNo: submittedApp.applicationNo,
+        gender: submittedApp.gender,
+        category: submittedApp.category || "General",
+        religion: submittedApp.religion || "Hindu",
+        nationality: submittedApp.nationality || "Indian",
+        fatherName: submittedApp.fatherName,
+        motherName: submittedApp.motherName,
+        phone: submittedApp.phone,
+        whatsappNo: submittedApp.whatsappNo,
+        email: submittedApp.email,
+        dateOfBirth: submittedApp.dateOfBirth,
+        bloodGroup: submittedApp.bloodGroup,
+        address: submittedApp.address,
+        city: submittedApp.city,
+        pincode: submittedApp.pincode,
+        photoUrl: submittedApp.photoUrl,
+        monthlyFee: tuitionFee,
+        admissionReceiptNo: receiptNo,
+        joinDate: paidIso.slice(0, 10),
+        active: true,
+        createdAt: paidIso,
+      };
+
+      const savedStudent = await saveStudent(newStudent);
+      const curLocals = getLocalStudents(school.id);
+      setLocalStudents(school.id, [savedStudent, ...curLocals.filter((s) => s.id !== savedStudent.id)]);
+
+      // Sync user profile so student can login if needed
+      try {
+        const safeSlug = (school.code || school.id || "school").toLowerCase().replace(/[^a-z0-9]/g, "") || "school";
+        const studentEmail =
+          submittedApp.email ||
+          `${savedStudent.admissionNo.toLowerCase().replace(/[^a-z0-9]/g, "")}@${safeSlug}.edu.in`;
+
+        await saveSchoolUserProfile({
+          uid: savedStudent.id,
+          schoolId: school.id,
+          role: "SCHOOL_STUDENT",
+          name: savedStudent.name,
+          email: studentEmail,
+          studentRef: savedStudent.id,
+          classId: targetClsId,
+          sessionId: activeSession?.id || "2026-27",
+        }).catch(() => {});
+      } catch (e) {}
+
+      // 3. Save fee record for Admission + Annual charges
+      const finalItems = [
+        {
+          id: "1",
+          slNo: 1,
+          description: "Admission Fee (प्रवेश शुल्क)",
+          due: admissionFee,
+          con: 0,
+          paid: admissionFee,
+        },
+        {
+          id: "2",
+          slNo: 2,
+          description: "Annual & Development Charge (वार्षिक शुल्क)",
+          due: annualCharges,
+          con: 0,
+          paid: annualCharges,
+        },
+      ];
+
+      const admissionFeeRecord: MonthlyFee = {
+        schoolId: school.id,
+        sessionId: activeSession?.id || "2026-27",
+        studentId: savedStudent.id,
+        studentName: savedStudent.name,
+        rollNo: savedStudent.rollNo,
+        classId: targetClsId,
+        month: paidIso.slice(0, 7),
+        amount: totalPayable,
+        monthlyAmount: tuitionFee,
+        paid: true,
+        paidDate: paidIso,
+        receiptNo,
+        paidAmount: totalPayable,
+        balanceDue: 0,
+        concession: 0,
+        feeType: "admission",
+        receiptCategory: "admission",
+        payModeInfo: {
+          payMode: "Online UPI (Screenshot)",
+          date: new Date().toLocaleDateString("en-GB"),
+          bank: "UPI / Net Banking",
+          number: transactionRef.trim() || `UPI-${Date.now().toString().slice(-6)}`,
+        },
+        items: finalItems,
+      };
+
+      await saveFee(admissionFeeRecord);
+
+      // 4. Update application status to approved with allocated roll no and screenshot
+      const savedFeeDetails: AdmissionApplication["admissionFeeDetails"] = {
+        admissionFee,
+        registrationFee: 0,
+        developmentFee: annualCharges,
+        idKitFee: 0,
+        examFund: 0,
+        concession: 0,
+        totalPayable,
+        paidAmount: totalPayable,
+        balanceDue: 0,
+        paymentMode: "Online UPI (Screenshot)",
+        receiptNo,
+        paidDate: paidIso,
+        items: finalItems,
+      };
+
+      await updateAdmissionStatus(school.id, submittedApp.id, "approved", {
+        enrolledStudentId: savedStudent.id,
+        assignedRollNo: nextRollNo,
+        paymentScreenshotUrl: paymentScreenshot || undefined,
+        transactionRef: transactionRef.trim() || undefined,
+        admissionFeeDetails: savedFeeDetails,
+        remarks: `Online Paid & Screenshot Submitted (Roll #${nextRollNo}). Receipt #${receiptNo}`,
+      });
+
+      // 5. Send Live Push Notification to School Admin
+      try {
+        await sendSchoolPushNotification({
+          schoolId: school.id,
+          title: `🎉 New Online Admission: ${submittedApp.studentName}`,
+          body: `${submittedApp.studentName} ne ${submittedApp.className} me online admission liya hai. Total Fee: ₹${totalPayable} (प्रवेश: ₹${admissionFee} + वार्षिक: ₹${annualCharges}). पेमेंट स्क्रीनशॉट प्राप्त हुआ! आबंटित रोल नंबर: #${nextRollNo}.`,
+          urgent: true,
+          type: "FEE_RECEIPT",
+        });
+      } catch (pushErr) {
+        console.warn("Push notification error:", pushErr);
+      }
+
+      // 6. Save alert to localStorage & dispatch event so School Admin panel shows live alert banner immediately
+      try {
+        const alertItem = {
+          id: generateId(),
+          schoolId: school.id,
+          studentName: submittedApp.studentName,
+          className: submittedApp.className,
+          rollNo: nextRollNo,
+          applicationNo: submittedApp.applicationNo,
+          amount: totalPayable,
+          admissionCharge: admissionFee,
+          annualCharge: annualCharges,
+          screenshotUrl: paymentScreenshot,
+          transactionRef: transactionRef.trim(),
+          timestamp: new Date().toISOString(),
+        };
+        const existing = JSON.parse(localStorage.getItem(`school_admission_alerts_${school.id}`) || "[]");
+        localStorage.setItem(`school_admission_alerts_${school.id}`, JSON.stringify([alertItem, ...existing]));
+        window.dispatchEvent(new CustomEvent("school-admission-alert", { detail: alertItem }));
+      } catch (e) {}
+
+      // 7. Update UI state to confirmed!
+      setConfirmedAdmission({
+        student: savedStudent,
+        assignedRollNo: nextRollNo,
+        existingCount: clsStudents.length,
+        totalPayable,
+        admissionCharge: admissionFee,
+        annualCharge: annualCharges,
+        receiptNo,
+        feeRecord: admissionFeeRecord,
+      });
+
+      setSuccessToast(`🎉 एडमिशन पक्का हो गया! आपको रोल नंबर #${nextRollNo} आवंटित हुआ है और स्क्रीनशॉट एडमिन को भेज दिया गया है।`);
+      fetchApplications();
+    } catch (err: any) {
+      setScreenshotError("स्क्रीनशॉट सबमिट करने में त्रुटि: " + (err?.message || "पुनः प्रयास करें"));
+    } finally {
+      setSubmittingScreenshot(false);
+    }
+  };
+
   // Resolve real student & real admission fee for any approved application (Zero fake ₹5300!)
   const resolveApplicationStudentAndFee = (app: AdmissionApplication): { student: SchoolStudent; fee: MonthlyFee | null } => {
     const locals = getLocalStudents(school.id);
@@ -582,6 +1040,15 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
       admissionNo: app.applicationNo,
       gender: app.gender,
       category: app.category,
+      religion: app.religion || "Hindu",
+      nationality: app.nationality || "Indian",
+      annualIncome: app.annualIncome,
+      emergencyContact: app.emergencyContact,
+      emergencyPhone: app.emergencyPhone,
+      emergencyRelation: app.emergencyRelation,
+      identificationMark: app.identificationMark,
+      medicalHistory: app.medicalHistory,
+      admissionType: app.admissionType || "NEW",
       apaarId: app.apaarId,
       fatherName: app.fatherName,
       fatherOccupation: app.fatherOccupation,
@@ -913,6 +1380,17 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
 
                       {/* Actions */}
                       <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        {app.paymentScreenshotUrl && (
+                          <button
+                            type="button"
+                            onClick={() => setViewScreenshotUrl(app.paymentScreenshotUrl)}
+                            className="px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-800 text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-xs"
+                            title="पेमेंट स्क्रीनशॉट देखें"
+                          >
+                            <ImageIcon className="w-3.5 h-3.5 text-amber-600" />
+                            <span>स्क्रीनशॉट देखें</span>
+                          </button>
+                        )}
                         {app.status === "pending" && (
                           <>
                             <button
@@ -973,6 +1451,25 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                               type="button"
                               onClick={() => {
                                 const { student, fee } = resolveApplicationStudentAndFee(app);
+                                setPrintStudioState({
+                                  open: true,
+                                  student,
+                                  application: app,
+                                  className: student.className || app.className,
+                                  feeRecord: fee,
+                                  mode: "receipt_only",
+                                });
+                              }}
+                              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black flex items-center gap-1.5 shadow cursor-pointer"
+                              title="प्रवेश शुल्क रसीद अलग से प्रिंट करें"
+                            >
+                              <ReceiptText className="w-3.5 h-3.5" /> प्रवेश रसीद (Receipt)
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const { student, fee } = resolveApplicationStudentAndFee(app);
                                 if (fee) {
                                   setPosReceiptState({ open: true, student, fee });
                                 } else {
@@ -981,7 +1478,8 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                                     student,
                                     application: app,
                                     className: student.className || app.className,
-                                    mode: "form_only",
+                                    feeRecord: null,
+                                    mode: "receipt_only",
                                   });
                                 }
                               }}
@@ -1035,82 +1533,437 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
         {activeTab === "new_form" && (
           <div className="max-w-3xl mx-auto">
             {submittedApp ? (
-              <div className="bg-white dark:bg-slate-800 rounded-3xl p-8 text-center shadow-xl border border-emerald-200 dark:border-emerald-800">
-                <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-4">
-                  <CheckCircle2 className="w-9 h-9" />
-                </div>
-                <span className="px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-black uppercase">
-                  Application Registered
-                </span>
-                <h2 className="text-2xl font-black text-slate-900 dark:text-white mt-2">
-                  Admission Form Submitted!
-                </h2>
-                <p className="text-sm text-slate-600 dark:text-slate-300 mt-1">
-                  Application Number:{" "}
-                  <strong className="font-mono text-indigo-600 text-base">
-                    {submittedApp.applicationNo}
-                  </strong>
-                </p>
+              (() => {
+                const targetCls = classes.find((c) => c.id === submittedApp.classId);
+                const fees = getClassFees(targetCls);
+                const admissionFee = fees.admissionFee;
+                const annualCharges = fees.annualCharges;
+                const totalPayable = fees.totalPayable;
+                const schoolUpiId = school.upiId || school.adminEmail || `${(school.code || "school").toLowerCase()}@upi`;
+                const upiPaymentUri = `upi://pay?pa=${encodeURIComponent(schoolUpiId)}&pn=${encodeURIComponent(school.name || "School")}&am=${totalPayable}&cu=INR&tn=${encodeURIComponent(`Adm-${submittedApp.applicationNo}`)}`;
 
-                <div className="my-6 p-4 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-left text-xs space-y-2 max-w-md mx-auto">
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">Student Name:</span>
-                    <strong className="text-slate-800 dark:text-white">{submittedApp.studentName}</strong>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">Class Applied:</span>
-                    <strong className="text-slate-800 dark:text-white">{submittedApp.className}</strong>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">Father's Name:</span>
-                    <strong className="text-slate-800 dark:text-white">{submittedApp.fatherName}</strong>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">Contact Mobile:</span>
-                    <strong className="text-slate-800 dark:text-white">{submittedApp.phone}</strong>
-                  </div>
-                </div>
+                // If confirmed after submitting screenshot
+                if (confirmedAdmission) {
+                  return (
+                    <div className="bg-white dark:bg-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl border border-emerald-300 dark:border-emerald-700 space-y-6">
+                      <div className="text-center">
+                        <div className="w-20 h-20 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto mb-3 shadow-inner">
+                          <CheckCircle2 className="w-12 h-12" />
+                        </div>
+                        <span className="px-3.5 py-1 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 text-xs font-black uppercase tracking-wider">
+                          🎉 Online Admission Confirmed
+                        </span>
+                        <h2 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mt-2">
+                          मुबारक हो! आपका एडमिशन पक्का हो गया
+                        </h2>
+                        <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 mt-1">
+                          फीस रसीद व छात्र नामांकन रिकॉर्ड सफलतापूर्वक दर्ज हो गया है।
+                        </p>
+                      </div>
 
-                <div className="flex flex-wrap justify-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setPrintStudioState({
-                        open: true,
-                        application: submittedApp,
-                        className: submittedApp.className,
-                        mode: "form_only",
-                      })
-                    }
-                    className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-black flex items-center gap-1.5 shadow cursor-pointer"
-                  >
-                    <Printer className="w-4 h-4" /> Print / Download Admission Form (A4)
-                  </button>
+                      {/* Allocated Roll Number Highlight Box */}
+                      <div className="bg-gradient-to-br from-amber-500 via-amber-600 to-orange-600 text-white rounded-3xl p-6 text-center shadow-lg relative overflow-hidden">
+                        <div className="absolute -right-4 -bottom-4 opacity-15">
+                          <GraduationCap className="w-32 h-32" />
+                        </div>
+                        <p className="text-xs uppercase font-extrabold tracking-widest text-amber-100">
+                          🎓 आवंटित छात्र क्रमांक (Allocated Roll Number)
+                        </p>
+                        <div className="text-5xl sm:text-6xl font-black my-2 tracking-tight drop-shadow-md">
+                          Roll #{confirmedAdmission.assignedRollNo}
+                        </div>
+                        <div className="inline-flex items-center gap-2 bg-black/25 backdrop-blur-xs px-4 py-1.5 rounded-full text-xs font-bold text-white/95">
+                          <Sparkles className="w-4 h-4 text-amber-300" />
+                          <span>
+                            कक्षा {submittedApp.className} के कुल {confirmedAdmission.existingCount} छात्रों के बाद अगला रोल नंबर मिला है
+                          </span>
+                        </div>
+                      </div>
 
-                  {isAdmin && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const appToEnroll = submittedApp;
-                        setSubmittedApp(null);
-                        setActiveTab("applications");
-                        openEnrollModal(appToEnroll);
-                      }}
-                      className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black flex items-center gap-1.5 shadow cursor-pointer"
-                    >
-                      <Check className="w-4 h-4" /> Approve &amp; Collect Fee Now
-                    </button>
-                  )}
+                      {/* Details & Fee Summary */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left">
+                        <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-700 space-y-2 text-xs">
+                          <p className="font-extrabold text-slate-400 uppercase text-[10px] tracking-wider mb-2">छात्र व आवेदन विवरण</p>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Application No:</span>
+                            <strong className="font-mono text-indigo-600 dark:text-indigo-400">{submittedApp.applicationNo}</strong>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Student Name:</span>
+                            <strong className="text-slate-800 dark:text-white">{submittedApp.studentName}</strong>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Class Enrolled:</span>
+                            <strong className="text-slate-800 dark:text-white">{submittedApp.className}</strong>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Father's Name:</span>
+                            <strong className="text-slate-800 dark:text-white">{submittedApp.fatherName}</strong>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Mobile:</span>
+                            <strong className="text-slate-800 dark:text-white">{submittedApp.phone}</strong>
+                          </div>
+                        </div>
 
-                  <button
-                    type="button"
-                    onClick={() => setSubmittedApp(null)}
-                    className="px-5 py-2.5 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-white text-xs font-black cursor-pointer"
-                  >
-                    Submit Another Form
-                  </button>
-                </div>
-              </div>
+                        <div className="p-4 rounded-2xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/60 space-y-2 text-xs">
+                          <p className="font-extrabold text-emerald-700 dark:text-emerald-400 uppercase text-[10px] tracking-wider mb-2">जमा शुल्क विवरण (Paid)</p>
+                          <div className="flex justify-between text-slate-600 dark:text-slate-300">
+                            <span>प्रवेश शुल्क (Admission Charge):</span>
+                            <strong className="text-slate-900 dark:text-white">₹{confirmedAdmission.admissionCharge}</strong>
+                          </div>
+                          <div className="flex justify-between text-slate-600 dark:text-slate-300">
+                            <span>वार्षिक शुल्क (Annual Charge):</span>
+                            <strong className="text-slate-900 dark:text-white">₹{confirmedAdmission.annualCharge}</strong>
+                          </div>
+                          <div className="pt-2 border-t border-emerald-300 dark:border-emerald-800 flex justify-between text-sm font-black text-emerald-700 dark:text-emerald-300">
+                            <span>कुल भुगतान (Total Paid):</span>
+                            <span>₹{confirmedAdmission.totalPayable}</span>
+                          </div>
+                          <div className="mt-2 text-[11px] text-emerald-800 dark:text-emerald-300 font-semibold flex items-center gap-1.5">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <span>Payment Screenshot & Push Notification sent to School Admin</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Payment Screenshot Preview if submitted */}
+                      {paymentScreenshot && (
+                        <div className="p-3 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-3">
+                            <img src={paymentScreenshot} alt="Payment Proof" className="w-12 h-12 object-cover rounded-xl border border-slate-300 dark:border-slate-600 shrink-0" />
+                            <div className="text-left text-xs">
+                              <p className="font-bold text-slate-800 dark:text-white flex items-center gap-1.5">
+                                <BadgeCheck className="w-4 h-4 text-emerald-600" />
+                                <span>पेमेंट स्क्रीनशॉट संलग्न है</span>
+                              </p>
+                              {transactionRef && <p className="text-[11px] text-slate-500 font-mono">Ref / UTR: {transactionRef}</p>}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setViewScreenshotUrl(paymentScreenshot)}
+                            className="px-3 py-1.5 bg-slate-200 dark:bg-slate-700 text-xs font-bold rounded-lg text-slate-800 dark:text-white hover:bg-slate-300 cursor-pointer"
+                          >
+                            देखें
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Action Buttons */}
+                      <div className="flex flex-wrap justify-center gap-3 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPrintStudioState({
+                              open: true,
+                              student: confirmedAdmission.student,
+                              application: { ...submittedApp, assignedRollNo: confirmedAdmission.assignedRollNo },
+                              className: submittedApp.className,
+                              feeRecord: confirmedAdmission.feeRecord,
+                              mode: "combined",
+                            });
+                          }}
+                          className="px-5 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-black flex items-center gap-2 shadow-lg shadow-blue-600/25 active:scale-95 transition cursor-pointer"
+                        >
+                          <Printer className="w-4 h-4" /> फॉर्म + रसीद प्रिंट करें (A4)
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPrintStudioState({
+                              open: true,
+                              student: confirmedAdmission.student,
+                              application: { ...submittedApp, assignedRollNo: confirmedAdmission.assignedRollNo },
+                              className: submittedApp.className,
+                              feeRecord: confirmedAdmission.feeRecord,
+                              mode: "receipt_only",
+                            });
+                          }}
+                          className="px-5 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-black flex items-center gap-2 shadow-lg shadow-emerald-600/25 active:scale-95 transition cursor-pointer"
+                        >
+                          <ReceiptText className="w-4 h-4" /> सिर्फ फीस रसीद (Receipt)
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSubmittedApp(null);
+                            setConfirmedAdmission(null);
+                            setPaymentScreenshot(null);
+                            setTransactionRef("");
+                          }}
+                          className="px-5 py-3 rounded-2xl bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 text-slate-800 dark:text-white text-xs sm:text-sm font-bold active:scale-95 transition cursor-pointer"
+                        >
+                          Submit Another Application
+                        </button>
+                      </div>
+                    </div>
+                  );
+                }
+
+                // If not yet confirmed -> Show Fee Breakdown + UPI QR + Screenshot Upload
+                return (
+                  <div className="bg-white dark:bg-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl border border-slate-200 dark:border-slate-700 space-y-6">
+                    {/* Header */}
+                    <div className="text-center">
+                      <div className="w-16 h-16 rounded-2xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto mb-3 shadow-inner">
+                        <CheckCircle2 className="w-9 h-9" />
+                      </div>
+                      <span className="px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 text-xs font-black uppercase">
+                        चरण 2: शुल्क भुगतान एवं स्क्रीनशॉट
+                      </span>
+                      <h2 className="text-2xl font-black text-slate-900 dark:text-white mt-2">
+                        प्रवेश आवेदन दर्ज हो गया!
+                      </h2>
+                      <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 mt-1">
+                        Application No:{" "}
+                        <strong className="font-mono text-indigo-600 dark:text-indigo-400 text-sm sm:text-base">
+                          {submittedApp.applicationNo}
+                        </strong>{" "}
+                        • {submittedApp.studentName} ({submittedApp.className})
+                      </p>
+                    </div>
+
+                    {/* Step 1: Fee Charges Breakdown Box (Admission + Annual Charge) - Strictly Fixed & Non-editable */}
+                    <div className="bg-gradient-to-br from-indigo-50/80 via-blue-50/60 to-slate-50 dark:from-indigo-950/40 dark:via-slate-900/50 dark:to-slate-900/80 rounded-2xl p-5 border border-indigo-200/90 dark:border-indigo-800/70 shadow-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                        <div className="flex items-center gap-2">
+                          <IndianRupee className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                          <h3 className="font-black text-sm text-slate-900 dark:text-white">
+                            कक्षा {submittedApp.className} का निर्धारित आधिकारिक शुल्क (Fixed Official Charges)
+                          </h3>
+                        </div>
+                        <span className="px-2.5 py-1 rounded-full bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 text-[10px] font-black uppercase flex items-center gap-1 border border-amber-300/80 dark:border-amber-800">
+                          <Lock className="w-3 h-3 text-amber-700 dark:text-amber-400" />
+                          <span>फिक्स शुल्क (Non-Editable)</span>
+                        </span>
+                      </div>
+
+                      <div className="space-y-2.5 text-xs">
+                        <div className="flex items-center justify-between p-2.5 bg-white dark:bg-slate-800 rounded-xl border border-slate-200/70 dark:border-slate-700">
+                          <div>
+                            <p className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
+                              <span>प्रवेश शुल्क (Admission Charge)</span>
+                              <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300">Exact</span>
+                            </p>
+                            <p className="text-[11px] text-slate-500">कक्षा {submittedApp.className} के लिए एकमुश्त प्रवेश शुल्क</p>
+                          </div>
+                          <span className="text-base font-black text-slate-900 dark:text-white font-mono">₹{admissionFee}</span>
+                        </div>
+
+                        <div className="flex items-center justify-between p-2.5 bg-white dark:bg-slate-800 rounded-xl border border-slate-200/70 dark:border-slate-700">
+                          <div>
+                            <p className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
+                              <span>वार्षिक व विकास शुल्क (Annual Charge)</span>
+                              <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300">Exact</span>
+                            </p>
+                            <p className="text-[11px] text-slate-500">वार्षिक खेल, गतिविधि, लैब एवं स्कूल विकास निधि</p>
+                          </div>
+                          <span className="text-base font-black text-slate-900 dark:text-white font-mono">₹{annualCharges}</span>
+                        </div>
+
+                        <div className="flex items-center justify-between p-3.5 bg-emerald-600 text-white rounded-xl shadow-md">
+                          <div>
+                            <span className="font-black text-sm block">कुल देय राशि (Exact Total Payable Amount):</span>
+                            <span className="text-[10px] text-emerald-100 font-semibold flex items-center gap-1">
+                              <ShieldCheck className="w-3 h-3 text-emerald-200" />
+                              <span>कोई कमी या बदलाव (कम/बेशी) देय नहीं है</span>
+                            </span>
+                          </div>
+                          <span className="text-xl sm:text-2xl font-black font-mono">₹{totalPayable}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Step 2: Pay via UPI QR Code */}
+                    <div className="bg-slate-50 dark:bg-slate-900/60 rounded-2xl p-5 border border-slate-200 dark:border-slate-700 text-center space-y-4">
+                      <div className="flex items-center justify-center gap-2 text-indigo-600 dark:text-indigo-400">
+                        <QrCode className="w-5 h-5" />
+                        <h3 className="font-black text-sm text-slate-900 dark:text-white">
+                          UPI QR कोड स्कैन करके ₹{totalPayable} का भुगतान करें
+                        </h3>
+                      </div>
+
+                      <div className="inline-block p-4 bg-white rounded-2xl shadow-md border-2 border-slate-200">
+                        <QRCode value={upiPaymentUri} size={150} />
+                      </div>
+
+                      <div className="space-y-2 max-w-sm mx-auto">
+                        <div className="flex items-center justify-between bg-white dark:bg-slate-800 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
+                          <span className="text-slate-500 font-semibold">School UPI ID:</span>
+                          <span className="font-mono font-black text-slate-800 dark:text-white">{schoolUpiId}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(schoolUpiId);
+                              setCopiedUpi(true);
+                              setTimeout(() => setCopiedUpi(false), 2000);
+                            }}
+                            className="p-1 text-indigo-600 hover:text-indigo-700 cursor-pointer"
+                            title="Copy UPI ID"
+                          >
+                            {copiedUpi ? <CheckCheck className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
+                          </button>
+                        </div>
+
+                        <a
+                          href={upiPaymentUri}
+                          className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-md cursor-pointer transition active:scale-95"
+                        >
+                          <Smartphone className="w-4 h-4" />
+                          <span>PhonePe / GPay / Paytm से ₹{totalPayable} Pay करें</span>
+                        </a>
+                      </div>
+                    </div>
+
+                    {/* Step 3: Upload Screenshot & Send */}
+                    <div className="bg-amber-50/60 dark:bg-amber-950/20 rounded-2xl p-5 border-2 border-dashed border-amber-300 dark:border-amber-700 space-y-4">
+                      <div className="flex items-start gap-2.5">
+                        <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 mt-0.5">
+                          <Upload className="w-4 h-4" />
+                        </div>
+                        <div className="text-left">
+                          <h4 className="font-black text-sm text-slate-900 dark:text-white">
+                            पेमेंट का स्क्रीनशॉट भेजें (Upload Screenshot)
+                          </h4>
+                          <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-0.5">
+                            स्क्रीनशॉट भेजते ही स्कूल एडमिन को <strong>लाइव नोटिफिकेशन</strong> चला जाएगा और छात्र को <strong>कक्षा के छात्रों के बाद का रोल नंबर</strong> तुरंत मिल जाएगा।
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* File input button & preview */}
+                      <input
+                        type="file"
+                        ref={screenshotFileInputRef}
+                        accept="image/*"
+                        onChange={handleScreenshotFileChange}
+                        className="hidden"
+                      />
+
+                      {paymentScreenshot ? (
+                        <div className="p-3 bg-white dark:bg-slate-800 rounded-xl border border-amber-300 dark:border-amber-800 flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-3">
+                            <img
+                              src={paymentScreenshot}
+                              alt="Payment Screenshot Preview"
+                              className="w-16 h-16 object-cover rounded-lg border border-slate-200"
+                            />
+                            <div className="text-left text-xs">
+                              <p className="font-bold text-emerald-600 flex items-center gap-1">
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>स्क्रीनशॉट चुना गया</span>
+                              </p>
+                              <p className="text-[11px] text-slate-500">तैयार है भेजने के लिए</p>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setPaymentScreenshot(null)}
+                            className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg text-xs font-bold cursor-pointer"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => screenshotFileInputRef.current?.click()}
+                          className="w-full py-4 border-2 border-dashed border-amber-400 dark:border-amber-600 rounded-xl bg-white dark:bg-slate-800 hover:bg-amber-50 dark:hover:bg-slate-700/60 transition flex flex-col items-center justify-center gap-1 text-slate-700 dark:text-slate-200 cursor-pointer"
+                        >
+                          <Camera className="w-6 h-6 text-amber-600" />
+                          <span className="text-xs font-black">कैमरा / गैलरी से पेमेंट स्क्रीनशॉट अपलोड करें</span>
+                          <span className="text-[10px] text-slate-400">JPG, PNG या WebP फ़ाइल (अधिकतम 8MB)</span>
+                        </button>
+                      )}
+
+                      {/* Optional UTR / Reference ID */}
+                      <div className="text-left">
+                        <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                          UPI Ref / Transaction UTR No. (वैकल्पिक):
+                        </label>
+                        <input
+                          type="text"
+                          value={transactionRef}
+                          onChange={(e) => setTransactionRef(e.target.value)}
+                          placeholder="e.g. 512398471923 या UTR नंबर"
+                          className="w-full px-3 py-2 text-xs font-semibold rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
+                        />
+                      </div>
+
+                      {screenshotError && (
+                        <div className="p-2.5 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 text-xs rounded-xl flex items-center gap-1.5 font-bold">
+                          <AlertCircle className="w-4 h-4 shrink-0" />
+                          <span>{screenshotError}</span>
+                        </div>
+                      )}
+
+                      {/* Send Button */}
+                      <button
+                        type="button"
+                        onClick={handleSendPaymentScreenshot}
+                        disabled={submittingScreenshot}
+                        className="w-full py-3.5 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30 active:scale-95 transition cursor-pointer"
+                      >
+                        {submittingScreenshot ? (
+                          <>
+                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            <span>स्क्रीनशॉट भेजा जा रहा है व रोल नंबर आवंटित हो रहा है...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Send className="w-4 h-4" />
+                            <span>स्क्रीनशॉट भेजें और एडमिशन पक्का करें (Get Roll Number)</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {/* Secondary Actions */}
+                    <div className="flex flex-wrap justify-center gap-3 pt-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPrintStudioState({
+                            open: true,
+                            application: submittedApp,
+                            className: submittedApp.className,
+                            mode: "form_only",
+                          })
+                        }
+                        className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Printer className="w-4 h-4" /> फॉर्म प्रिंट करें (A4)
+                      </button>
+
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const appToEnroll = submittedApp;
+                            setSubmittedApp(null);
+                            setActiveTab("applications");
+                            openEnrollModal(appToEnroll);
+                          }}
+                          className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Check className="w-4 h-4" /> एडमिन: नकद फीस जमा करें
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => setSubmittedApp(null)}
+                        className="px-4 py-2.5 rounded-xl bg-transparent hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-bold cursor-pointer"
+                      >
+                        वापस जाएं
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()
             ) : (
               <form
                 onSubmit={handleSubmitForm}
@@ -1160,14 +2013,48 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                   </div>
                 )}
 
+                {/* Admission Type Toggle */}
+                <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-2xl border border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <span className="text-xs font-black uppercase tracking-wider text-indigo-700 dark:text-indigo-300">
+                      प्रवेश का प्रकार (Admission Type)
+                    </span>
+                    <p className="text-[11px] text-slate-500">क्या यह नया नामांकन है या अगली कक्षा में पुनः प्रवेश?</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setForm({ ...form, admissionType: "NEW" })}
+                      className={`px-4 py-2 rounded-xl text-xs font-black transition cursor-pointer ${
+                        form.admissionType === "NEW"
+                          ? "bg-indigo-600 text-white shadow"
+                          : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700"
+                      }`}
+                    >
+                      ✓ NEW ADMISSION (नया प्रवेश)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setForm({ ...form, admissionType: "READMISSION" })}
+                      className={`px-4 py-2 rounded-xl text-xs font-black transition cursor-pointer ${
+                        form.admissionType === "READMISSION"
+                          ? "bg-indigo-600 text-white shadow"
+                          : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700"
+                      }`}
+                    >
+                      RE-ADMISSION / PROMOTION (पुनः प्रवेश)
+                    </button>
+                  </div>
+                </div>
+
                 {/* Student Bio-Data */}
                 <div>
-                  <h3 className="text-xs font-black uppercase tracking-wider text-indigo-600 mb-3">
+                  <h3 className="text-xs font-black uppercase tracking-wider text-indigo-600 dark:text-indigo-400 mb-3">
                     1. Student Bio-Data (छात्र का विवरण)
                   </h3>
                   <div className="grid sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                         Student Full Name *
                       </label>
                       <input
@@ -1176,27 +2063,83 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                         value={form.studentName}
                         onChange={(e) => setForm({ ...form, studentName: e.target.value })}
                         placeholder="e.g. Aarav Kumar"
-                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                         Applying For Class *
                       </label>
-                      <select
-                        value={form.classId}
-                        onChange={(e) => setForm({ ...form, classId: e.target.value })}
-                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm font-semibold"
-                      >
-                        {classes.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name} {c.section ? `(${c.section})` : ""}
-                          </option>
-                        ))}
-                      </select>
+                      {classes.length === 0 ? (
+                        <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-300 text-xs flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 shrink-0 text-amber-600" />
+                          <span>इस स्कूल में अभी कोई कक्षा उपलब्ध नहीं है। कृपया स्कूल एडमिन से क्लास जोड़ने को कहें।</span>
+                        </div>
+                      ) : (
+                        <select
+                          value={form.classId}
+                          onChange={(e) => setForm({ ...form, classId: e.target.value })}
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        >
+                          {classes.map((c) => (
+                            <option key={c.id} value={c.id} className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">
+                              {formatClassLabel(c)}
+                            </option>
+                          ))}
+                        </select>
+                      )}
                     </div>
+
+                    {/* Class Fee Guarantee Banner (Strictly Non-Editable / Real Fixed Amount) */}
+                    {(() => {
+                      const curCls = classes.find((c) => c.id === form.classId) || classes[0];
+                      if (!curCls) return null;
+                      const fees = getClassFees(curCls);
+                      const curAdmFee = fees.admissionFee;
+                      const curAnnualFee = fees.annualCharges;
+                      const curTotal = fees.totalPayable;
+                      const curClsLabel = formatClassLabel(curCls);
+                      return (
+                        <div className="sm:col-span-2 p-3.5 bg-gradient-to-r from-emerald-50 via-teal-50 to-indigo-50 dark:from-emerald-950/30 dark:via-teal-950/20 dark:to-slate-900 rounded-2xl border border-emerald-300 dark:border-emerald-800 shadow-xs">
+                          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                            <div className="flex items-center gap-1.5 text-xs font-black text-emerald-900 dark:text-emerald-300">
+                              <Lock className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                              <span>
+                                {curClsLabel ? `कक्षा ${curClsLabel}` : "चयनित कक्षा"} का निर्धारित ऑफिशियल शुल्क (Fixed Official Charges)
+                              </span>
+                            </div>
+                            <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 text-[10px] font-black uppercase tracking-wider flex items-center gap-1 border border-emerald-300 dark:border-emerald-800">
+                              <ShieldCheck className="w-3 h-3 text-emerald-600" />
+                              <span>नॉन-एडिटेबल (Fixed)</span>
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-2 text-center">
+                            <div className="p-2 bg-white dark:bg-slate-800 rounded-xl border border-emerald-100 dark:border-slate-700">
+                              <p className="text-[10px] text-slate-500 font-bold">प्रवेश शुल्क</p>
+                              <p className="text-sm sm:text-base font-black text-slate-900 dark:text-white font-mono">₹{curAdmFee}</p>
+                            </div>
+                            <div className="p-2 bg-white dark:bg-slate-800 rounded-xl border border-emerald-100 dark:border-slate-700">
+                              <p className="text-[10px] text-slate-500 font-bold">वार्षिक शुल्क</p>
+                              <p className="text-sm sm:text-base font-black text-slate-900 dark:text-white font-mono">₹{curAnnualFee}</p>
+                            </div>
+                            <div className="p-2 bg-emerald-600 text-white rounded-xl shadow-xs">
+                              <p className="text-[10px] text-emerald-100 font-bold">कुल देय राशि</p>
+                              <p className="text-sm sm:text-base font-black font-mono">₹{curTotal}</p>
+                            </div>
+                          </div>
+
+                          <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-2 flex items-center gap-1.5">
+                            <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                            <span>
+                              स्कूल द्वारा निर्धारित फिक्स शुल्क: फीस में कोई कमी या बदलाव (कम/बेशी) करने का विकल्प नहीं है। फॉर्म सबमिट करने पर सीधे ₹{curTotal} पे करने का ऑप्शन आएगा।
+                            </span>
+                          </p>
+                        </div>
+                      );
+                    })()}
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                         Date of Birth *
                       </label>
                       <input
@@ -1204,22 +2147,22 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                         required
                         value={form.dateOfBirth}
                         onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })}
-                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
                     </div>
                     <div className="grid grid-cols-3 gap-2">
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                           Gender
                         </label>
                         <select
                           value={form.gender}
                           onChange={(e) => setForm({ ...form, gender: e.target.value as any })}
-                          className="w-full px-2.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-semibold"
+                          className="w-full px-2.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         >
-                          <option value="male">Male</option>
-                          <option value="female">Female</option>
-                          <option value="other">Other</option>
+                          <option value="male" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">Male</option>
+                          <option value="female" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">Female</option>
+                          <option value="other" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">Other</option>
                         </select>
                       </div>
                       <div>
@@ -1229,27 +2172,27 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                         <select
                           value={form.bloodGroup}
                           onChange={(e) => setForm({ ...form, bloodGroup: e.target.value })}
-                          className="w-full px-2.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-semibold"
+                          className="w-full px-2.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         >
-                          <option value="">Optional</option>
+                          <option value="" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">Optional</option>
                           {BLOOD_GROUPS.map((bg) => (
-                            <option key={bg} value={bg}>
+                            <option key={bg} value={bg} className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">
                               {bg}
                             </option>
                           ))}
                         </select>
                       </div>
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                           Category
                         </label>
                         <select
                           value={form.category}
                           onChange={(e) => setForm({ ...form, category: e.target.value })}
-                          className="w-full px-2.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-semibold"
+                          className="w-full px-2.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         >
                           {ADMISSION_CATEGORIES.map((cat) => (
-                            <option key={cat} value={cat}>
+                            <option key={cat} value={cat} className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">
                               {cat}
                             </option>
                           ))}
@@ -1257,34 +2200,88 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                       </div>
                     </div>
 
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                          Religion (धर्म)
+                        </label>
+                        <input
+                          type="text"
+                          value={form.religion}
+                          onChange={(e) => setForm({ ...form, religion: e.target.value })}
+                          placeholder="e.g. Hindu / Muslim"
+                          className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                          Nationality (राष्ट्रीयता)
+                        </label>
+                        <input
+                          type="text"
+                          value={form.nationality}
+                          onChange={(e) => setForm({ ...form, nationality: e.target.value })}
+                          placeholder="Indian"
+                          className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                          Student Aadhaar (12-Digit)
+                        </label>
+                        <input
+                          type="text"
+                          maxLength={14}
+                          value={form.aadhaarNo}
+                          onChange={(e) => setForm({ ...form, aadhaarNo: e.target.value.replace(/[^\d\s]/g, "") })}
+                          placeholder="XXXX XXXX XXXX"
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-mono font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                          APAAR / PEN ID (Optional)
+                        </label>
+                        <input
+                          type="text"
+                          value={form.apaarId}
+                          onChange={(e) => setForm({ ...form, apaarId: e.target.value })}
+                          placeholder="UDISE+ APAAR / PEN"
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-mono font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+                    </div>
+
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                        Student Aadhaar (12-Digit)
+                      <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                        Identification Mark (पहचान चिन्ह)
                       </label>
                       <input
                         type="text"
-                        maxLength={14}
-                        value={form.aadhaarNo}
-                        onChange={(e) => setForm({ ...form, aadhaarNo: e.target.value.replace(/[^\d\s]/g, "") })}
-                        placeholder="XXXX XXXX XXXX"
-                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm font-mono"
+                        value={form.identificationMark}
+                        onChange={(e) => setForm({ ...form, identificationMark: e.target.value })}
+                        placeholder="e.g. Mole on forehead / Cut mark on arm"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                        APAAR ID / PEN No. (Optional)
+                      <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                        Medical History / Allergies (स्वास्थ्य विवरण)
                       </label>
                       <input
                         type="text"
-                        value={form.apaarId}
-                        onChange={(e) => setForm({ ...form, apaarId: e.target.value })}
-                        placeholder="UDISE+ APAAR / PEN"
-                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm font-mono"
+                        value={form.medicalHistory}
+                        onChange={(e) => setForm({ ...form, medicalHistory: e.target.value })}
+                        placeholder="e.g. None / Normal / Asthma"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                         Previous School Name
                       </label>
                       <input
@@ -1292,11 +2289,11 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                         value={form.previousSchool}
                         onChange={(e) => setForm({ ...form, previousSchool: e.target.value })}
                         placeholder="Last attended school"
-                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                         Previous Class / Marks %
                       </label>
                       <input
@@ -1304,7 +2301,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                         value={form.previousMarks}
                         onChange={(e) => setForm({ ...form, previousMarks: e.target.value })}
                         placeholder="e.g. 88% in Class 5"
-                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
                     </div>
                   </div>
@@ -1312,12 +2309,12 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
 
                 {/* Parent & Contact Details */}
                 <div>
-                  <h3 className="text-xs font-black uppercase tracking-wider text-indigo-600 mb-3">
+                  <h3 className="text-xs font-black uppercase tracking-wider text-indigo-600 dark:text-indigo-400 mb-3">
                     2. Parent &amp; Contact Information (अभिभावक विवरण)
                   </h3>
                   <div className="grid sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                         Father's Name *
                       </label>
                       <input
@@ -1326,11 +2323,11 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                         value={form.fatherName}
                         onChange={(e) => setForm({ ...form, fatherName: e.target.value })}
                         placeholder="Father's Full Name"
-                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                         Father's Occupation &amp; Aadhaar
                       </label>
                       <div className="grid grid-cols-2 gap-2">
@@ -1339,7 +2336,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                           value={form.fatherOccupation}
                           onChange={(e) => setForm({ ...form, fatherOccupation: e.target.value })}
                           placeholder="Occupation"
-                          className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs"
+                          className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         />
                         <input
                           type="text"
@@ -1347,13 +2344,13 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                           value={form.fatherAadhaar}
                           onChange={(e) => setForm({ ...form, fatherAadhaar: e.target.value.replace(/[^\d\s]/g, "") })}
                           placeholder="Father Aadhaar"
-                          className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-mono"
+                          className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-mono font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         />
                       </div>
                     </div>
 
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                         Mother's Name
                       </label>
                       <input
@@ -1361,11 +2358,11 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                         value={form.motherName}
                         onChange={(e) => setForm({ ...form, motherName: e.target.value })}
                         placeholder="Mother's Full Name"
-                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                         Mother's Occupation &amp; Aadhaar
                       </label>
                       <div className="grid grid-cols-2 gap-2">
@@ -1374,7 +2371,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                           value={form.motherOccupation}
                           onChange={(e) => setForm({ ...form, motherOccupation: e.target.value })}
                           placeholder="Occupation"
-                          className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs"
+                          className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         />
                         <input
                           type="text"
@@ -1382,13 +2379,13 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                           value={form.motherAadhaar}
                           onChange={(e) => setForm({ ...form, motherAadhaar: e.target.value.replace(/[^\d\s]/g, "") })}
                           placeholder="Mother Aadhaar"
-                          className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-mono"
+                          className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-mono font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         />
                       </div>
                     </div>
 
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                         Primary Mobile Number *
                       </label>
                       <input
@@ -1397,12 +2394,12 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                         value={form.phone}
                         onChange={(e) => setForm({ ...form, phone: e.target.value })}
                         placeholder="10-digit Mobile Number"
-                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                           WhatsApp No.
                         </label>
                         <input
@@ -1410,26 +2407,65 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                           value={form.whatsappNo}
                           onChange={(e) => setForm({ ...form, whatsappNo: e.target.value })}
                           placeholder="WhatsApp"
-                          className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs"
+                          className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                          Email (Optional)
+                        <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                          Family Annual Income (वार्षिक आय)
                         </label>
                         <input
-                          type="email"
-                          value={form.email}
-                          onChange={(e) => setForm({ ...form, email: e.target.value })}
-                          placeholder="parent@email.com"
-                          className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs"
+                          type="text"
+                          value={form.annualIncome}
+                          onChange={(e) => setForm({ ...form, annualIncome: e.target.value })}
+                          placeholder="e.g. ₹1,50,000 / year"
+                          className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="sm:col-span-2 grid sm:grid-cols-3 gap-3 p-3 bg-amber-50/50 dark:bg-amber-950/20 rounded-2xl border border-amber-200 dark:border-amber-900/40">
+                      <div>
+                        <label className="block text-xs font-bold text-amber-900 dark:text-amber-200 mb-1">
+                          Emergency Contact Person (आपातकालीन संपर्क)
+                        </label>
+                        <input
+                          type="text"
+                          value={form.emergencyContact}
+                          onChange={(e) => setForm({ ...form, emergencyContact: e.target.value })}
+                          placeholder="Name of Uncle / Guardian"
+                          className="w-full px-3 py-2 rounded-xl border border-amber-300 dark:border-amber-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-amber-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-amber-900 dark:text-amber-200 mb-1">
+                          Emergency Phone No.
+                        </label>
+                        <input
+                          type="tel"
+                          value={form.emergencyPhone}
+                          onChange={(e) => setForm({ ...form, emergencyPhone: e.target.value })}
+                          placeholder="Emergency Mobile"
+                          className="w-full px-3 py-2 rounded-xl border border-amber-300 dark:border-amber-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-amber-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-amber-900 dark:text-amber-200 mb-1">
+                          Relation with Student
+                        </label>
+                        <input
+                          type="text"
+                          value={form.emergencyRelation}
+                          onChange={(e) => setForm({ ...form, emergencyRelation: e.target.value })}
+                          placeholder="e.g. Uncle / Brother"
+                          className="w-full px-3 py-2 rounded-xl border border-amber-300 dark:border-amber-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-amber-500"
                         />
                       </div>
                     </div>
 
                     <div className="sm:col-span-2 grid sm:grid-cols-4 gap-3">
                       <div className="sm:col-span-2">
-                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                           Residential Address *
                         </label>
                         <input
@@ -1438,11 +2474,11 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                           value={form.address}
                           onChange={(e) => setForm({ ...form, address: e.target.value })}
                           placeholder="House / Village / Street"
-                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm"
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                           City / District
                         </label>
                         <input
@@ -1450,11 +2486,11 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                           value={form.city}
                           onChange={(e) => setForm({ ...form, city: e.target.value })}
                           placeholder="City"
-                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm"
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                           PIN Code
                         </label>
                         <input
@@ -1463,7 +2499,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                           value={form.pincode}
                           onChange={(e) => setForm({ ...form, pincode: e.target.value.replace(/\D/g, "") })}
                           placeholder="PIN Code"
-                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm font-mono"
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-mono font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         />
                       </div>
                     </div>
@@ -1491,7 +2527,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                         value={form.busRoute}
                         onChange={(e) => setForm({ ...form, busRoute: e.target.value })}
                         placeholder="Nearest Bus Stop / Route"
-                        className="px-3.5 py-2 rounded-xl border border-amber-300 bg-amber-50/40 dark:bg-slate-900 text-xs font-semibold sm:w-64"
+                        className="px-3.5 py-2 rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold sm:w-64 focus:outline-none focus:ring-2 focus:ring-amber-500"
                       />
                     )}
                   </div>
@@ -1609,11 +2645,11 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                       setEnrollFeeItems(buildDefaultFeeItems(cls, enrollUsesBus, Number(cls?.feeStructure?.busFee || 0)));
                       setEnrollPaidManual(false);
                     }}
-                    className="w-full px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
+                    className="w-full px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-bold"
                   >
                     {classes.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name} {c.section ? `(${c.section})` : ""}
+                      <option key={c.id} value={c.id} className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">
+                        {formatClassLabel(c)}
                       </option>
                     ))}
                   </select>
@@ -1624,7 +2660,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                     type="text"
                     value={enrollRollNo}
                     onChange={(e) => setEnrollRollNo(e.target.value)}
-                    className="w-full px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
+                    className="w-full px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-bold"
                   />
                 </div>
                 <div>
@@ -1633,7 +2669,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                     type="number"
                     value={enrollMonthlyFee}
                     onChange={(e) => setEnrollMonthlyFee(e.target.value)}
-                    className="w-full px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
+                    className="w-full px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-bold"
                   />
                 </div>
               </div>
@@ -1649,7 +2685,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                   value={enrollStudentAadhaar}
                   onChange={(e) => setEnrollStudentAadhaar(e.target.value.replace(/[^\d\s]/g, ""))}
                   placeholder="12-digit"
-                  className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-mono"
+                  className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-mono font-semibold"
                 />
               </div>
               <div>
@@ -1660,7 +2696,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                   value={enrollFatherAadhaar}
                   onChange={(e) => setEnrollFatherAadhaar(e.target.value.replace(/[^\d\s]/g, ""))}
                   placeholder="12-digit"
-                  className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-mono"
+                  className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-mono font-semibold"
                 />
               </div>
               <div>
@@ -1671,7 +2707,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                   value={enrollMotherAadhaar}
                   onChange={(e) => setEnrollMotherAadhaar(e.target.value.replace(/[^\d\s]/g, ""))}
                   placeholder="12-digit"
-                  className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-mono"
+                  className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-mono font-semibold"
                 />
               </div>
               <div>
@@ -1681,7 +2717,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                   value={enrollApaarId}
                   onChange={(e) => setEnrollApaarId(e.target.value)}
                   placeholder="Optional"
-                  className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-mono"
+                  className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-mono font-semibold"
                 />
               </div>
             </div>
@@ -1774,7 +2810,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                           p.map((r) => (r.id === row.id ? { ...r, description: e.target.value } : r))
                         )
                       }
-                      className="flex-1 px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold"
+                      className="flex-1 px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-semibold"
                     />
                     <input
                       type="number"
@@ -1784,7 +2820,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                           p.map((r) => (r.id === row.id ? { ...r, due: Math.max(0, Number(e.target.value)) } : r))
                         )
                       }
-                      className="w-24 px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-black text-right"
+                      className="w-24 px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-black text-right"
                     />
                     <button
                       type="button"
@@ -1805,11 +2841,11 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                     min={0}
                     value={enrollConcession}
                     onChange={(e) => setEnrollConcession(Math.max(0, Number(e.target.value)))}
-                    className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white dark:bg-slate-900 text-xs font-bold"
+                    className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-bold"
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold text-emerald-700 mb-1">Amount Paid Now (₹)</label>
+                  <label className="block text-[10px] font-bold text-emerald-700 dark:text-emerald-300 mb-1">Amount Paid Now (₹)</label>
                   <input
                     type="number"
                     min={0}
@@ -1818,7 +2854,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                       setEnrollPaidManual(true);
                       setEnrollPaidAmount(e.target.value);
                     }}
-                    className="w-full px-2.5 py-1.5 rounded-xl border-2 border-emerald-500 bg-white dark:bg-slate-900 text-xs font-black text-emerald-700"
+                    className="w-full px-2.5 py-1.5 rounded-xl border-2 border-emerald-500 bg-white dark:bg-slate-900 text-xs font-black text-emerald-700 dark:text-emerald-300"
                   />
                 </div>
                 <div>
@@ -1826,12 +2862,12 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                   <select
                     value={enrollPayMode}
                     onChange={(e) => setEnrollPayMode(e.target.value)}
-                    className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white dark:bg-slate-900 text-xs font-bold"
+                    className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-bold"
                   >
-                    <option value="Cash">Cash (नकद)</option>
-                    <option value="Online / UPI">UPI / QR</option>
-                    <option value="Bank Transfer">Bank Transfer</option>
-                    <option value="Cheque">Cheque</option>
+                    <option value="Cash" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">Cash (नकद)</option>
+                    <option value="Online / UPI" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">UPI / QR</option>
+                    <option value="Bank Transfer" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">Bank Transfer</option>
+                    <option value="Cheque" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">Cheque</option>
                   </select>
                 </div>
                 <div>
@@ -1841,7 +2877,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                     value={enrollPayRef}
                     onChange={(e) => setEnrollPayRef(e.target.value)}
                     placeholder="Optional"
-                    className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white dark:bg-slate-900 text-xs"
+                    className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-semibold"
                   />
                 </div>
               </div>
@@ -1903,12 +2939,45 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
           fee={posReceiptState.fee}
           student={posReceiptState.student}
           className={
-            classes.find((c) => c.id === posReceiptState.student?.classId)?.name ||
+            formatClassLabel(classes.find((c) => c.id === posReceiptState.student?.classId)) ||
             posReceiptState.student?.className ||
             "Class"
           }
           sessionName={activeSession?.name || "2026-27"}
         />
+      )}
+
+      {/* SCREENSHOT FULL PREVIEW MODAL */}
+      {viewScreenshotUrl && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-lg w-full p-4 relative shadow-2xl border border-slate-300 dark:border-slate-700 animate-in fade-in duration-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
+              <h3 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
+                <ImageIcon className="w-4 h-4 text-indigo-500" />
+                <span>Payment Screenshot Proof</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setViewScreenshotUrl(null)}
+                className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="mt-3 max-h-[70vh] overflow-auto rounded-xl bg-slate-950 flex items-center justify-center p-2">
+              <img src={viewScreenshotUrl} alt="Payment Screenshot" className="max-h-[65vh] object-contain rounded-lg shadow-md" />
+            </div>
+            <div className="mt-3 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setViewScreenshotUrl(null)}
+                className="px-4 py-2 rounded-xl bg-slate-200 dark:bg-slate-700 text-xs font-bold text-slate-800 dark:text-white hover:bg-slate-300 cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

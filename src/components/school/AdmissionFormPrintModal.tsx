@@ -20,10 +20,10 @@ import type {
 } from "../../school-types";
 import { ADMISSION_DOCUMENT_OPTIONS } from "../../school-types";
 import { getLocalFees } from "../../school-firebase";
-import { getSavedSchoolLogo, numberToIndianWords } from "./feeReceiptUtils";
+import { getSavedSchoolLogo, numberToIndianWords, formatAcademicSession } from "./feeReceiptUtils";
 import { OfficialFeeReceiptModal } from "./OfficialFeeReceiptModal";
 
-export type AdmissionPrintMode = "combined" | "form_only";
+export type AdmissionPrintMode = "combined" | "form_only" | "receipt_only";
 
 interface Props {
   isOpen: boolean;
@@ -362,6 +362,11 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
   });
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [showOfficialPosModal, setShowOfficialPosModal] = useState(false);
+  const [admissionType, setAdmissionType] = useState<"NEW" | "READMISSION">(() => {
+    const rawType = (student as any)?.admissionType || (application as any)?.admissionType;
+    return rawType === "READMISSION" ? "READMISSION" : "NEW";
+  });
+  const [copyTarget, setCopyTarget] = useState<"PARENT COPY" | "OFFICE COPY">("PARENT COPY");
   const previewRef = useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => {
@@ -370,9 +375,23 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
     } else {
       setMode(resolvedFee ? "combined" : "form_only");
     }
-  }, [initialMode, resolvedFee, isOpen]);
+    const rawType = (student as any)?.admissionType || (application as any)?.admissionType;
+    if (rawType === "READMISSION" || rawType === "NEW") {
+      setAdmissionType(rawType);
+    }
+  }, [initialMode, resolvedFee, isOpen, student, application]);
 
   if (!isOpen) return null;
+
+  // Masking helper for Aadhaar (UIDAI compliance: only last 4 digits visible)
+  const maskAadhaar = (val?: string | number | null): string => {
+    if (!val || val === "—") return "—";
+    const str = String(val).replace(/\D/g, "");
+    if (str.length >= 4) {
+      return `XXXXXXXX${str.slice(-4)}`;
+    }
+    return String(val);
+  };
 
   // Unified normalized bio-data from student + application
   const logoUrl = getSavedSchoolLogo(school?.logoUrl, school?.id);
@@ -380,7 +399,7 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
   const admNo = student?.admissionNo || application?.applicationNo || "—";
   const rollNo = student?.rollNo || application?.assignedRollNo || "Not Assigned";
   const clsLabel = className || student?.className || application?.className || student?.classId || "—";
-  const sessLabel = sessionName || "2026-27";
+  const sessLabel = formatAcademicSession(sessionName || student?.sessionId || "2026-27");
   const admDateRaw = student?.joinDate || (application?.appliedAt ? application.appliedAt.slice(0, 10) : new Date().toISOString().slice(0, 10));
   const dob = student?.dateOfBirth || application?.dateOfBirth || "—";
   const genderRaw = student?.gender || application?.gender || "";
@@ -404,6 +423,7 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
     student?.pincode || application?.pincode ? `PIN: ${student?.pincode || application?.pincode}` : "",
   ].filter(Boolean);
   const fullAddress = addressParts.join(", ") || "—";
+  const permanentAddress = (student as any)?.permanentAddress || (application as any)?.permanentAddress || fullAddress;
   const prevSchool = student?.previousSchool || application?.previousSchool || "—";
   const prevMarks = student?.previousMarks || application?.previousMarks || "";
   const photoUrl = student?.photoUrl || application?.photoUrl || "";
@@ -412,6 +432,31 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
   const busRoute = student?.busRoute || student?.busStop || application?.busRoute || application?.busStop || "";
   const busFee = student?.busFee ?? application?.busFee ?? 0;
   const submittedDocs = student?.submittedDocs || application?.submittedDocs || [];
+
+  // Statutory & Compliance Fields
+  const annualIncome = student?.annualIncome || (student as any)?.familyIncome || application?.annualIncome || "—";
+  const rawEmergContact = student?.emergencyContact || application?.emergencyContact || "";
+  const isEmergContactNumeric = /^\+?[\d\s-]{8,}$/.test(rawEmergContact.trim());
+  const emergencyPhone =
+    student?.emergencyPhone ||
+    application?.emergencyPhone ||
+    (isEmergContactNumeric ? rawEmergContact : "") ||
+    phone ||
+    "—";
+  const emergencyPerson =
+    (student as any)?.emergencyPerson ||
+    (application as any)?.emergencyPerson ||
+    (!isEmergContactNumeric && rawEmergContact ? rawEmergContact : "") ||
+    "Guardian / Relative";
+  const emergencyRelation = student?.emergencyRelation || application?.emergencyRelation || "Relative";
+  const identificationMark = student?.identificationMark || (student as any)?.idMark || application?.identificationMark || "—";
+  const medicalCondition = student?.medicalHistory || (student as any)?.medicalNotes || application?.medicalHistory || (application as any)?.medicalNotes || "Normal / Fit";
+  const religion = (student as any)?.religion || (application as any)?.religion || "Hindu";
+  const nationality = (student as any)?.nationality || (application as any)?.nationality || "Indian";
+  const motherTongue = (student as any)?.motherTongue || (application as any)?.motherTongue || "Hindi / Bhojpuri";
+  const mediumOfInstruction = (student as any)?.medium || (application as any)?.medium || "English / Hindi";
+  const guardianName = (student as any)?.guardianName || (application as any)?.guardianName || fatherName;
+  const guardianRelation = (student as any)?.guardianRelation || (application as any)?.guardianRelation || "Father / Guardian";
 
   // Fee Calculations
   const feeItems = resolvedFee?.items && resolvedFee.items.length > 0
@@ -439,18 +484,37 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
         <div class="inst-title-wrap">
           <div class="inst-name">${escapeHtml(school?.name || "Institutional Campus")}</div>
           ${school?.tagline ? `<div class="inst-sub" style="font-style:italic;">"${escapeHtml(school.tagline)}"</div>` : ""}
-          <div class="inst-sub">
-            ${escapeHtml(school?.address || "Academic Campus")}
-            ${school?.affiliation ? ` • Affiliation: ${escapeHtml(school.affiliation)}` : ""}
-            ${school?.code ? ` • School Code: ${escapeHtml(school.code)}` : ""}
-          </div>
+          ${school?.address ? `<div class="inst-sub">Address / Campus: ${escapeHtml(school.address)}</div>` : ""}
           <div class="inst-sub">
             ${school?.phone || school?.mobile ? `Helpline: ${escapeHtml(school.phone || school.mobile)}` : ""}
-            ${school?.email ? ` • Email: ${escapeHtml(school.email)}` : ""}
+            ${school?.email ? `${school?.phone || school?.mobile ? " • " : ""}Email: ${escapeHtml(school.email)}` : ""}
+            ${school?.code && school.code !== (school as any).lockCode && school.code !== "0002" ? ` • Reg. No: ${escapeHtml(school.code)}` : ""}
+            ${school?.phone || school?.mobile || school?.email ? " • " : ""}Office Timings: 08:00 AM – 02:00 PM
           </div>
         </div>
-        <div style="width:15mm;text-align:right;font-size:6.8pt;font-weight:800;color:#1e3a8a;">
-          SESSION<br/><span style="font-size:8pt;color:#0f172a;">${escapeHtml(sessLabel)}</span>
+        <div style="text-align:right;min-width:32mm;">
+          <div style="display:inline-block;padding:1mm 2.2mm;background:#1e3a8a;color:#ffffff;font-size:7pt;font-weight:900;border-radius:3px;letter-spacing:0.3px;">
+            ${escapeHtml(copyTarget)}
+          </div>
+          <div style="font-size:6.8pt;font-weight:800;color:#0f172a;margin-top:1.2mm;">
+            SESSION: ${escapeHtml(sessLabel)}
+          </div>
+        </div>
+      </div>
+    `;
+
+    const admissionTypeBarHtml = `
+      <div style="display:flex;align-items:center;justify-content:space-between;background:#f8fafc;border:1px solid #cbd5e1;border-radius:4px;padding:1.2mm 2.5mm;margin-bottom:2mm;font-size:7.2pt;font-weight:800;color:#1e3a8a;">
+        <span>ADMISSION CATEGORY / प्रवेश प्रकार:</span>
+        <div style="display:flex;gap:4mm;">
+          <span style="display:inline-flex;align-items:center;gap:1mm;">
+            <span class="chk-box ${admissionType === "NEW" ? "chk-on" : ""}">${admissionType === "NEW" ? "✓" : ""}</span>
+            <span>NEW ADMISSION (नया नामांकन)</span>
+          </span>
+          <span style="display:inline-flex;align-items:center;gap:1mm;">
+            <span class="chk-box ${admissionType === "READMISSION" ? "chk-on" : ""}">${admissionType === "READMISSION" ? "✓" : ""}</span>
+            <span>RE-ADMISSION / PROMOTION (पुनः नामांकन)</span>
+          </span>
         </div>
       </div>
     `;
@@ -478,9 +542,10 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
           <!-- TOP HALF: OFFICIAL ADMISSION BIO-DATA & CONFIRMATION -->
           <div class="adm-box">
             ${headerHtml}
+            ${admissionTypeBarHtml}
             <div class="doc-badge-bar">
               <span>OFFICIAL ADMISSION CONFIRMATION &amp; STUDENT BIO-DATA (प्रवेश विवरण प्रपत्र)</span>
-              <span>OFFICE / STUDENT RECORD</span>
+              <span>${escapeHtml(copyTarget)}</span>
             </div>
 
             <div class="meta-strip">
@@ -512,37 +577,47 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
                     <td class="val">${escapeHtml(dob)} (${escapeHtml(genderLabel)})</td>
                   </tr>
                   <tr>
-                    <td class="lbl">Blood Group &amp; Cat.</td>
+                    <td class="lbl">Religion &amp; Nationality</td>
+                    <td class="val">${escapeHtml(religion)} • ${escapeHtml(nationality)}</td>
+                    <td class="lbl">Blood Grp &amp; Cat.</td>
                     <td class="val">${escapeHtml(bloodGroup)} | ${escapeHtml(category)}</td>
+                  </tr>
+                  <tr>
                     <td class="lbl">Student Aadhaar</td>
-                    <td class="val">${escapeHtml(studentAadhaar)}</td>
+                    <td class="val" style="font-family:monospace;">${escapeHtml(maskAadhaar(studentAadhaar))}</td>
+                    <td class="lbl">APAAR / PEN ID</td>
+                    <td class="val" style="font-family:monospace;">${escapeHtml(apaarId || "—")}</td>
                   </tr>
                   <tr>
                     <td class="lbl">Father's Name</td>
                     <td class="val">${escapeHtml(fatherName)}${fatherOcc ? ` (${escapeHtml(fatherOcc)})` : ""}</td>
                     <td class="lbl">Father Aadhaar</td>
-                    <td class="val">${escapeHtml(fatherAadhaar)}</td>
+                    <td class="val" style="font-family:monospace;">${escapeHtml(maskAadhaar(fatherAadhaar))}</td>
                   </tr>
                   <tr>
                     <td class="lbl">Mother's Name</td>
                     <td class="val">${escapeHtml(motherName)}${motherOcc ? ` (${escapeHtml(motherOcc)})` : ""}</td>
                     <td class="lbl">Mother Aadhaar</td>
-                    <td class="val">${escapeHtml(motherAadhaar)}</td>
+                    <td class="val" style="font-family:monospace;">${escapeHtml(maskAadhaar(motherAadhaar))}</td>
                   </tr>
                   <tr>
-                    <td class="lbl">Mobile / WhatsApp</td>
-                    <td class="val">${escapeHtml(phone)}${whatsappNo ? ` / ${escapeHtml(whatsappNo)}` : ""}</td>
-                    <td class="lbl">APAAR / PEN ID</td>
-                    <td class="val">${escapeHtml(apaarId)}</td>
+                    <td class="lbl">Annual Income / Mobile</td>
+                    <td class="val">${annualIncome && annualIncome !== "—" ? `₹${Number(annualIncome).toLocaleString("en-IN")}` : "—"} | ${escapeHtml(phone)}</td>
+                    <td class="lbl">Emergency Contact</td>
+                    <td class="val">${escapeHtml(emergencyPerson)}: ${escapeHtml(emergencyPhone)} (${escapeHtml(emergencyRelation)})</td>
                   </tr>
                   <tr>
-                    <td class="lbl">Prev. School</td>
-                    <td class="val">${escapeHtml(prevSchool)}${prevMarks ? ` (${escapeHtml(prevMarks)})` : ""}</td>
+                    <td class="lbl">Health / ID Mark</td>
+                    <td class="val">${identificationMark && identificationMark !== "—" ? escapeHtml(identificationMark) : "Normal"} | ${escapeHtml(medicalCondition)}</td>
+                    <td class="lbl">Tongue &amp; Medium</td>
+                    <td class="val">${escapeHtml(motherTongue)} | ${escapeHtml(mediumOfInstruction)}</td>
+                  </tr>
+                  <tr>
                     <td class="lbl">Transport / Monthly</td>
-                    <td class="val">${usesBus ? `Bus (${escapeHtml(busRoute || "Yes")} ₹${busFee})` : "Self"} | Tuition: ₹${Number(monthlyFee || 0).toLocaleString("en-IN")}/m</td>
+                    <td class="val" colspan="3">${usesBus ? `Bus YES (Route/Stop: ${escapeHtml(busRoute || "Assigned Stop")} ₹${busFee}/mo)` : "NO (Self Arrangement)"} | Monthly Tuition: ₹${Number(monthlyFee || 0).toLocaleString("en-IN")}/mo</td>
                   </tr>
                   <tr>
-                    <td class="lbl">Full Address</td>
+                    <td class="lbl">Residential Address</td>
                     <td class="val" colspan="3">${escapeHtml(fullAddress)}</td>
                   </tr>
                 </tbody>
@@ -561,9 +636,15 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
 
             <div class="sig-row">
               <div class="sig-block">
+                <div style="font-size:6pt;color:#64748b;margin-bottom:0.8mm;">Date: ____/____/20__</div>
+                <div class="sig-line">Signature of Student</div>
+              </div>
+              <div class="sig-block">
+                <div style="font-size:6pt;color:#64748b;margin-bottom:0.8mm;">Date: ____/____/20__</div>
                 <div class="sig-line">Parent / Guardian Signature</div>
               </div>
               <div class="sig-block">
+                <div style="font-size:6pt;color:#64748b;margin-bottom:0.8mm;">Date: ____/____/20__</div>
                 <div class="sig-line">Admission In-Charge</div>
               </div>
               <div class="sig-block">
@@ -577,7 +658,7 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
           <div class="cut-divider">
             <span>✂</span>
             <div class="cut-line"></div>
-            <span>ADMISSION FEE RECEIPT • अभिभावक रसीद (यहाँ से काटें / या पूरा पेज रखें)</span>
+            <span>OFFICIAL ADMISSION FEE RECEIPT • प्रवेश शुल्क रसीद (${escapeHtml(copyTarget)})</span>
             <div class="cut-line"></div>
           </div>
 
@@ -589,7 +670,11 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
               </div>
               <div class="inst-title-wrap">
                 <div class="inst-name" style="font-size:11.5pt;">${escapeHtml(school?.name || "Institutional Campus")}</div>
-                <div class="inst-sub">${escapeHtml(school?.address || "")} ${school?.phone || school?.mobile ? `• Mob: ${escapeHtml(school.phone || school.mobile)}` : ""}</div>
+                <div class="inst-sub">
+                  ${school?.address ? `Address: ${escapeHtml(school.address)}` : ""}
+                  ${school?.phone || school?.mobile ? `${school?.address ? " • " : ""}Helpline: ${escapeHtml(school.phone || school.mobile)}` : ""}
+                  ${school?.code && school.code !== (school as any).lockCode && school.code !== "0002" ? ` • Reg. No: ${escapeHtml(school.code)}` : ""}
+                </div>
               </div>
               <div style="text-align:right;">
                 <span style="display:inline-block;padding:1mm 2.2mm;border-radius:3px;font-size:7pt;font-weight:900;background:${balanceDue <= 0 ? "#dcfce7" : "#fef3c7"};color:${balanceDue <= 0 ? "#166534" : "#92400e"};border:1px solid ${balanceDue <= 0 ? "#86efac" : "#fcd34d"};">
@@ -676,18 +761,191 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
       `;
     }
 
+    if (targetMode === "receipt_only") {
+      const effectiveReceiptItems =
+        feeItems.length > 0
+          ? feeItems
+          : [
+              {
+                id: "1",
+                slNo: 1,
+                description: "Admission & Registration Fee (प्रवेश एवं नामांकन शुल्क)",
+                due: Number(monthlyFee) || 0,
+                con: 0,
+                paid: Number(monthlyFee) || 0,
+              },
+            ];
+      const rcptDue = effectiveReceiptItems.reduce((s, i) => s + Number(i.due || 0), 0);
+      const rcptCon = resolvedFee ? totalCon : 0;
+      const rcptNet = Math.max(0, rcptDue - rcptCon);
+      const rcptPaid = resolvedFee ? totalPaid : rcptNet;
+      const rcptBal = resolvedFee ? balanceDue : Math.max(0, rcptNet - rcptPaid);
+      const rcptWords = numberToIndianWords(rcptPaid);
+      const rcptNo = resolvedFee?.receiptNo || student?.admissionReceiptNo || "ADM-RCPT";
+      const rcptDate = resolvedFee?.payModeInfo?.date || admDateRaw;
+      const rcptPayMode = resolvedFee?.payModeInfo?.payMode || "Cash";
+      const rcptPayRef = resolvedFee?.payModeInfo?.number && resolvedFee.payModeInfo.number !== "-" ? ` • Ref: ${resolvedFee.payModeInfo.number}` : "";
+
+      const renderReceiptCopyBox = (copyLabel: string) => `
+        <div class="adm-box" style="flex:1;display:flex;flex-direction:column;justify-content:space-between;padding:3.4mm 4mm;">
+          <div>
+            <div class="inst-header" style="padding-bottom:2mm;margin-bottom:2mm;">
+              <div class="inst-logo" style="width:13mm;height:13mm;">
+                ${logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="Logo" crossorigin="anonymous" />` : `<span>${escapeHtml((school?.name || "SC").slice(0, 2).toUpperCase())}</span>`}
+              </div>
+              <div class="inst-title-wrap">
+                <div class="inst-name" style="font-size:12.5pt;">${escapeHtml(school?.name || "Institutional Campus")}</div>
+                ${school?.address ? `<div class="inst-sub">Address / Campus: ${escapeHtml(school.address)}</div>` : ""}
+                <div class="inst-sub">
+                  ${school?.phone || school?.mobile ? `Helpline: ${escapeHtml(school.phone || school.mobile)}` : ""}
+                  ${school?.email ? `${school?.phone || school?.mobile ? " • " : ""}Email: ${escapeHtml(school.email)}` : ""}
+                  ${school?.code && school.code !== (school as any).lockCode && school.code !== "0002" ? ` • Reg. No: ${escapeHtml(school.code)}` : ""}
+                  • Office Timings: 08:00 AM – 02:00 PM
+                </div>
+              </div>
+              <div style="text-align:right;min-width:34mm;">
+                <div style="display:inline-block;padding:1mm 2.4mm;background:#1e3a8a;color:#ffffff;font-size:7pt;font-weight:900;border-radius:3px;letter-spacing:0.3px;">
+                  ${escapeHtml(copyLabel)}
+                </div>
+                <div style="margin-top:1.2mm;">
+                  <span style="display:inline-block;padding:0.8mm 2mm;border-radius:3px;font-size:6.8pt;font-weight:900;background:${rcptBal <= 0 ? "#dcfce7" : "#fef3c7"};color:${rcptBal <= 0 ? "#166534" : "#92400e"};border:1px solid ${rcptBal <= 0 ? "#86efac" : "#fcd34d"};">
+                    ${rcptBal <= 0 ? "✓ FULL PAID" : "PARTIAL PAID"}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div class="doc-badge-bar" style="background:#0f172a;margin-bottom:2mm;padding:1.5mm 3mm;">
+              <span>OFFICIAL ADMISSION FEE RECEIPT • प्रवेश शुल्क रसीद (${admissionType === "READMISSION" ? "RE-ADMISSION" : "NEW ADMISSION"})</span>
+              <span>RECEIPT NO: ${escapeHtml(rcptNo)}</span>
+            </div>
+
+            <div style="display:flex;gap:3mm;align-items:stretch;margin-bottom:2mm;">
+              <div style="flex:1;">
+                <table class="bio-table" style="font-size:7.6pt;">
+                  <tbody>
+                    <tr>
+                      <td class="lbl">Student Name</td>
+                      <td class="val" style="text-transform:uppercase;font-weight:900;">${escapeHtml(fullName)}</td>
+                      <td class="lbl">Session</td>
+                      <td class="val">${escapeHtml(sessLabel)}</td>
+                    </tr>
+                    <tr>
+                      <td class="lbl">Admission No.</td>
+                      <td class="val" style="font-family:monospace;">${escapeHtml(admNo)}</td>
+                      <td class="lbl">Class &amp; Roll No.</td>
+                      <td class="val">${escapeHtml(clsLabel)} (Roll: ${escapeHtml(rollNo)})</td>
+                    </tr>
+                    <tr>
+                      <td class="lbl">Father's Name</td>
+                      <td class="val">${escapeHtml(fatherName)}</td>
+                      <td class="lbl">Mobile Number</td>
+                      <td class="val">${escapeHtml(phone)}</td>
+                    </tr>
+                    <tr>
+                      <td class="lbl">Payment Date</td>
+                      <td class="val">${escapeHtml(rcptDate)}</td>
+                      <td class="lbl">Payment Mode</td>
+                      <td class="val">${escapeHtml(rcptPayMode)}${escapeHtml(rcptPayRef)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              ${
+                photoUrl
+                  ? `<div class="photo-frame" style="width:21mm;height:25mm;"><img src="${escapeHtml(photoUrl)}" alt="${escapeHtml(fullName)}" crossorigin="anonymous" /></div>`
+                  : ""
+              }
+            </div>
+
+            <table class="fee-table" style="font-size:7.8pt;">
+              <thead>
+                <tr>
+                  <th style="width:8%;text-align:center;">Sl.</th>
+                  <th>Admission Fee Particulars / प्रवेश शुल्क विवरण</th>
+                  <th class="num" style="width:18%;">Fee Amount (₹)</th>
+                  <th class="num" style="width:16%;">Concession (₹)</th>
+                  <th class="num" style="width:18%;">Net Paid (₹)</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${effectiveReceiptItems
+                  .map(
+                    (it, idx) => `
+                  <tr>
+                    <td style="text-align:center;">${idx + 1}</td>
+                    <td>${escapeHtml(it.description)}</td>
+                    <td class="num">₹${Number(it.due || 0).toLocaleString("en-IN")}</td>
+                    <td class="num">${Number(it.con || 0) > 0 ? `-₹${Number(it.con).toLocaleString("en-IN")}` : "—"}</td>
+                    <td class="num" style="font-weight:800;">₹${Math.max(0, Number(it.due || 0) - Number(it.con || 0)).toLocaleString("en-IN")}</td>
+                  </tr>
+                `
+                  )
+                  .join("")}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="receipt-footer-grid" style="margin-top:2.5mm;">
+            <div class="totals-box" style="padding:2mm 2.8mm;">
+              <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:2.5mm;border-bottom:1px solid #cbd5e1;padding-bottom:1.2mm;margin-bottom:1.2mm;">
+                <span>Gross Total: <strong>₹${rcptDue.toLocaleString("en-IN")}</strong></span>
+                ${rcptCon > 0 ? `<span style="color:#047857;">Concession: <strong>-₹${rcptCon.toLocaleString("en-IN")}</strong></span>` : ""}
+                <span style="color:#1e3a8a;font-size:9pt;">TOTAL PAID: <strong>₹${rcptPaid.toLocaleString("en-IN")}</strong></span>
+                <span style="color:${rcptBal > 0 ? "#b91c1c" : "#15803d"};">Balance Due: <strong>₹${rcptBal.toLocaleString("en-IN")}</strong></span>
+              </div>
+              <div style="font-size:7.1pt;color:#334155;">
+                <strong>Amount in Words:</strong> ${escapeHtml(rcptWords)}
+              </div>
+              <div style="font-size:6.4pt;color:#64748b;margin-top:0.8mm;">
+                * Note: Admission &amp; Registration fees once paid are non-refundable. Computer generated official receipt.
+              </div>
+            </div>
+
+            <div class="qr-mini" style="width:18mm;height:18mm;">
+              <img src="${qrImgUrl}" alt="QR" crossorigin="anonymous" />
+            </div>
+
+            <div class="sig-block" style="min-width:30mm;">
+              <div style="height:7mm;"></div>
+              <div class="sig-line" style="font-size:6.6pt;">Cashier / Clerk</div>
+            </div>
+
+            <div class="sig-block" style="min-width:36mm;">
+              ${school?.principalSignatureUrl ? `<img src="${escapeHtml(school.principalSignatureUrl)}" alt="Sign" crossorigin="anonymous" style="height:8.5mm;max-width:30mm;object-fit:contain;display:block;margin:0 auto 0.5mm;" />` : `<div style="height:7mm;"></div>`}
+              <div class="sig-line" style="font-size:6.8pt;">${escapeHtml(school?.principalName || "Principal")} (Sign &amp; Seal)</div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      return `
+        <div class="a4-sheet">
+          ${renderReceiptCopyBox("STUDENT / PARENT COPY")}
+          <div class="cut-divider" style="margin:2.8mm 0;">
+            <span>✂</span>
+            <div class="cut-line"></div>
+            <span>CUT HERE • यहाँ से फाड़ें (SCHOOL OFFICE &amp; ACCOUNTS COPY BELOW)</span>
+            <div class="cut-line"></div>
+          </div>
+          ${renderReceiptCopyBox("SCHOOL OFFICE COPY")}
+        </div>
+      `;
+    }
+
     // STANDALONE FULL A4 ADMISSION FORM
     return `
       <div class="a4-sheet">
-        <div class="adm-box" style="flex:1;display:flex;flex-direction:column;justify-content:space-between;padding:5mm;">
+        <div class="adm-box" style="flex:1;display:flex;flex-direction:column;justify-content:space-between;padding:4mm;">
           <div>
             ${headerHtml}
-            <div class="doc-badge-bar" style="padding:2mm 3.5mm;font-size:9pt;">
+            ${admissionTypeBarHtml}
+            <div class="doc-badge-bar" style="padding:1.8mm 3.2mm;font-size:8.5pt;">
               <span>OFFICIAL STUDENT ADMISSION &amp; REGISTRATION FORM (नामांकन आवेदन पत्र)</span>
               <span>FORM NO: ${escapeHtml(admNo)}</span>
             </div>
 
-            <div class="meta-strip" style="padding:2.2mm 3mm;">
+            <div class="meta-strip" style="padding:2mm 2.8mm;">
               <div class="meta-item">
                 <span class="meta-lbl">Admission / Reg No.</span>
                 <span class="meta-val">${escapeHtml(admNo)}</span>
@@ -706,13 +964,13 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
               </div>
             </div>
 
-            <div class="section-heading">1. Student Personal &amp; Academic Details (छात्र का व्यक्तिगत विवरण)</div>
+            <div class="section-heading">1. Student Personal &amp; Identification Details (छात्र का व्यक्तिगत विवरण)</div>
             <div class="bio-layout">
-              <table class="bio-table" style="font-size:8.2pt;">
+              <table class="bio-table" style="font-size:7.8pt;">
                 <tbody>
                   <tr>
                     <td class="lbl">Full Name of Student</td>
-                    <td class="val" colspan="3" style="font-size:9.5pt;text-transform:uppercase;">${escapeHtml(fullName)}</td>
+                    <td class="val" colspan="3" style="font-size:9.2pt;text-transform:uppercase;">${escapeHtml(fullName)}</td>
                   </tr>
                   <tr>
                     <td class="lbl">Date of Birth</td>
@@ -721,112 +979,151 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
                     <td class="val">${escapeHtml(genderLabel)}</td>
                   </tr>
                   <tr>
-                    <td class="lbl">Blood Group</td>
-                    <td class="val">${escapeHtml(bloodGroup)}</td>
-                    <td class="lbl">Social Category</td>
-                    <td class="val">${escapeHtml(category)}</td>
+                    <td class="lbl">Religion &amp; Nationality</td>
+                    <td class="val">${escapeHtml(religion)} • ${escapeHtml(nationality)}</td>
+                    <td class="lbl">Blood Grp &amp; Category</td>
+                    <td class="val">${escapeHtml(bloodGroup)} | ${escapeHtml(category)}</td>
                   </tr>
                   <tr>
-                    <td class="lbl">Student Aadhaar No.</td>
-                    <td class="val">${escapeHtml(studentAadhaar)}</td>
+                    <td class="lbl">Student Aadhaar (UIDAI)</td>
+                    <td class="val" style="font-family:monospace;">${escapeHtml(maskAadhaar(studentAadhaar))}</td>
                     <td class="lbl">APAAR / PEN ID</td>
-                    <td class="val">${escapeHtml(apaarId)}</td>
+                    <td class="val" style="font-family:monospace;">${escapeHtml(apaarId || "—")}</td>
                   </tr>
                   <tr>
-                    <td class="lbl">Previous School</td>
-                    <td class="val">${escapeHtml(prevSchool)}</td>
-                    <td class="lbl">Previous Class / %</td>
-                    <td class="val">${escapeHtml(prevMarks || "—")}</td>
+                    <td class="lbl">Identification Mark</td>
+                    <td class="val">${identificationMark && identificationMark !== "—" ? escapeHtml(identificationMark) : "Normal Mole / Cut"}</td>
+                    <td class="lbl">Medical History / Allergy</td>
+                    <td class="val">${escapeHtml(medicalCondition)}</td>
+                  </tr>
+                  <tr>
+                    <td class="lbl">Mother Tongue &amp; Medium</td>
+                    <td class="val">${escapeHtml(motherTongue)} | ${escapeHtml(mediumOfInstruction)}</td>
+                    <td class="lbl">Previous School &amp; Marks</td>
+                    <td class="val">${escapeHtml(prevSchool)} ${prevMarks ? `(${escapeHtml(prevMarks)})` : ""}</td>
                   </tr>
                 </tbody>
               </table>
 
-              <div class="photo-frame" style="width:30mm;height:38mm;">
+              <div class="photo-frame" style="width:28mm;height:35mm;">
                 ${
                   photoUrl
                     ? `<img src="${escapeHtml(photoUrl)}" alt="${escapeHtml(fullName)}" crossorigin="anonymous" />`
-                    : `<div style="font-size:7pt;color:#64748b;padding:2mm;">AFFIX<br/>PASSPORT<br/>PHOTO<br/><strong style="font-size:14pt;color:#1e3a8a;">${escapeHtml(fullName.charAt(0).toUpperCase())}</strong></div>`
+                    : `<div style="font-size:6.5pt;color:#64748b;padding:2mm;">AFFIX<br/>PASSPORT<br/>PHOTO<br/><strong style="font-size:13pt;color:#1e3a8a;">${escapeHtml(fullName.charAt(0).toUpperCase())}</strong></div>`
                 }
               </div>
             </div>
 
-            <div class="section-heading">2. Parents / Guardian Information (माता-पिता / अभिभावक का विवरण)</div>
-            <table class="bio-table" style="font-size:8.2pt;">
+            <div class="section-heading">2. Parents &amp; Guardian Information (माता-पिता / अभिभावक का विवरण)</div>
+            <table class="bio-table" style="font-size:7.8pt;">
               <tbody>
                 <tr>
                   <td class="lbl">Father's Name</td>
                   <td class="val">${escapeHtml(fatherName)}</td>
-                  <td class="lbl">Occupation</td>
-                  <td class="val">${escapeHtml(fatherOcc || "—")}</td>
+                  <td class="lbl">Occupation &amp; Income</td>
+                  <td class="val">${escapeHtml(fatherOcc || "—")} ${annualIncome && annualIncome !== "—" ? `(₹${Number(annualIncome).toLocaleString("en-IN")}/yr)` : ""}</td>
                 </tr>
                 <tr>
-                  <td class="lbl">Father's Aadhaar</td>
-                  <td class="val">${escapeHtml(fatherAadhaar)}</td>
-                  <td class="lbl">Primary Mobile</td>
-                  <td class="val">${escapeHtml(phone)}</td>
+                  <td class="lbl">Father's Aadhaar (Masked)</td>
+                  <td class="val" style="font-family:monospace;">${escapeHtml(maskAadhaar(fatherAadhaar))}</td>
+                  <td class="lbl">Primary Mobile Phone</td>
+                  <td class="val" style="font-weight:800;">${escapeHtml(phone)}</td>
                 </tr>
                 <tr>
                   <td class="lbl">Mother's Name</td>
                   <td class="val">${escapeHtml(motherName)}</td>
-                  <td class="lbl">Occupation</td>
-                  <td class="val">${escapeHtml(motherOcc || "—")}</td>
+                  <td class="lbl">Occupation &amp; WhatsApp</td>
+                  <td class="val">${escapeHtml(motherOcc || "—")} | ${escapeHtml(whatsappNo || phone)}</td>
                 </tr>
                 <tr>
-                  <td class="lbl">Mother's Aadhaar</td>
-                  <td class="val">${escapeHtml(motherAadhaar)}</td>
-                  <td class="lbl">WhatsApp / Email</td>
-                  <td class="val">${escapeHtml([whatsappNo, email].filter(Boolean).join(" | ") || "—")}</td>
+                  <td class="lbl">Mother's Aadhaar (Masked)</td>
+                  <td class="val" style="font-family:monospace;">${escapeHtml(maskAadhaar(motherAadhaar))}</td>
+                  <td class="lbl">Local Guardian (Optional)</td>
+                  <td class="val">${escapeHtml(guardianName)} (${escapeHtml(guardianRelation)})</td>
+                </tr>
+                <tr>
+                  <td class="lbl">Emergency Contact Person</td>
+                  <td class="val" colspan="3">${escapeHtml(emergencyPerson)} — Mobile: <strong>${escapeHtml(emergencyPhone)}</strong> (Relation: ${escapeHtml(emergencyRelation)})</td>
                 </tr>
               </tbody>
             </table>
 
-            <div class="section-heading">3. Address &amp; Transport Facility (पता एवं वाहन सुविधा)</div>
-            <table class="bio-table" style="font-size:8.2pt;">
+            <div class="section-heading">3. Residential Address &amp; Transport Facility (स्थायी एवं वर्तमान पता)</div>
+            <table class="bio-table" style="font-size:7.8pt;">
               <tbody>
                 <tr>
-                  <td class="lbl">Residential Address</td>
+                  <td class="lbl">Present / Local Address</td>
                   <td class="val" colspan="3">${escapeHtml(fullAddress)}</td>
                 </tr>
                 <tr>
-                  <td class="lbl">School Bus Required?</td>
-                  <td class="val">${usesBus ? `YES — Route/Stop: ${escapeHtml(busRoute || "Assigned")} (₹${busFee}/mo)` : "NO (Own Arrangement)"}</td>
+                  <td class="lbl">Permanent Native Address</td>
+                  <td class="val" colspan="3">${escapeHtml(permanentAddress)}</td>
+                </tr>
+                <tr>
+                  <td class="lbl">School Bus / Transport?</td>
+                  <td class="val">${usesBus ? `YES — Route/Stop: ${escapeHtml(busRoute || "Main Route")} (₹${busFee}/mo)` : "NO (Own / Parent Arrangement)"}</td>
                   <td class="lbl">Monthly Tuition Fee</td>
-                  <td class="val">₹${Number(monthlyFee || 0).toLocaleString("en-IN")} / month</td>
+                  <td class="val" style="font-weight:800;color:#1e3a8a;">₹${Number(monthlyFee || 0).toLocaleString("en-IN")} / month</td>
                 </tr>
               </tbody>
             </table>
 
-            <div class="section-heading">4. Enclosures &amp; Documents Checklist (जमा किए गए दस्तावेज)</div>
+            <div class="section-heading">4. Fee Structure &amp; Initial Payment Record (प्रारंभिक शुल्क एवं रसीद विवरण)</div>
+            <table class="bio-table" style="font-size:7.8pt;">
+              <thead>
+                <tr style="background:#f1f5f9;font-weight:800;color:#1e3a8a;">
+                  <td style="width:25%;">Admission Fee (प्रवेश शुल्क)</td>
+                  <td style="width:25%;">Registration / Form Fee</td>
+                  <td style="width:25%;">Monthly Tuition Fee</td>
+                  <td style="width:25%;">Total Paid at Admission</td>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="val">₹${(feeItems.find(i => /admission/i.test(i.description))?.due || 0).toLocaleString("en-IN")}</td>
+                  <td class="val">₹${(feeItems.find(i => /registration|form/i.test(i.description))?.due || 0).toLocaleString("en-IN")}</td>
+                  <td class="val">₹${Number(monthlyFee || 0).toLocaleString("en-IN")} / mo</td>
+                  <td class="val" style="font-weight:900;color:${totalPaid > 0 ? "#166534" : "#92400e"};">
+                    ${totalPaid > 0 ? `₹${totalPaid.toLocaleString("en-IN")} (${resolvedFee?.payModeInfo?.payMode || "Cash"}) • Rcpt #${resolvedFee?.receiptNo || "ADM-01"}` : "Pending at Counter"}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="section-heading">5. Enclosures &amp; Documents Checklist (जमा किए गए दस्तावेज)</div>
             ${docsChecklistHtml}
 
-            <div class="section-heading">5. Declaration by Parent / Guardian (अभिभावक द्वारा घोषणा)</div>
-            <div style="font-size:7.3pt;color:#334155;line-height:1.45;border:1px solid #cbd5e1;border-radius:4px;padding:2.2mm 3mm;background:#f8fafc;">
+            <div class="section-heading">6. Declaration by Parent / Guardian (अभिभावक द्वारा घोषणा)</div>
+            <div style="font-size:7pt;color:#334155;line-height:1.4;border:1px solid #cbd5e1;border-radius:4px;padding:2mm 2.8mm;background:#f8fafc;">
               मैं प्रमाणित करता/करती हूँ कि ऊपर दिया गया छात्र का नाम, जन्मतिथि एवं अन्य सभी विवरण पूर्णतः सत्य हैं। मैं विद्यालय के अनुशासन, उपस्थिति एवं शुल्क संबंधी सभी नियमों का पालन करने के लिए सहमत हूँ।<br/>
               <em>I hereby declare that the particulars furnished above are true and correct to the best of my knowledge, and I agree to abide by the rules, fee schedule, and discipline regulations of the institution.</em>
             </div>
           </div>
 
           <div>
-            <div style="display:flex;justify-content:space-between;align-items:center;border:1px dashed #94a3b8;border-radius:4px;padding:2mm 3mm;margin-top:3mm;background:#f8fafc;font-size:7.4pt;">
+            <div style="display:flex;justify-content:space-between;align-items:center;border:1.2px solid #1e3a8a;border-radius:4px;padding:1.8mm 2.8mm;margin-top:2.5mm;background:#f8fafc;font-size:7.2pt;">
               <div>
-                <strong>FOR OFFICE USE ONLY:</strong> Enrollment Status: <strong>CONFIRMED</strong> • Class: <strong>${escapeHtml(clsLabel)}</strong> • Roll No: <strong>${escapeHtml(rollNo)}</strong>
+                <strong style="color:#1e3a8a;">FOR OFFICE USE ONLY:</strong> Enrollment Status: <strong style="color:#166534;">CONFIRMED &amp; APPROVED BY AUTHORITY</strong> • Class: <strong>${escapeHtml(clsLabel)}</strong> • Roll No: <strong>${escapeHtml(rollNo)}</strong>
                 ${resolvedFee ? ` • Adm. Receipt: <strong>${escapeHtml(resolvedFee.receiptNo)} (Paid ₹${totalPaid.toLocaleString("en-IN")})</strong>` : ""}
               </div>
-              <img src="${qrImgUrl}" alt="QR" crossorigin="anonymous" style="width:14mm;height:14mm;object-fit:contain;" />
+              <img src="${qrImgUrl}" alt="QR" crossorigin="anonymous" style="width:13mm;height:13mm;object-fit:contain;" />
             </div>
 
-            <div class="sig-row" style="margin-top:7mm;">
+            <div class="sig-row" style="margin-top:5mm;">
               <div class="sig-block">
+                <div style="font-size:6.2pt;color:#64748b;margin-bottom:0.8mm;">Date: ____/____/20__</div>
                 <div class="sig-line">Signature of Student</div>
               </div>
               <div class="sig-block">
-                <div class="sig-line">Signature of Father / Guardian</div>
+                <div style="font-size:6.2pt;color:#64748b;margin-bottom:0.8mm;">Date: ____/____/20__</div>
+                <div class="sig-line">Signature of Parent / Guardian</div>
               </div>
               <div class="sig-block">
+                <div style="font-size:6.2pt;color:#64748b;margin-bottom:0.8mm;">Date: ____/____/20__</div>
                 <div class="sig-line">Admission Clerk</div>
               </div>
               <div class="sig-block">
-                ${school?.principalSignatureUrl ? `<img src="${escapeHtml(school.principalSignatureUrl)}" alt="Sign" crossorigin="anonymous" style="height:10mm;max-width:34mm;object-fit:contain;display:block;margin:0 auto 1mm;" />` : `<div style="height:8mm;"></div>`}
+                ${school?.principalSignatureUrl ? `<img src="${escapeHtml(school.principalSignatureUrl)}" alt="Sign" crossorigin="anonymous" style="height:9mm;max-width:32mm;object-fit:contain;display:block;margin:0 auto 0.5mm;" />` : `<div style="height:7mm;"></div>`}
                 <div class="sig-line">${escapeHtml(school?.principalName || "Principal")} (Seal &amp; Sign)</div>
               </div>
             </div>
@@ -887,7 +1184,12 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
       const renderH = Math.min(pdfH - margin * 2, (canvas.height * renderW) / canvas.width);
       pdf.addImage(imgData, "JPEG", margin, margin, renderW, renderH);
       const safeName = fullName.replace(/[^a-z0-9-_]+/gi, "_");
-      const prefix = mode === "combined" ? "Admission_Form_And_Receipt" : "Admission_Form";
+      const prefix =
+        mode === "combined"
+          ? "Admission_Form_And_Receipt"
+          : mode === "receipt_only"
+          ? "Official_Admission_Fee_Receipt"
+          : "Admission_Form";
       pdf.save(`${prefix}_${safeName}_${admNo}.pdf`);
     } catch (err) {
       console.warn("PDF generation fallback to print:", err);
@@ -967,34 +1269,88 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => setMode("combined")}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer border ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer border ${
                   mode === "combined"
                     ? "bg-blue-600 text-white border-blue-600 shadow-xs"
                     : "bg-slate-50 dark:bg-slate-700 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-600 hover:bg-slate-100"
                 }`}
               >
                 <Scissors className="w-3.5 h-3.5" />
-                <span>1 A4 पर दोनों: एडमिशन फॉर्म + फीस रसीद</span>
+                <span>1 A4 पर दोनों (फॉर्म + रसीद)</span>
+              </button>
+            )}
+
+            {(resolvedFee || mode === "receipt_only") && (
+              <button
+                type="button"
+                onClick={() => setMode("receipt_only")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer border ${
+                  mode === "receipt_only"
+                    ? "bg-emerald-600 text-white border-emerald-600 shadow-xs"
+                    : "bg-slate-50 dark:bg-slate-700 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-600 hover:bg-slate-100"
+                }`}
+              >
+                <ReceiptText className="w-3.5 h-3.5" />
+                <span>केवल रसीद (Admission Receipt)</span>
               </button>
             )}
 
             <button
               type="button"
               onClick={() => setMode("form_only")}
-              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer border ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer border ${
                 mode === "form_only"
                   ? "bg-blue-600 text-white border-blue-600 shadow-xs"
                   : "bg-slate-50 dark:bg-slate-700 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-600 hover:bg-slate-100"
               }`}
             >
               <FileText className="w-3.5 h-3.5" />
-              <span>केवल एडमिशन फॉर्म (Full A4 Bio-Data)</span>
+              <span>केवल फॉर्म (Full A4)</span>
             </button>
-          </div>
 
-          <div className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
-            <CheckCircle2 className="w-3.5 h-3.5" />
-            <span>{resolvedFee ? `रसीद #${resolvedFee.receiptNo} संलग्न (Paid ₹${totalPaid.toLocaleString("en-IN")})` : "Bio-Data Form Ready"}</span>
+            {/* Admission Type Toggle */}
+            <div className="flex items-center bg-slate-100 dark:bg-slate-700 p-0.5 rounded-xl border border-slate-300 dark:border-slate-600 text-[11px] font-bold">
+              <button
+                type="button"
+                onClick={() => setAdmissionType("NEW")}
+                className={`px-2.5 py-1 rounded-lg transition ${
+                  admissionType === "NEW" ? "bg-indigo-600 text-white shadow-xs" : "text-slate-600 dark:text-slate-300 hover:text-slate-900"
+                }`}
+              >
+                New Admission
+              </button>
+              <button
+                type="button"
+                onClick={() => setAdmissionType("READMISSION")}
+                className={`px-2.5 py-1 rounded-lg transition ${
+                  admissionType === "READMISSION" ? "bg-indigo-600 text-white shadow-xs" : "text-slate-600 dark:text-slate-300 hover:text-slate-900"
+                }`}
+              >
+                Re-Admission
+              </button>
+            </div>
+
+            {/* Copy Target Toggle */}
+            <div className="flex items-center bg-slate-100 dark:bg-slate-700 p-0.5 rounded-xl border border-slate-300 dark:border-slate-600 text-[11px] font-bold">
+              <button
+                type="button"
+                onClick={() => setCopyTarget("PARENT COPY")}
+                className={`px-2.5 py-1 rounded-lg transition ${
+                  copyTarget === "PARENT COPY" ? "bg-blue-600 text-white shadow-xs" : "text-slate-600 dark:text-slate-300 hover:text-slate-900"
+                }`}
+              >
+                Parent Copy
+              </button>
+              <button
+                type="button"
+                onClick={() => setCopyTarget("OFFICE COPY")}
+                className={`px-2.5 py-1 rounded-lg transition ${
+                  copyTarget === "OFFICE COPY" ? "bg-blue-600 text-white shadow-xs" : "text-slate-600 dark:text-slate-300 hover:text-slate-900"
+                }`}
+              >
+                Office Copy
+              </button>
+            </div>
           </div>
         </div>
 

@@ -92,7 +92,8 @@ export const DirectUploadButton: React.FC<DirectUploadButtonProps> = (props) => 
     try {
       let finalUrl = '';
       if (kind === 'image') {
-        finalUrl = await uploadImageToImgBB(file, file.name);
+        const isPngFile = file.type === 'image/png' || /\.png$/i.test(file.name);
+        finalUrl = await uploadImageToImgBB(file, file.name, { preservePng: isPngFile });
       } else {
         const tgRes = await uploadToTelegramStorage(file, {
           fileName: file.name,
@@ -114,7 +115,8 @@ export const DirectUploadButton: React.FC<DirectUploadButtonProps> = (props) => 
       // Guaranteed offline & local fallback for images (e.g. logos, stamps, signatures)
       if (kind === 'image' && file) {
         try {
-          const fallbackDataUrl = await compressImage(file, 1600, 1600, 0.88);
+          const isPngFile = file.type === 'image/png' || /\.png$/i.test(file.name);
+          const fallbackDataUrl = await compressImage(file, 1600, 1600, 0.88, isPngFile);
           if (fallbackDataUrl) {
             setProgress(100);
             onUploaded(fallbackDataUrl, file);

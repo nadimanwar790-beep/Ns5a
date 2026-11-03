@@ -448,7 +448,7 @@ export const IdCardManager: React.FC<Props> = ({
               {showSchoolDetail("address") && schoolDetails.address && <span className="font-bold text-slate-700">{schoolDetails.address}</span>}
               {showSchoolDetail("phone") && schoolDetails.phone && <span className="ml-1 text-slate-600 font-semibold">• Helpline: {schoolDetails.phone}</span>}
               {showSchoolDetail("email") && schoolDetails.email && <span className="ml-1 text-slate-500">• {schoolDetails.email}</span>}
-              {showSchoolDetail("code") && schoolDetails.code && <span className="ml-1 text-slate-500">• School Code: {schoolDetails.code}</span>}
+              {showSchoolDetail("code") && schoolDetails.code && schoolDetails.code !== (school as any)?.lockCode && schoolDetails.code !== "0002" && <span className="ml-1 text-slate-500">• Reg. No: {schoolDetails.code}</span>}
               {customSchoolDetails && <span className="ml-1 text-slate-500">• {customSchoolDetails}</span>}
             </div>
             <div className="text-right shrink-0 flex flex-col items-end justify-end">
@@ -641,7 +641,7 @@ export const IdCardManager: React.FC<Props> = ({
             {showSchoolDetail("address") && schoolDetails.address && <span className="font-bold text-slate-700 truncate block">{schoolDetails.address}</span>}
             {showSchoolDetail("phone") && schoolDetails.phone && <span className="text-slate-600 font-semibold text-[6px] block">Helpline: {schoolDetails.phone}</span>}
             {showSchoolDetail("email") && schoolDetails.email && <span className="text-slate-500 text-[6px] block">{schoolDetails.email}</span>}
-            {showSchoolDetail("code") && schoolDetails.code && <span className="text-slate-500 text-[6px]">School Code: {schoolDetails.code}</span>}
+            {showSchoolDetail("code") && schoolDetails.code && schoolDetails.code !== (school as any)?.lockCode && schoolDetails.code !== "0002" && <span className="text-slate-500 text-[6px]">Reg. No: {schoolDetails.code}</span>}
             {customSchoolDetails && <span className="text-slate-500 text-[6px] block truncate">{customSchoolDetails}</span>}
           </div>
           <div className="text-right shrink-0 flex flex-col items-end justify-end">

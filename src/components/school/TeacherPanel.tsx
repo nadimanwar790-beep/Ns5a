@@ -16,8 +16,13 @@ import {
   BookOpen, Users, ClipboardList, LayoutDashboard,
   ChevronRight, ChevronLeft, Edit3, FileText, HelpCircle, Play,
   Search, Phone, User, Calendar, Award, Sparkles, Filter, CheckCircle2,
-  GraduationCap, LogOut, Home, Megaphone, Image as ImageIcon
+  GraduationCap, LogOut, Home, Megaphone, Image as ImageIcon,
+  Clock, Book, MessageSquare
 } from "lucide-react";
+import { TimetableManager } from "./TimetableManager";
+import { HomeworkManager } from "./HomeworkManager";
+import { LibraryManager } from "./LibraryManager";
+import { ParentTeacherQueryManager } from "./ParentTeacherQueryManager";
 
 interface Props {
   schoolId: string;
@@ -38,7 +43,11 @@ type TeacherView =
   | "attendance"
   | "marks"
   | "smart_class"
-  | "content_manage";
+  | "content_manage"
+  | "timetable"
+  | "homework"
+  | "library"
+  | "parent_queries";
 
 export const TeacherPanel: React.FC<Props> = ({ schoolId, teacherId, teacherName, onBack, onLogout }) => {
   const [school, setSchool] = useState<School | null>(null);
@@ -335,11 +344,110 @@ export const TeacherPanel: React.FC<Props> = ({ schoolId, teacherId, teacherName
     );
   }
 
+  if (view === "timetable") {
+    return (
+      <div className="pb-20">
+        <TimetableManager
+          school={school!}
+          classes={classes}
+          subjects={allSubjects}
+          teachers={[{ id: teacherId, name: teacherName, schoolId } as any]}
+          activeSession={activeSession}
+          isTeacher={true}
+          currentTeacherId={teacherId}
+          onBack={() => setView("dashboard")}
+        />
+        {renderBottomNav()}
+      </div>
+    );
+  }
+
+  if (view === "homework") {
+    return (
+      <div className="pb-20">
+        <HomeworkManager
+          school={school!}
+          classes={classes}
+          subjects={allSubjects}
+          teachers={[{ id: teacherId, name: teacherName, schoolId } as any]}
+          currentRole="TEACHER"
+          currentTeacherId={teacherId}
+          currentTeacherName={teacherName}
+          onBack={() => setView("dashboard")}
+        />
+        {renderBottomNav()}
+      </div>
+    );
+  }
+
+  if (view === "library") {
+    return (
+      <div className="pb-20">
+        <LibraryManager
+          school={school!}
+          students={allStudents}
+          teachers={[{ id: teacherId, name: teacherName, schoolId } as any]}
+          classes={classes}
+          isAdmin={true}
+          currentTeacherId={teacherId}
+          onBack={() => setView("dashboard")}
+        />
+        {renderBottomNav()}
+      </div>
+    );
+  }
+
+  if (view === "parent_queries") {
+    return (
+      <div className="pb-20">
+        <ParentTeacherQueryManager
+          school={school!}
+          students={allStudents}
+          teachers={[{ id: teacherId, name: teacherName, schoolId } as any]}
+          classes={classes}
+          currentUserRole="TEACHER"
+          currentUserName={teacherName}
+          currentUserId={teacherId}
+          onBack={() => setView("dashboard")}
+        />
+        {renderBottomNav()}
+      </div>
+    );
+  }
+
   const goBack = () => {
     if (view === "lessons") setView("subjects");
     else if (view === "subjects" || view === "class_students") setView("classes");
     else setView("dashboard");
   };
+
+  const schoolExpIso = school?.subscription?.expiresAt || school?.subscription?.paidUntil;
+  const isSchoolSubExpired = schoolExpIso ? new Date(schoolExpIso).getTime() <= Date.now() : false;
+
+  if (isSchoolSubExpired && school) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6 text-center select-none">
+        <div className="max-w-md w-full bg-slate-900 border-2 border-red-500/50 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-4">
+          <div className="w-16 h-16 mx-auto rounded-2xl bg-red-600 flex items-center justify-center text-3xl">
+            🔒
+          </div>
+          <h2 className="text-xl font-black text-white">School Subscription Expired</h2>
+          <p className="text-xs text-red-400 font-bold">Access Terminated (स्कूल मॉड्यूल लॉक हैं)</p>
+          <p className="text-xs text-slate-300">
+            Aapke school ({school.name}) ka subscription plan samapt ho chuka hai. Kripya school administration ya principal se contact karein.
+          </p>
+          {onBack && (
+            <button
+              onClick={onBack}
+              className="mt-4 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition cursor-pointer"
+            >
+              Back
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-100 select-none pb-24">
@@ -631,6 +739,102 @@ export const TeacherPanel: React.FC<Props> = ({ schoolId, teacherId, teacherName
                   </p>
                 </div>
               </button>
+
+              {/* 7. Daily Homework & Class Diary */}
+              <button
+                type="button"
+                onClick={() => setView("homework")}
+                className="bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-slate-200/80 dark:border-slate-700 flex flex-col justify-between gap-3 hover:shadow-md hover:border-purple-400 transition active:scale-[0.98] text-left cursor-pointer"
+              >
+                <div className="flex items-center justify-between w-full">
+                  <div className="w-11 h-11 rounded-2xl bg-purple-50 dark:bg-purple-950/50 text-purple-600 dark:text-purple-400 flex items-center justify-center">
+                    <BookOpen className="w-5 h-5" />
+                  </div>
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300">
+                    DIARY
+                  </span>
+                </div>
+                <div>
+                  <p className="font-black text-slate-900 dark:text-white text-sm leading-snug">
+                    Daily Homework
+                  </p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">
+                    Classwork, homework aur notebook submission manage karein
+                  </p>
+                </div>
+              </button>
+
+              {/* 8. Timetable & Periods */}
+              <button
+                type="button"
+                onClick={() => setView("timetable")}
+                className="bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-slate-200/80 dark:border-slate-700 flex flex-col justify-between gap-3 hover:shadow-md hover:border-amber-400 transition active:scale-[0.98] text-left cursor-pointer"
+              >
+                <div className="flex items-center justify-between w-full">
+                  <div className="w-11 h-11 rounded-2xl bg-amber-50 dark:bg-amber-950/50 text-amber-600 dark:text-amber-400 flex items-center justify-center">
+                    <Clock className="w-5 h-5" />
+                  </div>
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300">
+                    ROUTINE
+                  </span>
+                </div>
+                <div>
+                  <p className="font-black text-slate-900 dark:text-white text-sm leading-snug">
+                    Weekly Timetable
+                  </p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">
+                    Apna class routine aur period schedule dekhein
+                  </p>
+                </div>
+              </button>
+
+              {/* 9. Parent-Teacher Queries */}
+              <button
+                type="button"
+                onClick={() => setView("parent_queries")}
+                className="bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-slate-200/80 dark:border-slate-700 flex flex-col justify-between gap-3 hover:shadow-md hover:border-blue-400 transition active:scale-[0.98] text-left cursor-pointer"
+              >
+                <div className="flex items-center justify-between w-full">
+                  <div className="w-11 h-11 rounded-2xl bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 flex items-center justify-center">
+                    <MessageSquare className="w-5 h-5" />
+                  </div>
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300">
+                    HELPDESK
+                  </span>
+                </div>
+                <div>
+                  <p className="font-black text-slate-900 dark:text-white text-sm leading-snug">
+                    Parent Queries &amp; Leaves
+                  </p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">
+                    Parents ke prashnon ka jawab dein aur chhutti approve karein
+                  </p>
+                </div>
+              </button>
+
+              {/* 10. Library Books */}
+              <button
+                type="button"
+                onClick={() => setView("library")}
+                className="bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-slate-200/80 dark:border-slate-700 flex flex-col justify-between gap-3 hover:shadow-md hover:border-emerald-400 transition active:scale-[0.98] text-left cursor-pointer"
+              >
+                <div className="flex items-center justify-between w-full">
+                  <div className="w-11 h-11 rounded-2xl bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+                    <Book className="w-5 h-5" />
+                  </div>
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300">
+                    LIBRARY
+                  </span>
+                </div>
+                <div>
+                  <p className="font-black text-slate-900 dark:text-white text-sm leading-snug">
+                    Library Catalog
+                  </p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">
+                    Books issue karein aur library catalog search karein
+                  </p>
+                </div>
+              </button>
             </div>
           </div>
         </div>
@@ -832,7 +1036,7 @@ export const TeacherPanel: React.FC<Props> = ({ schoolId, teacherId, teacherName
                     className="py-2 px-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:hover:bg-indigo-900/50 dark:text-indigo-300 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition cursor-pointer"
                   >
                     <BookOpen className="w-3.5 h-3.5" />
-                    <span>Lessons</span>
+                    <span>Subjects</span>
                   </button>
 
                   <button
@@ -945,21 +1149,9 @@ export const TeacherPanel: React.FC<Props> = ({ schoolId, teacherId, teacherName
                   Active
                 </span>
               </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => { setSelectedSubject(sub); setView("lessons"); }}
-                  className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
-                >
-                  <BookOpen className="w-3.5 h-3.5" />
-                  <span>View Lessons</span>
-                </button>
-                <button
-                  onClick={() => { setSelectedSubject(sub); setView("content_manage"); }}
-                  className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer"
-                >
-                  <Edit3 className="w-3.5 h-3.5" />
-                  <span>Manage Content</span>
-                </button>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-400">Curriculum Subject</span>
+                <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400">✓ Enrolled</span>
               </div>
             </div>
           ))}

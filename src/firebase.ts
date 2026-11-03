@@ -7,14 +7,14 @@ import { CLASS_10_FAKE_LESSONS } from "./constants/class10SeedLessons";
 
 // --- FIREBASE CONFIGURATION ---
 const firebaseConfig = {
-  apiKey: "AIzaSyBEDKZVPgwOPCccjWdKSShfvSqC3REDa0c",
-  authDomain: "iic-nst.firebaseapp.com",
-  databaseURL: "https://iic-nst-default-rtdb.firebaseio.com",
-  projectId: "iic-nst",
-  storageBucket: "iic-nst.firebasestorage.app",
-  messagingSenderId: "984309241322",
-  appId: "1:984309241322:web:4dae35987732d630e64e93",
-  measurementId: "G-QX0XT7RSQX"
+  apiKey: "AIzaSyCtjCnVHwFIj9NPWZnVXcm4Ayw5YZJna54",
+  authDomain: "nst2512-6a2e4.firebaseapp.com",
+  databaseURL: "https://nst2512-6a2e4-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "nst2512-6a2e4",
+  storageBucket: "nst2512-6a2e4.firebasestorage.app",
+  messagingSenderId: "1041659780014",
+  appId: "1:1041659780014:web:26db9e156334f2de87063f",
+  measurementId: "G-VRSSQK3TB0"
 };
 
 // ── Stale IndexedDB guard ──────────────────────────────────────────────────
@@ -29,6 +29,7 @@ if (_lastProject && _lastProject !== firebaseConfig.projectId) {
     localStorage.removeItem('nst_cached_battle_mcqs');
     localStorage.removeItem('nst_system_settings');
     localStorage.removeItem('nst_official_mcqs_cache');
+    localStorage.removeItem('nst_fcm_token');
     (indexedDB as any).databases?.().then((dbs: { name?: string }[]) => {
       dbs.filter(d => d.name && (d.name.includes('firestore') || d.name.includes('firebase')))
         .forEach(d => { try { indexedDB.deleteDatabase(d.name!); } catch {} });
@@ -112,7 +113,7 @@ if (typeof window !== 'undefined') {
 }
 
 // Initialize Firebase
-const analytics: any = null;
+let analytics: any = null;
 export { analytics };
 
 let app: any;
@@ -145,6 +146,17 @@ try {
       console.error('[Firebase] getFirestore on existing app failed:', e);
     }
   }
+
+  if (typeof window !== 'undefined' && app) {
+    import('firebase/analytics')
+      .then(async ({ getAnalytics, isSupported }) => {
+        const supported = await isSupported().catch(() => false);
+        if (supported) {
+          analytics = getAnalytics(app);
+        }
+      })
+      .catch(() => {});
+  }
 } catch (appErr) {
   console.error('[Firebase] initializeApp failed:', appErr);
 }
@@ -161,7 +173,9 @@ try {
 } catch (e) {
   console.error('[Firebase] getAuth failed:', e);
 }
-export const VAPID_KEY = 'BIZ9FrX99-hm4cM6pgBIKqZPevNkrVNM0AliLpTPbSr23eX4Vw_DGyC2GMLyJqTbogbuTseW5suFRWE6qQzbrL0';
+export const VAPID_KEY =
+  (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_FIREBASE_VAPID_KEY) ||
+  'BJjsBS8tulWMWugfwVKPDAGECy2ZhJKXPNOcTbPBDI1xpOzUGduKbsRgrwEvsZ4DKl-Gnn_k2wwY_pnqQAroAA4';
 
 let _messagingInstance: any = null;
 export const getFirebaseMessaging = async () => {

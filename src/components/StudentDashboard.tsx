@@ -18620,7 +18620,6 @@ export const StudentDashboard: React.FC<Props> = ({
         ) ? 'transparent' : (activeTab === 'MCQ' ? (isDarkMode ? '#020617' : '#f8fafc') : _appBg)
       }}
     >
-      <NotificationPrompt userId={user.id} />
       {/* Admin WhiteBoard floating panel — fixed z-[9999], visible in ALL modes */}
       {_isAdminUser && showAdminBoard && (
         <AdminWhiteBoard onClose={() => setShowAdminBoard(false)} />

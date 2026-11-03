@@ -270,7 +270,6 @@ export const ExamResultsPanel: React.FC<Props> = ({
   .sign-box { text-align: center; }
   .sign-line { border-top: 1px solid #1e293b; width: 155px; margin-bottom: 4px; }
   .sign-label { font-size: 12px; color: #0f172a; font-weight: 700; text-transform: uppercase; }
-  .stamp-circle { width: 48px; height: 48px; border: 1px dashed #64748b; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 8px; color: #64748b; font-weight: bold; text-transform: uppercase; margin-right: 10px; vertical-align: bottom; }
   .footer { text-align: center; margin-top: 24px; font-size: 10px; color: #94a3b8; }
 </style>
 </head>
@@ -324,10 +323,7 @@ export const ExamResultsPanel: React.FC<Props> = ({
 <div class="sign-row">
   <div class="sign-box"><div class="sign-line"></div><div class="sign-label">Class Teacher</div></div>
   <div class="sign-box"><div class="sign-line"></div><div class="sign-label">Exam Controller</div></div>
-  <div class="sign-box" style="display:flex;align-items:flex-end;">
-    <div class="stamp-circle">School<br>Stamp</div>
-    <div><div class="sign-line"></div><div class="sign-label">Principal</div></div>
-  </div>
+  <div class="sign-box"><div class="sign-line"></div><div class="sign-label">Principal</div></div>
 </div>
 
 <div class="footer">Official Academic Progress Transcript • Session ${cleanSession}</div>

@@ -30,6 +30,7 @@ import {
   Users,
   Megaphone,
   Image as ImageIcon,
+  Search,
 } from "lucide-react";
 import QRCode from "react-qr-code";
 import {
@@ -56,6 +57,7 @@ import {
   subscribeToNotices,
   subscribeToSchoolHolidays,
   subscribeToSchoolCommunityPosts,
+  subscribeToTeachers,
   getClasses,
   isDemoRecord,
   shouldUseDemoForSchool,
@@ -74,7 +76,7 @@ import {
   syncStudentFeeDueForPush,
   sendSchoolPushNotification,
 } from "../../utils/schoolPushClient";
-import type { School, SchoolStudent } from "../../school-types";
+import type { School, SchoolStudent, SchoolTeacher } from "../../school-types";
 
 interface Props {
   uid?: string;
@@ -96,7 +98,7 @@ interface Props {
   onSelectForFee?: any;
 }
 
-type TabType = "overview" | "attendance" | "fees" | "exams" | "homework" | "notices" | "community" | "idcard";
+type TabType = "overview" | "attendance" | "fees" | "exams" | "homework" | "notices" | "community" | "idcard" | "teachers";
 
 export const StudentSchoolPanel: React.FC<Props> = ({
   uid,
@@ -116,7 +118,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   const normalizeTab = (t?: string): TabType => {
     if (!t) return "overview";
     if (t === "notices" || t === "community") return "community";
-    if (["overview", "attendance", "fees", "exams", "homework", "idcard"].includes(t)) {
+    if (["overview", "attendance", "fees", "exams", "homework", "idcard", "teachers"].includes(t)) {
       return t as TabType;
     }
     return "overview";
@@ -670,6 +672,38 @@ export const StudentSchoolPanel: React.FC<Props> = ({
       window.removeEventListener("homework-updated", loadHomework);
     };
   }, [schoolId, activeStudent?.classId, demoEnabled]);
+
+  const [schoolTeachers, setSchoolTeachers] = useState<SchoolTeacher[]>([]);
+  const [teacherSearch, setTeacherSearch] = useState<string>("");
+
+  useEffect(() => {
+    if (!schoolId) return;
+    let mounted = true;
+    const unsub = subscribeToTeachers(schoolId, (list) => {
+      if (mounted && Array.isArray(list)) {
+        setSchoolTeachers(list.filter((t) => t.active !== false));
+      }
+    });
+    return () => {
+      mounted = false;
+      if (typeof unsub === "function") unsub();
+    };
+  }, [schoolId]);
+
+  const displayedFaculty = useMemo(() => {
+    const list = schoolTeachers;
+    if (!teacherSearch.trim()) return list;
+    const q = teacherSearch.toLowerCase().trim();
+    return list.filter((t) => {
+      const matchName = t.name?.toLowerCase().includes(q);
+      const matchDesig = t.designation?.toLowerCase().includes(q);
+      const matchQual = t.qualification?.toLowerCase().includes(q);
+      const matchSubs = Array.isArray(t.subjects)
+        ? t.subjects.some((s) => s.toLowerCase().includes(q))
+        : (typeof t.subjects === "string" ? (t.subjects as string).toLowerCase().includes(q) : false);
+      return matchName || matchDesig || matchQual || matchSubs;
+    });
+  }, [schoolTeachers, teacherSearch]);
 
   // Check if today is Sunday or holiday
   const todayHolidayInfo = useMemo(() => {
@@ -1377,6 +1411,78 @@ export const StudentSchoolPanel: React.FC<Props> = ({
     }
   };
 
+  // Check if school subscription is expired
+  const schoolExpIso = school?.subscription?.expiresAt || school?.subscription?.paidUntil;
+  const isSchoolSubExpired = schoolExpIso ? new Date(schoolExpIso).getTime() <= Date.now() : false;
+
+  if (isSchoolSubExpired && school) {
+    const expiredFormattedDate = schoolExpIso
+      ? new Date(schoolExpIso).toLocaleDateString("en-IN", {
+          day: "numeric",
+          month: "long",
+          year: "numeric",
+        })
+      : "24 April 2027";
+
+    return (
+      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6 text-center select-none relative overflow-hidden">
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-red-600/15 rounded-full blur-3xl pointer-events-none" />
+        <div className="relative max-w-md w-full bg-slate-900/90 border-2 border-red-500/50 rounded-3xl p-6 sm:p-8 shadow-2xl backdrop-blur-md space-y-5">
+          <div className="w-20 h-20 mx-auto rounded-2xl bg-gradient-to-br from-red-600 to-rose-700 flex items-center justify-center text-4xl shadow-xl shadow-red-600/40 border border-red-400/40">
+            🔒
+          </div>
+          <div>
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-500/20 text-red-300 text-[11px] font-black uppercase mb-2">
+              <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
+              <span>School Modules Locked</span>
+            </div>
+            <h2 className="text-xl sm:text-2xl font-black text-white">
+              Subscription Expired
+            </h2>
+            <p className="text-xs text-red-400 font-bold mt-1">
+              Access Terminated (स्कूल मॉड्यूल लॉक हो गए हैं)
+            </p>
+            <p className="text-xs text-slate-300 mt-2 leading-relaxed">
+              Aapke school ({school.name}) ka subscription plan samapt ho chuka hai. Kripya school administration ya principal se contact karein taaki plan renew ho sake.
+            </p>
+          </div>
+
+          <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-3 text-xs text-left space-y-1.5 text-slate-400">
+            <div className="flex justify-between">
+              <span>School:</span>
+              <span className="font-bold text-white">{school.name}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Expired On:</span>
+              <span className="font-bold text-red-400">{expiredFormattedDate}</span>
+            </div>
+          </div>
+
+          <div className="pt-2 flex flex-col gap-2">
+            {onLogout && (
+              <button
+                type="button"
+                onClick={onLogout}
+                className="w-full py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold transition cursor-pointer"
+              >
+                Logout / Switch Student
+              </button>
+            )}
+            {onBack && (
+              <button
+                type="button"
+                onClick={onBack}
+                className="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition cursor-pointer"
+              >
+                Back
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
       {/* ── TOP NAV HEADER ─────────────────────────────────────────────────── */}
@@ -1797,6 +1903,20 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                     <p className="text-xs text-slate-400 mt-0.5">
                       {homeworkList.filter((h) => homeworkStatusMap[h.id] !== "completed").length} कार्य बाकी
                     </p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("teachers")}
+                  className="p-4 rounded-2xl bg-slate-900 hover:bg-slate-800/90 border border-slate-800 hover:border-blue-500/40 text-left transition cursor-pointer flex flex-col justify-between gap-3"
+                >
+                  <div className="w-10 h-10 rounded-xl bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-blue-400">
+                    <GraduationCap className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-white">Our Teachers (फैकल्टी)</p>
+                    <p className="text-xs text-slate-400 mt-0.5">योग्यता, अनुभव व परिचय</p>
                   </div>
                 </button>
 
@@ -2535,6 +2655,200 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                 </div>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* TAB 8: OUR TEACHERS & FACULTY DIRECTORY ─────────────────────────── */}
+        {activeTab === "teachers" && (
+          <div className="space-y-5 animate-in fade-in">
+            {/* Faculty Header Card */}
+            <div className="p-4 sm:p-6 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 border border-slate-800 shadow-md">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div className="flex items-start sm:items-center gap-3.5">
+                  <div className="w-12 h-12 rounded-2xl bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-blue-400 shrink-0 shadow-inner">
+                    <GraduationCap className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h2 className="text-base sm:text-lg font-black text-white">
+                        Our Esteemed Faculty (हमारे सम्मानीय शिक्षक)
+                      </h2>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                        {displayedFaculty.length} Educators
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      हमारे विद्यालय के सुयोग्य, अनुभवी एवं समर्पित मार्गदर्शकों का परिचय
+                    </p>
+                  </div>
+                </div>
+
+                {/* Privacy Badge */}
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 text-xs font-semibold shrink-0">
+                  <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>🔒 Privacy Protected • Teachers ke personal numbers private hain</span>
+                </div>
+              </div>
+
+              {/* Search Bar */}
+              <div className="mt-4 pt-4 border-t border-slate-800/80 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                <div className="relative flex-1 max-w-md">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={teacherSearch}
+                    onChange={(e) => setTeacherSearch(e.target.value)}
+                    placeholder="Search by teacher name, subject, or qualification..."
+                    className="w-full pl-9 pr-4 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition"
+                  />
+                  {teacherSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setTeacherSearch("")}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-xs font-bold"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                <p className="text-[11px] text-slate-400 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span>Academic guidance ke liye school counter / office se sampark karein.</span>
+                </p>
+              </div>
+            </div>
+
+            {/* Teachers Cards Grid */}
+            {schoolTeachers.length === 0 ? (
+              <div className="text-center py-14 bg-slate-900 border border-slate-800 rounded-3xl p-8 space-y-3">
+                <div className="w-16 h-16 rounded-2xl bg-blue-500/10 border border-blue-500/20 text-blue-400 flex items-center justify-center mx-auto shadow-inner">
+                  <GraduationCap className="w-8 h-8" />
+                </div>
+                <h3 className="text-base sm:text-lg font-black text-white">
+                  शिक्षक सूची अभी अपडेट की जा रही है (No Faculty Added Yet)
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-400 max-w-md mx-auto leading-relaxed">
+                  जैसे ही स्कूल प्रशासन द्वारा शिक्षकों का प्रोफाइल और विषय विवरण दर्ज किया जाएगा, यहाँ सभी सम्मानीय शिक्षकों की सूची प्रदर्शित होगी।
+                </p>
+                <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-800/80 border border-slate-700/60 text-[11px] font-semibold text-slate-400">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                  <span>स्कूल एडमिन पैनल से टीचर जोड़े जाने पर यहाँ लाइव दिखेगा</span>
+                </div>
+              </div>
+            ) : displayedFaculty.length === 0 ? (
+              <div className="text-center py-12 bg-slate-900 border border-slate-800 rounded-2xl p-6">
+                <GraduationCap className="w-10 h-10 text-slate-500 mx-auto mb-2" />
+                <p className="text-sm font-bold text-white">Koi teacher match nahi hua</p>
+                <p className="text-xs text-slate-400 mt-1">
+                  "{teacherSearch}" se match hone wala koi teacher nahi mila. Search query badalkar dekhein.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {displayedFaculty.map((t, idx) => {
+                  const subjectsList = Array.isArray(t.subjects)
+                    ? t.subjects
+                    : (typeof t.subjects === "string" ? t.subjects.split(",").map((s: string) => s.trim()).filter(Boolean) : []);
+                  return (
+                    <div
+                      key={t.id || `faculty-${t.name}-${idx}`}
+                      className="bg-slate-900 border border-slate-800 hover:border-slate-700/90 rounded-2xl p-5 flex flex-col justify-between transition-all duration-200 shadow-sm relative overflow-hidden group hover:shadow-lg"
+                    >
+                      {/* Top accent line */}
+                      <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-500 via-indigo-500 to-emerald-500" />
+
+                      <div className="space-y-3.5">
+                        {/* Header: Photo + Name + Designation */}
+                        <div className="flex items-start gap-3.5">
+                          {/* Portrait Photo */}
+                          <div className="w-14 h-16 rounded-xl overflow-hidden bg-slate-800 border border-slate-700/80 shrink-0 shadow-inner flex items-center justify-center">
+                            {t.photoUrl ? (
+                              <img
+                                src={t.photoUrl}
+                                alt={t.name}
+                                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                              />
+                            ) : (
+                              <div className="w-full h-full bg-gradient-to-tr from-blue-600 via-indigo-600 to-emerald-600 flex flex-col items-center justify-center text-white select-none">
+                                <span className="text-lg font-black">{t.name ? t.name.charAt(0).toUpperCase() : "T"}</span>
+                                <span className="text-[7px] font-bold text-blue-200">FACULTY</span>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <h3 className="font-bold text-sm sm:text-base text-white truncate">
+                                {t.name}
+                              </h3>
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" title="Verified Faculty" />
+                            </div>
+
+                            <p className="text-xs font-semibold text-blue-400 mt-0.5 truncate">
+                              {t.designation || "Senior Faculty Member"}
+                            </p>
+
+                            <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+                              {t.qualification && (
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
+                                  🎓 {t.qualification}
+                                </span>
+                              )}
+                              {t.experience && (
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-300 border border-amber-500/20">
+                                  ⏳ {t.experience}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Subjects Taught Badges */}
+                        {subjectsList.length > 0 && (
+                          <div>
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                              Subjects Taught (विषय):
+                            </span>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {subjectsList.map((sub: string, sIdx: number) => (
+                                <span
+                                  key={`t-sub-${t.id}-${sIdx}`}
+                                  className="text-[11px] font-semibold px-2.5 py-0.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-300"
+                                >
+                                  {sub}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Bio / Teacher Quote */}
+                        {t.bio && (
+                          <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800/80 text-xs text-slate-300 italic relative">
+                            <span className="text-blue-400 font-serif font-black mr-1 text-sm">“</span>
+                            {t.bio}
+                            <span className="text-blue-400 font-serif font-black ml-1 text-sm">”</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Card Footer: Privacy-Safe Official Routing */}
+                      <div className="mt-4 pt-3 border-t border-slate-800/70 flex items-center justify-between text-[11px] text-slate-400">
+                        <span className="flex items-center gap-1">
+                          <BookOpen className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                          <span>Academic Mentor</span>
+                        </span>
+                        <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                          <ShieldCheck className="w-3.5 h-3.5" />
+                          <span>Verified Faculty</span>
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
       </main>

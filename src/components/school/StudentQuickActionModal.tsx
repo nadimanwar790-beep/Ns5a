@@ -301,8 +301,7 @@ export const StudentQuickActionModal: React.FC<Props> = ({
             <div class="footer">
               <div>
                 ${school?.address ? `<strong>${school.address}</strong>` : ""}
-                ${schoolPhone ? ` • Helpline: ${schoolPhone}` : ""}
-                ${school?.code ? ` • School Code: ${school.code}` : ""}
+                ${school?.code && school.code !== (school as any).lockCode && school.code !== "0002" ? ` • Reg. No: ${school.code}` : ""}
               </div>
               <div style="text-align: right;">
                 ${school?.principalSignatureUrl ? `<img src="${school.principalSignatureUrl}" style="height: 15px; max-width: 60px; object-fit: contain; display: block; margin-left: auto; margin-bottom: 1px;" alt="Principal Sign" />` : (school?.principalName ? `<div style="font-style:italic;font-weight:700;color:#0f172a;font-size:6pt;">${school.principalName}</div>` : "")}
@@ -533,7 +532,7 @@ export const StudentQuickActionModal: React.FC<Props> = ({
                   <div className="min-w-0 flex-1 truncate">
                     {school?.address ? <span className="font-bold text-slate-700">{school.address}</span> : null}
                     {schoolPhone ? <span className="ml-1">• Helpline: {schoolPhone}</span> : null}
-                    {school?.code ? <span className="ml-1">• School Code: {school.code}</span> : null}
+                    {school?.code && school.code !== (school as any).lockCode && school.code !== "0002" ? <span className="ml-1">• Reg. No: {school.code}</span> : null}
                   </div>
                   <div className="flex flex-col items-end shrink-0">
                     {school?.principalSignatureUrl ? (

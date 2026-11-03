@@ -11,6 +11,7 @@ import {
   User as UserIcon
 } from 'lucide-react';
 import { PwaInstallPrompt } from './components/PwaInstallPrompt';
+import { NotificationPrompt } from './components/NotificationPrompt';
 import { auth, logoutUser } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { DeviceConflictModal } from './components/DeviceConflictModal';
@@ -543,6 +544,7 @@ export function App() {
       />
 
       <PwaInstallPrompt />
+      <NotificationPrompt userId={user?.uid || user?.id || ''} />
     </div>
   );
 }

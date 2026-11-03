@@ -204,7 +204,10 @@ export const DEFAULT_DPS_SCHOOL: School = {
     mcq: true,
     monthlyAmount: 4500,
     status: "active",
-    tier: "full"
+    tier: "full",
+    expiresAt: "2027-04-24T23:59:59.000Z",
+    paidUntil: "2027-04-24T23:59:59.000Z",
+    assignedAt: "2026-04-24T00:00:00.000Z"
   },
   active: true,
   createdAt: "2026-04-01T00:00:00.000Z",
@@ -227,6 +230,10 @@ export const getLocalSchools = (): School[] => {
             (!updated.code || updated.code === "DPS_DEL")
           ) {
             updated = { ...updated, name: "Nstz", code: "NSTZ" };
+          }
+          if (updated.subscription && !updated.subscription.expiresAt) {
+            updated.subscription.expiresAt = "2027-04-24T23:59:59.000Z";
+            updated.subscription.paidUntil = "2027-04-24T23:59:59.000Z";
           }
           const resolvedLogo = getSavedSchoolLogo(updated.logoUrl, updated.id);
           updated.logoUrl = resolvedLogo && !isAppLogo(resolvedLogo) ? resolvedLogo : "";

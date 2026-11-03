@@ -14,6 +14,7 @@ import { OfficialFeeReceiptModal } from "./OfficialFeeReceiptModal";
 import { ClassFeeStructureModal } from "./ClassFeeStructureModal";
 import { QrFeeScannerModal } from "./QrFeeScannerModal";
 import { BusTransportModal } from "./BusTransportModal";
+import { AdmissionFormPrintModal, type AdmissionPrintMode } from "./AdmissionFormPrintModal";
 import {
   generateDpsReceiptHtml,
   generate4in1A4PageHtml,
@@ -92,6 +93,24 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
   const [customChequeNo, setCustomChequeNo] = useState<string>("");
   const [customConcession, setCustomConcession] = useState<string>("");
   const [customPaymentDate, setCustomPaymentDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+
+  // Admission Fee Collection Modal State
+  const [showAdmissionModal, setShowAdmissionModal] = useState<boolean>(false);
+  const [admSelectedStudentId, setAdmSelectedStudentId] = useState<string>("");
+  const [admFeeItems, setAdmFeeItems] = useState<{ id: string; description: string; due: number }[]>([]);
+  const [admConcession, setAdmConcession] = useState<number>(0);
+  const [admPaidAmount, setAdmPaidAmount] = useState<string>("");
+  const [admPaidManual, setAdmPaidManual] = useState<boolean>(false);
+  const [admPayMode, setAdmPayMode] = useState<string>("Cash");
+  const [admPayRef, setAdmPayRef] = useState<string>("");
+  const [admPaymentDate, setAdmPaymentDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [admSaving, setAdmSaving] = useState<boolean>(false);
+  const [admPrintStudio, setAdmPrintStudio] = useState<{
+    open: boolean;
+    student: SchoolStudent | null;
+    fee: MonthlyFee | null;
+    mode: AdmissionPrintMode;
+  }>({ open: false, student: null, fee: null, mode: "receipt_only" });
   const [schoolDetails, setSchoolDetails] = useState<SchoolHeaderDetails>(() => ({
     schoolName: school?.name || schoolName || "School",
     tagline: school?.tagline || "",
@@ -510,6 +529,149 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     setCustomPaymentDate(fee.paidDate ? fee.paidDate.slice(0, 10) : new Date().toISOString().slice(0, 10));
   };
 
+  const buildAdmissionItemsForStudent = (targetStudent: SchoolStudent | null) => {
+    if (!targetStudent) return [];
+    const cls = rawClasses.find(c => c.id === targetStudent.classId);
+    const fs = cls?.feeStructure;
+    const items: { id: string; description: string; due: number }[] = [];
+    if (fs) {
+      if (Number(fs.admissionFee) > 0) items.push({ id: "adm_1", description: "Admission Fee (प्रवेश शुल्क)", due: Number(fs.admissionFee) });
+      if (Number(fs.cautionMoney) > 0) items.push({ id: "adm_2", description: "Registration / Form Fee", due: Number(fs.cautionMoney) });
+      if (Number(fs.annualCharges) > 0) items.push({ id: "adm_3", description: "Annual / Development Fund", due: Number(fs.annualCharges) });
+      if (Number(fs.tuitionFee) > 0) items.push({ id: "adm_4", description: "1st Month Tuition Fee", due: Number(fs.tuitionFee) });
+      if (Array.isArray(fs.customHeads)) {
+        fs.customHeads.forEach((h, i) => {
+          if (Number(h.amount) > 0) items.push({ id: `adm_c_${i}`, description: h.name, due: Number(h.amount) });
+        });
+      }
+      if (targetStudent.usesBus && Number(fs.busFee || targetStudent.busFee || 0) > 0) {
+        items.push({ id: "adm_bus", description: `Transport / Bus Fee (${targetStudent.busRoute || "Bus"})`, due: Number(targetStudent.busFee || fs.busFee) });
+      }
+    }
+    if (items.length === 0) {
+      const defTuition = Number(cls?.defaultFee || targetStudent.monthlyFee || 0);
+      items.push(
+        { id: "adm_1", description: "Admission Fee (नामांकन / प्रवेश शुल्क)", due: 1500 },
+        { id: "adm_2", description: "Registration & Form Fee (पंजीकरण शुल्क)", due: 250 },
+        { id: "adm_3", description: "Annual / Development Fund (वार्षिक विकास कोष)", due: 800 },
+        { id: "adm_4", description: "Student Kit, ID Card & Diary (किट व डायरी)", due: 350 }
+      );
+      if (defTuition > 0) items.push({ id: "adm_tui", description: "1st Month Tuition Fee (प्रथम माह शुल्क)", due: defTuition });
+      if (targetStudent.usesBus && Number(targetStudent.busFee || 0) > 0) {
+        items.push({ id: "adm_bus", description: `Transport / Bus Fee (${targetStudent.busRoute || "Bus"})`, due: Number(targetStudent.busFee) });
+      }
+    }
+    return items;
+  };
+
+  const openAdmissionModalForStudent = (targetStudent?: SchoolStudent | null) => {
+    const s = targetStudent || students[0] || null;
+    setAdmSelectedStudentId(s ? s.id : "");
+    const items = buildAdmissionItemsForStudent(s);
+    setAdmFeeItems(items);
+    setAdmConcession(0);
+    const gross = items.reduce((sum, it) => sum + (Number(it.due) || 0), 0);
+    setAdmPaidAmount(String(gross));
+    setAdmPaidManual(false);
+    setAdmPayMode("Cash");
+    setAdmPayRef("");
+    setAdmPaymentDate(new Date().toISOString().slice(0, 10));
+    setShowAdmissionModal(true);
+  };
+
+  const handleSelectAdmStudent = (sId: string) => {
+    setAdmSelectedStudentId(sId);
+    const s = students.find(item => item.id === sId) || null;
+    const items = buildAdmissionItemsForStudent(s);
+    setAdmFeeItems(items);
+    setAdmConcession(0);
+    const gross = items.reduce((sum, it) => sum + (Number(it.due) || 0), 0);
+    setAdmPaidAmount(String(gross));
+    setAdmPaidManual(false);
+  };
+
+  const admGross = admFeeItems.reduce((sum, it) => sum + (Number(it.due) || 0), 0);
+  const admNet = Math.max(0, admGross - (Number(admConcession) || 0));
+
+  const handleSaveAdmissionFee = async (mode: AdmissionPrintMode = "receipt_only") => {
+    const student = students.find(s => s.id === admSelectedStudentId);
+    if (!student) {
+      setFeeError("कृपया पहले एक छात्र चुनें!");
+      return;
+    }
+    setFeeError(null);
+    setAdmSaving(true);
+    try {
+      const paidAmt = Math.max(0, Number(admPaidAmount) || 0);
+      const balanceAmt = Math.max(0, admNet - paidAmt);
+      const receiptNo = `ADM-${Math.floor(10000 + Math.random() * 90000)}`;
+      const paidIso = new Date().toISOString();
+
+      const finalItems = admFeeItems
+        .filter(it => it.description.trim() && Number(it.due) >= 0)
+        .map((it, idx) => ({
+          id: it.id,
+          slNo: idx + 1,
+          description: it.description.trim(),
+          due: Number(it.due) || 0,
+          con: idx === 0 ? Math.min(Number(it.due) || 0, Number(admConcession) || 0) : 0,
+          paid: Number(it.due) || 0,
+        }));
+
+      const admissionFeeRecord: MonthlyFee = {
+        schoolId,
+        sessionId: student.sessionId || sessionId || "2026-27",
+        studentId: student.id,
+        studentName: student.name,
+        rollNo: student.rollNo,
+        classId: student.classId,
+        month: paidIso.slice(0, 7),
+        amount: admNet,
+        monthlyAmount: Number(student.monthlyFee) || 0,
+        paid: paidAmt >= admNet && admNet > 0,
+        paidDate: paidIso,
+        paidBy: adminId,
+        receiptNo,
+        paidAmount: paidAmt,
+        balanceDue: balanceAmt,
+        concession: Number(admConcession) || 0,
+        feeType: "admission",
+        receiptCategory: "admission",
+        includeBusFee: Boolean(student.usesBus),
+        busFeeAmount: student.usesBus ? Number(student.busFee) || 0 : 0,
+        busRoute: student.busRoute,
+        payModeInfo: {
+          payMode: admPayMode,
+          date: new Date(admPaymentDate || Date.now()).toLocaleDateString("en-IN"),
+          bank: admPayMode === "Cash" ? "School Counter" : admPayMode,
+          number: admPayRef.trim() || "-",
+        },
+        items: finalItems,
+      };
+
+      await saveFee(admissionFeeRecord);
+
+      if (!student.admissionReceiptNo) {
+        await updateStudent(schoolId, student.id, { admissionReceiptNo: receiptNo }).catch(() => {});
+      }
+
+      setShowAdmissionModal(false);
+      loadData(true);
+
+      setAdmPrintStudio({
+        open: true,
+        student,
+        fee: admissionFeeRecord,
+        mode,
+      });
+    } catch (err: any) {
+      console.error("Admission fee error:", err);
+      setFeeError("Admission fee save करने में समस्या आई: " + (err?.message || "कृपया दोबारा कोशिश करें।"));
+    } finally {
+      setAdmSaving(false);
+    }
+  };
+
   const handleConfirmPayment = async (openDpsReceipt: boolean, markUnpaidDirectly = false) => {
     if (!collectingFee) return;
     const fee = collectingFee;
@@ -889,7 +1051,7 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       showSchoolField("directorName") && schoolDetails.directorName ? `Director: ${schoolDetails.directorName}` : "",
       showSchoolField("directorPhone") && schoolDetails.directorPhone ? `Director mobile: ${schoolDetails.directorPhone}` : "",
       showSchoolField("affiliation") && schoolDetails.affiliation ? schoolDetails.affiliation : "",
-      showSchoolField("code") && schoolDetails.code ? `School code: ${schoolDetails.code}` : "",
+      showSchoolField("code") && schoolDetails.code && schoolDetails.code !== (school as any)?.lockCode && schoolDetails.code !== "0002" ? `Reg. No: ${schoolDetails.code}` : "",
       ...(showSchoolField("customFields") ? (schoolDetails.customFields || [])
         .filter(field => field.label?.trim() && field.value?.trim())
         .map(field => `${field.label}: ${field.value}`) : []),
@@ -1328,6 +1490,8 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
     });
   }, [collectingFee, modalUnpaidMonths, enteredPaid, modalMonthly]);
 
+  const admCurrentStudent = students.find((st) => st.id === admSelectedStudentId);
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
       <div className="bg-white dark:bg-slate-800 border-b dark:border-slate-700 px-4 py-3 flex items-center gap-3">
@@ -1337,6 +1501,14 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
           <p className="text-xs text-slate-500">{students.length} students enrolled</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
+          <button
+            onClick={() => openAdmissionModalForStudent()}
+            className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-500 hover:to-teal-500 text-white px-3.5 py-2 text-xs font-black shadow-md shadow-emerald-700/25 transition active:scale-95 cursor-pointer"
+            title="प्रवेश शुल्क (Admission Fee) भरें और रसीद बनाएं"
+          >
+            <ReceiptText className="h-4 w-4 text-amber-300" />
+            <span>+ प्रवेश शुल्क रसीद</span>
+          </button>
           <button
             onClick={handleBroadcastMonthlyFeePush}
             disabled={sendingMonthlyPush}
@@ -2100,6 +2272,33 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                           <span>Mark Unpaid</span>
                         </button>
                       )}
+                      {student && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const existingAdmFee = feeHistory.find(
+                              (f) =>
+                                f.studentId === student.id &&
+                                (f.feeType === "admission" || f.receiptCategory === "admission")
+                            );
+                            if (existingAdmFee) {
+                              setAdmPrintStudio({
+                                open: true,
+                                student,
+                                fee: existingAdmFee,
+                                mode: "receipt_only",
+                              });
+                            } else {
+                              openAdmissionFeeModal(student);
+                            }
+                          }}
+                          className="rounded-lg px-2.5 py-1 text-xs font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 transition-colors cursor-pointer flex items-center gap-1"
+                          title="Collect or Print Official Admission Fee Receipt"
+                        >
+                          <ReceiptText className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                          <span>🎓 Adm. Receipt</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 {fee.paid ? (
@@ -2240,7 +2439,7 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
           fee={dpsReceiptFee}
           student={students.find(s => s.id === dpsReceiptFee.studentId)}
           className={className && className !== "All Classes" ? className : (classNames[dpsReceiptFee.classId] || "Class 6-B")}
-          sessionName={sessionId || "2026-27"}
+          sessionName={formatAcademicSession(sessionId || "2026-27")}
           feeHistory={feeHistory}
         />
       )}
@@ -2710,6 +2909,251 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
               </div>
             </div>
           </div>
+        )}
+
+        {/* ── ADMISSION FEE COLLECTION MODAL ── */}
+        {showAdmissionModal && (
+          <div className="fixed inset-0 z-50 bg-black/65 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+            <div className="bg-white dark:bg-slate-800 rounded-3xl max-w-2xl w-full p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-slate-700 my-6 max-h-[92vh] overflow-y-auto space-y-4">
+              <div className="flex items-start justify-between gap-3 border-b border-slate-200 dark:border-slate-700 pb-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-md">
+                    <ReceiptText className="w-6 h-6 text-amber-300" />
+                  </div>
+                  <div>
+                    <h3 className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
+                      प्रवेश शुल्क रसीद (Admission Fee Collection)
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      छात्र का नया प्रवेश शुल्क भरें और आधिकारिक रसीद प्रिंट करें
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowAdmissionModal(false)}
+                  className="p-1.5 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Student Selector */}
+              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 space-y-2">
+                <label className="block text-xs font-black uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                  Select Student (छात्र चुनें) *
+                </label>
+                <select
+                  value={admSelectedStudentId}
+                  onChange={(e) => handleSelectAdmStudent(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-sm font-bold"
+                >
+                  {students.map((s) => (
+                    <option key={s.id} value={s.id} className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">
+                      {s.name} (Roll #{s.rollNo || "—"}, {s.className || className || "Class"}) • Father: {s.fatherName || "—"}
+                    </option>
+                  ))}
+                </select>
+
+                {admCurrentStudent && (
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 dark:text-slate-400 pt-1 border-t border-slate-200 dark:border-slate-700">
+                    <span>Admission No: <strong className="font-mono text-indigo-600 dark:text-indigo-400">{admCurrentStudent.admissionNo || "New"}</strong></span>
+                    <span>Class: <strong>{admCurrentStudent.className || className}</strong></span>
+                    <span>Phone: <strong>{admCurrentStudent.phone || "—"}</strong></span>
+                    {admCurrentStudent.usesBus && <span className="text-teal-600 font-bold">🚌 Bus: {admCurrentStudent.busRoute || "Active"}</span>}
+                  </div>
+                )}
+              </div>
+
+              {/* Itemized Admission Fee Table */}
+              <div className="p-4 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/25 border border-emerald-200 dark:border-emerald-800/60 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-black uppercase tracking-wider text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+                    <IndianRupee className="w-4 h-4" /> Admission Charges Breakdown (शुल्क विवरण)
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAdmFeeItems((p) => [
+                          ...p,
+                          { id: `bk_${Date.now()}`, description: "Books & Stationery Set (किताबें)", due: 1200 },
+                        ])
+                      }
+                      className="px-2 py-1 rounded-lg bg-white dark:bg-slate-800 border border-emerald-300 text-[11px] font-bold text-emerald-700 cursor-pointer"
+                    >
+                      + Books
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAdmFeeItems((p) => [
+                          ...p,
+                          { id: `dr_${Date.now()}`, description: "School Uniform / Dress (ड्रेस)", due: 950 },
+                        ])
+                      }
+                      className="px-2 py-1 rounded-lg bg-white dark:bg-slate-800 border border-emerald-300 text-[11px] font-bold text-emerald-700 cursor-pointer"
+                    >
+                      + Dress
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAdmFeeItems((p) => [
+                          ...p,
+                          { id: `adm_c_${Date.now()}`, description: "Other Admission Charge", due: 0 },
+                        ])
+                      }
+                      className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Plus className="w-3 h-3" /> Add Head
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  {admFeeItems.map((row, idx) => (
+                    <div key={row.id} className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-slate-400 w-5">{idx + 1}.</span>
+                      <input
+                        type="text"
+                        value={row.description}
+                        onChange={(e) =>
+                          setAdmFeeItems((p) =>
+                            p.map((r) => (r.id === row.id ? { ...r, description: e.target.value } : r))
+                          )
+                        }
+                        className="flex-1 px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-semibold"
+                      />
+                      <input
+                        type="number"
+                        value={row.due}
+                        onChange={(e) =>
+                          setAdmFeeItems((p) =>
+                            p.map((r) => (r.id === row.id ? { ...r, due: Math.max(0, Number(e.target.value)) } : r))
+                          )
+                        }
+                        className="w-24 px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-black text-right"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setAdmFeeItems((p) => p.filter((r) => r.id !== row.id))}
+                        className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-2 border-t border-emerald-200 dark:border-emerald-800/60">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-1">Concession (छूट ₹)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={admConcession}
+                      onChange={(e) => setAdmConcession(Math.max(0, Number(e.target.value)))}
+                      className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-emerald-700 dark:text-emerald-300 mb-1">Amount Paid Now (₹)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={admPaidAmount}
+                      onChange={(e) => {
+                        setAdmPaidManual(true);
+                        setAdmPaidAmount(e.target.value);
+                      }}
+                      className="w-full px-2.5 py-1.5 rounded-xl border-2 border-emerald-500 bg-white dark:bg-slate-900 text-xs font-black text-emerald-700 dark:text-emerald-300"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-1">Payment Mode</label>
+                    <select
+                      value={admPayMode}
+                      onChange={(e) => setAdmPayMode(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-bold"
+                    >
+                      <option value="Cash">Cash (नकद)</option>
+                      <option value="Online / UPI">UPI / QR</option>
+                      <option value="Bank Transfer">Bank Transfer</option>
+                      <option value="Cheque">Cheque</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-1">Ref / UTR No.</label>
+                    <input
+                      type="text"
+                      value={admPayRef}
+                      onChange={(e) => setAdmPayRef(e.target.value)}
+                      placeholder="Optional"
+                      className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-semibold"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between text-xs bg-white dark:bg-slate-900 px-3.5 py-2.5 rounded-xl border border-emerald-200 dark:border-emerald-800">
+                  <span>
+                    Net Payable: <strong>₹{admNet.toLocaleString("en-IN")}</strong>
+                  </span>
+                  <span className="font-black text-emerald-700 dark:text-emerald-300">
+                    Paid: ₹{(Number(admPaidAmount) || 0).toLocaleString("en-IN")} • Due: ₹
+                    {Math.max(0, admNet - (Number(admPaidAmount) || 0)).toLocaleString("en-IN")}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAdmissionModal(false)}
+                  className="px-4 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSaveAdmissionFee("receipt_only")}
+                  disabled={admSaving || !admSelectedStudentId}
+                  className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs shadow-lg flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
+                >
+                  <ReceiptText className="w-4 h-4" />
+                  <span>{admSaving ? "Saving..." : "✓ Save & Print Admission Receipt"}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSaveAdmissionFee("combined")}
+                  disabled={admSaving || !admSelectedStudentId}
+                  className="flex-1 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black text-xs shadow-lg flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>Save &amp; Print Form + Receipt (A4)</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── COMBINED ADMISSION FORM & RECEIPT PRINT STUDIO ── */}
+        {admPrintStudio.open && (
+          <AdmissionFormPrintModal
+            isOpen={admPrintStudio.open}
+            onClose={() => setAdmPrintStudio({ open: false, student: null, fee: null, mode: "receipt_only" })}
+            school={school || { id: schoolId, name: schoolName || "School" } as any}
+            student={admPrintStudio.student}
+            className={
+              rawClasses.find((c) => c.id === admPrintStudio.student?.classId)?.name ||
+              admPrintStudio.student?.className ||
+              className ||
+              "Class"
+            }
+            sessionName={formatAcademicSession(sessionId || "2026-27")}
+            feeRecord={admPrintStudio.fee}
+            initialMode={admPrintStudio.mode}
+          />
         )}
       </div>
   );

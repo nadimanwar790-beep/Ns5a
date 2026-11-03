@@ -528,6 +528,7 @@ export function generateFull1YearDemoDataset(schoolId: string = "demo_school", a
       const teacherId = `demo_teacher_${classKey}_${section.toLowerCase()}`;
       teacherIndexCounter++;
 
+      const baseMonthlyFee = Number(classDef.defaultFee) || 1000;
       const schoolClass: SchoolClass = {
         id: classId,
         schoolId,
@@ -535,7 +536,15 @@ export function generateFull1YearDemoDataset(schoolId: string = "demo_school", a
         name: classNameFormatted,
         section,
         classTeacherId: teacherId,
-        defaultFee: classDef.defaultFee,
+        defaultFee: baseMonthlyFee,
+        feeStructure: {
+          admissionFee: Math.round(baseMonthlyFee * 2), // grade-tailored admission charge
+          tuitionFee: baseMonthlyFee,
+          cautionMoney: 500,
+          annualCharges: Math.round(baseMonthlyFee * 1.2), // grade-tailored annual charge
+          busFee: 1500,
+          customHeads: [],
+        },
         createdAt: session.createdAt,
       };
       classes.push(schoolClass);

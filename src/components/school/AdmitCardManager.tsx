@@ -47,15 +47,15 @@ export const AdmitCardManager: React.FC<Props> = ({
   // School Header Customization State
   const [schoolDetails, setSchoolDetails] = useState<SchoolHeaderDetails>({
     schoolName: school?.name || "National Academy",
-    tagline: school?.tagline || "Learn • Grow • Lead",
+    tagline: school?.tagline || "",
     affiliation: school?.affiliation || school?.tagline || "CBSE Pattern Curriculum",
-    address: school?.address || "Main Campus Examination Center",
+    address: school?.address || "",
     phone: school?.mobile || school?.phone || "",
     email: school?.email || "",
     logoUrl: getSavedSchoolLogo(school?.logoUrl, school?.id),
     principalName: school?.principalName || "Principal",
     principalTitle: "Principal",
-    code: school?.code || "0002",
+    code: school?.code && school?.code !== (school as any)?.lockCode && school?.code !== "0002" ? school.code : "",
     principalSignatureUrl: school?.principalSignatureUrl || "",
     directorSignatureUrl: school?.directorSignatureUrl || "",
   });
@@ -72,7 +72,7 @@ export const AdmitCardManager: React.FC<Props> = ({
       email: school.email || prev.email,
       logoUrl: getSavedSchoolLogo(school.logoUrl || prev.logoUrl, school.id),
       principalName: school.principalName || prev.principalName,
-      code: school.code || prev.code,
+      code: (school.code && school.code !== (school as any)?.lockCode && school.code !== "0002" ? school.code : "") || prev.code,
       principalSignatureUrl: school.principalSignatureUrl || "",
       directorSignatureUrl: school.directorSignatureUrl || "",
     }));
@@ -85,8 +85,9 @@ export const AdmitCardManager: React.FC<Props> = ({
   const [centerName, setCenterName] = useState(schoolDetails.schoolName + ", Main Campus Examination Hall");
 
   // Signatory & Authority
+  const [examController, setExamController] = useState("Exam Controller");
   const [centerSuperintendent, setCenterSuperintendent] = useState("Center Superintendent");
-  const [principalTitle, setPrincipalTitle] = useState("Principal");
+  const [principalTitle, setPrincipalTitle] = useState("Principal / Center Superintendent");
   const [principalName, setPrincipalName] = useState(school?.principalName || "Principal");
 
   // Candidate Details Editable State (Allows overriding student details for print)
@@ -292,7 +293,9 @@ export const AdmitCardManager: React.FC<Props> = ({
               <h1 className="text-xl font-black uppercase tracking-wider text-slate-950 leading-tight">{schoolDetails.schoolName}</h1>
               {schoolDetails.address && <p className="text-xs text-slate-600">{schoolDetails.address}</p>}
               <p className="text-[10px] text-slate-500 font-semibold tracking-wide uppercase">
-                {(schoolDetails.affiliation || "CBSE Pattern Curriculum").replace(/affiliation\s*code/gi, "Center / School Code").replace(/\(?\s*cbse\s+full\s+year\s*\)?/gi, "CBSE Pattern Curriculum")} &bull; Center / School Code: {schoolDetails.code || "0002"}{schoolDetails.phone ? ` • Helpline: ${schoolDetails.phone}` : ""}
+                {schoolDetails.affiliation || "CBSE Pattern Curriculum"}
+                {schoolDetails.phone ? ` • Helpline: ${schoolDetails.phone}` : ""}
+                {schoolDetails.code && schoolDetails.code !== (school as any)?.lockCode && schoolDetails.code !== "0002" ? ` • Center / Reg Code: ${schoolDetails.code}` : ""}
               </p>
             </div>
           </div>
@@ -403,13 +406,15 @@ export const AdmitCardManager: React.FC<Props> = ({
         <div className="grid grid-cols-3 gap-6 pt-4 border-t border-slate-300 text-center text-xs">
           <div>
             <div className="h-8 border-b border-slate-400 mb-1"></div>
-            <p className="font-bold text-slate-600">Candidate Signature</p>
+            <p className="font-bold text-slate-700">Candidate Signature</p>
+            <p className="text-[10px] text-slate-500">(परीक्षार्थी हस्ताक्षर)</p>
           </div>
           <div>
             <div className="h-8 border-b border-slate-400 mb-1 flex items-end justify-center">
-              <span className="text-[11px] font-bold text-slate-700">{centerSuperintendent}</span>
+              <span className="text-[11px] font-semibold text-slate-400">Sign / Stamp</span>
             </div>
-            <p className="font-bold text-slate-600">Center Superintendent</p>
+            <p className="font-bold text-slate-700">{examController || "Exam Controller"}</p>
+            <p className="text-[10px] text-slate-500">(परीक्षा नियंत्रक)</p>
           </div>
           <div>
             <div className="h-8 border-b border-slate-400 mb-1 flex items-end justify-center">
@@ -424,6 +429,7 @@ export const AdmitCardManager: React.FC<Props> = ({
               )}
             </div>
             <p className="font-black text-slate-900 uppercase tracking-wider text-[11px]">{principalTitle}</p>
+            <p className="text-[10px] text-slate-500">(केन्द्राधीक्षक / मुहर)</p>
           </div>
         </div>
       </div>
@@ -592,14 +598,24 @@ export const AdmitCardManager: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                 <div>
                   <label className="text-xs font-bold text-slate-500 block mb-1">Exam Center Name:</label>
                   <input
                     type="text"
                     value={centerName}
                     onChange={e => setCenterName(e.target.value)}
-                    className="w-full px-3 py-2 text-xs font-bold bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-white rounded-xl border-0"
+                    className="w-full px-3 py-2 text-xs font-bold bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100 rounded-xl border-0"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-500 block mb-1">Exam Controller Title:</label>
+                  <input
+                    type="text"
+                    value={examController}
+                    onChange={e => setExamController(e.target.value)}
+                    placeholder="Exam Controller"
+                    className="w-full px-3 py-2 text-xs font-bold bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100 rounded-xl border-0"
                   />
                 </div>
                 <div>
@@ -608,7 +624,7 @@ export const AdmitCardManager: React.FC<Props> = ({
                     type="text"
                     value={principalName}
                     onChange={e => setPrincipalName(e.target.value)}
-                    className="w-full px-3 py-2 text-xs font-bold bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-white rounded-xl border-0"
+                    className="w-full px-3 py-2 text-xs font-bold bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100 rounded-xl border-0"
                   />
                 </div>
                 <div>
@@ -617,7 +633,7 @@ export const AdmitCardManager: React.FC<Props> = ({
                     type="text"
                     value={principalTitle}
                     onChange={e => setPrincipalTitle(e.target.value)}
-                    className="w-full px-3 py-2 text-xs font-bold bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-white rounded-xl border-0"
+                    className="w-full px-3 py-2 text-xs font-bold bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100 rounded-xl border-0"
                   />
                 </div>
               </div>

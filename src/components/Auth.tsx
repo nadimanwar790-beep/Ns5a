@@ -1029,6 +1029,9 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
     localStorage.setItem('nst_current_user', JSON.stringify(userToLogin));
     localStorage.removeItem('nst_logged_out');
     if (logActivity) logActivity('LOGIN', `Logged in as: ${userToLogin.name}`, userToLogin);
+    try {
+      window.dispatchEvent(new CustomEvent('user-signed-up-prompt-notifications'));
+    } catch {}
     onLogin(userToLogin);
   };
 

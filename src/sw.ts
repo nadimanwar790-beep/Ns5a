@@ -12,7 +12,9 @@ declare const self: ServiceWorkerGlobalScope & {
  * Keeping Firebase Messaging here is important: PWA scanners and installed
  * browsers inspect /sw.js, not a second worker registered on another scope.
  */
-precacheAndRoute(self.__WB_MANIFEST);
+precacheAndRoute(self.__WB_MANIFEST, {
+  ignoreURLParametersMatching: [/^v$/],
+});
 self.skipWaiting();
 clientsClaim();
 
@@ -35,12 +37,12 @@ const showNstaNotification = (payload: NstaPushPayload) => {
   const urgent = type === 'CHAT' || type === 'FRIEND_REQUEST' || type === 'DIRECT_MESSAGE';
 
   const rawIcon = notification.icon || data.icon || data.senderPhoto;
-  const icon = (rawIcon && !rawIcon.endsWith('.svg')) ? rawIcon : '/icons/icon-192.png';
+  const icon = (rawIcon && !rawIcon.endsWith('.svg')) ? rawIcon : '/icons/icon-192.png?v=3';
 
   const options = {
     body,
     icon,
-    badge: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png?v=3',
     tag: data.senderId ? `nsta-${type}-${data.senderId}` : `nsta-${type}-${Date.now()}`,
     renotify: urgent,
     requireInteraction: urgent,
@@ -59,8 +61,8 @@ const showNstaNotification = (payload: NstaPushPayload) => {
     // Graceful fallback for mobile browsers that reject actions/vibrate
     return self.registration.showNotification(title, {
       body,
-      icon: '/icons/icon-192.png',
-      badge: '/icons/icon-192.png',
+      icon: '/icons/icon-192.png?v=3',
+      badge: '/icons/icon-192.png?v=3',
       data: { url, ...data },
     });
   });

@@ -177,14 +177,19 @@ export interface SchoolTeacher {
   id: string; // Firebase Auth UID
   schoolId: string;
   name: string;
-  email: string;
-  phone?: string;
-  subjects: string[]; // subject IDs
+  email?: string;
+  phone?: string; // Optional internal phone for administrative use only (never displayed to students)
+  subjects: string[]; // subject names or IDs
   classes: string[]; // class IDs
   employeeId?: string;
   joinDate: string;
   active: boolean;
   createdAt: string;
+  photoUrl?: string; // Teacher portrait picture
+  designation?: string; // e.g. "Senior Science Faculty", "TGT Mathematics", "Head of English"
+  qualification?: string; // e.g. "M.Sc. (Physics), B.Ed", "B.Tech, CTET"
+  experience?: string; // e.g. "8+ Years"
+  bio?: string; // Short bio / inspiring message for students
 }
 
 export interface SchoolStudent {
@@ -228,6 +233,15 @@ export interface SchoolStudent {
   busRoute?: string; // bus route or stop name
   busStop?: string; // boarding / drop stop
   busFee?: number; // custom bus fee if set individually
+  religion?: string;
+  nationality?: string;
+  annualIncome?: string;
+  emergencyContact?: string;
+  emergencyPhone?: string;
+  emergencyRelation?: string;
+  identificationMark?: string;
+  medicalHistory?: string;
+  admissionType?: 'NEW' | 'READMISSION';
 }
 
 export const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"] as const;
@@ -565,6 +579,15 @@ export interface AdmissionApplication {
   busStop?: string;
   busFee?: number;
   submittedDocs?: string[];
+  religion?: string;
+  nationality?: string;
+  annualIncome?: string;
+  emergencyContact?: string;
+  emergencyPhone?: string;
+  emergencyRelation?: string;
+  identificationMark?: string;
+  medicalHistory?: string;
+  admissionType?: 'NEW' | 'READMISSION';
   enrolledStudentId?: string;
   monthlyFee?: number;
   admissionFeeDetails?: {
@@ -596,6 +619,8 @@ export interface AdmissionApplication {
   remarks?: string;
   assignedRollNo?: string;
   assignedSection?: string;
+  paymentScreenshotUrl?: string;
+  transactionRef?: string;
 }
 
 // ── SCHOOL PUBLIC WEBSITE & PORTAL ──
@@ -640,6 +665,161 @@ export interface SchoolPublicInquiry {
   message: string;
   createdAt: string;
   status: 'new' | 'contacted' | 'resolved';
+}// ── 1. TIMETABLE & PERIOD ROUTINE ──
+export interface TimetablePeriod {
+  id: string;
+  periodNumber: number; // 1 to 8
+  startTime: string; // e.g. "08:30"
+  endTime: string; // e.g. "09:15"
+  subjectId?: string;
+  subjectName: string;
+  teacherId?: string;
+  teacherName: string;
+  room?: string;
+  isBreak?: boolean;
 }
 
+export interface ClassWeeklyTimetable {
+  id: string;
+  schoolId: string;
+  classId: string;
+  className: string;
+  section?: string;
+  sessionId: string;
+  schedule: Record<string, TimetablePeriod[]>; // key: "Monday", "Tuesday", etc.
+  updatedAt: string;
+}
 
+// ── 2. DAILY HOMEWORK & ASSIGNMENTS ──
+export interface DailyHomework {
+  id: string;
+  schoolId: string;
+  classId: string;
+  className: string;
+  section?: string;
+  subjectId?: string;
+  subjectName: string;
+  teacherId: string;
+  teacherName: string;
+  title: string;
+  description: string;
+  assignedDate: string; // YYYY-MM-DD
+  dueDate: string; // YYYY-MM-DD
+  attachmentUrl?: string;
+  status: 'active' | 'archived';
+  createdAt: string;
+}
+
+export interface HomeworkSubmission {
+  id: string;
+  homeworkId: string;
+  schoolId: string;
+  studentId: string;
+  studentName: string;
+  rollNo?: string;
+  submittedAt: string;
+  text?: string;
+  fileUrl?: string;
+  status: 'submitted' | 'reviewed';
+  remarks?: string;
+}
+
+// ── 3. LIBRARY MANAGEMENT ──
+export interface LibraryBook {
+  id: string;
+  schoolId: string;
+  accessionNo: string; // e.g. "LIB-1001"
+  isbn?: string;
+  title: string;
+  author: string;
+  publisher?: string;
+  category: string;
+  shelfLocation?: string;
+  totalCopies: number;
+  availableCopies: number;
+  addedAt: string;
+}
+
+export interface BookIssueRecord {
+  id: string;
+  schoolId: string;
+  bookId: string;
+  bookTitle: string;
+  accessionNo: string;
+  borrowerType: 'student' | 'teacher';
+  borrowerId: string;
+  borrowerName: string;
+  borrowerClass?: string;
+  borrowerRoll?: string;
+  borrowerPhone?: string;
+  issueDate: string; // YYYY-MM-DD
+  dueDate: string; // YYYY-MM-DD
+  returnDate?: string;
+  status: 'issued' | 'returned' | 'overdue' | 'lost';
+  fineAmount?: number;
+  finePaid?: boolean;
+  remarks?: string;
+}
+
+// ── 4. PARENT-TEACHER QUERY / HELPDESK ──
+export interface QueryReply {
+  id: string;
+  senderId: string;
+  senderName: string;
+  senderRole: 'PARENT' | 'STUDENT' | 'TEACHER' | 'ADMIN';
+  message: string;
+  timestamp: string;
+}
+
+export interface ParentTeacherQuery {
+  id: string;
+  schoolId: string;
+  studentId: string;
+  studentName: string;
+  rollNo?: string;
+  className: string;
+  category: 'academic' | 'fee' | 'transport' | 'leave' | 'general';
+  subject: string;
+  message: string;
+  status: 'open' | 'in_progress' | 'resolved';
+  replies: QueryReply[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ── 5. SCHOOL STORE & INVENTORY ──
+export interface StoreInventoryItem {
+  id: string;
+  schoolId: string;
+  itemCode: string;
+  name: string;
+  category: 'uniform' | 'books' | 'accessories' | 'stationery' | 'sports' | 'other';
+  sizeOrVariant?: string;
+  purchasePrice: number;
+  salePrice: number;
+  stockQuantity: number;
+  lowStockAlert: number;
+  unit: string;
+  updatedAt: string;
+}
+
+export interface StoreSaleRecord {
+  id: string;
+  schoolId: string;
+  receiptNo: string;
+  studentId?: string;
+  studentName: string;
+  className?: string;
+  rollNo?: string;
+  items: {
+    itemId: string;
+    itemName: string;
+    quantity: number;
+    unitPrice: number;
+    subtotal: number;
+  }[];
+  totalAmount: number;
+  paymentMode: 'cash' | 'online_upi' | 'card';
+  date: string;
+  soldBy: string;
+}

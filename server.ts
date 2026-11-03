@@ -9,7 +9,138 @@ const isProduction = process.env.NODE_ENV === "production";
 const ROOT_DIR = process.cwd();
 const VAPID_FILE = path.join(ROOT_DIR, ".vapid-keys.json");
 const SUBS_FILE = path.join(ROOT_DIR, ".push-subscriptions.json");
-const RTDB_BASE_URL = "https://iic-nst-default-rtdb.firebaseio.com";
+const RTDB_BASE_URL = process.env.FIREBASE_DATABASE_URL || "https://nst2512-6a2e4-default-rtdb.asia-southeast1.firebasedatabase.app";
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "nst2512-6a2e4";
+
+let cachedFcmAccessToken: { token: string; expiresAt: number } | null = null;
+
+async function getFcmAccessToken(): Promise<string | null> {
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+  const rawPrivateKey = process.env.FIREBASE_PRIVATE_KEY;
+  if (!clientEmail || !rawPrivateKey) return null;
+
+  if (cachedFcmAccessToken && Date.now() < cachedFcmAccessToken.expiresAt - 60_000) {
+    return cachedFcmAccessToken.token;
+  }
+
+  try {
+    const privateKey = rawPrivateKey.replace(/\\n/g, "\n");
+    const nowSec = Math.floor(Date.now() / 1000);
+    const b64url = (input: string | Buffer) =>
+      Buffer.from(input).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+
+    const header = b64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+    const claim = b64url(
+      JSON.stringify({
+        iss: clientEmail,
+        scope: "https://www.googleapis.com/auth/firebase.messaging",
+        aud: "https://oauth2.googleapis.com/token",
+        iat: nowSec,
+        exp: nowSec + 3600,
+      })
+    );
+    const unsignedJwt = `${header}.${claim}`;
+    const signer = crypto.createSign("RSA-SHA256");
+    signer.update(unsignedJwt);
+    signer.end();
+    const signature = b64url(signer.sign(privateKey));
+    const assertion = `${unsignedJwt}.${signature}`;
+
+    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        assertion,
+      }).toString(),
+    });
+    if (!tokenRes.ok) return null;
+    const tokenJson = (await tokenRes.json()) as { access_token?: string; expires_in?: number };
+    if (!tokenJson.access_token) return null;
+
+    cachedFcmAccessToken = {
+      token: tokenJson.access_token,
+      expiresAt: Date.now() + Number(tokenJson.expires_in || 3600) * 1000,
+    };
+    return tokenJson.access_token;
+  } catch {
+    return null;
+  }
+}
+
+async function dispatchFcmToUsers(
+  recipientIds: string[],
+  broadcast: boolean,
+  payload: { title: string; body: string; type?: string; url?: string; icon?: string }
+): Promise<number> {
+  const accessToken = await getFcmAccessToken();
+  if (!accessToken) return 0;
+
+  const allTokens = await rtdbGet<Record<string, { token?: string; userId?: string }>>("fcm_tokens");
+  if (!allTokens || typeof allTokens !== "object") return 0;
+
+  const cleanSet = new Set(recipientIds.map((id) => String(id).trim().replace(/[.#$[\]/]/g, "_")));
+  const rawSet = new Set(recipientIds.map((id) => String(id).trim()));
+
+  const targets: string[] = [];
+  for (const [key, entry] of Object.entries(allTokens)) {
+    if (!entry?.token) continue;
+    if (broadcast || cleanSet.size === 0 || cleanSet.has(key) || (entry.userId && rawSet.has(String(entry.userId)))) {
+      targets.push(entry.token);
+    }
+  }
+
+  let sent = 0;
+  await Promise.allSettled(
+    Array.from(new Set(targets)).map(async (fcmToken) => {
+      const res = await fetch(
+        `https://fcm.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/messages:send`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            message: {
+              token: fcmToken,
+              notification: {
+                title: payload.title,
+                body: payload.body,
+              },
+              data: {
+                title: payload.title,
+                body: payload.body,
+                type: String(payload.type || "DEFAULT"),
+                url: String(payload.url || "/"),
+                icon: String(payload.icon || "/icons/icon-192.png?v=3"),
+                urgent: "1",
+              },
+              webpush: {
+                headers: {
+                  Urgency: "high",
+                  TTL: "604800",
+                },
+                notification: {
+                  title: payload.title,
+                  body: payload.body,
+                  icon: payload.icon || "/icons/icon-192.png?v=3",
+                  badge: "/icons/icon-192.png?v=3",
+                  requireInteraction: true,
+                },
+                fcm_options: {
+                  link: payload.url || "/",
+                },
+              },
+            },
+          }),
+        }
+      );
+      if (res.ok) sent++;
+    })
+  );
+  return sent;
+}
 
 export interface LinkedStudentPushMeta {
   id: string;
@@ -581,13 +712,14 @@ async function startServer() {
     }
   });
 
-  // Also handle legacy /api/notifications/push gracefully if called by NotificationManager
+  // Also handle /api/notifications/push via both Web Push and FCM HTTP v1
   app.post("/api/notifications/push", async (req, res) => {
-    const { recipientIds, title, body, url, type } = req.body || {};
+    const { recipientIds = [], broadcast = false, title, body, url, type, icon } = req.body || {};
     let delivered = 0;
     if (title && body) {
       for (const record of subscriptionsMap.values()) {
         if (
+          broadcast ||
           !Array.isArray(recipientIds) ||
           recipientIds.length === 0 ||
           recipientIds.includes(record.userId) ||
@@ -597,6 +729,12 @@ async function startServer() {
           if (ok) delivered++;
         }
       }
+      const fcmDelivered = await dispatchFcmToUsers(
+        Array.isArray(recipientIds) ? recipientIds : [],
+        Boolean(broadcast),
+        { title, body, type, url, icon }
+      );
+      delivered += fcmDelivered;
     }
     res.json({ ok: true, delivered });
   });

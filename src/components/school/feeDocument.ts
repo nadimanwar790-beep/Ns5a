@@ -107,6 +107,7 @@ export function buildDpsReceiptData({
   }
 
   const isDueDemandSlip = !fee.paid && (Number(fee.paidAmount || 0) === 0);
+  const isAdmissionReceipt = fee.feeType === "admission" || fee.receiptCategory === "admission";
   const resolvedSchoolId = schoolDetails?.schoolId || fee.schoolId || "";
   const histSummary = computeStudentFeeHistorySummary({
     studentId: fee.studentId,
@@ -127,6 +128,8 @@ export function buildDpsReceiptData({
     upiId: schoolDetails?.upiId || "",
     receiptTitle: isDueDemandSlip
       ? "FEE DEMAND SLIP • बकाया शुल्क तकादा पर्ची"
+      : isAdmissionReceipt
+      ? "OFFICIAL ADMISSION FEE RECEIPT / प्रवेश शुल्क रसीद"
       : "OFFICIAL MONTHLY FEE RECEIPT / मासिक शुल्क रसीद",
 
     receiptNo: fee.receiptNo || String(Math.floor(10000 + Math.random() * 90000)),
@@ -137,11 +140,11 @@ export function buildDpsReceiptData({
     rollNo: student?.rollNo || fee.rollNo || "",
     phone: student?.phone || (fee as any).phone || "",
     studentPhotoUrl: (student as any)?.photoUrl || (student as any)?.photo || "",
-    installment,
+    installment: isAdmissionReceipt ? "ADMISSION" : installment,
     receiptDate: isDueDemandSlip ? receiptDate : (receiptTime ? `${receiptDate} (${receiptTime})` : receiptDate),
     session: formatAcademicSession((fee as any)?.sessionId || "2026-27"),
     className: className || fee.classId || "Class",
-    counterNo: isDueDemandSlip ? "DUE-DEMAND" : "FEE-RECEIPT",
+    counterNo: isDueDemandSlip ? "DUE-DEMAND" : isAdmissionReceipt ? "ADM-RECEIPT" : "FEE-RECEIPT",
 
     items,
     balanceDue: fee.balanceDue,

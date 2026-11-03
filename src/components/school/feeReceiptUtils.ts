@@ -448,11 +448,16 @@ export function formatAcademicSession(raw?: string | null): string {
     return `${fullRangeMatch[1]}-${fullRangeMatch[2].slice(-2)}`;
   }
 
-  const yearMatch = trimmed.match(/(20\d{2})/);
+  const yearMatch = trimmed.match(/((?:19|20)\d{2})/);
   if (yearMatch) {
     const startYear = parseInt(yearMatch[1], 10);
     const nextShort = String((startYear + 1) % 100).padStart(2, "0");
     return `${startYear}-${nextShort}`;
+  }
+
+  // Reject any raw Firestore document IDs or non-year hashes (e.g. dRhlh12mWxu57lw1VuNQ or session_abc123)
+  if (!/\d{4}/.test(trimmed) || (trimmed.length >= 9 && /[a-zA-Z]/.test(trimmed))) {
+    return "2026-27";
   }
 
   return trimmed;
@@ -756,7 +761,9 @@ export function generateDpsReceiptHtml(
 
   // Auto-resolve Father's Name & Phone from IndexedDB student cache if not explicitly passed
   let resolvedFatherName = (data.fatherName || "").trim();
-  let resolvedStudentPhone = (data.phone || "").trim();
+  let resolvedStudentPhone = (data.phone || "")
+    .replace(/\s*\([A-Za-z0-9_-]{10,}\)\s*/g, "")
+    .trim();
   if ((!resolvedFatherName || !resolvedStudentPhone) && data.schoolId && data.studentId) {
     const cachedStudents = getSchoolCacheSync<any[]>(`nst_school_students_${data.schoolId}`, []);
     if (Array.isArray(cachedStudents)) {
@@ -764,7 +771,9 @@ export function generateDpsReceiptHtml(
       if (matchedSt) {
         if (!resolvedFatherName && matchedSt.fatherName) resolvedFatherName = String(matchedSt.fatherName).trim();
         if (!resolvedStudentPhone && (matchedSt.phone || matchedSt.whatsappNo)) {
-          resolvedStudentPhone = String(matchedSt.phone || matchedSt.whatsappNo).trim();
+          resolvedStudentPhone = String(matchedSt.phone || matchedSt.whatsappNo)
+            .replace(/\s*\([A-Za-z0-9_-]{10,}\)\s*/g, "")
+            .trim();
         }
       }
     }
@@ -938,7 +947,7 @@ export function generateDpsReceiptHtml(
         <div class="dps-meta-row">
           <span class="dps-label">${resolvedStudentPhone ? "Mobile" : "Session"}</span>
           <span class="dps-colon">:</span>
-          <span class="dps-val font-bold dps-tabular">${escapeHtml(resolvedStudentPhone ? `${resolvedStudentPhone} (${cleanSession})` : cleanSession)}</span>
+          <span class="dps-val font-bold dps-tabular">${escapeHtml(resolvedStudentPhone || cleanSession)}</span>
         </div>
       </div>
     </div>
@@ -1612,7 +1621,8 @@ export const DPS_RECEIPT_CSS = `
   }
   .dps-fee-table {
     width: 100%;
-    height: 100%;
+    height: auto;
+    table-layout: fixed;
     border-collapse: collapse;
     font-size: 11px;
   }
@@ -1620,38 +1630,41 @@ export const DPS_RECEIPT_CSS = `
     background: #f1f5f9;
     border-bottom: 1.2px solid #0f172a;
     border-right: 1px solid #475569;
-    padding: 5px 8px;
+    padding: 4px 6px;
     font-weight: 800;
     color: #0f172a;
-    font-size: 10.5px;
+    font-size: 10px;
+    vertical-align: middle;
   }
   .dps-fee-table thead th:last-child {
     border-right: none;
   }
   .dps-fee-table tbody td {
-    padding: 5px 8px;
+    padding: 4px 6px;
     border-right: 1px solid #475569;
     color: #0f172a;
-    font-size: 11px;
+    font-size: 10.5px;
     vertical-align: middle;
+    line-height: 1.25;
   }
   .dps-fee-table tbody td:last-child {
     border-right: none;
   }
   .fee-data-row {
-    height: 1px;
+    height: auto !important;
     border-bottom: 1px solid #cbd5e1;
   }
   .dps-filler-row {
-    height: 100%;
+    display: none;
   }
   .dps-filler-row td {
-    padding: 0 8px !important;
+    padding: 0 6px !important;
     border-bottom: none;
   }
   .th-sl, .td-sl {
-    width: 42px;
+    width: 32px;
     text-align: center;
+    white-space: nowrap;
     font-variant-numeric: tabular-nums;
   }
   .th-desc, .td-desc {
@@ -1661,15 +1674,18 @@ export const DPS_RECEIPT_CSS = `
   .th-con, .td-con {
     width: 60px;
     text-align: right;
+    white-space: nowrap;
     font-variant-numeric: tabular-nums;
   }
   .th-num, .td-num {
     width: 86px;
     text-align: right;
+    white-space: nowrap;
     font-variant-numeric: tabular-nums;
   }
   .th-demand-amt, .td-demand-amt {
     width: 96px;
+    white-space: nowrap;
   }
 
   /* Pay Mode Information (Paid Receipts) */
@@ -2074,35 +2090,55 @@ export const DPS_RECEIPT_CSS = `
     font-size: 8.2px;
   }
   .is-compact .dps-table-container {
-    min-height: 0;
+    min-height: 38px;
+    overflow: visible;
   }
   .is-compact .dps-fee-table {
-    font-size: 9.2px;
+    font-size: 8.8px;
+    table-layout: fixed;
   }
   .is-compact .dps-fee-table thead th {
-    padding: 3.5px 6px;
-    font-size: 8.6px;
+    padding: 3px 5px;
+    font-size: 8.4px;
     border-bottom-width: 1.1px;
   }
   .is-compact .dps-fee-table tbody td {
-    padding: 3.8px 6px;
-    font-size: 9.2px;
+    padding: 3px 5px !important;
+    font-size: 8.8px !important;
+    vertical-align: middle !important;
+    line-height: 1.22 !important;
   }
   .is-compact .th-sl, .is-compact .td-sl {
-    width: 28px;
+    width: 24px !important;
+    text-align: center;
+    white-space: nowrap !important;
+    vertical-align: middle !important;
   }
   .is-compact .th-desc, .is-compact .td-desc {
-    padding-left: 7px !important;
+    padding-left: 6px !important;
+    vertical-align: middle !important;
+    word-break: break-word;
   }
   .is-compact .th-con, .is-compact .td-con {
-    width: 42px;
+    width: 38px !important;
+    white-space: nowrap !important;
+    vertical-align: middle !important;
   }
   .is-compact .th-num, .is-compact .td-num {
-    width: 58px;
+    width: 58px !important;
+    white-space: nowrap !important;
+    vertical-align: middle !important;
   }
   .is-compact .th-demand-amt, .is-compact .td-demand-amt {
-    width: 72px;
-    font-size: 9.6px;
+    width: 72px !important;
+    font-size: 9.2px !important;
+    white-space: nowrap !important;
+    vertical-align: middle !important;
+  }
+  .is-compact .dps-grand-total-row {
+    position: relative;
+    z-index: 2;
+    flex-shrink: 0;
   }
   .is-compact .dps-paymode-grid {
     padding: 3.5px 8px;

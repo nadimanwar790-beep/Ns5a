@@ -7,13 +7,13 @@
          and the OS status/navigation bar are themed correctly from first paint.
          Keep in sync with the manifest theme_color/background_color in vite.config.ts
          and with the dynamic theme-color updates in StudentDashboard.tsx. -->
-    <meta name="theme-color" content="#030717" />
-    <meta name="background-color" content="#030717" />
+    <meta name="theme-color" content="#121212" />
+    <meta name="background-color" content="#121212" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="NSTA" />
-    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png?v=3" />
     <title>NSTA - National Study &amp; Tracking App</title>
     <meta name="description" content="Comprehensive learning platform with syllabus, notes, audio studio, MCQs, and student progress tracking." />
     <meta name="robots" content="index, follow" />
@@ -23,8 +23,9 @@
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="NSTA - National Study &amp; Tracking App" />
     <meta name="twitter:description" content="Comprehensive learning platform with syllabus, notes, audio studio, MCQs, and student progress tracking." />
-    <link rel="manifest" href="manifest.webmanifest" />
-    <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
+    <link rel="manifest" href="/manifest.webmanifest?v=3" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png?v=3" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512.png?v=3" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -206,9 +207,9 @@
       <div class="pre-react-splash-brand">
         <img
           class="pre-react-splash-logo"
-          src="/branding/nsta-logo.png"
+          src="/icons/icon-512.png?v=3"
           alt=""
-          onerror="this.onerror=null;this.src='/icons/icon-512.png'"
+          onerror="this.onerror=null;this.src='/branding/nsta-logo.png'"
         />
         <h1 class="pre-react-splash-title">NSTA</h1>
         <p class="pre-react-splash-subtitle">National Study &amp; Tracking App</p>

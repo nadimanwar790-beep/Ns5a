@@ -47,6 +47,9 @@ export const PwaInstallPrompt: React.FC = () => {
         window.addEventListener('appinstalled', () => {
             setIsVisible(false);
             setDeferredPrompt(null);
+            setTimeout(() => {
+                window.dispatchEvent(new CustomEvent('app-installed-prompt-notifications'));
+            }, 800);
         });
 
         return () => window.removeEventListener('beforeinstallprompt', handler);
@@ -61,6 +64,12 @@ export const PwaInstallPrompt: React.FC = () => {
         // Wait for the user to respond to the prompt
         const { outcome } = await deferredPrompt.userChoice;
         console.log(`User response to the install prompt: ${outcome}`);
+
+        if (outcome === 'accepted') {
+            setTimeout(() => {
+                window.dispatchEvent(new CustomEvent('app-installed-prompt-notifications'));
+            }, 1000);
+        }
 
         // We've used the prompt, and can't use it again, throw it away
         setDeferredPrompt(null);
@@ -80,9 +89,11 @@ export const PwaInstallPrompt: React.FC = () => {
         return (
             <div className="fixed bottom-20 left-4 right-4 md:left-auto md:right-4 md:w-88 bg-white dark:bg-slate-900 shadow-2xl rounded-2xl p-4 z-[9999] border border-blue-200 dark:border-slate-800 animate-in slide-in-from-bottom-5 text-slate-800 dark:text-slate-100">
                 <div className="flex items-start gap-3">
-                    <div className="bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 p-2.5 rounded-xl flex-shrink-0">
-                        <Share2 size={22} />
-                    </div>
+                    <img
+                        src="/icons/icon-192.png?v=3"
+                        alt="App Icon"
+                        className="w-12 h-12 rounded-xl object-cover flex-shrink-0 border border-amber-500/30 shadow-md bg-[#121212]"
+                    />
                     <div className="flex-1 pr-4">
                         <h3 className="font-bold text-sm text-slate-900 dark:text-white">
                             iPhone पर Install करें
@@ -120,9 +131,11 @@ export const PwaInstallPrompt: React.FC = () => {
     // Android / Desktop Chrome Prompt
     return (
         <div className="fixed bottom-20 left-4 right-4 md:left-auto md:right-4 md:w-80 bg-white dark:bg-slate-900 shadow-2xl rounded-2xl p-4 z-[9999] border border-blue-100 dark:border-slate-800 flex items-start gap-3 animate-in slide-in-from-bottom-5">
-            <div className="bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 p-2 rounded-xl flex-shrink-0">
-                <Download size={24} />
-            </div>
+            <img
+                src="/icons/icon-192.png?v=3"
+                alt="App Icon"
+                className="w-12 h-12 rounded-xl object-cover flex-shrink-0 border border-amber-500/30 shadow-md bg-[#121212]"
+            />
             <div className="flex-1">
                 <h3 className="font-bold text-slate-800 dark:text-slate-100 text-sm">Install App</h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Install our app on your device for a faster, better offline experience.</p>

@@ -94,7 +94,16 @@ export const DirectAdmissionModal: React.FC<Props> = ({
   const [whatsappNo, setWhatsappNo] = useState<string>("");
   const [email, setEmail] = useState<string>("");
 
-  // Address & Previous School
+  // Address, Previous School & Statutory Compliance Fields
+  const [admissionType, setAdmissionType] = useState<"NEW" | "READMISSION">("NEW");
+  const [religion, setReligion] = useState<string>("Hindu");
+  const [nationality, setNationality] = useState<string>("Indian");
+  const [annualIncome, setAnnualIncome] = useState<string>("");
+  const [identificationMark, setIdentificationMark] = useState<string>("");
+  const [medicalHistory, setMedicalHistory] = useState<string>("");
+  const [emergencyContact, setEmergencyContact] = useState<string>("");
+  const [emergencyPhone, setEmergencyPhone] = useState<string>("");
+  const [emergencyRelation, setEmergencyRelation] = useState<string>("");
   const [address, setAddress] = useState<string>("");
   const [city, setCity] = useState<string>("");
   const [pincode, setPincode] = useState<string>("");
@@ -306,6 +315,15 @@ export const DirectAdmissionModal: React.FC<Props> = ({
         pincode: pincode.trim() || undefined,
         previousSchool: previousSchool.trim() || undefined,
         previousMarks: previousMarks.trim() || undefined,
+        religion: religion.trim() || undefined,
+        nationality: nationality.trim() || undefined,
+        annualIncome: annualIncome.trim() || undefined,
+        identificationMark: identificationMark.trim() || undefined,
+        medicalHistory: medicalHistory.trim() || undefined,
+        emergencyContact: emergencyContact.trim() || undefined,
+        emergencyPhone: emergencyPhone.trim() || undefined,
+        emergencyRelation: emergencyRelation.trim() || undefined,
+        admissionType,
         photoUrl: photoUrl || undefined,
         usesBus,
         busRoute: usesBus ? busRoute.trim() : undefined,
@@ -703,9 +721,35 @@ export const DirectAdmissionModal: React.FC<Props> = ({
           {entryMode === "full" && (
             <>
               <div className="bg-white dark:bg-slate-800/40 rounded-2xl p-4 border border-slate-200 dark:border-slate-700 space-y-3">
-                <h4 className="text-xs font-black uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
-                  UDISE+ / Aadhaar / Family &amp; Address Details (वैकल्पिक विवरण)
-                </h4>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h4 className="text-xs font-black uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+                    UDISE+ / Aadhaar / Statutory &amp; Address Details (प्रवेश विवरण)
+                  </h4>
+                  <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-300 dark:border-slate-700 text-[11px] font-bold">
+                    <button
+                      type="button"
+                      onClick={() => setAdmissionType("NEW")}
+                      className={`px-2.5 py-1 rounded-lg transition cursor-pointer ${
+                        admissionType === "NEW"
+                          ? "bg-indigo-600 text-white shadow-xs"
+                          : "text-slate-600 dark:text-slate-300"
+                      }`}
+                    >
+                      New Admission
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAdmissionType("READMISSION")}
+                      className={`px-2.5 py-1 rounded-lg transition cursor-pointer ${
+                        admissionType === "READMISSION"
+                          ? "bg-indigo-600 text-white shadow-xs"
+                          : "text-slate-600 dark:text-slate-300"
+                      }`}
+                    >
+                      Re-Admission
+                    </button>
+                  </div>
+                </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
@@ -826,6 +870,92 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-500 block mb-1">Religion (धर्म)</label>
+                    <input
+                      type="text"
+                      value={religion}
+                      onChange={(e) => setReligion(e.target.value)}
+                      placeholder="Hindu / Muslim / Sikh"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-500 block mb-1">Nationality</label>
+                    <input
+                      type="text"
+                      value={nationality}
+                      onChange={(e) => setNationality(e.target.value)}
+                      placeholder="Indian"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-500 block mb-1">Annual Income (₹/yr)</label>
+                    <input
+                      type="text"
+                      value={annualIncome}
+                      onChange={(e) => setAnnualIncome(e.target.value)}
+                      placeholder="e.g. 150000"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-500 block mb-1">Identification Mark</label>
+                    <input
+                      type="text"
+                      value={identificationMark}
+                      onChange={(e) => setIdentificationMark(e.target.value)}
+                      placeholder="e.g. Mole on cheek"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-500 block mb-1">Medical / Allergy Note</label>
+                    <input
+                      type="text"
+                      value={medicalHistory}
+                      onChange={(e) => setMedicalHistory(e.target.value)}
+                      placeholder="Normal / Fit"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-amber-700 dark:text-amber-300 block mb-1">Emergency Person</label>
+                    <input
+                      type="text"
+                      value={emergencyContact}
+                      onChange={(e) => setEmergencyContact(e.target.value)}
+                      placeholder="Uncle / Guardian Name"
+                      className="w-full px-3 py-2 rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-amber-700 dark:text-amber-300 block mb-1">Emergency Mobile</label>
+                    <input
+                      type="tel"
+                      value={emergencyPhone}
+                      onChange={(e) => setEmergencyPhone(e.target.value)}
+                      placeholder="Emergency Phone"
+                      className="w-full px-3 py-2 rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-amber-700 dark:text-amber-300 block mb-1">Emergency Relation</label>
+                    <input
+                      type="text"
+                      value={emergencyRelation}
+                      onChange={(e) => setEmergencyRelation(e.target.value)}
+                      placeholder="Uncle / Brother"
+                      className="w-full px-3 py-2 rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                   <div className="sm:col-span-2">
                     <label className="text-[11px] font-bold text-slate-500 block mb-1">Village / Mohalla / Street Address</label>
                     <input
@@ -833,7 +963,7 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                       value={address}
                       onChange={(e) => setAddress(e.target.value)}
                       placeholder="Complete residential address"
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-slate-800 dark:text-white"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
                     />
                   </div>
                   <div>
@@ -843,7 +973,7 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                       value={city}
                       onChange={(e) => setCity(e.target.value)}
                       placeholder="City / District"
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-slate-800 dark:text-white"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
                     />
                   </div>
                   <div>
@@ -854,7 +984,7 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                       value={pincode}
                       onChange={(e) => setPincode(e.target.value.replace(/\D/g, ""))}
                       placeholder="6-digit PIN"
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs font-mono text-slate-800 dark:text-white"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs font-mono text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
                     />
                   </div>
                 </div>

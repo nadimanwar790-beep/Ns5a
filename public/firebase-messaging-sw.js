@@ -7,13 +7,14 @@ importScripts('https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-com
 
 try {
   firebase.initializeApp({
-    apiKey: 'AIzaSyBEDKZVPgwOPCccjWdKSShfvSqC3REDa0c',
-    authDomain: 'iic-nst.firebaseapp.com',
-    databaseURL: 'https://iic-nst-default-rtdb.firebaseio.com',
-    projectId: 'iic-nst',
-    storageBucket: 'iic-nst.firebasestorage.app',
-    messagingSenderId: '984309241322',
-    appId: '1:984309241322:web:4dae35987732d630e64e93',
+    apiKey: 'AIzaSyCtjCnVHwFIj9NPWZnVXcm4Ayw5YZJna54',
+    authDomain: 'nst2512-6a2e4.firebaseapp.com',
+    databaseURL: 'https://nst2512-6a2e4-default-rtdb.asia-southeast1.firebasedatabase.app',
+    projectId: 'nst2512-6a2e4',
+    storageBucket: 'nst2512-6a2e4.firebasestorage.app',
+    messagingSenderId: '1041659780014',
+    appId: '1:1041659780014:web:26db9e156334f2de87063f',
+    measurementId: 'G-VRSSQK3TB0',
   });
 
   const messaging = firebase.messaging();
@@ -28,8 +29,8 @@ try {
 
     return self.registration.showNotification(title, {
       body,
-      icon: notification.icon || data.icon || data.senderPhoto || '/icons/icon-192.png',
-      badge: '/icons/icon-192.png',
+      icon: notification.icon || data.icon || data.senderPhoto || '/icons/icon-192.png?v=3',
+      badge: '/icons/icon-192.png?v=3',
       tag: data.senderId ? `nsta-${type}-${data.senderId}` : `nsta-${type}-${Date.now()}`,
       renotify: urgent,
       requireInteraction: urgent,
@@ -42,8 +43,8 @@ try {
     }).catch(() => {
       return self.registration.showNotification(title, {
         body,
-        icon: '/icons/icon-192.png',
-        badge: '/icons/icon-192.png',
+        icon: '/icons/icon-192.png?v=3',
+        badge: '/icons/icon-192.png?v=3',
         data: { url, ...data },
       });
     });
@@ -98,8 +99,8 @@ self.addEventListener('push', (event) => {
 
   const promise = self.registration.showNotification(title, {
     body,
-    icon: data.icon || data.senderPhoto || '/icons/icon-192.png',
-    badge: '/icons/icon-192.png',
+    icon: data.icon || data.senderPhoto || '/icons/icon-192.png?v=3',
+    badge: '/icons/icon-192.png?v=3',
     tag: tagKey,
     renotify: true,
     requireInteraction: urgent,
@@ -112,8 +113,8 @@ self.addEventListener('push', (event) => {
   }).catch(() => {
     return self.registration.showNotification(title, {
       body,
-      icon: '/icons/icon-192.png',
-      badge: '/icons/icon-192.png',
+      icon: '/icons/icon-192.png?v=3',
+      badge: '/icons/icon-192.png?v=3',
       data: { url: data.url || '/', ...data },
     });
   });
