@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from "react";
 import QRCode from "react-qr-code";
 import type { School, SchoolClass, SchoolStudent, SchoolSession, ExamEntry } from "../../school-types";
-import { getExams, promoteStudents, isStudentInClass } from "../../school-firebase";
+import { getExams, promoteStudents, isStudentInClass, getMonthlyAttendance, currentMonthStr } from "../../school-firebase";
 import {
   FileSpreadsheet, Printer, ChevronLeft, Plus, Trash2, Award, Calendar,
   CheckCircle2, Sparkles, RefreshCw, User, BookOpen, Layers, Edit3, Shield,
@@ -11,7 +11,7 @@ import {
 import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeaderEditorModal";
 import { schoolPrintFieldEnabled } from "../../school-types";
 import { QuickAddStudentModal } from "./QuickAddStudentModal";
-import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo } from "./feeReceiptUtils";
+import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo, formatAcademicSession } from "./feeReceiptUtils";
 
 interface Props {
   school: School;
@@ -97,7 +97,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
 
   const handleBatchPromote = async () => {
     if (!promoToClassId || promoSelectedStudentIds.length === 0) {
-      alert("Kripya kam se kam ek student aur target class chunein.");
+      setPromotionNotice("⚠️ Kripya kam se kam ek student aur target class chunein.");
       return;
     }
     setIsPromotingStudents(true);
@@ -116,7 +116,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
       setShowPromotionModal(false);
       setTimeout(() => setPromotionNotice(null), 6000);
     } catch (err: any) {
-      alert("Promotion failed: " + (err?.message || "Unknown error"));
+      setPromotionNotice("⚠️ Promotion failed: " + (err?.message || "Unknown error"));
     } finally {
       setIsPromotingStudents(false);
     }
@@ -125,13 +125,13 @@ export const MarksheetGenerator: React.FC<Props> = ({
   const [schoolDetails, setSchoolDetails] = useState<SchoolHeaderDetails>({
     schoolName: school?.name || "",
     tagline: school?.tagline || "",
-    affiliation: school?.affiliation || "",
+    affiliation: school?.affiliation || "CBSE Pattern Curriculum",
     address: school?.address || "",
     phone: school?.mobile || school?.phone || "",
     email: school?.email || "",
-    logoUrl: getSavedSchoolLogo(school?.logoUrl),
+    logoUrl: getSavedSchoolLogo(school?.logoUrl, school?.id),
     principalName: school?.principalName || "",
-    principalTitle: "Principal / Headmaster",
+    principalTitle: "Principal",
     code: school?.code || "",
     principalPhone: school?.principalPhone || "",
     directorName: school?.directorName || "",
@@ -146,11 +146,11 @@ export const MarksheetGenerator: React.FC<Props> = ({
       ...previous,
       schoolName: school.name || "",
       tagline: school.tagline || "",
-      affiliation: school.affiliation || "",
+      affiliation: school.affiliation || previous.affiliation || "CBSE Pattern Curriculum",
       address: school.address || "",
       phone: school.mobile || school.phone || "",
       email: school.email || "",
-      logoUrl: getSavedSchoolLogo(school.logoUrl || previous.logoUrl),
+      logoUrl: getSavedSchoolLogo(school.logoUrl || previous.logoUrl, school.id),
       principalName: school.principalName || "",
       code: school.code || "",
       principalPhone: school.principalPhone || "",
@@ -170,11 +170,15 @@ export const MarksheetGenerator: React.FC<Props> = ({
     : "";
   const principalName = schoolDetails.principalName;
 
-  // Exam Meta
-  const [examTitle, setExamTitle] = useState("ANNUAL EXAMINATION 2026-27");
+  // Exam Meta (Clean unaffiliated defaults: no BOARD / no CBSE FULL YEAR)
+  const [examTitle, setExamTitle] = useState("Annual Examination 2026-27");
   const [publishDate, setPublishDate] = useState(new Date().toISOString().split("T")[0]);
-  const [sessionName, setSessionName] = useState(activeSession?.name || "2026-27");
+  const [sessionName, setSessionName] = useState(() => formatAcademicSession(activeSession?.name || "2026-27"));
   const [gradingScaleType, setGradingScaleType] = useState<"5.0" | "10.0">("5.0");
+
+  // Attendance Summary Box States (Default 220 Working Days / 198 Student Attendance = 90%)
+  const [totalWorkingDays, setTotalWorkingDays] = useState<number>(220);
+  const [studentAttendance, setStudentAttendance] = useState<number>(198);
 
   // Editable Student Meta (Overrides auto student data if desired)
   const currentStudent = classStudents.find(s => s.id === selectedStudentId) || classStudents[0] || null;
@@ -194,8 +198,9 @@ export const MarksheetGenerator: React.FC<Props> = ({
   // Layout Mode: Standard 1-Page Portrait, 2-Page Part 1 & Part 2, or Landscape Wide
   const [layoutMode, setLayoutMode] = useState<"portrait_compact" | "two_pages" | "landscape_wide">("portrait_compact");
 
-  // Signatures
+  // 3 Official Signatures: Class Teacher, Exam Controller, Principal (with Round Stamp)
   const [teacherName, setTeacherName] = useState("Class Teacher");
+  const [examControllerName, setExamControllerName] = useState("Exam Controller");
 
   // Subject rows
   const [subjects, setSubjects] = useState<MarksheetSubjectRow[]>(DEFAULT_SUBJECTS);
@@ -203,6 +208,25 @@ export const MarksheetGenerator: React.FC<Props> = ({
   // Bulk Mode
   const [bulkMode, setBulkMode] = useState(false);
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
+
+  // Optional auto-sync from recorded class attendance if available
+  useEffect(() => {
+    if (!school?.id || !selectedClassId || !selectedStudentId) return;
+    getMonthlyAttendance(school.id, selectedClassId, currentMonthStr())
+      .then(records => {
+        if (records && records.length >= 10) {
+          let present = 0;
+          records.forEach(rec => {
+            const st = rec.students?.[selectedStudentId];
+            const isP = st ? (typeof st === "object" ? Boolean(st.present) : Boolean(st)) : false;
+            if (isP) present++;
+          });
+          setTotalWorkingDays(records.length);
+          setStudentAttendance(present);
+        }
+      })
+      .catch(() => {});
+  }, [school?.id, selectedClassId, selectedStudentId]);
 
   // Synchronize student data on selection
   const syncStudentData = (target: SchoolStudent | null) => {
@@ -529,6 +553,19 @@ export const MarksheetGenerator: React.FC<Props> = ({
     const isCompact = subjects.length > 8;
     const isVeryCompact = subjects.length > 12;
 
+    const cleanSessionText = formatAcademicSession(sessionName);
+    const cleanExamHeading = (examTitle || "Annual Examination 2026-27")
+      .replace(/\(?\s*cbse\s+full\s+year\s*\)?/gi, "")
+      .replace(/\bBOARD\s+/gi, "")
+      .trim() || "Annual Examination 2026-27";
+    const cleanCurriculumLine = (schoolDetails.affiliation || "CBSE Pattern Curriculum")
+      .replace(/\(?\s*cbse\s+full\s+year\s*\)?/gi, "CBSE Pattern Curriculum")
+      .replace(/affiliation\s*code\s*:?\s*/gi, "School Code: ")
+      .trim();
+    const safeWorkingDays = Math.max(0, Number(totalWorkingDays) || 0);
+    const safePresentDays = Math.max(0, Math.min(safeWorkingDays || 999, Number(studentAttendance) || 0));
+    const attendancePercentage = safeWorkingDays > 0 ? Math.round((safePresentDays / safeWorkingDays) * 100) : 0;
+
     return (
       <div key={targetStudent?.id || "single"} className="marksheet-print-page w-full flex justify-center">
       <div
@@ -542,13 +579,13 @@ export const MarksheetGenerator: React.FC<Props> = ({
           </span>
         </div>
 
-        {/* Top Header: Logo, School Name, Category, Affiliation */}
-        <div className={`border-b-2 border-slate-900 ${isCompact ? "pb-2.5 mb-2.5" : "pb-4 mb-4"}`}>
+        {/* Top Header: Clean Lifelong Transcript Header (No Personal Mobile Numbers, School Code / Reg. No) */}
+        <div className={`border-b-2 border-slate-900 ${isCompact ? "pb-2.5 mb-2.5" : "pb-3.5 mb-3.5"}`}>
           <div className="flex items-start justify-between gap-4">
             <div className="flex items-center gap-3">
-              {getSavedSchoolLogo(schoolDetails.logoUrl) ? (
+              {getSavedSchoolLogo(schoolDetails.logoUrl, school?.id) ? (
                 <img
-                  src={cleanLogoUrl(getSavedSchoolLogo(schoolDetails.logoUrl))}
+                  src={cleanLogoUrl(getSavedSchoolLogo(schoolDetails.logoUrl, school?.id))}
                   alt="School Logo"
                   className={`${isCompact ? "w-13 h-13" : "w-16 h-16"} object-contain rounded-xl border border-slate-300 shadow-sm bg-white p-0.5`}
                   onError={(e) => {
@@ -559,33 +596,22 @@ export const MarksheetGenerator: React.FC<Props> = ({
                 />
               ) : null}
               <div
-                className={`${isCompact ? "w-13 h-13" : "w-16 h-16"} rounded-xl bg-slate-900 text-amber-300 font-black text-2xl items-center justify-center shadow-sm marksheet-logo-fallback ${getSavedSchoolLogo(schoolDetails.logoUrl) ? 'hidden' : 'flex'}`}
+                className={`${isCompact ? "w-13 h-13" : "w-16 h-16"} rounded-xl bg-slate-900 text-amber-300 font-black text-2xl items-center justify-center shadow-sm marksheet-logo-fallback ${getSavedSchoolLogo(schoolDetails.logoUrl, school?.id) ? 'hidden' : 'flex'}`}
               >
                 {(schoolDetails.schoolName || "SC").slice(0, 2).toUpperCase()}
               </div>
               <div>
                 {showSchoolDetail("schoolName") && <h1 className={`${isCompact ? "text-xl" : "text-2xl"} font-black uppercase tracking-tight text-slate-950 leading-none`}>{schoolDetails.schoolName}</h1>}
                 {showSchoolDetail("address") && schoolDetails.address && <p className="text-[11px] text-slate-600 mt-0.5 font-medium">{schoolDetails.address}</p>}
-                {(showSchoolDetail("affiliation") && schoolDetails.affiliation) || (showSchoolDetail("code") && schoolDetails.code) ? (
-                  <p className="text-[9px] text-slate-500 font-semibold tracking-wide uppercase mt-0.5">
-                    {showSchoolDetail("affiliation") ? schoolDetails.affiliation : ""}
-                    {showSchoolDetail("affiliation") && showSchoolDetail("code") && schoolDetails.code ? " • " : ""}
-                    {showSchoolDetail("code") && schoolDetails.code ? `Code: ${schoolDetails.code}` : ""}
-                  </p>
-                ) : null}
-                {(showSchoolDetail("phone") && schoolDetails.phone) || (showSchoolDetail("email") && schoolDetails.email) ? (
+                <p className="text-[9.5px] text-slate-600 font-bold tracking-wide uppercase mt-0.5">
+                  {showSchoolDetail("affiliation") ? (cleanCurriculumLine || "CBSE Pattern Curriculum") : "CBSE Pattern Curriculum"}
+                  {(showSchoolDetail("code") && (schoolDetails.code || school?.code)) ? ` • School Code: ${schoolDetails.code || school?.code}` : ""}
+                </p>
+                {((showSchoolDetail("phone") && schoolDetails.phone) || (showSchoolDetail("email") && schoolDetails.email)) ? (
                   <p className="text-[9px] text-slate-600 mt-0.5">
-                    {showSchoolDetail("phone") && schoolDetails.phone ? `School mobile: ${schoolDetails.phone}` : ""}
+                    {showSchoolDetail("phone") && schoolDetails.phone ? `Helpline: ${schoolDetails.phone}` : ""}
                     {showSchoolDetail("phone") && schoolDetails.phone && showSchoolDetail("email") && schoolDetails.email ? " • " : ""}
                     {showSchoolDetail("email") && schoolDetails.email ? `Email: ${schoolDetails.email}` : ""}
-                  </p>
-                ) : null}
-                {(showSchoolDetail("principalName") && schoolDetails.principalName) || (showSchoolDetail("principalPhone") && schoolDetails.principalPhone) || (showSchoolDetail("directorName") && schoolDetails.directorName) || (showSchoolDetail("directorPhone") && schoolDetails.directorPhone) ? (
-                  <p className="text-[9px] text-slate-600 mt-0.5">
-                    {showSchoolDetail("principalName") && schoolDetails.principalName ? `Principal: ${schoolDetails.principalName}` : ""}
-                    {showSchoolDetail("principalPhone") && schoolDetails.principalPhone ? ` • Principal mobile: ${schoolDetails.principalPhone}` : ""}
-                    {showSchoolDetail("directorName") && schoolDetails.directorName ? ` • Director: ${schoolDetails.directorName}` : ""}
-                    {showSchoolDetail("directorPhone") && schoolDetails.directorPhone ? ` • Director mobile: ${schoolDetails.directorPhone}` : ""}
                   </p>
                 ) : null}
                 {customSchoolDetails && <p className="text-[9px] text-slate-600 mt-0.5">{customSchoolDetails}</p>}
@@ -610,10 +636,10 @@ export const MarksheetGenerator: React.FC<Props> = ({
 
           <div className="text-center mt-2 pt-1.5 border-t border-slate-200">
             <span className="inline-block px-4 py-0.5 rounded-full bg-slate-900 text-white font-black text-[11px] uppercase tracking-widest">
-              ACADEMIC TRANSCRIPT &amp; OFFICIAL MARKSHEET
+              ACADEMIC TRANSCRIPT &amp; PROGRESS REPORT
             </span>
             <p className="text-[11px] font-bold text-indigo-950 mt-0.5 uppercase tracking-wider">
-              {examTitle} &bull; Academic Session: {sessionName}
+              {cleanExamHeading} &bull; Academic Session: {cleanSessionText}
             </p>
           </div>
         </div>
@@ -758,63 +784,95 @@ export const MarksheetGenerator: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Performance Summary Banner */}
-        <div className={`grid grid-cols-3 gap-3 ${isCompact ? "p-2 mb-3" : "p-2.5 mb-5"} bg-indigo-50/70 border border-indigo-200 rounded-xl text-xs text-slate-800`}>
-          <div>
-            <span className="text-slate-500 font-bold block text-[9.5px]">Percentage Score</span>
-            <span className="text-sm font-black text-indigo-950">{totals.overallPct}%</span>
+        {/* Attendance Box + Performance Summary Directly Below Grand Total & GPA */}
+        <div className={`space-y-2 ${isCompact ? "mb-2.5" : "mb-4"}`}>
+          {/* Attendance Summary Box */}
+          <div className="grid grid-cols-3 divide-x divide-slate-300 border-2 border-slate-800 rounded-lg bg-slate-50 text-xs overflow-hidden">
+            <div className="px-3 py-1.5 flex items-center justify-between">
+              <span className="font-bold text-slate-600 text-[10.5px]">Total Working Days:</span>
+              <span className="font-black text-slate-950 text-xs font-mono">{safeWorkingDays}</span>
+            </div>
+            <div className="px-3 py-1.5 flex items-center justify-between">
+              <span className="font-bold text-slate-600 text-[10.5px]">Student Attendance:</span>
+              <span className="font-black text-indigo-900 text-xs font-mono">{safePresentDays}</span>
+            </div>
+            <div className="px-3 py-1.5 flex items-center justify-between bg-emerald-50/70">
+              <span className="font-bold text-slate-700 text-[10.5px]">Attendance Percentage:</span>
+              <span className="font-black text-emerald-800 text-xs font-mono">{attendancePercentage}%</span>
+            </div>
           </div>
-          <div>
-            <span className="text-slate-500 font-bold block text-[9.5px]">Final Classification</span>
-            <span className="text-xs font-black text-indigo-950">
-              {totals.overallGrade === "A+" ? "First Division with Distinction" :
-               totals.overallGrade === "A" ? "First Division" :
-               totals.overallGrade === "F" ? "Supplementary / Retake" : "Second Division"}
-            </span>
-          </div>
-          <div className="text-right">
-            <span className="text-slate-500 font-bold block text-[9.5px]">Digital Verification</span>
-            <span className="text-[10px] font-bold text-emerald-700 flex items-center justify-end gap-1">
-              <CheckCircle2 className="w-3 h-3" /> Live Verified QR
-            </span>
+
+          {/* Performance Summary + Verification QR */}
+          <div className={`flex items-center justify-between gap-3 ${isCompact ? "p-2" : "p-2.5"} bg-indigo-50/70 border border-indigo-200 rounded-xl text-xs text-slate-800`}>
+            <div>
+              <span className="text-slate-500 font-bold block text-[9.5px]">Percentage Score</span>
+              <span className="text-sm font-black text-indigo-950">{totals.overallPct}%</span>
+            </div>
+            <div>
+              <span className="text-slate-500 font-bold block text-[9.5px]">Final Classification</span>
+              <span className="text-xs font-black text-indigo-950">
+                {totals.overallGrade === "A+" || totals.overallGrade === "A1" ? "First Division with Distinction" :
+                 totals.overallGrade === "A" || totals.overallGrade === "A2" || totals.overallGrade === "B1" ? "First Division" :
+                 totals.overallGrade === "F" ? "Supplementary / Retake" : "Second Division"}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="text-right">
+                <span className="text-slate-500 font-bold block text-[9px]">Transcript Verify</span>
+                <span className="text-[9.5px] font-bold text-emerald-700 flex items-center justify-end gap-0.5">
+                  <CheckCircle2 className="w-3 h-3" /> Scan QR
+                </span>
+              </div>
+              <div className="p-1 bg-white border border-slate-400 rounded shadow-2xs">
+                <QRCode value={qrVerifyUrl} size={40} level="M" />
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Authorities & Signatures */}
-        <div className={`${isCompact ? "pt-3" : "pt-5"} border-t-2 border-slate-900 grid grid-cols-4 items-end text-center text-xs`}>
+        {/* 3 Official Signatures: Class Teacher, Exam Controller, and Principal (with School Round Stamp) */}
+        <div className={`${isCompact ? "pt-3" : "pt-4"} border-t-2 border-slate-900 grid grid-cols-3 gap-6 items-end text-center text-xs`}>
+          {/* 1. Class Teacher */}
           <div>
-            <div className="h-8 border-b border-slate-400 mb-1"></div>
-            <p className="font-bold text-slate-700 text-[10.5px]">Guardian Signature</p>
+            <div className="h-10 border-b border-slate-400 mb-1 flex items-end justify-center">
+              {teacherName && teacherName !== "Class Teacher" ? (
+                <span className="italic font-serif font-bold text-slate-800 text-[11px] mb-0.5">{teacherName}</span>
+              ) : null}
+            </div>
+            <p className="font-black text-slate-800 uppercase tracking-wider text-[10.5px]">Class Teacher</p>
           </div>
 
+          {/* 2. Exam Controller */}
           <div>
-            <div className="h-8 border-b border-slate-400 mb-1 flex items-end justify-center">
-              <span className="italic font-serif font-black text-slate-800 text-[11px]">{teacherName}</span>
+            <div className="h-10 border-b border-slate-400 mb-1 flex items-end justify-center">
+              {examControllerName && examControllerName !== "Exam Controller" ? (
+                <span className="italic font-serif font-bold text-slate-800 text-[11px] mb-0.5">{examControllerName}</span>
+              ) : null}
             </div>
-            <p className="font-bold text-slate-700 text-[10.5px]">Class Teacher Signature</p>
+            <p className="font-black text-slate-800 uppercase tracking-wider text-[10.5px]">Exam Controller</p>
           </div>
 
-          <div className="flex flex-col items-center justify-center">
-            <div className="p-1 bg-white border border-slate-400 rounded shadow-xs">
-              <QRCode value={qrVerifyUrl} size={46} level="M" />
+          {/* 3. Principal + School Round Stamp Space */}
+          <div className="flex items-end justify-center gap-3">
+            <div className="w-12 h-12 rounded-full border border-dashed border-slate-400 flex items-center justify-center text-[7px] font-bold uppercase text-slate-400 leading-tight p-1 shrink-0">
+              School<br />Stamp
             </div>
-            <span className="text-[7.5px] text-slate-500 mt-0.5 font-bold">Scan to Verify</span>
-          </div>
-
-          <div>
-            <div className="h-8 border-b border-slate-400 mb-1 flex items-end justify-center">
-              {schoolDetails.principalSignatureUrl ? (
-                <img
-                  src={schoolDetails.principalSignatureUrl}
-                  alt="Principal Signature"
-                  className="max-h-7 max-w-[110px] object-contain mb-0.5"
-                />
-              ) : (
-                <span className="italic font-serif font-black text-indigo-900 text-xs">{principalName}</span>
-              )}
+            <div className="flex-1">
+              <div className="h-10 border-b border-slate-400 mb-1 flex items-end justify-center">
+                {schoolDetails.principalSignatureUrl ? (
+                  <img
+                    src={schoolDetails.principalSignatureUrl}
+                    alt="Principal Signature"
+                    className="max-h-8 max-w-[110px] object-contain mb-0.5"
+                  />
+                ) : principalName ? (
+                  <span className="italic font-serif font-black text-indigo-900 text-xs mb-0.5">{principalName}</span>
+                ) : null}
+              </div>
+              <p className="font-black text-slate-950 uppercase tracking-wider text-[10.5px]">
+                {schoolDetails.principalTitle || "Principal"}
+              </p>
             </div>
-            {showSchoolDetail("principalName") && principalName && <p className="font-black text-slate-950 uppercase tracking-tight text-[10.5px]">{schoolDetails.principalTitle}</p>}
-            {showSchoolDetail("schoolName") && <p className="text-[8px] text-slate-500">{schoolDetails.schoolName}</p>}
           </div>
         </div>
       </div>
@@ -1087,7 +1145,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* Father, Mother & Signatory inputs */}
+          {/* Father, Signatories & Attendance Box inputs */}
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-2">
             <div>
               <label className="text-xs font-bold text-slate-500 block mb-1">Father's Name:</label>
@@ -1099,7 +1157,25 @@ export const MarksheetGenerator: React.FC<Props> = ({
               />
             </div>
             <div>
-              <label className="text-xs font-bold text-slate-500 block mb-1">Principal / Head Name:</label>
+              <label className="text-xs font-bold text-slate-500 block mb-1">Class Teacher (Sign 1):</label>
+              <input
+                type="text"
+                value={teacherName}
+                onChange={e => setTeacherName(e.target.value)}
+                className="w-full px-3 py-1.5 text-xs font-bold bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-white rounded-xl border-0"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-bold text-slate-500 block mb-1">Exam Controller (Sign 2):</label>
+              <input
+                type="text"
+                value={examControllerName}
+                onChange={e => setExamControllerName(e.target.value)}
+                className="w-full px-3 py-1.5 text-xs font-bold bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-white rounded-xl border-0"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-bold text-slate-500 block mb-1">Principal Name (Sign 3):</label>
               <input
                 type="text"
                 value={principalName}
@@ -1107,12 +1183,39 @@ export const MarksheetGenerator: React.FC<Props> = ({
                 className="w-full px-3 py-1.5 text-xs font-bold bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-white rounded-xl border-0"
               />
             </div>
+          </div>
+
+          {/* Attendance Summary Box & GPA Scale Controls */}
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-2">
             <div>
-              <label className="text-xs font-bold text-slate-500 block mb-1">Class Teacher Name:</label>
+              <label className="text-xs font-bold text-slate-500 block mb-1">Total Working Days:</label>
+              <input
+                type="number"
+                min="1"
+                max="365"
+                value={totalWorkingDays}
+                onChange={e => setTotalWorkingDays(Number(e.target.value) || 0)}
+                className="w-full px-3 py-1.5 text-xs font-mono font-bold bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-white rounded-xl border-0"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-bold text-slate-500 block mb-1">Student Attendance (Days):</label>
+              <input
+                type="number"
+                min="0"
+                max={totalWorkingDays || 365}
+                value={studentAttendance}
+                onChange={e => setStudentAttendance(Number(e.target.value) || 0)}
+                className="w-full px-3 py-1.5 text-xs font-mono font-bold bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-white rounded-xl border-0"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-bold text-slate-500 block mb-1">Academic Session:</label>
               <input
                 type="text"
-                value={teacherName}
-                onChange={e => setTeacherName(e.target.value)}
+                value={sessionName}
+                onChange={e => setSessionName(e.target.value)}
+                placeholder="2026-27"
                 className="w-full px-3 py-1.5 text-xs font-bold bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-white rounded-xl border-0"
               />
             </div>
@@ -1124,7 +1227,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                 className="w-full px-3 py-1.5 text-xs font-bold bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-white rounded-xl border-0"
               >
                 <option value="5.0">5.0 Scale (Standard A+, A, A-, B, C, D, F)</option>
-                <option value="10.0">10.0 Scale (CBSE A1, A2, B1, B2, C1, C2, D, F)</option>
+                <option value="10.0">10.0 Scale (Pattern A1, A2, B1, B2, C1, C2, D, F)</option>
               </select>
             </div>
           </div>

@@ -75,19 +75,38 @@ self.addEventListener('push', (event) => {
   }
 
   const type = data.type || 'DEFAULT';
-  const urgent = type === 'CHAT' || type === 'FRIEND_REQUEST' || type === 'DIRECT_MESSAGE';
+  const isSchoolUrgent =
+    type === 'MONTHLY_FEE' ||
+    type === 'FEE_RECEIPT' ||
+    type === 'SCHOOL_NOTICE' ||
+    type === 'SCHOOL_HOLIDAY' ||
+    data.urgent === '1';
+  const urgent = isSchoolUrgent || type === 'CHAT' || type === 'FRIEND_REQUEST' || type === 'DIRECT_MESSAGE';
+
+  const openTitle =
+    type === 'MONTHLY_FEE' || type === 'FEE_RECEIPT'
+      ? 'Fee Passbook खोलें'
+      : type === 'SCHOOL_NOTICE' || type === 'SCHOOL_HOLIDAY'
+      ? 'Notice देखें'
+      : 'Open App';
+
+  const tagKey = data.studentId
+    ? `nsta-${type}-${data.studentId}`
+    : data.senderId
+    ? `nsta-${type}-${data.senderId}`
+    : `nsta-${type}-${Date.now()}`;
 
   const promise = self.registration.showNotification(title, {
     body,
     icon: data.icon || data.senderPhoto || '/icons/icon-192.png',
     badge: '/icons/icon-192.png',
-    tag: data.senderId ? `nsta-${type}-${data.senderId}` : `nsta-${type}-${Date.now()}`,
+    tag: tagKey,
     renotify: true,
     requireInteraction: urgent,
-    vibrate: urgent ? [250, 100, 250] : [100, 50, 100],
+    vibrate: urgent ? [250, 100, 250, 100, 250] : [100, 50, 100],
     data: { url: data.url || '/', ...data },
     actions: [
-      { action: 'open', title: 'Open App' },
+      { action: 'open', title: openTitle },
       { action: 'dismiss', title: 'Dismiss' },
     ],
   }).catch(() => {
@@ -105,12 +124,22 @@ self.addEventListener('push', (event) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   if (event.action === 'dismiss') return;
-  const targetUrl = event.notification.data?.url || '/';
+  const notifData = event.notification.data || {};
+  const targetUrl = notifData.url || '/';
 
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
       for (const client of windowClients) {
         if ('focus' in client) {
+          try {
+            client.postMessage({
+              type: 'SCHOOL_PUSH_NAVIGATE',
+              url: targetUrl,
+              studentId: notifData.studentId || '',
+              schoolId: notifData.schoolId || '',
+              notifType: notifData.type || '',
+            });
+          } catch (_) {}
           if ('navigate' in client) client.navigate(targetUrl);
           return client.focus();
         }

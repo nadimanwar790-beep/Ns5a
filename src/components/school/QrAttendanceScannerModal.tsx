@@ -801,12 +801,23 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
       } catch {}
 
     } catch (err: any) {
-      console.error("[QR Scanner] Camera Start Error:", err);
+      const isPermissionDenied =
+        err?.name === "NotAllowedError" ||
+        err?.name === "PermissionDeniedError" ||
+        err?.message?.includes("Permission") ||
+        err?.message?.includes("denied");
+
+      if (isPermissionDenied) {
+        console.warn("[QR Scanner] Camera permission was not granted by user/browser:", err?.message || err?.name);
+      } else {
+        console.warn("[QR Scanner] Camera initialization notice:", err?.message || err);
+      }
+
       setCameraActive(false);
       setCameraError(
-        err?.message?.includes("Permission") || err?.name === "NotAllowedError"
-          ? "Camera permission denied hai. Kripya browser me Camera permission allow karein ya Media / Gallery se photo upload karein."
-          : "Camera shuru nahi ho paya. Kripya permissions check karein ya Media / Gallery se QR scan karein."
+        isPermissionDenied
+          ? "Camera permission denied hai. Kripya browser address bar me Camera allow karein ya 'Media / Photo' se QR image select karein."
+          : "Camera shuru nahi ho paya. Kripya browser permissions check karein ya 'Media / Photo' se QR scan karein."
       );
     }
   }, [stopScanner, processAttendanceData]);

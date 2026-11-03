@@ -5,8 +5,9 @@ import {
 } from "../../school-firebase";
 import type { SchoolStudent, SchoolClass, MonthlyFee, School, SchoolDocumentPrintFields } from "../../school-types";
 import { schoolPrintFieldEnabled } from "../../school-types";
-import { CheckCircle, Clock, Download, ChevronLeft, ChevronRight, IndianRupee, Users, TrendingUp, AlertCircle, Printer, MessageCircle, ReceiptText, Building2, Sparkles, X, Check, RotateCcw, CheckCircle2, ShieldCheck, ToggleLeft, ToggleRight, Bus, QrCode, Search, Filter } from "lucide-react";
+import { CheckCircle, Clock, Download, ChevronLeft, ChevronRight, IndianRupee, Users, TrendingUp, AlertCircle, Printer, MessageCircle, ReceiptText, Building2, Sparkles, X, Check, RotateCcw, CheckCircle2, ShieldCheck, ToggleLeft, ToggleRight, Bus, QrCode, Search, Filter, Loader2, Bell } from "lucide-react";
 import { downloadFeeDocument, shareFeeReceiptOnWhatsApp } from "./feeDocument";
+import { sendSchoolPushNotification, triggerMonthlySchoolFeePush } from "../../utils/schoolPushClient";
 import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeaderEditorModal";
 import { StudentQuickActionModal } from "./StudentQuickActionModal";
 import { OfficialFeeReceiptModal } from "./OfficialFeeReceiptModal";
@@ -18,6 +19,11 @@ import {
   generate4in1A4PageHtml,
   printDpsReceipts4in1,
   printDpsReceiptDirect,
+  printPosSlipDirect,
+  printReceiptHtmlInIframe,
+  formatAcademicSession,
+  formatConciseArrearsMonths,
+  computeStudentFeeHistorySummary,
   DPS_RECEIPT_CSS,
   cleanLogoUrl,
   getSavedSchoolLogo,
@@ -68,6 +74,9 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
   const [expandedStudentFeeIds, setExpandedStudentFeeIds] = useState<string[]>([]);
   const [showDuesBreakdownTable, setShowDuesBreakdownTable] = useState<boolean>(false);
   const [showAllFeesOverview, setShowAllFeesOverview] = useState<boolean>(true);
+  const [sendingWhatsAppId, setSendingWhatsAppId] = useState<string | null>(null);
+  const [sendingMonthlyPush, setSendingMonthlyPush] = useState<boolean>(false);
+  const [pushBannerMsg, setPushBannerMsg] = useState<string | null>(null);
 
   // Custom payment collection modal state (optional custom paid amount / default print rate / fee heads)
   const [collectingFee, setCollectingFee] = useState<MonthlyFee | null>(null);
@@ -90,7 +99,8 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     address: school?.address || "",
     phone: school?.mobile || school?.phone || "",
     email: school?.email || "",
-    logoUrl: getSavedSchoolLogo(school?.logoUrl),
+    logoUrl: getSavedSchoolLogo(school?.logoUrl, school?.id || schoolId),
+    upiId: school?.upiId || "",
     principalName: school?.principalName || "",
     principalTitle: "Principal",
     code: school?.code || "",
@@ -106,7 +116,8 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
   useEffect(() => {
     const handleProfileUpdate = (e?: Event) => {
       const customEvent = e as CustomEvent<{ schoolId?: string; logoUrl?: string; name?: string }>;
-      const updatedLogo = customEvent?.detail?.logoUrl || getSavedSchoolLogo();
+      if (customEvent?.detail?.schoolId && customEvent.detail.schoolId !== (school?.id || schoolId)) return;
+      const updatedLogo = customEvent?.detail?.logoUrl || getSavedSchoolLogo(undefined, school?.id || schoolId);
       setSchoolDetails(prev => ({
         ...prev,
         logoUrl: updatedLogo || prev.logoUrl,
@@ -115,7 +126,7 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     };
     window.addEventListener("school-profile-updated", handleProfileUpdate);
     return () => window.removeEventListener("school-profile-updated", handleProfileUpdate);
-  }, []);
+  }, [school?.id, schoolId]);
 
   useEffect(() => {
     if (!school) return;
@@ -127,7 +138,8 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       address: school.address || previous.address || "",
       phone: school.mobile || school.phone || previous.phone || "",
       email: school.email || previous.email || "",
-      logoUrl: getSavedSchoolLogo(school.logoUrl) || previous.logoUrl,
+      logoUrl: getSavedSchoolLogo(school.logoUrl, school.id) || previous.logoUrl,
+      upiId: school.upiId ?? previous.upiId ?? "",
       principalName: school.principalName || previous.principalName || "",
       code: school.code || previous.code || "",
       principalPhone: school.principalPhone || previous.principalPhone || "",
@@ -298,16 +310,52 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
         : currentMonthHeadsTotal + arrearsAmount;
 
       const isPaid = Boolean(existing?.paid);
-      const paidAmount = existing?.paidAmount !== undefined
+      // Normalize legacy FIFO records where full lump-sum payment was saved onto an unpaid/partial current month
+      const hasFifoSplitChildren = Boolean(
+        existing?.receiptNo &&
+        !String(existing.receiptNo).startsWith("FIFO-") &&
+        history.some(h => h.studentId === student.id && h.month !== month && String(h.receiptNo || "").endsWith(String(existing.receiptNo)))
+      );
+      const rawExistingPaid = existing?.paidAmount !== undefined
         ? Number(existing.paidAmount)
         : (isPaid ? totalAmount : 0);
+      const paidAmount = hasFifoSplitChildren && !isPaid && rawExistingPaid > currentMonthHeadsTotal
+        ? Math.max(0, currentMonthHeadsTotal - Number(existing?.balanceDue ?? currentMonthHeadsTotal))
+        : rawExistingPaid;
 
       const balanceDue = existing?.balanceDue !== undefined
         ? Number(existing.balanceDue)
-        : (isPaid ? 0 : Math.max(0, totalAmount - paidAmount));
+        : (isPaid ? 0 : Math.max(0, currentMonthHeadsTotal - paidAmount));
+
+      const lastReceiptPaidAmount = (existing as any)?.lastReceiptPaidAmount ?? (hasFifoSplitChildren ? rawExistingPaid : undefined);
+
+      const effectiveArrears = isPaid && balanceDue === 0 ? Number(existing?.arrearsAmount || 0) : arrearsAmount;
+      const effectiveArrearsMonths = isPaid && balanceDue === 0 ? (existing?.arrearsMonths || []) : arrearsMonths;
+      const histSummary = computeStudentFeeHistorySummary({
+        studentId: student.id,
+        schoolId,
+        currentMonth: month,
+        currentFee: {
+          ...(existing || {}),
+          studentId: student.id,
+          month,
+          paid: isPaid && balanceDue === 0,
+          paidAmount,
+          balanceDue,
+          lastReceiptPaidAmount,
+          arrearsAmount: effectiveArrears,
+          arrearsMonths: effectiveArrearsMonths,
+        },
+        feeHistory: history,
+      });
 
       return {
         ...(existing || {}),
+        lastReceiptPaidAmount,
+        lastPaidAmount: histSummary.lastPaidAmount,
+        lastPaidDate: histSummary.lastPaidDate,
+        lastDueAmount: histSummary.lastDueAmount,
+        lastDueDate: histSummary.lastDueDate,
         schoolId,
         sessionId: student.sessionId || sessionId,
         studentId: student.id,
@@ -322,8 +370,8 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
         includeBusFee,
         busFeeAmount: busFee,
         busRoute: student.busRoute || existing?.busRoute || "Route 1",
-        arrearsAmount: isPaid && balanceDue === 0 ? Number(existing?.arrearsAmount || 0) : arrearsAmount,
-        arrearsMonths: isPaid && balanceDue === 0 ? (existing?.arrearsMonths || []) : arrearsMonths,
+        arrearsAmount: effectiveArrears,
+        arrearsMonths: effectiveArrearsMonths,
         amount: totalAmount,
         paid: isPaid && balanceDue === 0,
         paidAmount,
@@ -499,7 +547,19 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     }
 
     const receiptNo = fee.receiptNo || `DPS-RCP-${Math.floor(10000 + Math.random() * 90000)}`;
-    const paidDate = customPaymentDate ? new Date(customPaymentDate).toISOString() : new Date().toISOString();
+    const now = new Date();
+    let paidDate: string;
+    if (customPaymentDate) {
+      const selected = new Date(customPaymentDate);
+      if (selected.toDateString() === now.toDateString()) {
+        paidDate = now.toISOString();
+      } else {
+        selected.setHours(now.getHours(), now.getMinutes(), now.getSeconds());
+        paidDate = selected.toISOString();
+      }
+    } else {
+      paidDate = now.toISOString();
+    }
     const payModeInfo = {
       payMode: customPayMode,
       date: new Date(paidDate).toLocaleDateString("en-IN"),
@@ -611,6 +671,7 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     const currentMonthBalance = currentAlloc ? currentAlloc.balanceDueAfter : currentMonthHeadDue;
     const currentMonthPaidAmount = currentAlloc ? currentAlloc.totalPaidAfter : 0;
 
+    // Persist only THIS month's allocated paidAmount so Student Ledger never double-counts FIFO months!
     const updatedFee: MonthlyFee = {
       ...fee,
       month,
@@ -623,8 +684,9 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       busRoute: student?.busRoute || fee.busRoute || "Route 1",
       amount: currentMonthHeadDue + priorRemainingArrears,
       paid: isCurrentFullPaid && priorRemainingArrears === 0,
-      paidAmount: effectivePaid,
-      balanceDue: currentMonthBalance, // Key fix: record only this month's remaining balance
+      paidAmount: currentMonthPaidAmount,
+      ...(effectivePaid > 0 ? { lastReceiptPaidAmount: effectivePaid } : {}),
+      balanceDue: currentMonthBalance,
       arrearsAmount: priorRemainingArrears,
       arrearsMonths: priorRemainingMonths,
       concession,
@@ -634,6 +696,13 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       payModeInfo,
       items: fifoResult.receiptItems.length > 0 ? fifoResult.receiptItems : [],
       note: `${fifoResult.summaryHindi} (Receipt: ${receiptNo})`,
+    } as MonthlyFee;
+
+    // Snapshot for immediate receipt printing showing full payment collected & total remaining session balance
+    const receiptFeeSnapshot: MonthlyFee = {
+      ...updatedFee,
+      paidAmount: effectivePaid,
+      balanceDue: fifoResult.totalOutstandingDueAfter,
     };
 
     // Optimistic UI update
@@ -665,8 +734,20 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       }
 
       await loadData(true);
+      if (effectivePaid > 0) {
+        const remAfter = Math.max(0, Number(fifoResult.totalOutstandingDueAfter || 0));
+        void sendSchoolPushNotification({
+          schoolId,
+          studentIds: [fee.studentId],
+          type: "FEE_RECEIPT",
+          title: `✅ ${schoolDetails.schoolName || "School"} • शुल्क जमा रसीद`,
+          body: `${fee.studentName} का ₹${effectivePaid.toLocaleString("en-IN")} शुल्क जमा हो गया है (रसीद: ${receiptNo})। ${remAfter > 0 ? `शेष बकाया: ₹${remAfter.toLocaleString("en-IN")}` : "कोई बकाया नहीं!"}`,
+          url: `/?schoolPortal=1&studentId=${encodeURIComponent(fee.studentId)}&schoolTab=fees`,
+          urgent: true,
+        });
+      }
       if (openDpsReceipt && effectivePaid > 0) {
-        setDpsReceiptFee(updatedFee);
+        setDpsReceiptFee(receiptFeeSnapshot);
       }
     } catch (error) {
       console.error("Could not save fee:", error);
@@ -674,6 +755,55 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       await loadData(true);
     } finally {
       setSaving(null);
+    }
+  };
+
+  const handleBroadcastMonthlyFeePush = async () => {
+    if (sendingMonthlyPush) return;
+    setSendingMonthlyPush(true);
+    setPushBannerMsg(null);
+    try {
+      const mLabel = formatMonthLabel(month);
+      const duesList = fees
+        .map((f) => {
+          const st = students.find((s) => s.id === f.studentId);
+          const curBal = f.balanceDue !== undefined ? Number(f.balanceDue) : (f.paid ? 0 : Number(f.amount || 0));
+          const arrBal = f.paid ? 0 : Number(f.arrearsAmount || 0);
+          const totalPending = Math.max(0, curBal + arrBal);
+          return {
+            studentId: f.studentId,
+            schoolId,
+            schoolName: schoolDetails.schoolName || schoolName || "School",
+            studentName: f.studentName || st?.name || "Student",
+            classId: f.classId || st?.classId || "",
+            className: classNames[f.classId] || (st as any)?.className || "",
+            rollNo: f.rollNo || st?.rollNo || "",
+            pendingDues: totalPending,
+            monthlyFee: Number(f.monthlyAmount || st?.monthlyFee || 0),
+          };
+        })
+        .filter((d) => d.pendingDues > 0);
+
+      if (duesList.length === 0) {
+        setPushBannerMsg("Sabhi chhatron ki fee jama hai — kisi par koi बकाया nahi hai!");
+        return;
+      }
+
+      const res = await triggerMonthlySchoolFeePush({
+        schoolId,
+        schoolName: schoolDetails.schoolName || schoolName || "School",
+        monthLabel: mLabel,
+        duesList,
+      });
+
+      setPushBannerMsg(
+        res.delivered > 0
+          ? `🔔 ${res.delivered} subscribed parent devices par ${mLabel} ka exact बकाया Lock Screen Push bhej diya gaya!`
+          : `✅ ${duesList.length} chhatron ka बकाया sync ho gaya! Jaise hi parent Student Portal me 'Enable Alerts' ON karenge, unke phone par Lock Screen notification jayega.`
+      );
+    } finally {
+      setSendingMonthlyPush(false);
+      setTimeout(() => setPushBannerMsg(null), 8000);
     }
   };
 
@@ -825,13 +955,8 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     const baseFee = Number(fee.monthlyAmount ?? fee.amount ?? struct?.tuitionFee ?? 2000);
     const effectivePaid = fee.paidAmount !== undefined ? Number(fee.paidAmount) : (fee.paid ? baseFee : 0);
 
-    const formattedMonths = fee.arrearsMonths && fee.arrearsMonths.length > 0
-      ? ` (${fee.arrearsMonths.map(m => {
-          const [y, mo] = m.split("-").map(Number);
-          const d = new Date(y, (mo || 1) - 1, 1);
-          return isNaN(d.getTime()) ? m : d.toLocaleDateString("en-IN", { month: "short", year: "numeric" });
-        }).join(", ")})`
-      : "";
+    const conciseArrears = formatConciseArrearsMonths(fee.arrearsMonths);
+    const formattedMonths = conciseArrears ? ` (${conciseArrears})` : "";
 
     if (fee.items && fee.items.length > 0) {
       const hasArrearsItem = fee.items.some(it => it.id === "arrears" || it.description.toLowerCase().includes("arrears") || it.description.toLowerCase().includes("back due"));
@@ -946,36 +1071,63 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     const d = new Date(`${fee.month}-01T00:00:00`);
     const monthName = d.toLocaleDateString("en-IN", { month: "short", year: "numeric" }).toUpperCase();
 
+    const histSummary = computeStudentFeeHistorySummary({
+      studentId: fee.studentId,
+      schoolId: school?.id || schoolId,
+      currentMonth: fee.month,
+      currentFee: fee,
+      feeHistory,
+    });
+
     return {
       schoolName: schoolDetails.schoolName || school?.name || "School",
+      schoolId: school?.id || schoolId,
       schoolAddress: schoolDetails.address || school?.address || "Institutional Academic Campus, Educational Zone",
-      schoolLogoUrl: getSavedSchoolLogo(schoolDetails.logoUrl || school?.logoUrl),
+      schoolLogoUrl: getSavedSchoolLogo(schoolDetails.logoUrl || school?.logoUrl, school?.id || schoolId),
       schoolPhone: schoolDetails.phone || school?.phone || school?.mobile,
       schoolEmail: schoolDetails.email || school?.email,
       schoolAffiliation: schoolDetails.affiliation || school?.affiliation,
-      receiptTitle: fee.paid ? "FEE RECEIPT" : "FEE DUE SLIP / DEMAND NOTE (बकाया शुल्क विवरण)",
+      upiId: schoolDetails.upiId || school?.upiId || "",
+      receiptTitle: fee.paid ? "FEE RECEIPT" : "FEE DEMAND SLIP • बकाया शुल्क तकादा पर्ची",
       receiptNo: fee.receiptNo || String(Math.floor(10000 + Math.random() * 90000)),
       admissionNo: student?.admissionNo || fee.rollNo || "140516",
       studentName: fee.studentName,
+      fatherName: student?.fatherName || "",
+      studentId: student?.id || fee.studentId || "",
+      rollNo: student?.rollNo || fee.rollNo || "",
+      phone: student?.phone || student?.whatsappNo || (fee as any).phone || "",
       studentPhotoUrl: student?.photoUrl || (student as any)?.photo || "",
       installment: monthName,
       receiptDate: paidDate,
-      session: sessionId || "2026-2027",
+      session: formatAcademicSession(sessionId || "2026-27"),
       className: feeClassName,
       counterNo: fee.paid ? "FEE-RECEIPT" : "DUE-DEMAND",
       items,
+      balanceDue: fee.balanceDue,
+      lastPaidAmount: fee.lastPaidAmount !== undefined ? fee.lastPaidAmount : histSummary.lastPaidAmount,
+      lastPaidDate: fee.lastPaidDate || histSummary.lastPaidDate,
+      lastDueAmount: fee.lastDueAmount !== undefined ? fee.lastDueAmount : histSummary.lastDueAmount,
+      lastDueDate: fee.lastDueDate || histSummary.lastDueDate,
       payModeInfo: fee.payModeInfo || {
         payMode: fee.paid ? "Cash" : "Payment Pending / Due Slip",
         date: paidDate,
         bank: fee.paid ? "SCHOOL COUNTER" : "PENDING",
         number: fee.receiptNo || "—",
       },
-      note: fee.note || (fee.paid ? String(Math.floor(100 + Math.random() * 900)) : "Please clear pending fee on or before 10th."),
-      showDigitalSignature: Boolean(schoolDetails.principalSignatureUrl),
+      note: fee.note || (fee.paid ? String(Math.floor(100 + Math.random() * 900)) : "Pay by 10th of month"),
+      showDigitalSignature: Boolean(schoolDetails.principalSignatureUrl || schoolDetails.directorSignatureUrl),
       principalSignatureUrl: schoolDetails.principalSignatureUrl,
       principalName: schoolDetails.principalName || "Principal",
-      principalTitle: "Principal / Authorized Signatory",
+      principalTitle: "Principal",
+      directorSignatureUrl: schoolDetails.directorSignatureUrl,
+      directorName: schoolDetails.directorName,
+      signatoryTitle: schoolDetails.signatoryTitle || "Principal",
     };
+  };
+
+  const printPosSlip = (fee: MonthlyFee) => {
+    const dpsData = getDpsDataForFee(fee);
+    printPosSlipDirect(dpsData, 80);
   };
 
   const printDpsReceipts = (receiptFees: MonthlyFee[], layoutMode: "4in1" | "full" = "4in1") => {
@@ -987,17 +1139,11 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       return;
     }
 
-    const printWindow = window.open("", "_blank", "width=850,height=900");
-    if (!printWindow) {
-      alert("Please allow pop-ups to print official fee receipts.");
-      return;
-    }
-    const markup = `
-      <!doctype html>
+    const markup = `<!doctype html>
       <html>
         <head>
           <meta charset="UTF-8">
-          <title>Official Fee Receipts (DPS Format)</title>
+          <title>Official Fee Receipts</title>
           <style>
             ${DPS_RECEIPT_CSS}
             .dps-page-container {
@@ -1017,53 +1163,56 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
               ${generateDpsReceiptHtml(data, { layout: "full" })}
             </div>
           `).join("")}
-          <script>
-            window.onload = () => setTimeout(() => { window.print(); window.close(); }, 250);
-          </script>
         </body>
-      </html>
-    `;
-    printWindow.document.write(markup);
-    printWindow.document.close();
+      </html>`;
+    printReceiptHtmlInIframe(markup);
   };
 
   const sendReceiptOnWhatsApp = async (fee: MonthlyFee) => {
     const student = students.find(item => item.id === fee.studentId);
     const resolvedClassName = className && className !== "All Classes" ? className : classNames[fee.classId] || fee.classId;
+    setSendingWhatsAppId(fee.studentId);
     try {
       await shareFeeReceiptOnWhatsApp({
         fee,
         student,
         schoolName: schoolName || schoolDetails.schoolName,
         className: resolvedClassName,
+        feeHistory,
         schoolDetails,
         isDueDemand: false,
       });
     } catch (err) {
       console.error("Error sharing receipt on WhatsApp:", err);
+    } finally {
+      setSendingWhatsAppId(null);
     }
   };
 
   const sendDueSlipOnWhatsApp = async (fee: MonthlyFee) => {
     const student = students.find(item => item.id === fee.studentId);
     const resolvedClassName = className && className !== "All Classes" ? className : classNames[fee.classId] || fee.classId;
+    setSendingWhatsAppId(fee.studentId);
     try {
       await shareFeeReceiptOnWhatsApp({
         fee,
         student,
         schoolName: schoolName || schoolDetails.schoolName,
         className: resolvedClassName,
+        feeHistory,
         schoolDetails,
         isDueDemand: true,
       });
     } catch (err) {
       console.error("Error sharing due slip on WhatsApp:", err);
+    } finally {
+      setSendingWhatsAppId(null);
     }
   };
 
   const downloadFeeFile = (fee: MonthlyFee) => {
     const student = students.find(item => item.id === fee.studentId);
-    downloadFeeDocument({ fee, student, schoolName, className, schoolDetails });
+    downloadFeeDocument({ fee, student, schoolName, className, feeHistory, schoolDetails });
   };
 
   const downloadFeeReport = () => {
@@ -1189,6 +1338,15 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
           <button
+            onClick={handleBroadcastMonthlyFeePush}
+            disabled={sendingMonthlyPush}
+            className="flex items-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white px-3 py-2 text-xs font-black shadow-md shadow-indigo-700/20 transition active:scale-95 cursor-pointer"
+            title="Sabhi बकाया fee wale students ke parents ko Lock Screen Push Notification bhejein"
+          >
+            <Bell className="h-4 w-4 text-amber-300" />
+            <span>{sendingMonthlyPush ? "Sending Push..." : "🔔 Push Monthly Alert"}</span>
+          </button>
+          <button
             onClick={() => setShowQrScannerModal(true)}
             className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white px-3 py-2 text-xs font-black shadow-md shadow-emerald-700/25 transition active:scale-95 cursor-pointer"
             title="Student ke ID card ka QR code scan karke direct fee jama karein"
@@ -1223,6 +1381,12 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
 
       <div className="p-4 space-y-4 max-w-2xl mx-auto">
         {feeError && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{feeError}</div>}
+        {pushBannerMsg && (
+          <div className="rounded-xl border border-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 dark:border-indigo-700 p-3 text-xs font-bold text-indigo-900 dark:text-indigo-200 flex items-center justify-between gap-2">
+            <span>{pushBannerMsg}</span>
+            <button onClick={() => setPushBannerMsg(null)} className="text-indigo-500 hover:text-indigo-800 cursor-pointer">✕</button>
+          </div>
+        )}
 
         {/* ── FAST QR SCANNER & BUS SERVICE BANNER ── */}
         <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-teal-700 rounded-2xl p-4 text-white shadow-lg shadow-blue-900/20 flex flex-col sm:flex-row items-center justify-between gap-3">
@@ -1705,9 +1869,16 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
               const busRate = Number(student?.busFee || fee.busFeeAmount || targetClass?.feeStructure?.busFee || 1000);
               const totalFee = Number(fee.amount || fee.monthlyAmount || 0);
               const isFullPaid = Boolean(fee.paid && (!fee.balanceDue || fee.balanceDue === 0));
-              const paidAmt = fee.paidAmount !== undefined ? Number(fee.paidAmount) : (isFullPaid ? totalFee : 0);
-              const dueAmt = isFullPaid ? 0 : (fee.balanceDue !== undefined ? Number(fee.balanceDue) : Math.max(0, totalFee - paidAmt));
-              const isPartial = !isFullPaid && paidAmt > 0;
+              const lastTxPaid = Number((fee as any).lastReceiptPaidAmount || 0);
+              const paidAmt = lastTxPaid > 0
+                ? lastTxPaid
+                : (fee.paidAmount !== undefined ? Number(fee.paidAmount) : (isFullPaid ? totalFee : 0));
+              const dueAmt = isFullPaid
+                ? 0
+                : (fee.balanceDue !== undefined
+                    ? Number(fee.balanceDue) + Number(fee.arrearsAmount || 0)
+                    : Math.max(0, totalFee - Number(fee.paidAmount || 0)));
+              const isPartial = !isFullPaid && (paidAmt > 0 || Number(fee.paidAmount || 0) > 0);
 
               return (
                 <div key={fee.studentId ? `fee-${fee.studentId}` : `fee-${fee.rollNo || idx}-${idx}`} className={`flex items-start sm:items-center gap-3 px-4 py-3.5 border-b dark:border-slate-700 last:border-0 transition ${isFullPaid ? "bg-green-50/40 dark:bg-green-950/10" : ""}`}>
@@ -1942,19 +2113,25 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                       <span>DPS Receipt</span>
                     </button>
                     <button
-                      onClick={() => printDpsReceipts([fee], "4in1")}
-                      className="p-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 border border-blue-200 dark:border-blue-800 transition"
-                      title="Direct Print 4-in-1 A4 (Student, School, Accounts, Parent Copy)"
+                      onClick={() => printPosSlip(fee)}
+                      className="px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white transition flex items-center gap-1 font-bold text-xs shadow-xs active:scale-95 cursor-pointer"
+                      title="1-Click Mini Thermal POS Print (80mm / 58mm Roll Slip)"
                     >
-                      <Printer className="w-4 h-4" />
+                      <Printer className="w-3.5 h-3.5" />
+                      <span>🧾 POS</span>
                     </button>
                     <button
                       onClick={() => sendReceiptOnWhatsApp(fee)}
-                      className="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 transition"
-                      title={`WhatsApp receipt to parent`}
+                      disabled={sendingWhatsAppId === fee.studentId}
+                      className="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 transition disabled:opacity-50 cursor-pointer"
+                      title="WhatsApp PDF receipt to parent"
                       aria-label={`Send ${fee.studentName} receipt on WhatsApp`}
                     >
-                      <MessageCircle className="w-4 h-4" />
+                      {sendingWhatsAppId === fee.studentId ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
+                      ) : (
+                        <MessageCircle className="w-4 h-4" />
+                      )}
                     </button>
                   </div>
                 ) : (
@@ -1968,28 +2145,33 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                       <span>Pay Fee</span>
                     </button>
                     <button
-                      onClick={() => setDpsReceiptFee({ ...fee, paid: true, paidDate: new Date().toISOString() })}
-                      className="px-2 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 dark:bg-slate-700 dark:text-slate-200 font-bold text-[11px] flex items-center gap-1 shadow-xs transition"
-                      title="Generate DPS Official Receipt"
+                      onClick={() => setDpsReceiptFee(fee)}
+                      className="px-2 py-1.5 rounded-lg bg-orange-50 hover:bg-orange-100 text-orange-800 dark:bg-orange-950/50 dark:text-orange-200 border border-orange-200 dark:border-orange-800 font-bold text-[11px] flex items-center gap-1 shadow-xs transition cursor-pointer"
+                      title="Preview & Print 4-in-1 Fee Due Demand Slip"
                     >
-                      <ReceiptText className="w-3.5 h-3.5 text-blue-600" />
-                      <span>DPS Slip</span>
+                      <ReceiptText className="w-3.5 h-3.5 text-orange-600" />
+                      <span>Due Slip</span>
                     </button>
                     <button
-                      onClick={() => printReceipts([fee])}
-                      className="p-2 rounded-lg bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/40 dark:text-orange-300"
-                      title={`Print ${fee.studentName} unpaid fee due slip`}
-                      aria-label={`Print ${fee.studentName} unpaid fee due slip`}
+                      onClick={() => printPosSlip(fee)}
+                      className="px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white transition flex items-center gap-1 font-bold text-xs shadow-xs active:scale-95 cursor-pointer"
+                      title="Direct Print Mini Thermal POS Due Slip (80mm / 58mm)"
                     >
-                      <Printer className="w-4 h-4" />
+                      <Printer className="w-3.5 h-3.5" />
+                      <span>🧾 POS</span>
                     </button>
                     <button
                       onClick={() => sendDueSlipOnWhatsApp(fee)}
-                      className="p-2 rounded-lg bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/40 dark:text-green-300"
-                      title={`WhatsApp unpaid slip to parent`}
+                      disabled={sendingWhatsAppId === fee.studentId}
+                      className="p-2 rounded-lg bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/40 dark:text-green-300 transition disabled:opacity-50 cursor-pointer"
+                      title="WhatsApp unpaid due slip & PDF to parent"
                       aria-label={`Send ${fee.studentName} unpaid fee due slip on WhatsApp`}
                     >
-                      <MessageCircle className="w-4 h-4" />
+                      {sendingWhatsAppId === fee.studentId ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-green-600" />
+                      ) : (
+                        <MessageCircle className="w-4 h-4" />
+                      )}
                     </button>
                     <button
                       onClick={() => downloadFeeFile(fee)}
@@ -2058,7 +2240,8 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
           fee={dpsReceiptFee}
           student={students.find(s => s.id === dpsReceiptFee.studentId)}
           className={className && className !== "All Classes" ? className : (classNames[dpsReceiptFee.classId] || "Class 6-B")}
-          sessionName="2026-2027"
+          sessionName={sessionId || "2026-27"}
+          feeHistory={feeHistory}
         />
       )}
       <ClassFeeStructureModal

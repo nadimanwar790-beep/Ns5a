@@ -11,11 +11,12 @@ import { AttendanceManager } from "./AttendanceManager";
 import { MarksManager } from "./MarksManager";
 import { SmartClass } from "./SmartClass";
 import { ContentManager } from "./ContentManager";
+import { SchoolCommunityFeed } from "./SchoolCommunityFeed";
 import {
   BookOpen, Users, ClipboardList, LayoutDashboard,
   ChevronRight, ChevronLeft, Edit3, FileText, HelpCircle, Play,
   Search, Phone, User, Calendar, Award, Sparkles, Filter, CheckCircle2,
-  GraduationCap, LogOut
+  GraduationCap, LogOut, Home, Megaphone, Image as ImageIcon
 } from "lucide-react";
 
 interface Props {
@@ -28,6 +29,7 @@ interface Props {
 
 type TeacherView =
   | "dashboard"
+  | "community"
   | "all_students"
   | "classes"
   | "class_students"
@@ -229,30 +231,90 @@ export const TeacherPanel: React.FC<Props> = ({ schoolId, teacherId, teacherName
     );
   }
 
+  const renderBottomNav = () => {
+    const openAttendance = () => {
+      const target = selectedClass || classes[0] || null;
+      if (target) {
+        setSelectedClass(target);
+        setView("attendance");
+      } else {
+        setView("classes");
+      }
+    };
+    const openMarks = () => {
+      const target = selectedClass || classes[0] || null;
+      if (target) {
+        setSelectedClass(target);
+        setView("marks");
+      } else {
+        setView("classes");
+      }
+    };
+
+    const items = [
+      { key: "dashboard", label: "Home", active: view === "dashboard", icon: Home, onClick: () => setView("dashboard") },
+      { key: "attendance", label: "Attendance", active: view === "attendance", icon: ClipboardList, onClick: openAttendance },
+      { key: "classes", label: "Classes", active: view === "classes" || view === "class_students" || view === "subjects" || view === "lessons", icon: BookOpen, onClick: () => setView("classes") },
+      { key: "community", label: "Community", active: view === "community", icon: Megaphone, onClick: () => setView("community") },
+      { key: "marks", label: "Marks", active: view === "marks", icon: Edit3, onClick: openMarks },
+    ];
+
+    return (
+      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border-t border-slate-200 dark:border-slate-800 shadow-[0_-8px_24px_rgba(0,0,0,0.08)]">
+        <div className="max-w-3xl mx-auto grid grid-cols-5 px-2 py-1.5">
+          {items.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.key}
+                type="button"
+                onClick={item.onClick}
+                className={`flex flex-col items-center justify-center gap-0.5 py-1.5 rounded-xl transition cursor-pointer ${
+                  item.active
+                    ? "text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 font-black"
+                    : "text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 font-semibold"
+                }`}
+              >
+                <Icon className={`w-5 h-5 ${item.active ? "stroke-[2.5]" : ""}`} />
+                <span className="text-[10px] leading-tight tracking-tight">{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+    );
+  };
+
   if (view === "attendance" && selectedClass) {
     return (
-      <AttendanceManager
-        schoolId={schoolId}
-        classId={selectedClass.id}
-        className={selectedClass.name}
-        teacherId={teacherId}
-        onBack={() => setView("classes")}
-      />
+      <div className="pb-20">
+        <AttendanceManager
+          schoolId={schoolId}
+          classId={selectedClass.id}
+          className={selectedClass.name}
+          teacherId={teacherId}
+          onBack={() => setView("dashboard")}
+        />
+        {renderBottomNav()}
+      </div>
     );
   }
 
   if (view === "marks" && selectedClass) {
     return (
-      <MarksManager
-        schoolId={schoolId}
-        classId={selectedClass.id}
-        className={selectedClass.name}
-        sessionId={activeSession?.id || "demo_session_2026_27"}
-        teacherId={teacherId}
-        subjectId={selectedSubject?.id}
-        subjectName={selectedSubject?.name}
-        onBack={() => setView("classes")}
-      />
+      <div className="pb-20">
+        <MarksManager
+          schoolId={schoolId}
+          classId={selectedClass.id}
+          className={selectedClass.name}
+          sessionId={activeSession?.id || "demo_session_2026_27"}
+          teacherId={teacherId}
+          subjectId={selectedSubject?.id}
+          subjectName={selectedSubject?.name}
+          onBack={() => setView("dashboard")}
+        />
+        {renderBottomNav()}
+      </div>
     );
   }
 
@@ -280,7 +342,7 @@ export const TeacherPanel: React.FC<Props> = ({ schoolId, teacherId, teacherName
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-100 select-none pb-12">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-100 select-none pb-24">
       {/* ── TOP HEADER ── */}
       <div className="bg-gradient-to-r from-emerald-900 via-teal-900 to-slate-900 px-4 py-5 shadow-lg border-b border-emerald-800/40">
         <div className="max-w-3xl mx-auto">
@@ -333,7 +395,22 @@ export const TeacherPanel: React.FC<Props> = ({ schoolId, teacherId, teacherName
         </div>
       </div>
 
-      {/* ── DASHBOARD VIEW ── */}
+      {/* ── SCHOOL COMMUNITY HUB VIEW ── */}
+      {view === "community" && (
+        <div className="p-3 sm:p-4 max-w-3xl mx-auto">
+          <SchoolCommunityFeed
+            schoolId={schoolId}
+            schoolName={school?.name || "School"}
+            currentUserId={teacherId}
+            currentUserName={teacherName}
+            currentUserRole="TEACHER"
+            classes={classes}
+            onBack={() => setView("dashboard")}
+          />
+        </div>
+      )}
+
+      {/* ── DASHBOARD VIEW (Clean Multi-Section Launchpad Grid) ── */}
       {view === "dashboard" && (
         <div className="p-3 sm:p-4 space-y-4 max-w-3xl mx-auto">
           {/* Key Metrics Grid */}
@@ -346,8 +423,8 @@ export const TeacherPanel: React.FC<Props> = ({ schoolId, teacherId, teacherName
                 <span className="text-[11px] font-bold text-slate-500 uppercase">My Classes</span>
                 <BookOpen className="w-4 h-4 text-emerald-500" />
               </div>
-              <p className="text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-1">{classes.length || 13}</p>
-              <span className="text-[10px] text-slate-400">All grades active</span>
+              <p className="text-2xl font-black tabular-nums text-emerald-600 dark:text-emerald-400 mt-1">{classes.length || 0}</p>
+              <span className="text-[10px] text-slate-400">Active grades</span>
             </div>
 
             <div
@@ -358,8 +435,8 @@ export const TeacherPanel: React.FC<Props> = ({ schoolId, teacherId, teacherName
                 <span className="text-[11px] font-bold text-slate-500 uppercase">Students</span>
                 <Users className="w-4 h-4 text-blue-500" />
               </div>
-              <p className="text-2xl font-black text-blue-600 dark:text-blue-400 mt-1">{allStudents.length || 910}</p>
-              <span className="text-[10px] text-slate-400">Enrolled &amp; tracked</span>
+              <p className="text-2xl font-black tabular-nums text-blue-600 dark:text-blue-400 mt-1">{allStudents.length || 0}</p>
+              <span className="text-[10px] text-slate-400">Enrolled &amp; synced</span>
             </div>
 
             <div
@@ -370,125 +447,191 @@ export const TeacherPanel: React.FC<Props> = ({ schoolId, teacherId, teacherName
                 <span className="text-[11px] font-bold text-slate-500 uppercase">Subjects</span>
                 <FileText className="w-4 h-4 text-purple-500" />
               </div>
-              <p className="text-2xl font-black text-purple-600 dark:text-purple-400 mt-1">
-                {allSubjects.length > 0 ? allSubjects.length : 26}
+              <p className="text-2xl font-black tabular-nums text-purple-600 dark:text-purple-400 mt-1">
+                {allSubjects.length}
               </p>
               <span className="text-[10px] text-slate-400">Curriculum books</span>
             </div>
 
             <div
-              onClick={() => setView("classes")}
+              onClick={() => setView("community")}
               className="bg-white dark:bg-slate-800 rounded-2xl p-3.5 shadow-sm border border-slate-200/80 dark:border-slate-700 cursor-pointer hover:shadow-md transition active:scale-[0.99]"
             >
               <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold text-slate-500 uppercase">Attendance</span>
-                <ClipboardList className="w-4 h-4 text-amber-500" />
+                <span className="text-[11px] font-bold text-slate-500 uppercase">Community</span>
+                <Megaphone className="w-4 h-4 text-rose-500" />
               </div>
-              <p className="text-2xl font-black text-amber-600 dark:text-amber-400 mt-1">Daily</p>
-              <span className="text-[10px] text-slate-400">Live marking</span>
+              <p className="text-2xl font-black text-rose-600 dark:text-rose-400 mt-1">Live</p>
+              <span className="text-[10px] text-slate-400">Photos, Videos &amp; Notices</span>
             </div>
           </div>
 
-          {/* Quick Action Navigation Cards */}
+          {/* Clean Section Button Grid (Tap to open separate section) */}
           <div className="space-y-2.5">
-            <h3 className="text-xs font-black uppercase text-slate-400 tracking-wider px-1">
-              Teacher Action Center
-            </h3>
+            <div className="flex items-center justify-between px-1">
+              <h3 className="text-xs font-black uppercase text-slate-500 dark:text-slate-400 tracking-wider">
+                Teacher Sections (Tap to Open)
+              </h3>
+              <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                Real-Time Sync Active
+              </span>
+            </div>
 
-            {/* 1. School Students Directory (Crucial requested feature!) */}
-            <button
-              onClick={() => setView("all_students")}
-              className="w-full bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-slate-200/80 dark:border-slate-700 flex items-center gap-3.5 hover:shadow-md transition active:scale-[0.99] text-left cursor-pointer group"
-            >
-              <div className="w-12 h-12 rounded-2xl bg-blue-50 dark:bg-blue-950/50 border border-blue-200/60 dark:border-blue-800 flex items-center justify-center text-blue-600 dark:text-blue-400 shrink-0 group-hover:scale-105 transition">
-                <Users className="w-6 h-6" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <p className="font-black text-slate-900 dark:text-white text-sm sm:text-base">School Students Directory</p>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300">
-                    {allStudents.length || 910} Students
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {/* 1. School Community Hub */}
+              <button
+                type="button"
+                onClick={() => setView("community")}
+                className="bg-gradient-to-br from-rose-500/10 via-white to-amber-500/10 dark:from-rose-950/40 dark:via-slate-800 dark:to-amber-950/30 rounded-2xl p-4 shadow-sm border border-rose-200/80 dark:border-rose-800/60 flex flex-col justify-between gap-3 hover:shadow-md hover:border-rose-400 transition active:scale-[0.98] text-left cursor-pointer"
+              >
+                <div className="flex items-center justify-between w-full">
+                  <div className="w-11 h-11 rounded-2xl bg-rose-100 dark:bg-rose-900/60 text-rose-600 dark:text-rose-300 flex items-center justify-center">
+                    <ImageIcon className="w-5 h-5" />
+                  </div>
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-rose-600 text-white">
+                    NEW • LIVE
                   </span>
                 </div>
-                <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                  View all students across classes, roll numbers, admission details &amp; parent contacts
-                </p>
-              </div>
-              <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-blue-500 transition shrink-0" />
-            </button>
+                <div>
+                  <p className="font-black text-slate-900 dark:text-white text-sm leading-snug">
+                    School Community
+                  </p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">
+                    Photo, Video, Chhutti Notice &amp; Homework post karein
+                  </p>
+                </div>
+              </button>
 
-            {/* 2. My Classes */}
-            <button
-              onClick={() => setView("classes")}
-              className="w-full bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-slate-200/80 dark:border-slate-700 flex items-center gap-3.5 hover:shadow-md transition active:scale-[0.99] text-left cursor-pointer group"
-            >
-              <div className="w-12 h-12 rounded-2xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200/60 dark:border-emerald-800 flex items-center justify-center text-emerald-600 dark:text-emerald-400 shrink-0 group-hover:scale-105 transition">
-                <BookOpen className="w-6 h-6" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <p className="font-black text-slate-900 dark:text-white text-sm sm:text-base">My Classes &amp; Roster</p>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300">
-                    {classes.length || 13} Classes
+              {/* 2. Mark Daily Attendance */}
+              <button
+                type="button"
+                onClick={() => {
+                  const target = selectedClass || classes[0] || null;
+                  if (target) {
+                    setSelectedClass(target);
+                    setView("attendance");
+                  } else {
+                    setView("classes");
+                  }
+                }}
+                className="bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-slate-200/80 dark:border-slate-700 flex flex-col justify-between gap-3 hover:shadow-md hover:border-orange-400 transition active:scale-[0.98] text-left cursor-pointer"
+              >
+                <div className="flex items-center justify-between w-full">
+                  <div className="w-11 h-11 rounded-2xl bg-orange-50 dark:bg-orange-950/50 text-orange-600 dark:text-orange-400 flex items-center justify-center">
+                    <ClipboardList className="w-5 h-5" />
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-slate-400" />
+                </div>
+                <div>
+                  <p className="font-black text-slate-900 dark:text-white text-sm leading-snug">
+                    Mark Attendance
+                  </p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">
+                    Present, Absent, Late &amp; Leave live update karein
+                  </p>
+                </div>
+              </button>
+
+              {/* 3. My Classes & Lessons */}
+              <button
+                type="button"
+                onClick={() => setView("classes")}
+                className="bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-slate-200/80 dark:border-slate-700 flex flex-col justify-between gap-3 hover:shadow-md hover:border-emerald-400 transition active:scale-[0.98] text-left cursor-pointer"
+              >
+                <div className="flex items-center justify-between w-full">
+                  <div className="w-11 h-11 rounded-2xl bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+                    <BookOpen className="w-5 h-5" />
+                  </div>
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black tabular-nums bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300">
+                    {classes.length} Classes
                   </span>
                 </div>
-                <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                  Select a class to manage students, curriculum lessons, and schedule
-                </p>
-              </div>
-              <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-emerald-500 transition shrink-0" />
-            </button>
+                <div>
+                  <p className="font-black text-slate-900 dark:text-white text-sm leading-snug">
+                    My Classes &amp; Lessons
+                  </p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">
+                    Class roster, subjects aur chapter notes manage karein
+                  </p>
+                </div>
+              </button>
 
-            {/* 3. Smart Class */}
-            <button
-              onClick={() => setView("classes")}
-              className="w-full bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-slate-200/80 dark:border-slate-700 flex items-center gap-3.5 hover:shadow-md transition active:scale-[0.99] text-left cursor-pointer group"
-            >
-              <div className="w-12 h-12 rounded-2xl bg-green-50 dark:bg-green-950/50 border border-green-200/60 dark:border-green-800 flex items-center justify-center text-green-600 dark:text-green-400 shrink-0 group-hover:scale-105 transition">
-                <Play className="w-6 h-6" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="font-black text-slate-900 dark:text-white text-sm sm:text-base">Smart Class Interactive Session</p>
-                <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                  Launch digital whiteboard, reading mode, writing canvas, PDFs &amp; live MCQs
-                </p>
-              </div>
-              <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-green-500 transition shrink-0" />
-            </button>
+              {/* 4. Marks Entry */}
+              <button
+                type="button"
+                onClick={() => {
+                  const target = selectedClass || classes[0] || null;
+                  if (target) {
+                    setSelectedClass(target);
+                    setView("marks");
+                  } else {
+                    setView("classes");
+                  }
+                }}
+                className="bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-slate-200/80 dark:border-slate-700 flex flex-col justify-between gap-3 hover:shadow-md hover:border-purple-400 transition active:scale-[0.98] text-left cursor-pointer"
+              >
+                <div className="flex items-center justify-between w-full">
+                  <div className="w-11 h-11 rounded-2xl bg-purple-50 dark:bg-purple-950/50 text-purple-600 dark:text-purple-400 flex items-center justify-center">
+                    <Edit3 className="w-5 h-5" />
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-slate-400" />
+                </div>
+                <div>
+                  <p className="font-black text-slate-900 dark:text-white text-sm leading-snug">
+                    Marks &amp; Exam Entry
+                  </p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">
+                    PA-1, Half Yearly aur Annual marks live chadhayein
+                  </p>
+                </div>
+              </button>
 
-            {/* 4. Mark Attendance */}
-            <button
-              onClick={() => setView("classes")}
-              className="w-full bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-slate-200/80 dark:border-slate-700 flex items-center gap-3.5 hover:shadow-md transition active:scale-[0.99] text-left cursor-pointer group"
-            >
-              <div className="w-12 h-12 rounded-2xl bg-orange-50 dark:bg-orange-950/50 border border-orange-200/60 dark:border-orange-800 flex items-center justify-center text-orange-600 dark:text-orange-400 shrink-0 group-hover:scale-105 transition">
-                <ClipboardList className="w-6 h-6" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="font-black text-slate-900 dark:text-white text-sm sm:text-base">Mark Daily Attendance</p>
-                <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                  Record daily attendance: Present, Absent, Late, Leave &amp; Bunk tracking
-                </p>
-              </div>
-              <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-orange-500 transition shrink-0" />
-            </button>
+              {/* 5. Students Directory */}
+              <button
+                type="button"
+                onClick={() => setView("all_students")}
+                className="bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-slate-200/80 dark:border-slate-700 flex flex-col justify-between gap-3 hover:shadow-md hover:border-blue-400 transition active:scale-[0.98] text-left cursor-pointer"
+              >
+                <div className="flex items-center justify-between w-full">
+                  <div className="w-11 h-11 rounded-2xl bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 flex items-center justify-center">
+                    <Users className="w-5 h-5" />
+                  </div>
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black tabular-nums bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300">
+                    {allStudents.length}
+                  </span>
+                </div>
+                <div>
+                  <p className="font-black text-slate-900 dark:text-white text-sm leading-snug">
+                    Students Directory
+                  </p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">
+                    Roll no, admission no aur parent contact search karein
+                  </p>
+                </div>
+              </button>
 
-            {/* 5. Marks Entry */}
-            <button
-              onClick={() => setView("classes")}
-              className="w-full bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-slate-200/80 dark:border-slate-700 flex items-center gap-3.5 hover:shadow-md transition active:scale-[0.99] text-left cursor-pointer group"
-            >
-              <div className="w-12 h-12 rounded-2xl bg-purple-50 dark:bg-purple-950/50 border border-purple-200/60 dark:border-purple-800 flex items-center justify-center text-purple-600 dark:text-purple-400 shrink-0 group-hover:scale-105 transition">
-                <Edit3 className="w-6 h-6" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="font-black text-slate-900 dark:text-white text-sm sm:text-base">Marks Entry &amp; Exam Cycles</p>
-                <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                  Enter and grade PA-1, PA-2, Half Yearly, PA-3, PA-4 and Final Annual Board exams
-                </p>
-              </div>
-              <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-purple-500 transition shrink-0" />
-            </button>
+              {/* 6. Smart Class Interactive */}
+              <button
+                type="button"
+                onClick={() => setView("classes")}
+                className="bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-slate-200/80 dark:border-slate-700 flex flex-col justify-between gap-3 hover:shadow-md hover:border-teal-400 transition active:scale-[0.98] text-left cursor-pointer"
+              >
+                <div className="flex items-center justify-between w-full">
+                  <div className="w-11 h-11 rounded-2xl bg-teal-50 dark:bg-teal-950/50 text-teal-600 dark:text-teal-400 flex items-center justify-center">
+                    <Play className="w-5 h-5" />
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-slate-400" />
+                </div>
+                <div>
+                  <p className="font-black text-slate-900 dark:text-white text-sm leading-snug">
+                    Smart Class Board
+                  </p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">
+                    Digital reading, writing board, PDF aur live MCQ chalayein
+                  </p>
+                </div>
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -891,6 +1034,7 @@ export const TeacherPanel: React.FC<Props> = ({ schoolId, teacherId, teacherName
           )}
         </div>
       )}
+      {renderBottomNav()}
     </div>
   );
 };

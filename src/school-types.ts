@@ -45,10 +45,10 @@ export type SchoolPrintField =
 export type SchoolDocumentPrintFields = Partial<Record<SchoolDocumentKey, SchoolPrintField[]>>;
 
 export const DEFAULT_SCHOOL_DOCUMENT_PRINT_FIELDS: Record<SchoolDocumentKey, SchoolPrintField[]> = {
-  idCard: ["schoolName", "affiliation", "address", "phone", "email", "code", "principalName", "principalPhone", "directorName", "directorPhone"],
-  certificate: ["schoolName", "address", "phone", "email", "affiliation", "code", "principalName", "principalPhone", "directorName", "directorPhone"],
-  marksheet: ["schoolName", "address", "phone", "email", "affiliation", "code", "principalName", "principalPhone", "directorName", "directorPhone"],
-  feeReceipt: ["schoolName", "address", "phone", "email", "affiliation", "code", "principalName", "principalPhone", "directorName", "directorPhone"],
+  idCard: ["schoolName", "affiliation", "address", "phone", "email", "code", "principalName"],
+  certificate: ["schoolName", "address", "phone", "email", "affiliation", "code", "principalName"],
+  marksheet: ["schoolName", "address", "phone", "email", "affiliation", "code", "principalName", "directorName"],
+  feeReceipt: ["schoolName", "address", "phone", "email", "affiliation", "code", "principalName"],
 };
 
 export const schoolPrintFieldEnabled = (
@@ -77,6 +77,7 @@ export interface School {
   customFields?: SchoolProfileCustomField[];
   documentPrintFields?: SchoolDocumentPrintFields;
   idCardFieldSettings?: Record<string, boolean>;
+  upiId?: string; // Official School UPI ID for Scan & Pay on Fee Due Slips
   tagline?: string; // Short tagline shown on school card
   bannerColor?: string; // Hex color for card banner
   subscription: SchoolSubscription;
@@ -191,24 +192,37 @@ export interface SchoolStudent {
   schoolId: string;
   sessionId: string;
   classId: string;
+  className?: string;
   name: string;
   email?: string;
   phone?: string;
+  whatsappNo?: string;
   rollNo: string;
   admissionNo?: string;
+  gender?: 'male' | 'female' | 'other';
+  category?: string; // General, OBC, SC, ST, EWS
+  apaarId?: string; // UDISE+ APAAR / PEN No.
   fatherName?: string;
+  fatherOccupation?: string;
   motherName?: string;
+  motherOccupation?: string;
   aadhaarNo?: string; // 12-digit student UIDAI Aadhaar Number
   fatherAadhaar?: string; // 12-digit Father's Aadhaar
   motherAadhaar?: string; // 12-digit Mother's Aadhaar
   dateOfBirth?: string;
   bloodGroup?: string;
   address?: string;
+  city?: string;
+  pincode?: string;
+  previousSchool?: string;
+  previousMarks?: string;
+  submittedDocs?: string[];
+  admissionReceiptNo?: string;
   monthlyFee: number;
   joinDate: string;
   active: boolean;
   createdAt: string;
-  photoUrl?: string; // base64 or Google Drive URL of student photo
+  photoUrl?: string; // Cloud CDN URL of student photo
   iicUid?: string; // linked IIC account UID
   usesBus?: boolean; // whether student avails school bus / transport
   busRoute?: string; // bus route or stop name
@@ -218,6 +232,18 @@ export interface SchoolStudent {
 
 export const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"] as const;
 export type BloodGroup = typeof BLOOD_GROUPS[number];
+
+export const ADMISSION_CATEGORIES = ["General", "OBC", "SC", "ST", "EWS"] as const;
+
+export const ADMISSION_DOCUMENT_OPTIONS = [
+  "Birth Certificate (जन्म प्रमाण पत्र)",
+  "Student Aadhaar Card (छात्र आधार)",
+  "Parent Aadhaar Card (अभिभावक आधार)",
+  "Transfer Certificate / SLC (टी.सी.)",
+  "Previous Marksheet (पिछला अंकपत्र)",
+  "Passport Photos (पासपोर्ट फोटो)",
+  "Caste / Income Cert. (जाति/आय प्रमाण)",
+] as const;
 
 // ATTENDANCE
 export interface AttendanceRecord {
@@ -286,6 +312,11 @@ export interface MonthlyFee {
   receiptNo?: string;
   note?: string;
   paidAmount?: number;
+  lastReceiptPaidAmount?: number;
+  lastPaidAmount?: number;
+  lastPaidDate?: string;
+  lastDueAmount?: number;
+  lastDueDate?: string;
   balanceDue?: number;
   concession?: number;
   feeType?: 'monthly' | 'admission';
@@ -514,11 +545,14 @@ export interface AdmissionApplication {
   category?: string; // General, OBC, SC, ST
   previousSchool?: string;
   previousMarks?: string;
+  photoUrl?: string;
+  apaarId?: string;
   fatherName: string;
   fatherOccupation?: string;
   motherName: string;
   motherOccupation?: string;
   phone: string;
+  whatsappNo?: string;
   email?: string;
   aadhaarNo?: string; // 12-digit student Aadhaar number
   fatherAadhaar?: string; // 12-digit Father's Aadhaar
@@ -526,18 +560,34 @@ export interface AdmissionApplication {
   address: string;
   city?: string;
   pincode?: string;
+  usesBus?: boolean;
+  busRoute?: string;
+  busStop?: string;
+  busFee?: number;
+  submittedDocs?: string[];
+  enrolledStudentId?: string;
+  monthlyFee?: number;
   admissionFeeDetails?: {
     admissionFee: number;
     registrationFee: number;
     developmentFee: number;
     idKitFee: number;
     examFund: number;
+    concession?: number;
     totalPayable: number;
     paidAmount: number;
     balanceDue: number;
     paymentMode: string;
     receiptNo?: string;
     paidDate?: string;
+    items?: {
+      id: string;
+      slNo: number;
+      description: string;
+      due: number;
+      con: number;
+      paid: number;
+    }[];
   };
   status: 'pending' | 'approved' | 'rejected';
   appliedAt: string;

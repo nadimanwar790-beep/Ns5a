@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from "react";
 import {
   subscribeToAllSchools, saveSchool, updateSchool, generateId, setSchoolLockCode,
-  assignSchoolAdminByEmail, lockSchool, deleteSchool
+  assignSchoolAdminByEmail, checkEmailSchoolAllotment, lockSchool, deleteSchool
 } from "../../school-firebase";
 import type { School, SchoolSubscription } from "../../school-types";
 import { SchoolAdminPanel } from "./SchoolAdminPanel";
@@ -707,7 +707,17 @@ export const SuperAdminPanel: React.FC<Props> = ({ adminUid, onBack }) => {
       const id = generateId();
       const schoolCode = (form.code.trim() || cleanName.slice(0, 6)).toUpperCase().replace(/[^A-Z0-9]/g, "_");
       const cleanEmail = form.email.trim() || `${schoolCode.toLowerCase()}@school.internal`;
-      const cleanAdminEmail = form.adminEmail.trim() || cleanEmail;
+      const cleanAdminEmail = (form.adminEmail.trim() || cleanEmail).toLowerCase();
+
+      // Enforce 1 Email = 1 School Rule for Super Admin allotment
+      if (form.adminEmail.trim()) {
+        const check = await checkEmailSchoolAllotment(cleanAdminEmail);
+        if (check.isAllotted) {
+          setCreateError(`❌ Yeh Email (${cleanAdminEmail}) pehle se "${check.schoolName}" school ko allot hai! Ek email/ID par sirf 1 hi school allot ho sakta hai.`);
+          setSaving(false);
+          return;
+        }
+      }
 
       const school: School = {
         id,
@@ -772,11 +782,26 @@ export const SuperAdminPanel: React.FC<Props> = ({ adminUid, onBack }) => {
 
   const handleAssignAdmin = async () => {
     if (!selectedSchool || !assignEmail.trim()) return;
+    const cleanEmail = assignEmail.trim().toLowerCase();
     setAssigningAdmin(true);
     setAssignResult(null);
+
+    // Strict 1 Email / ID = 1 School Rule Check
+    const check = await checkEmailSchoolAllotment(cleanEmail, selectedSchool.id);
+    if (check.isAllotted) {
+      setAssignResult({
+        ok: false,
+        msg: `❌ Yeh Email (${cleanEmail}) pehle se "${check.schoolName}" school ko allot hai! Ek email/ID par sirf 1 hi school allot ho sakta hai.`
+      });
+      setAssigningAdmin(false);
+      return;
+    }
+
     try {
-      const profile = await assignSchoolAdminByEmail(selectedSchool.id, assignEmail.trim());
+      const profile = await assignSchoolAdminByEmail(selectedSchool.id, cleanEmail);
       setAssignResult({ ok: true, msg: `✅ ${profile.name} (${profile.email}) ab is school ka admin hai!` });
+      setSelectedSchool(prev => prev ? ({ ...prev, adminEmail: cleanEmail }) : null);
+      setSchools(prev => prev.map(s => s.id === selectedSchool.id ? { ...s, adminEmail: cleanEmail } : s));
       setAssignEmail('');
     } catch (e: any) {
       setAssignResult({ ok: false, msg: `❌ ${e.message || 'Error aaya, dobara try karo.'}` });
@@ -934,8 +959,12 @@ export const SuperAdminPanel: React.FC<Props> = ({ adminUid, onBack }) => {
               <Users className="w-4 h-4 text-blue-500" />
               <h3 className="font-semibold text-slate-700 dark:text-slate-200">School Admin Assign Karo</h3>
             </div>
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800/60 px-3 py-1.5 rounded-lg">
+              <Shield className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+              <span>Strict Rule: 1 Email / ID = Sirf 1 School Allot Hoga</span>
+            </div>
             <p className="text-xs text-slate-400">
-              Jis IIC user ko is school ka admin banana hai, uska email enter karo. Woh pehle se IIC app mein registered hona chahiye.
+              Jis IIC user ko is school ka admin banana hai, uska email enter karo. Ek email par sirf 1 hi school allot ho sakta hai.
             </p>
             <div>
               <label className="text-xs text-slate-500 mb-1 block">Admin ka Email</label>
@@ -1251,3 +1280,5 @@ export const SuperAdminPanel: React.FC<Props> = ({ adminUid, onBack }) => {
     </div>
   );
 };
+
+export default SuperAdminPanel;

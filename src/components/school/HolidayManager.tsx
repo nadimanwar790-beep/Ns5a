@@ -10,7 +10,15 @@ import {
   removeCustomHoliday,
   type FestivalHoliday,
   ACADEMIC_MONTHS,
+  isDemoDataEnabled,
 } from "./demoDataStore";
+import {
+  saveSchoolHoliday,
+  deleteSchoolHoliday,
+  subscribeToSchoolHolidays,
+  saveSchoolCommunityPost,
+} from "../../school-firebase";
+import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 
 interface Props {
   schoolId: string;
@@ -21,6 +29,7 @@ interface Props {
 
 export const HolidayManager: React.FC<Props> = ({ schoolId, adminUid, schoolName, onBack }) => {
   const [holidays, setHolidays] = useState<FestivalHoliday[]>([]);
+  const [liveFbHolidays, setLiveFbHolidays] = useState<any[]>([]);
   const [filterType, setFilterType] = useState<string>("all");
   const [selectedMonth, setSelectedMonth] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -39,17 +48,43 @@ export const HolidayManager: React.FC<Props> = ({ schoolId, adminUid, schoolName
 
   const loadHolidays = () => {
     const dataset = getDemoSchoolDataset();
-    setHolidays([...dataset.holidays]);
+    if (!isDemoDataEnabled()) {
+      setHolidays(dataset.holidays.filter(h => h.isPreloaded === false));
+    } else {
+      setHolidays([...dataset.holidays]);
+    }
   };
 
   useEffect(() => {
     loadHolidays();
+    const unsub = subscribeToSchoolHolidays(schoolId, (fbList) => {
+      setLiveFbHolidays(
+        (fbList || []).map((h: any) => ({
+          id: h.id,
+          name: h.name,
+          date: h.startDate || h.date,
+          endDate: h.endDate,
+          type: h.type || "festival",
+          description: h.description || "",
+          isPreloaded: false,
+        }))
+      );
+    });
+    return () => unsub();
   }, [schoolId]);
 
-  const handleAddHoliday = (e: React.FormEvent) => {
+  const combinedHolidays = React.useMemo(() => {
+    const map = new Map<string, FestivalHoliday>();
+    holidays.forEach((h) => map.set(h.id, h));
+    liveFbHolidays.forEach((h) => map.set(h.id, h));
+    return Array.from(map.values()).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  }, [holidays, liveFbHolidays]);
+
+  const handleAddHoliday = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.name.trim() || !form.date) {
-      alert("Kripya Holiday Name aur Date bharein!");
+      setNotification("⚠️ Kripya Holiday Name aur Date bharein!");
+      setTimeout(() => setNotification(null), 3500);
       return;
     }
 
@@ -59,6 +94,44 @@ export const HolidayManager: React.FC<Props> = ({ schoolId, adminUid, schoolName
       endDate: form.endDate || undefined,
       type: form.type,
       description: form.description.trim() || `${form.name} ki chhutti ghoshit ki gayi hai.`,
+    });
+
+    const nowIso = new Date().toISOString();
+    await saveSchoolHoliday(schoolId, {
+      id: created.id,
+      schoolId,
+      name: created.name,
+      startDate: created.date,
+      endDate: created.endDate || created.date,
+      type: created.type as any,
+      description: created.description,
+      createdAt: nowIso,
+    } as any);
+
+    await saveSchoolCommunityPost({
+      id: `holpost_${created.id}`,
+      schoolId,
+      schoolName: schoolName || "School",
+      title: `${created.name} — अवकाश सूचना`,
+      text: created.description,
+      category: "HOLIDAY",
+      holidayStartDate: created.date,
+      holidayEndDate: created.endDate || created.date,
+      authorId: adminUid || "admin",
+      authorName: `${schoolName || "School"} Office`,
+      authorRole: "ADMIN",
+      isPinned: true,
+      commentsEnabled: true,
+      createdAt: nowIso,
+    });
+
+    void sendSchoolPushNotification({
+      schoolId,
+      type: "SCHOOL_HOLIDAY",
+      title: `${schoolName || "School"} · अवकाश सूचना: ${created.name}`,
+      body: `${created.date}${created.endDate && created.endDate !== created.date ? ` से ${created.endDate}` : ""} — ${created.description}`,
+      url: `/?schoolPortal=1&schoolId=${encodeURIComponent(schoolId)}&schoolTab=community`,
+      urgent: true,
     });
 
     loadHolidays();
@@ -72,20 +145,20 @@ export const HolidayManager: React.FC<Props> = ({ schoolId, adminUid, schoolName
       applicableTo: "all",
     });
 
-    setNotification(`✅ "${created.name}" festival holiday kamyabi se add ho gayi! Attendance calendar update ho gaya.`);
+    setNotification(`✅ "${created.name}" holiday लाइव हो गई और Community + Lock-Screen Push अपडेट भेज दिया गया!`);
     setTimeout(() => setNotification(null), 4000);
   };
 
-  const handleDeleteHoliday = (id: string, name: string) => {
-    if (!confirm(`Kya aap "${name}" ko holidays list se hatana chahte hain?`)) return;
+  const handleDeleteHoliday = async (id: string, name: string) => {
     removeCustomHoliday(id);
+    await deleteSchoolHoliday(schoolId, id);
     loadHolidays();
     setNotification(`🗑️ "${name}" holiday hata di gayi.`);
     setTimeout(() => setNotification(null), 3000);
   };
 
   // Filter logic
-  const filteredHolidays = holidays.filter(h => {
+  const filteredHolidays = combinedHolidays.filter(h => {
     if (filterType !== "all" && h.type !== filterType) return false;
     if (selectedMonth !== "all" && !h.date.startsWith(selectedMonth)) return false;
     if (searchQuery.trim()) {

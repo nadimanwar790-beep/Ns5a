@@ -2,7 +2,7 @@
 import React, { useState } from "react";
 import { UserPlus, X, Save, User, Phone, Calendar, Image as ImageIcon, CheckCircle2 } from "lucide-react";
 import { DirectUploadButton } from "../DirectUploadButton";
-import { saveStudent, generateId, saveSchoolUserProfile, getLocalStudents, setLocalStudents } from "../../school-firebase";
+import { saveStudent, generateId, generateNextAdmissionNo, saveSchoolUserProfile, getLocalStudents, setLocalStudents } from "../../school-firebase";
 import { saveUserToLive } from "../../firebase";
 import type { School, SchoolClass, SchoolStudent } from "../../school-types";
 import { BLOOD_GROUPS } from "../../school-types";
@@ -24,17 +24,22 @@ export const QuickAddStudentModal: React.FC<Props> = ({
   defaultClassId,
   onStudentAdded,
 }) => {
+  const initialCls = classes.find(c => c.id === defaultClassId) || classes[0];
   const [classId, setClassId] = useState<string>(defaultClassId || classes[0]?.id || "");
   const [name, setName] = useState("");
   const [rollNo, setRollNo] = useState("");
-  const [admissionNo, setAdmissionNo] = useState(() => "ADM-" + Math.floor(100 + Math.random() * 900));
+  const [admissionNo, setAdmissionNo] = useState(() =>
+    generateNextAdmissionNo({ id: schoolId, code: schoolId.slice(0, 4) }, getLocalStudents(schoolId).length)
+  );
   const [fatherName, setFatherName] = useState("");
   const [motherName, setMotherName] = useState("");
   const [phone, setPhone] = useState("");
-  const [dateOfBirth, setDateOfBirth] = useState("2010-05-15");
+  const [dateOfBirth, setDateOfBirth] = useState("2012-05-15");
   const [bloodGroup, setBloodGroup] = useState("");
   const [photoUrl, setPhotoUrl] = useState("");
-  const [monthlyFee, setMonthlyFee] = useState<number>(500);
+  const [monthlyFee, setMonthlyFee] = useState<number>(() =>
+    Number(initialCls?.feeStructure?.tuitionFee ?? initialCls?.defaultFee ?? 0)
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -75,24 +80,23 @@ export const QuickAddStudentModal: React.FC<Props> = ({
         createdAt: new Date().toISOString(),
       };
 
-      await saveStudent(newStudent);
+      const savedStudent = await saveStudent(newStudent);
 
-      // Cache student locally and register profile for QR login
+      // Register student profile strictly scoped to THIS schoolId (no cross-school copying!)
       try {
         const curLocals = getLocalStudents(schoolId);
-        setLocalStudents(schoolId, [newStudent, ...curLocals.filter(s => s.id !== newStudent.id)]);
-        if (schoolId !== 'dps_gurgaon_sector45') {
-          const defLocals = getLocalStudents('dps_gurgaon_sector45');
-          setLocalStudents('dps_gurgaon_sector45', [newStudent, ...defLocals.filter(s => s.id !== newStudent.id)]);
-        }
+        setLocalStudents(schoolId, [savedStudent, ...curLocals.filter(s => s.id !== savedStudent.id)]);
+
+        const safeSchoolSlug = (schoolId || "academy").toLowerCase().replace(/[^a-z0-9]/g, "") || "academy";
+        const studentEmail = `${savedStudent.admissionNo.toLowerCase().replace(/[^a-z0-9]/g, "")}@student.${safeSchoolSlug}.edu`;
 
         const studentUserPayload = {
-          id: newStudent.id,
-          uid: newStudent.id,
-          displayId: `ROLL-${newStudent.rollNo}`,
-          name: newStudent.name,
-          email: `${newStudent.admissionNo.toLowerCase().replace(/[^a-z0-9]/g, '')}@student.dps.edu.in`,
-          mobile: newStudent.phone,
+          id: savedStudent.id,
+          uid: savedStudent.id,
+          displayId: `ROLL-${savedStudent.rollNo}`,
+          name: savedStudent.name,
+          email: studentEmail,
+          mobile: savedStudent.phone,
           role: 'STUDENT',
           schoolId,
           classLevel: classId,
@@ -105,32 +109,21 @@ export const QuickAddStudentModal: React.FC<Props> = ({
           subscriptionTier: 'PRO',
           provider: 'qr_student_id',
           isQrLogin: true,
-          admissionNo: newStudent.admissionNo,
-          rollNo: newStudent.rollNo,
-          fatherName: newStudent.fatherName,
-          motherName: newStudent.motherName,
-          bloodGroup: newStudent.bloodGroup,
-          monthlyFee: newStudent.monthlyFee,
+          admissionNo: savedStudent.admissionNo,
+          rollNo: savedStudent.rollNo,
+          fatherName: savedStudent.fatherName,
+          motherName: savedStudent.motherName,
+          bloodGroup: savedStudent.bloodGroup,
+          monthlyFee: savedStudent.monthlyFee,
         };
 
-        localStorage.setItem(`nst_school_user_${newStudent.id}`, JSON.stringify({
-          uid: newStudent.id,
-          schoolId,
-          role: 'SCHOOL_STUDENT',
-          name: newStudent.name,
-          email: studentUserPayload.email,
-          studentRef: newStudent.id,
-          classId,
-          sessionId: '2026-27'
-        }));
-
         saveSchoolUserProfile({
-          uid: newStudent.id,
+          uid: savedStudent.id,
           schoolId,
           role: 'SCHOOL_STUDENT',
-          name: newStudent.name,
-          email: studentUserPayload.email,
-          studentRef: newStudent.id,
+          name: savedStudent.name,
+          email: studentEmail,
+          studentRef: savedStudent.id,
           classId,
           sessionId: '2026-27'
         }).catch(() => {});
@@ -138,7 +131,7 @@ export const QuickAddStudentModal: React.FC<Props> = ({
         saveUserToLive(studentUserPayload, { immediate: true }).catch(() => {});
       } catch (e) {}
 
-      onStudentAdded(newStudent);
+      onStudentAdded(savedStudent);
       onClose();
     } catch (err: any) {
       console.error("Failed to add student:", err);

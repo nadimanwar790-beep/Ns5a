@@ -3,8 +3,10 @@ import React, { useState, useEffect } from "react";
 import type { SchoolNotice, SchoolHoliday } from "../../school-types";
 import {
   saveNotice, getNotices, deleteNotice, generateId, todayStr,
-  getSchoolHolidays, saveSchoolHoliday, deleteSchoolHoliday
+  getSchoolHolidays, saveSchoolHoliday, deleteSchoolHoliday, getSchool,
+  subscribeToNotices, subscribeToSchoolHolidays
 } from "../../school-firebase";
+import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 import {
   Bell, ChevronLeft, Plus, Trash2, Calendar, Tag, AlertTriangle,
   Pin, Sparkles, CheckCircle2, Megaphone, Clock, Filter, Sun, PartyPopper
@@ -69,22 +71,37 @@ export const NoticeBoardManager: React.FC<Props> = ({
   });
 
   const [saving, setSaving] = useState(false);
+  const [schoolTitle, setSchoolTitle] = useState("School");
+  const [pushToast, setPushToast] = useState<string | null>(null);
 
   const loadData = async () => {
     setLoading(true);
     try {
-      const [listNotices, listHolidays] = await Promise.all([
+      const [listNotices, listHolidays, sch] = await Promise.all([
         getNotices(schoolId),
         getSchoolHolidays(schoolId),
+        getSchool(schoolId).catch(() => null),
       ]);
       setNotices(listNotices);
       setHolidays(listHolidays);
+      if (sch?.name) setSchoolTitle(sch.name);
     } catch (e) {}
     setLoading(false);
   };
 
   useEffect(() => {
     loadData();
+    const unsubNotices = subscribeToNotices(schoolId, (liveNotices) => {
+      setNotices(liveNotices);
+      setLoading(false);
+    });
+    const unsubHolidays = subscribeToSchoolHolidays(schoolId, (liveHolidays) => {
+      setHolidays(liveHolidays);
+    });
+    return () => {
+      unsubNotices();
+      unsubHolidays();
+    };
   }, [schoolId]);
 
   const handleCreateNotice = async () => {
@@ -105,6 +122,24 @@ export const NoticeBoardManager: React.FC<Props> = ({
       };
       await saveNotice(notice);
       setNotices(prev => [notice, ...prev]);
+
+      // Broadcast real Lock Screen Push Notification to all linked student devices of this school
+      const pushRes = await sendSchoolPushNotification({
+        schoolId,
+        type: "SCHOOL_NOTICE",
+        title: `📢 ${schoolTitle} • ${notice.title}`,
+        body: notice.content.slice(0, 180),
+        url: `/?schoolPortal=1&schoolId=${encodeURIComponent(schoolId)}&schoolTab=community`,
+        urgent: true,
+      });
+
+      setPushToast(
+        pushRes.delivered > 0
+          ? `✅ Notice save ho gaya aur ${pushRes.delivered} devices par Lock Screen Push bhej diya gaya!`
+          : "✅ Notice save ho gaya aur Student Portal par live sync ho gaya!"
+      );
+      setTimeout(() => setPushToast(null), 6000);
+
       setForm({
         title: "",
         content: "",
@@ -115,14 +150,13 @@ export const NoticeBoardManager: React.FC<Props> = ({
       });
       setShowAddForm(false);
     } catch (e: any) {
-      alert("Error saving notice: " + (e?.message || "Unknown error"));
+      setPushToast("Notice save karne me samasya: " + (e?.message || "Unknown error"));
     } finally {
       setSaving(false);
     }
   };
 
   const handleDeleteNotice = async (id: string) => {
-    if (!confirm("Kya aap is notice ko delete karna chahte hain?")) return;
     await deleteNotice(schoolId, id);
     setNotices(prev => prev.filter(n => n.id !== id));
   };
@@ -145,6 +179,24 @@ export const NoticeBoardManager: React.FC<Props> = ({
       };
       await saveSchoolHoliday(schoolId, h);
       setHolidays(prev => [...prev, h].sort((a, b) => a.startDate.localeCompare(b.startDate)));
+
+      const dateSpan = h.endDate && h.endDate !== h.startDate ? `${h.startDate} se ${h.endDate}` : h.startDate;
+      const pushRes = await sendSchoolPushNotification({
+        schoolId,
+        type: "SCHOOL_HOLIDAY",
+        title: `🏖️ ${schoolTitle} • अवकाश सूचना: ${h.title}`,
+        body: `${dateSpan} (${h.days} दिन अवकाश)। ${h.description || "स्कूल बंद रहेगा।"}`,
+        url: `/?schoolPortal=1&schoolId=${encodeURIComponent(schoolId)}&schoolTab=community`,
+        urgent: true,
+      });
+
+      setPushToast(
+        pushRes.delivered > 0
+          ? `✅ अवकाश जुड़ गया और ${pushRes.delivered} devices पर Lock Screen Push भेज दिया गया!`
+          : "✅ अवकाश जुड़ गया और Student Portal पर live sync हो गया!"
+      );
+      setTimeout(() => setPushToast(null), 6000);
+
       setHolidayForm({
         title: "",
         startDate: todayStr(),
@@ -155,14 +207,13 @@ export const NoticeBoardManager: React.FC<Props> = ({
       });
       setShowAddHolidayForm(false);
     } catch (e: any) {
-      alert("Error saving holiday: " + (e?.message || "Unknown error"));
+      setPushToast("Holiday save karne me samasya: " + (e?.message || "Unknown error"));
     } finally {
       setSaving(false);
     }
   };
 
   const handleDeleteHoliday = async (id: string) => {
-    if (!confirm("Kya aap is festival holiday ko delete karna chahte hain?")) return;
     await deleteSchoolHoliday(schoolId, id);
     setHolidays(prev => prev.filter(h => h.id !== id));
   };
@@ -215,6 +266,12 @@ export const NoticeBoardManager: React.FC<Props> = ({
       </div>
 
       <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
+        {pushToast && (
+          <div className="p-3.5 rounded-xl bg-emerald-600/15 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 text-xs font-bold flex items-center justify-between gap-2">
+            <span>{pushToast}</span>
+            <button onClick={() => setPushToast(null)} className="font-bold cursor-pointer">✕</button>
+          </div>
+        )}
         {/* Header Title */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>

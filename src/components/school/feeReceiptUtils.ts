@@ -3,6 +3,7 @@
 // student photo, high-definition vector QR, and 4-in-1 A4 sheet printing (4 receipts per A4 page).
 
 import type { Student, SchoolConfig } from '../../types';
+import { getSchoolCacheSync, getSchoolLogoSync } from '../../utils/schoolIndexedDb';
 
 export const DEFAULT_SCHOOL_CONFIG: SchoolConfig = {
   name: "Nstz Smart Academy",
@@ -186,6 +187,7 @@ export interface DpsReceiptData {
   receiptNo: string;
   admissionNo: string;
   studentName: string;
+  fatherName?: string;
   studentId?: string;
   schoolId?: string;
   rollNo?: string;
@@ -201,8 +203,12 @@ export interface DpsReceiptData {
   // Fee items
   items: FeeReceiptItem[];
 
-  // Balance due & Next Billing details (FIFO multi-month support)
+  // Balance due, Last Paid & Last Due summary details
   balanceDue?: number;
+  lastPaidAmount?: number;
+  lastPaidDate?: string;
+  lastDueAmount?: number;
+  lastDueDate?: string;
   nextMonthEstimatedFee?: number;
   fifoSummary?: string;
 
@@ -212,16 +218,250 @@ export interface DpsReceiptData {
   // Remarks & Note
   note?: string; // e.g. "356" or "Monthly fee received"
 
-  // Signature
+  // Signature & Payment QR
+  upiId?: string;
   showDigitalSignature?: boolean;
   principalSignatureUrl?: string;
   principalName?: string;
   principalTitle?: string;
+  directorSignatureUrl?: string;
+  directorName?: string;
+  signatoryTitle?: string;
+}
+
+export interface StudentFeeHistorySummary {
+  lastPaidAmount: number;
+  lastPaidDate: string;
+  lastDueAmount: number;
+  lastDueDate: string;
+}
+
+/**
+ * Formats a "YYYY-MM" string as "Oct 2026".
+ */
+export function formatShortFeeMonth(ym?: string | null): string {
+  if (!ym || typeof ym !== "string") return "";
+  const m = ym.trim().match(/^(\d{4})-(\d{2})/);
+  if (!m) return ym.trim();
+  const year = parseInt(m[1], 10);
+  const monthIdx = parseInt(m[2], 10) - 1;
+  const d = new Date(year, monthIdx, 1);
+  if (isNaN(d.getTime())) return ym.trim();
+  return d.toLocaleDateString("en-IN", { month: "short", year: "numeric" });
+}
+
+/**
+ * Formats an array of unpaid "YYYY-MM" months concisely so slips never overflow.
+ * e.g. ["2026-10"] -> "Oct 2026"
+ *      ["2026-09", "2026-10"] -> "Sep 2026, Oct 2026"
+ *      ["2026-06", ..., "2026-10"] -> "Jun 2026 – Oct 2026 (5M)"
+ */
+export function formatConciseArrearsMonths(months?: string[] | null): string {
+  if (!Array.isArray(months) || months.length === 0) return "";
+  const sorted = Array.from(new Set(months.filter(Boolean))).sort();
+  if (sorted.length === 0) return "";
+  if (sorted.length === 1) return formatShortFeeMonth(sorted[0]);
+  if (sorted.length === 2) return `${formatShortFeeMonth(sorted[0])}, ${formatShortFeeMonth(sorted[1])}`;
+  return `${formatShortFeeMonth(sorted[0])} – ${formatShortFeeMonth(sorted[sorted.length - 1])} (${sorted.length}M)`;
+}
+
+/**
+ * Formats an ISO date or DD/MM/YYYY date cleanly as DD/MM/YYYY.
+ */
+function formatCleanSlipDate(rawDate?: string | null, fallbackMonth?: string | null): string {
+  if (rawDate && typeof rawDate === "string") {
+    const trimmed = rawDate.trim();
+    if (/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(trimmed)) {
+      const parts = trimmed.split("/");
+      return `${parts[0].padStart(2, "0")}/${parts[1].padStart(2, "0")}/${parts[2].length === 2 ? "20" + parts[2] : parts[2]}`;
+    }
+    const parsed = new Date(trimmed);
+    if (!isNaN(parsed.getTime())) {
+      return `${String(parsed.getDate()).padStart(2, "0")}/${String(parsed.getMonth() + 1).padStart(2, "0")}/${parsed.getFullYear()}`;
+    }
+  }
+  return formatShortFeeMonth(fallbackMonth);
+}
+
+/**
+ * Computes accurate Last Paid (Amount + Date) and Last Due / Previous Arrears (Amount + Month/Date)
+ * from a student's fee history + IndexedDB cache + current fee record.
+ */
+export function computeStudentFeeHistorySummary(params: {
+  studentId?: string;
+  schoolId?: string;
+  currentMonth?: string;
+  currentFee?: any;
+  feeHistory?: any[];
+}): StudentFeeHistorySummary {
+  const { studentId, schoolId, currentMonth, currentFee, feeHistory } = params;
+
+  // Merge provided feeHistory with synchronous IndexedDB cache for this school
+  const cachedFees = schoolId
+    ? getSchoolCacheSync<any[]>(`nst_school_fees_${schoolId}`, [])
+    : [];
+  const combinedMap = new Map<string, any>();
+
+  const addRecord = (rec: any) => {
+    if (!rec || (studentId && rec.studentId && rec.studentId !== studentId)) return;
+    const key = `${rec.studentId || studentId || ""}_${rec.feeType === "admission" ? `adm_${rec.receiptNo || ""}` : (rec.month || rec.receiptNo || Math.random())}`;
+    if (!combinedMap.has(key)) {
+      combinedMap.set(key, rec);
+    }
+  };
+
+  if (Array.isArray(feeHistory)) feeHistory.forEach(addRecord);
+  if (Array.isArray(cachedFees)) cachedFees.forEach(addRecord);
+  if (currentFee) addRecord(currentFee);
+
+  const studentRecords = Array.from(combinedMap.values()).filter(
+    r => !studentId || r.studentId === studentId
+  );
+
+  // 1. Compute Last Paid Amount & Date (group FIFO split rows by base receipt number so lump-sum payment shows accurately)
+  type PaidTx = { amount: number; explicitLumpSum: number; sortTime: number; dateStr: string; month: string };
+  const txGroups = new Map<string, PaidTx>();
+
+  studentRecords.forEach((rec) => {
+    const rawLump = Number(rec.lastReceiptPaidAmount || 0);
+    const rowPaid = rec.paidAmount !== undefined
+      ? Number(rec.paidAmount)
+      : (rec.paid ? Number(rec.amount ?? rec.monthlyAmount ?? 0) : 0);
+
+    if (rawLump <= 0 && rowPaid <= 0) return;
+
+    const rawReceipt = String(rec.receiptNo || "").trim();
+    const baseReceipt = rawReceipt.replace(/^FIFO-\d{4}-\d{2}-/, "");
+    const groupKey = baseReceipt || (rec.paidDate ? `dt_${String(rec.paidDate).slice(0, 19)}` : `mo_${rec.month || "x"}`);
+
+    let ts = 0;
+    if (rec.paidDate) {
+      const p = new Date(rec.paidDate).getTime();
+      if (!isNaN(p)) ts = p;
+    }
+    if (!ts && rec.month && /^\d{4}-\d{2}/.test(rec.month)) {
+      const p = new Date(`${rec.month.slice(0, 7)}-01T00:00:00`).getTime();
+      if (!isNaN(p)) ts = p;
+    }
+
+    const formattedDate = formatCleanSlipDate(rec.paidDate || rec.payModeInfo?.date, rec.month);
+    const existing = txGroups.get(groupKey);
+    if (!existing) {
+      txGroups.set(groupKey, {
+        amount: rowPaid,
+        explicitLumpSum: rawLump,
+        sortTime: ts,
+        dateStr: formattedDate,
+        month: rec.month || "",
+      });
+    } else {
+      existing.amount += rowPaid;
+      if (rawLump > existing.explicitLumpSum) existing.explicitLumpSum = rawLump;
+      if (ts > existing.sortTime) {
+        existing.sortTime = ts;
+        if (formattedDate) existing.dateStr = formattedDate;
+      } else if (!existing.dateStr && formattedDate) {
+        existing.dateStr = formattedDate;
+      }
+      if ((rec.month || "") > existing.month) existing.month = rec.month || "";
+    }
+  });
+
+  const sortedTxs = Array.from(txGroups.values())
+    .map(tx => ({
+      finalAmount: tx.explicitLumpSum > 0 ? tx.explicitLumpSum : tx.amount,
+      sortTime: tx.sortTime,
+      dateStr: tx.dateStr || formatShortFeeMonth(tx.month),
+      month: tx.month,
+    }))
+    .filter(tx => tx.finalAmount > 0)
+    .sort((a, b) => {
+      if (b.sortTime !== a.sortTime) return b.sortTime - a.sortTime;
+      return (b.month || "").localeCompare(a.month || "");
+    });
+
+  const latestPaid = sortedTxs[0];
+  const lastPaidAmount = latestPaid ? latestPaid.finalAmount : 0;
+  const lastPaidDate = latestPaid ? latestPaid.dateStr : "";
+
+  // 2. Compute Last Due / Previous Arrears Amount & Month/Date
+  const resolvedMonth = currentMonth || currentFee?.month || "";
+  const explicitArrears = Number(currentFee?.arrearsAmount || 0);
+  const explicitArrearsMonths: string[] = Array.isArray(currentFee?.arrearsMonths)
+    ? currentFee.arrearsMonths
+    : [];
+
+  let lastDueAmount = 0;
+  let lastDueDate = "";
+
+  if (explicitArrears > 0) {
+    lastDueAmount = explicitArrears;
+    lastDueDate = formatConciseArrearsMonths(explicitArrearsMonths) || "पिछला माह / Prev. Month";
+  } else {
+    // Check prior unpaid records in history before resolvedMonth
+    const priorUnpaid = studentRecords.filter(r => {
+      if (!r.month || (resolvedMonth && r.month >= resolvedMonth)) return false;
+      if (r.feeType === "admission") return false;
+      if (r.balanceDue !== undefined) return Number(r.balanceDue) > 0;
+      if (r.paid) return false;
+      const tot = Number(r.amount ?? r.monthlyAmount ?? 0);
+      const pd = Number(r.paidAmount || 0);
+      return tot - pd > 0;
+    });
+
+    if (priorUnpaid.length > 0) {
+      lastDueAmount = priorUnpaid.reduce((sum, r) => {
+        if (r.balanceDue !== undefined) return sum + Math.max(0, Number(r.balanceDue));
+        return sum + Math.max(0, Number(r.amount ?? r.monthlyAmount ?? 0) - Number(r.paidAmount || 0));
+      }, 0);
+      lastDueDate = formatConciseArrearsMonths(priorUnpaid.map(r => r.month));
+    } else if (
+      currentFee &&
+      Number(currentFee.paidAmount || 0) > 0 &&
+      Number(currentFee.balanceDue || 0) > 0
+    ) {
+      // Partial balance remaining from earlier payment in the current month
+      lastDueAmount = Number(currentFee.balanceDue);
+      lastDueDate = `${formatShortFeeMonth(resolvedMonth) || "चालू माह"} (शेष)`;
+    }
+  }
+
+  return {
+    lastPaidAmount,
+    lastPaidDate,
+    lastDueAmount,
+    lastDueDate,
+  };
+}
+
+/**
+ * Formats raw session strings like "demo session 2026_2" or "2026-2027" cleanly as "2026-27".
+ */
+export function formatAcademicSession(raw?: string | null): string {
+  if (!raw || typeof raw !== "string") return "2026-27";
+  const trimmed = raw.trim();
+  if (!trimmed) return "2026-27";
+  if (/^\d{4}-\d{2}$/.test(trimmed)) return trimmed;
+
+  const fullRangeMatch = trimmed.match(/^(\d{4})\s*[-/]\s*(\d{4})$/);
+  if (fullRangeMatch) {
+    return `${fullRangeMatch[1]}-${fullRangeMatch[2].slice(-2)}`;
+  }
+
+  const yearMatch = trimmed.match(/(20\d{2})/);
+  if (yearMatch) {
+    const startYear = parseInt(yearMatch[1], 10);
+    const nextShort = String((startYear + 1) % 100).padStart(2, "0");
+    return `${startYear}-${nextShort}`;
+  }
+
+  return trimmed;
 }
 
 export interface DpsReceiptRenderOptions {
-  layout?: "full" | "compact" | "mini"; // "compact" fits 4 on 1 A4 page, "mini" fits 6 on 1 A4 page
+  layout?: "full" | "compact" | "mini" | "pos"; // "compact" fits 4 on 1 A4 page, "mini" fits 6 on 1 A4 page, "pos" is 80mm/58mm thermal roll
   copyTitle?: string; // e.g. "STUDENT COPY", "OFFICE COPY", "ACCOUNTS COPY", "GUARDIAN COPY"
+  rollWidthMm?: number; // e.g. 80 (default) or 58
 }
 
 /**
@@ -381,11 +621,10 @@ export function cleanLogoUrl(url?: string): string {
 }
 
 /**
- * Resolves the user's authentic saved school logo.
- * Always prefers the user's saved school logo over any platform app logo.
- * Never returns the NSTA app logo for a school.
+ * Resolves the authentic saved school logo strictly isolated per schoolId.
+ * Never leaks School A's logo onto School B, and never returns the NSTA app logo.
  */
-export function getSavedSchoolLogo(preferredLogo?: string | null): string {
+export function getSavedSchoolLogo(preferredLogo?: string | null, schoolId?: string): string {
   // 1. If preferredLogo is provided and is a valid custom school logo (NOT an app logo), use it!
   if (preferredLogo && typeof preferredLogo === "string") {
     const cleaned = cleanLogoUrl(preferredLogo);
@@ -394,33 +633,37 @@ export function getSavedSchoolLogo(preferredLogo?: string | null): string {
     }
   }
 
-  // 2. Check localStorage for user's saved school logo
-  if (typeof localStorage !== "undefined") {
-    const active = localStorage.getItem("nst_active_school_logo") || localStorage.getItem("nst_school_logo");
-    if (active && typeof active === "string") {
-      const cleaned = cleanLogoUrl(active);
+  // 2. If schoolId is specified, check strictly that school's IndexedDB logo & school profile
+  if (schoolId) {
+    const perSchoolLogo = getSchoolLogoSync(schoolId);
+    if (perSchoolLogo) {
+      const cleaned = cleanLogoUrl(perSchoolLogo);
       if (cleaned && !isAppLogo(cleaned)) {
         return cleaned;
       }
     }
 
-    // 3. Check cached schools list in localStorage
-    try {
-      const rawSchools = localStorage.getItem("nst_schools_local_cache");
-      if (rawSchools) {
-        const schools = JSON.parse(rawSchools);
-        if (Array.isArray(schools)) {
-          for (const s of schools) {
-            if (s?.logoUrl && typeof s.logoUrl === "string") {
-              const cleaned = cleanLogoUrl(s.logoUrl);
-              if (cleaned && !isAppLogo(cleaned)) {
-                return cleaned;
-              }
-            }
-          }
+    const schools = getSchoolCacheSync<any[]>("nst_schools_local_cache", []);
+    if (Array.isArray(schools)) {
+      const matched = schools.find((s) => s?.id === schoolId);
+      if (matched?.logoUrl && typeof matched.logoUrl === "string") {
+        const cleaned = cleanLogoUrl(matched.logoUrl);
+        if (cleaned && !isAppLogo(cleaned)) {
+          return cleaned;
         }
       }
-    } catch {}
+    }
+
+    return "";
+  }
+
+  // 3. Fallback when schoolId is omitted: only resolve if there is a single school in cache
+  const schools = getSchoolCacheSync<any[]>("nst_schools_local_cache", []);
+  if (Array.isArray(schools) && schools.length === 1 && schools[0]?.logoUrl) {
+    const cleaned = cleanLogoUrl(schools[0].logoUrl);
+    if (cleaned && !isAppLogo(cleaned)) {
+      return cleaned;
+    }
   }
 
   return "";
@@ -496,10 +739,93 @@ export function generateDpsReceiptHtml(
     }[c] as string));
 
   const totalDue = data.items.reduce((s, it) => s + (Number(it.due) || 0), 0);
+  const totalConcession = data.items.reduce((s, it) => s + (Number(it.con) || 0), 0);
+  const netPayable = Math.max(0, totalDue - totalConcession);
   const totalPaid = data.items.reduce((s, it) => s + (Number(it.paid) || 0), 0);
-  const grandTotal = totalPaid > 0 ? totalPaid : totalDue;
+  const grandTotal = totalPaid > 0 ? totalPaid : netPayable;
   const totalWords = numberToIndianWords(grandTotal);
-  const calculatedBalDue = data.balanceDue !== undefined ? Number(data.balanceDue) : Math.max(0, totalDue - totalPaid);
+  const calculatedBalDue = data.balanceDue !== undefined ? Number(data.balanceDue) : Math.max(0, netPayable - totalPaid);
+  const cleanSession = formatAcademicSession(data.session);
+  const isDueSlip = totalPaid === 0 || calculatedBalDue > 0;
+  const payableDueAmount = totalPaid === 0 ? netPayable : calculatedBalDue;
+  const isDemandNote =
+    totalPaid === 0 ||
+    (payableDueAmount > 0 &&
+      (data.counterNo === "DUE-DEMAND" ||
+        /DUE|DEMAND|बकाया/i.test(data.receiptTitle || "")));
+
+  // Auto-resolve Father's Name & Phone from IndexedDB student cache if not explicitly passed
+  let resolvedFatherName = (data.fatherName || "").trim();
+  let resolvedStudentPhone = (data.phone || "").trim();
+  if ((!resolvedFatherName || !resolvedStudentPhone) && data.schoolId && data.studentId) {
+    const cachedStudents = getSchoolCacheSync<any[]>(`nst_school_students_${data.schoolId}`, []);
+    if (Array.isArray(cachedStudents)) {
+      const matchedSt = cachedStudents.find(s => s?.id === data.studentId);
+      if (matchedSt) {
+        if (!resolvedFatherName && matchedSt.fatherName) resolvedFatherName = String(matchedSt.fatherName).trim();
+        if (!resolvedStudentPhone && (matchedSt.phone || matchedSt.whatsappNo)) {
+          resolvedStudentPhone = String(matchedSt.phone || matchedSt.whatsappNo).trim();
+        }
+      }
+    }
+  }
+
+  // Auto-resolve Last Paid (Amount + Date) & Last Due / Previous Arrears (Amount + Date/Month)
+  const arrearsItem = data.items.find(
+    it => it.id === "arrears" || /arrears|back due|पिछला बकाया/i.test(it.description || "")
+  );
+  const arrearsFromItems = arrearsItem ? Number(arrearsItem.due || 0) : 0;
+  const arrearsParenMatch = arrearsItem?.description?.match(/\(([^)]+)\)/);
+  const arrearsPeriodFromDesc = arrearsParenMatch ? arrearsParenMatch[1].trim() : "";
+
+  const fallbackSummary = (data.lastPaidAmount === undefined || data.lastDueAmount === undefined)
+    ? computeStudentFeeHistorySummary({
+        studentId: data.studentId,
+        schoolId: data.schoolId,
+        currentFee: {
+          arrearsAmount: arrearsFromItems,
+          paidAmount: totalPaid,
+          balanceDue: calculatedBalDue,
+        },
+      })
+    : { lastPaidAmount: 0, lastPaidDate: "", lastDueAmount: 0, lastDueDate: "" };
+
+  const effectiveLastPaidAmount = data.lastPaidAmount !== undefined
+    ? Number(data.lastPaidAmount)
+    : fallbackSummary.lastPaidAmount;
+  const effectiveLastPaidDate = (data.lastPaidDate || fallbackSummary.lastPaidDate || "").trim();
+
+  const effectiveLastDueAmount = data.lastDueAmount !== undefined
+    ? Number(data.lastDueAmount)
+    : (arrearsFromItems > 0 ? arrearsFromItems : fallbackSummary.lastDueAmount);
+  const effectiveLastDueDate = (
+    data.lastDueDate ||
+    arrearsPeriodFromDesc ||
+    fallbackSummary.lastDueDate ||
+    (effectiveLastDueAmount > 0 ? "पिछला माह / Prev. Month" : "")
+  ).trim();
+
+  // Resolve School UPI ID (explicit -> per-school IndexedDB cache)
+  let effectiveUpiId = (data.upiId || "").trim();
+  let effectiveSchoolPhone = (data.schoolPhone || "").trim();
+  if ((!effectiveUpiId || !effectiveSchoolPhone) && data.schoolId) {
+    const cachedSchools = getSchoolCacheSync<any[]>("nst_schools_local_cache", []);
+    const matchedSchool = Array.isArray(cachedSchools) ? cachedSchools.find((s) => s?.id === data.schoolId) : null;
+    if (matchedSchool?.upiId && !effectiveUpiId) effectiveUpiId = String(matchedSchool.upiId).trim();
+    if ((matchedSchool?.phone || matchedSchool?.mobile) && !effectiveSchoolPhone) {
+      effectiveSchoolPhone = String(matchedSchool.phone || matchedSchool.mobile).trim();
+    }
+  }
+
+  const upiUri = effectiveUpiId && payableDueAmount > 0
+    ? `upi://pay?pa=${encodeURIComponent(effectiveUpiId)}&pn=${encodeURIComponent((data.schoolName || "School").slice(0, 40))}&am=${payableDueAmount}&cu=INR&tn=${encodeURIComponent(`Fee ${data.admissionNo || data.studentName}`)}`
+    : "";
+  const upiQrSvgUrl = upiUri
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=320x320&format=svg&qzone=1&margin=1&data=${encodeURIComponent(upiUri)}`
+    : "";
+  const upiQrPngUrl = upiUri
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=320x320&qzone=1&margin=1&data=${encodeURIComponent(upiUri)}`
+    : "";
 
   // Generate Ultra High-Definition Vector SVG / High-Res QR Code URL with NSTA-SCHOOL prefix for instant student login
   const cleanSchoolId = data.schoolId || 'school_campus';
@@ -508,7 +834,7 @@ export function generateDpsReceiptHtml(
   const cleanClassId = data.className || '';
   const cleanStudentName = data.studentName || '';
   const cleanAdmissionNo = data.admissionNo || '';
-  const cleanPhone = data.phone || '';
+  const cleanPhone = resolvedStudentPhone;
 
   const qrLoginPrefix = `NSTA-SCHOOL:${[
     encodeURIComponent(cleanSchoolId),
@@ -520,13 +846,12 @@ export function generateDpsReceiptHtml(
     encodeURIComponent(cleanPhone)
   ].join(":")}`;
 
-  const qrVerificationData = `${qrLoginPrefix}\nFEE-RECEIPT\nReceiptNo: ${data.receiptNo}\nAdmNo: ${data.admissionNo}\nStudent: ${data.studentName}\nClass: ${data.className}\nSession: ${data.session}\nTotalPaid: ₹${grandTotal}\nDate: ${data.receiptDate}`;
+  const qrVerificationData = `${qrLoginPrefix}\nFEE-RECEIPT\nReceiptNo: ${data.receiptNo}\nAdmNo: ${data.admissionNo}\nStudent: ${data.studentName}\nClass: ${data.className}\nSession: ${cleanSession}\nAmount: ₹${grandTotal}\nDate: ${data.receiptDate}`;
   const qrSvgUrl = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&format=svg&qzone=1&margin=1&data=${encodeURIComponent(qrVerificationData)}`;
   const qrHighResPngUrl = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&qzone=1&margin=1&data=${encodeURIComponent(qrVerificationData)}`;
 
   // Resolve the actual school's logo: explicitly passed -> cached active school logo
-  const effectiveLogo = getSavedSchoolLogo(data.schoolLogoUrl);
-
+  const effectiveLogo = getSavedSchoolLogo(data.schoolLogoUrl, data.schoolId);
   const fallbackSvg = generateSchoolCrestSvg(data.schoolName, isMini);
 
   const logoMarkup = effectiveLogo
@@ -534,202 +859,241 @@ export function generateDpsReceiptHtml(
        <div class="dps-logo-fallback" style="display:none;width:100%;height:100%;">${fallbackSvg}</div>`
     : fallbackSvg;
 
-  const cardClasses = `dps-receipt-card ${isMini ? "is-mini is-compact" : isCompact ? "is-compact" : ""}`;
+  const cardClasses = `dps-receipt-card ${isMini ? "is-mini is-compact" : isCompact ? "is-compact" : ""} ${isDemandNote ? "is-demand-slip" : "is-paid-receipt"}`;
+  const cleanDateShort = String(data.receiptDate || "").split("(")[0].trim() || data.receiptDate;
+  const showDemandSimpleCols = isDemandNote && totalPaid === 0;
+  const showConCol = !showDemandSimpleCols || totalConcession > 0;
+  const totalTableCols = showDemandSimpleCols ? (showConCol ? 4 : 3) : 5;
+
+  const bannerTitle = isDemandNote
+    ? "FEE DEMAND SLIP • बकाया शुल्क तकादा पर्ची"
+    : (data.receiptTitle || "OFFICIAL FEE RECEIPT • शुल्क रसीद");
 
   return `
   <div class="${cardClasses}">
-    <!-- Top Header with School Logo & Address -->
+    <!-- Top Header with School Logo, Name, Address & Office Helpline -->
     <div class="dps-header">
       <div class="dps-logo-col">
         ${logoMarkup}
       </div>
       <div class="dps-school-info">
-        <h1 class="dps-school-name">${escapeHtml(data.schoolName || "Nstz")}</h1>
-        <p class="dps-school-address">${escapeHtml(data.schoolAddress || "Institutional Academic Campus, Educational Zone")}</p>
+        <h1 class="dps-school-name">${escapeHtml(data.schoolName || "School")}</h1>
+        <p class="dps-school-address">
+          ${escapeHtml(data.schoolAddress || "Institutional Academic Campus, Educational Zone")}${effectiveSchoolPhone ? ` • Ph: ${escapeHtml(effectiveSchoolPhone)}` : ""}
+        </p>
       </div>
     </div>
 
-    <!-- Shaded Grey Banner: FEE RECEIPT (+ Copy Tag) -->
+    <!-- Shaded Title Banner -->
     <div class="dps-banner">
-      <span>${escapeHtml(data.receiptTitle || "FEE RECEIPT")}</span>
+      <span>${escapeHtml(bannerTitle)}</span>
       ${copyTitle ? `<span class="dps-copy-tag">[ ${escapeHtml(copyTitle)} ]</span>` : ""}
     </div>
 
-    <!-- Student & Receipt Metadata Grid with Student Picture Frame -->
+    <!-- Student & Slip Metadata Grid (Clear, High-Contrast 2-Column Layout) -->
     <div class="dps-meta-grid">
-      <!-- Left Column -->
+      <!-- Left Column: Student Identity -->
       <div class="dps-meta-col dps-meta-col-left">
         <div class="dps-meta-row">
-          <span class="dps-label">Receipt No</span>
+          <span class="dps-label">Student</span>
           <span class="dps-colon">:</span>
-          <span class="dps-val font-bold">${escapeHtml(data.receiptNo)}</span>
+          <span class="dps-val uppercase font-bold dps-student-name-val">${escapeHtml(data.studentName)}</span>
+        </div>
+        ${resolvedFatherName ? `
+        <div class="dps-meta-row">
+          <span class="dps-label">Father</span>
+          <span class="dps-colon">:</span>
+          <span class="dps-val uppercase font-semibold">${escapeHtml(resolvedFatherName)}</span>
+        </div>
+        ` : ""}
+        <div class="dps-meta-row">
+          <span class="dps-label">Class</span>
+          <span class="dps-colon">:</span>
+          <span class="dps-val font-bold">${escapeHtml(data.className)}${data.rollNo ? ` (Roll: ${escapeHtml(data.rollNo)})` : ""}</span>
         </div>
         <div class="dps-meta-row">
           <span class="dps-label">Adm No</span>
           <span class="dps-colon">:</span>
-          <span class="dps-val">${escapeHtml(data.admissionNo)}</span>
-        </div>
-        <div class="dps-meta-row">
-          <span class="dps-label">Name</span>
-          <span class="dps-colon">:</span>
-          <span class="dps-val uppercase font-bold">${escapeHtml(data.studentName)}</span>
-        </div>
-        <div class="dps-meta-row">
-          <span class="dps-label">Installment</span>
-          <span class="dps-colon">:</span>
-          <span class="dps-val uppercase font-semibold">${escapeHtml(data.installment)}</span>
+          <span class="dps-val font-bold dps-tabular">${escapeHtml(data.admissionNo)}</span>
         </div>
       </div>
 
-      <!-- Right Column -->
+      <!-- Right Column: Slip & Billing Period -->
       <div class="dps-meta-col dps-meta-col-right">
+        <div class="dps-meta-row">
+          <span class="dps-label">${isDemandNote && totalPaid === 0 ? "Slip No" : "Receipt No"}</span>
+          <span class="dps-colon">:</span>
+          <span class="dps-val font-bold dps-tabular">${escapeHtml(data.receiptNo)}</span>
+        </div>
         <div class="dps-meta-row">
           <span class="dps-label">Date</span>
           <span class="dps-colon">:</span>
-          <span class="dps-val">${escapeHtml(data.receiptDate)}</span>
+          <span class="dps-val font-semibold dps-tabular">${escapeHtml(cleanDateShort)}</span>
         </div>
         <div class="dps-meta-row">
-          <span class="dps-label">Session</span>
+          <span class="dps-label">Month</span>
           <span class="dps-colon">:</span>
-          <span class="dps-val">${escapeHtml(data.session)}</span>
+          <span class="dps-val uppercase font-bold">${escapeHtml(data.installment)}</span>
         </div>
         <div class="dps-meta-row">
-          <span class="dps-label">Class</span>
+          <span class="dps-label">${resolvedStudentPhone ? "Mobile" : "Session"}</span>
           <span class="dps-colon">:</span>
-          <span class="dps-val font-bold">${escapeHtml(data.className)}</span>
-        </div>
-        <div class="dps-meta-row">
-          <span class="dps-label">CounterNo</span>
-          <span class="dps-colon">:</span>
-          <span class="dps-val uppercase">${escapeHtml(data.counterNo || "FEE-RECEIPT")}</span>
-        </div>
-      </div>
-
-      <!-- Student Picture Box -->
-      <div class="dps-photo-col">
-        <div class="dps-photo-box">
-          ${data.studentPhotoUrl && data.studentPhotoUrl.trim() !== "" ? `
-            <img 
-              src="${escapeHtml(data.studentPhotoUrl)}" 
-              alt="${escapeHtml(data.studentName)}" 
-              class="dps-student-img" 
-              onerror="this.style.display='none';this.parentElement.classList.add('photo-fallback');"
-            />
-          ` : `
-            <div class="dps-photo-empty">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
-                <circle cx="12" cy="7" r="4"></circle>
-              </svg>
-              <span>PHOTO</span>
-            </div>
-          `}
+          <span class="dps-val font-bold dps-tabular">${escapeHtml(resolvedStudentPhone ? `${resolvedStudentPhone} (${cleanSession})` : cleanSession)}</span>
         </div>
       </div>
     </div>
 
-    <!-- Itemized Fee Table with Vertical Column Dividing Lines -->
+    ${isDemandNote ? `
+    <!-- Previous Payment & Previous Due Summary Strip (With Dates) -->
+    <div class="dps-history-strip">
+      <div class="dps-history-cell dps-history-paid">
+        <div class="dps-history-kicker">पिछला जमा • LAST PAID</div>
+        <div class="dps-history-main">
+          <span class="dps-history-amt">₹${effectiveLastPaidAmount.toLocaleString("en-IN")}</span>
+          <span class="dps-history-date">${effectiveLastPaidAmount > 0
+            ? `Date: ${escapeHtml(effectiveLastPaidDate || "Recorded")}`
+            : "कोई पिछला जमा नहीं"}</span>
+        </div>
+      </div>
+      <div class="dps-history-cell dps-history-due ${effectiveLastDueAmount > 0 ? "has-due" : "is-clear"}">
+        <div class="dps-history-kicker">पिछला बकाया • LAST DUE</div>
+        <div class="dps-history-main">
+          <span class="dps-history-amt">₹${effectiveLastDueAmount.toLocaleString("en-IN")}</span>
+          <span class="dps-history-date">${effectiveLastDueAmount > 0
+            ? `${escapeHtml(effectiveLastDueDate)}`
+            : "पिछला बकाया शून्य (Clear)"}</span>
+        </div>
+      </div>
+    </div>
+    ` : ""}
+
+    <!-- Itemized Fee Table (Elastic Full-Height Ledger — Eliminates Dead Blank Space) -->
     <div class="dps-table-container">
       <table class="dps-fee-table">
         <thead>
           <tr>
-            <th class="th-sl">Sl.No</th>
-            <th class="th-desc">Description</th>
-            <th class="th-num">Due</th>
-            <th class="th-con">Con</th>
-            <th class="th-num">Paid</th>
+            <th class="th-sl">Sl.</th>
+            <th class="th-desc">${showDemandSimpleCols ? "Fee Particulars / शुल्क विवरण" : "Description"}</th>
+            ${showDemandSimpleCols ? `
+              ${showConCol ? `<th class="th-con">Con.</th>` : ""}
+              <th class="th-num th-demand-amt">Amount (₹)</th>
+            ` : `
+              <th class="th-num">Due</th>
+              <th class="th-con">Con</th>
+              <th class="th-num">Paid</th>
+            `}
           </tr>
         </thead>
         <tbody>
-          ${data.items.map(item => `
+          ${data.items.map(item => {
+            const lineNetDue = Math.max(0, Number(item.due || 0) - Number(item.con || 0));
+            return `
             <tr class="fee-data-row">
               <td class="td-sl">${item.slNo}</td>
-              <td class="td-desc">${escapeHtml(item.description)}</td>
-              <td class="td-num">${Number(item.due).toLocaleString("en-IN")}</td>
-              <td class="td-con">${Number(item.con).toLocaleString("en-IN")}</td>
-              <td class="td-num font-bold">${Number(item.paid).toLocaleString("en-IN")}</td>
+              <td class="td-desc font-semibold">${escapeHtml(item.description)}</td>
+              ${showDemandSimpleCols ? `
+                ${showConCol ? `<td class="td-con">${Number(item.con).toLocaleString("en-IN")}</td>` : ""}
+                <td class="td-num td-demand-amt font-bold">₹${(showConCol ? Number(item.due) : lineNetDue).toLocaleString("en-IN")}</td>
+              ` : `
+                <td class="td-num">${Number(item.due).toLocaleString("en-IN")}</td>
+                <td class="td-con">${Number(item.con).toLocaleString("en-IN")}</td>
+                <td class="td-num font-bold">${Number(item.paid).toLocaleString("en-IN")}</td>
+              `}
             </tr>
-          `).join("")}
-          <!-- Spacer empty rows to give authentic ledger vertical rules height -->
-          ${Array.from({ length: Math.max(isCompact ? 1 : 2, (isCompact ? 4 : 6) - data.items.length) }).map(() => `
-            <tr class="empty-spacer-row">
-              <td class="td-sl">&nbsp;</td>
-              <td class="td-desc">&nbsp;</td>
-              <td class="td-num">&nbsp;</td>
-              <td class="td-con">&nbsp;</td>
-              <td class="td-num">&nbsp;</td>
-            </tr>
-          `).join("")}
+            `;
+          }).join("")}
+          <!-- Elastic ledger filler row: stretches column dividers cleanly to bottom of table without empty white holes -->
+          <tr class="dps-filler-row" aria-hidden="true">
+            ${Array.from({ length: totalTableCols }).map((_, idx) => `
+              <td class="${idx === 0 ? "td-sl" : idx === 1 ? "td-desc" : "td-num"}"></td>
+            `).join("")}
+          </tr>
         </tbody>
       </table>
     </div>
 
-    <!-- Shaded Grey Banner: PAY MODE INFORMATION -->
+    ${!isDemandNote ? `
+    <!-- Paid Receipt: Pay Mode Information -->
     <div class="dps-banner">
       <span>PAY MODE INFORMATION</span>
     </div>
-
-    <!-- Payment Mode Details Grid -->
     <div class="dps-paymode-grid">
       <div class="dps-pay-row">
         <div class="dps-pay-field">
           <span class="dps-pay-label">Pay Mode</span>
-          <span class="dps-pay-val">${escapeHtml(data.payModeInfo.payMode || "Cheque")}</span>
+          <span class="dps-pay-val">${escapeHtml(data.payModeInfo.payMode || "Cash")}</span>
         </div>
         <div class="dps-pay-field text-right">
-          <span class="dps-pay-label">Date</span>
-          <span class="dps-pay-val">${escapeHtml(data.payModeInfo.date || data.receiptDate)}</span>
+          <span class="dps-pay-label">Pay Date</span>
+          <span class="dps-pay-val dps-tabular">${escapeHtml(data.payModeInfo.date || cleanDateShort)}</span>
         </div>
       </div>
       <div class="dps-pay-row">
         <div class="dps-pay-field">
-          <span class="dps-pay-label">Bank</span>
-          <span class="dps-pay-val uppercase">${escapeHtml(data.payModeInfo.bank || "HDFC BANK")}</span>
+          <span class="dps-pay-label">Counter</span>
+          <span class="dps-pay-val uppercase">${escapeHtml(data.payModeInfo.bank || "SCHOOL COUNTER")}</span>
         </div>
         <div class="dps-pay-field text-right">
-          <span class="dps-pay-label">Number</span>
-          <span class="dps-pay-val font-mono">${escapeHtml(data.payModeInfo.number || "689870,06,07")}</span>
+          <span class="dps-pay-label">Ref No</span>
+          <span class="dps-pay-val dps-tabular">${escapeHtml(data.payModeInfo.number || "—")}</span>
         </div>
       </div>
     </div>
+    ` : ""}
 
-    <!-- Pay Mode Subtotal Bar -->
-    <div class="dps-paymode-subtotal">
-      <span class="subtotal-label">Total</span>
-      <span class="subtotal-val">${grandTotal.toLocaleString("en-IN")}</span>
+    <!-- Highlighted Net Payable / Total Paid Bar -->
+    <div class="dps-grand-total-row ${isDemandNote ? "is-due-highlight" : ""}">
+      <span class="grand-label">${isDemandNote
+        ? "कुल देय राशि • NET PAYABLE DUE :"
+        : (calculatedBalDue > 0 ? "कुल जमा • TOTAL PAID :" : "कुल प्राप्त राशि • TOTAL PAID :")}</span>
+      <span class="grand-val dps-tabular">₹${(isDemandNote ? payableDueAmount : grandTotal).toLocaleString("en-IN")}</span>
     </div>
 
-    <!-- Grand Total Bar -->
-    <div class="dps-grand-total-row">
-      <span class="grand-label">${calculatedBalDue > 0 ? "Total Paid (कुल जमा) :" : "Total :"}</span>
-      <span class="grand-val">${grandTotal.toLocaleString("en-IN")}</span>
-    </div>
-
-    ${calculatedBalDue > 0 ? `
-    <!-- Net Balance Due Bar (अगला बकाया) -->
-    <div class="dps-grand-total-row" style="background:#fff1f2;border-top:1px solid #fecdd3;color:#9f1239;display:flex;justify-content:space-between;align-items:center;padding:2px 8px;">
-      <span class="grand-label" style="font-weight:800;color:#9f1239;font-size:${isCompact ? '7.5px' : '9.5px'};">Balance Due (शेष अगला बकाया) :</span>
-      <span class="grand-val" style="font-weight:900;color:#be123c;font-size:${isCompact ? '8.5px' : '11px'};">₹${calculatedBalDue.toLocaleString("en-IN")}</span>
+    ${!isDemandNote && totalPaid > 0 && calculatedBalDue > 0 ? `
+    <!-- Net Balance Due Bar on Partial Paid Receipt -->
+    <div class="dps-balance-due-row">
+      <span class="grand-label">शेष बकाया • BALANCE DUE :</span>
+      <span class="grand-val dps-tabular">₹${calculatedBalDue.toLocaleString("en-IN")}</span>
     </div>
     ` : ""}
 
-    <!-- Total in Words Box -->
+    <!-- Amount in Words Box -->
     <div class="dps-words-box">
-      <strong>Total in Words:</strong>
-      <span>${escapeHtml(totalWords)}</span>
-      ${calculatedBalDue > 0 ? `
-        <div style="margin-top:2px;font-size:${isCompact ? '6.5px' : '8px'};color:#b91c1c;font-weight:700;">
-          * शेष बकाया ₹${calculatedBalDue.toLocaleString("en-IN")} अगले महीने के बिल प्रिंट में जुड़ेगा (Balance will carry forward to next billing)
-        </div>
-      ` : ""}
-      ${data.fifoSummary ? `
-        <div style="margin-top:1.5px;font-size:${isCompact ? '6px' : '7.5px'};color:#475569;font-style:italic;">
-          ${escapeHtml(data.fifoSummary)}
+      <div><strong>In Words:</strong> <span>${escapeHtml(numberToIndianWords(isDemandNote ? payableDueAmount : grandTotal))}</span></div>
+      ${!isDemandNote && calculatedBalDue > 0 && totalPaid > 0 ? `
+        <div class="dps-words-subnote">
+          * शेष बकाया ₹${calculatedBalDue.toLocaleString("en-IN")} अगले माह के बिल में जुड़ेगा
         </div>
       ` : ""}
     </div>
 
-    <!-- Footer: High-Definition Vector QR Code, Note, and Disclaimer -->
+    ${isDemandNote ? `
+    <!-- Parent Payment Undertaking Box (Promise Date + Parent Signature on Demand Slips Only) -->
+    <div class="dps-parent-promise-box">
+      <div class="dps-promise-header">
+        <span>अभिभावक वचनबद्धता • PARENT PAYMENT PROMISE</span>
+        <span class="dps-promise-note">(तिथि भरकर हस्ताक्षर करें)</span>
+      </div>
+      <div class="dps-promise-grid">
+        <div class="dps-promise-col dps-promise-date-col">
+          <span class="dps-promise-label">जमा करने की तिथि / Promise Date:</span>
+          <div class="dps-promise-date-slots">
+            <span class="dps-date-blank"></span>
+            <span class="dps-date-sep">/</span>
+            <span class="dps-date-blank"></span>
+            <span class="dps-date-sep">/</span>
+            <span class="dps-date-year">20<span class="dps-date-blank-yr"></span></span>
+          </div>
+        </div>
+        <div class="dps-promise-col dps-promise-sign-col">
+          <span class="dps-promise-label">अभिभावक हस्ताक्षर / Parent Sign:</span>
+          <div class="dps-promise-sign-line"></div>
+        </div>
+      </div>
+    </div>
+    ` : ""}
+
+    <!-- Footer: Verification QR + School Payment UPI QR (on Due Slips) + Principal Signatory -->
     <div class="dps-footer">
       <div class="dps-footer-left">
         <img 
@@ -738,19 +1102,45 @@ export function generateDpsReceiptHtml(
           class="dps-qr-code" 
           onerror="this.onerror=null;this.src='${qrHighResPngUrl}'" 
         />
-        <span class="dps-note-text">Note : ${escapeHtml(data.note || "356")}</span>
+        <div class="dps-qr-caption">
+          <span class="dps-note-text">Verify QR</span>
+          <span class="dps-note-sub">${escapeHtml(isDemandNote ? "Pay by 10th of month" : (data.note || "Official Record"))}</span>
+        </div>
       </div>
-      <div class="dps-footer-right">
-        ${data.showDigitalSignature && data.principalSignatureUrl ? `
-          <div class="dps-sign-block">
-            <img src="${escapeHtml(data.principalSignatureUrl)}" alt="Principal Signature" class="dps-sign-img" />
-            <span class="dps-sign-title">${escapeHtml(data.principalName || "Principal")}</span>
-            <span class="dps-sign-role">Authorized Signatory</span>
+
+      ${isDueSlip && payableDueAmount > 0 ? `
+        <div class="dps-upi-pay-box">
+          ${upiQrSvgUrl ? `
+            <img
+              src="${upiQrSvgUrl}"
+              alt="School UPI QR"
+              class="dps-qr-code dps-upi-qr"
+              onerror="this.onerror=null;this.src='${upiQrPngUrl}'"
+            />
+          ` : `
+            <div class="dps-upi-placeholder">
+              <span>SCHOOL</span>
+              <span>UPI PAY</span>
+            </div>
+          `}
+          <div class="dps-upi-meta">
+            <div class="dps-upi-title">Scan &amp; Pay</div>
+            <div class="dps-upi-amt dps-tabular">₹${payableDueAmount.toLocaleString("en-IN")}</div>
+            <div class="dps-upi-id">${effectiveUpiId ? escapeHtml(effectiveUpiId) : "UPI / Counter"}</div>
           </div>
-        ` : ""}
-        <p class="dps-computer-gen">
-          This is a computer generated Receipt. Does not required signature.
-        </p>
+        </div>
+      ` : ""}
+
+      <div class="dps-footer-right">
+        <div class="dps-sign-block">
+          ${data.showDigitalSignature && data.principalSignatureUrl ? `
+            <img src="${escapeHtml(data.principalSignatureUrl)}" alt="Principal Signature" class="dps-sign-img" />
+          ` : `
+            <div class="dps-sign-manual-space"></div>
+          `}
+          <span class="dps-sign-title">${escapeHtml(data.principalName || "Principal")}</span>
+          <span class="dps-sign-role">Principal</span>
+        </div>
       </div>
     </div>
   </div>
@@ -871,11 +1261,11 @@ export const DPS_RECEIPT_CSS = `
     width: 105mm;
     height: 148.5mm;
     max-height: 148.5mm;
-    padding: 6mm;
+    padding: 2.5mm 2.8mm;
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    justify-content: center;
+    justify-content: stretch;
     overflow: hidden;
     z-index: 1;
   }
@@ -919,33 +1309,33 @@ export const DPS_RECEIPT_CSS = `
   .dps-cut-scissor {
     background: #ffffff;
     color: #334155;
-    font-size: 11px;
+    font-size: 10px;
     line-height: 1;
-    padding: 1px 3px;
+    padding: 1px 2px;
     font-weight: 700;
   }
   .dps-cut-scissor.left {
-    margin-left: 2mm;
+    margin-left: 1.2mm;
   }
   .dps-cut-scissor.right {
-    margin-right: 2mm;
+    margin-right: 1.2mm;
     transform: scaleX(-1);
   }
   .dps-cut-scissor.top {
-    margin-top: 2mm;
+    margin-top: 1.2mm;
     transform: rotate(90deg);
   }
   .dps-cut-scissor.bottom {
-    margin-bottom: 2mm;
+    margin-bottom: 1.2mm;
     transform: rotate(-90deg);
   }
   .dps-cut-label {
     background: #ffffff;
     color: #64748b;
-    font-size: 6.5px;
+    font-size: 6px;
     font-weight: 700;
-    letter-spacing: 0.6px;
-    padding: 0 5px;
+    letter-spacing: 0.5px;
+    padding: 0 4px;
     margin-right: 26%;
     text-transform: uppercase;
   }
@@ -954,13 +1344,13 @@ export const DPS_RECEIPT_CSS = `
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    width: 14px;
-    height: 14px;
+    width: 12px;
+    height: 12px;
     background: #ffffff;
     color: #334155;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 700;
-    line-height: 14px;
+    line-height: 12px;
     text-align: center;
     z-index: 6;
     pointer-events: none;
@@ -1007,15 +1397,19 @@ export const DPS_RECEIPT_CSS = `
      ════════════════════════════════════════════════════════════════════ */
   .dps-receipt-card {
     width: 100%;
-    max-width: 650px;
+    max-width: 680px;
     margin: 0 auto;
     background: #ffffff;
-    border: 1.5px solid #000000;
-    font-size: 11px;
+    border: 1.5px solid #0f172a;
+    font-size: 11.5px;
     line-height: 1.35;
-    color: #000000;
-    box-shadow: 0 0 0 1px rgba(0,0,0,0.05);
+    color: #0f172a;
     box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+  }
+  .dps-tabular {
+    font-variant-numeric: tabular-nums;
   }
 
   /* Header Box */
@@ -1023,223 +1417,269 @@ export const DPS_RECEIPT_CSS = `
     display: flex;
     align-items: center;
     padding: 10px 14px 8px;
-    gap: 14px;
+    gap: 12px;
     background: #ffffff;
   }
   .dps-logo-col {
-    width: 68px;
-    height: 80px;
+    width: 64px;
+    height: 74px;
     flex-shrink: 0;
     display: flex;
     align-items: center;
     justify-content: center;
   }
   .dps-logo-img {
-    max-width: 66px;
-    max-height: 80px;
+    max-width: 62px;
+    max-height: 72px;
     object-fit: contain;
   }
   .dps-school-info {
     flex: 1;
     text-align: center;
-    padding-right: 18px;
+    padding-right: 10px;
+    min-width: 0;
   }
   .dps-school-name {
     margin: 0 0 3px 0;
-    font-size: 21px;
-    font-weight: 800;
-    color: #000000;
+    font-size: 22px;
+    font-weight: 900;
+    color: #0f172a;
     letter-spacing: 0.2px;
-    font-family: 'Times New Roman', Georgia, serif;
-    line-height: 1.15;
+    font-family: Georgia, 'Times New Roman', serif;
+    line-height: 1.12;
   }
   .dps-school-address {
     margin: 0;
-    font-size: 10.5px;
-    color: #000000;
-    font-weight: 500;
-    letter-spacing: 0.1px;
+    font-size: 11px;
+    color: #1e293b;
+    font-weight: 600;
+    line-height: 1.25;
   }
 
-  /* Shaded Grey Banners */
+  /* Shaded Section Banners */
   .dps-banner {
-    background: #d4d4d8 !important;
-    background-color: #d1d5db !important;
-    border-top: 1.5px solid #000000;
-    border-bottom: 1.5px solid #000000;
-    padding: 3.5px 6px;
+    background: #e2e8f0 !important;
+    background-color: #e2e8f0 !important;
+    border-top: 1.4px solid #0f172a;
+    border-bottom: 1.4px solid #0f172a;
+    padding: 4px 10px;
     text-align: center;
-    font-weight: 800;
+    font-weight: 900;
     font-size: 11px;
-    letter-spacing: 0.8px;
-    color: #000000;
+    letter-spacing: 0.5px;
+    color: #0f172a;
     text-transform: uppercase;
-    font-family: Arial, sans-serif;
+    font-family: Arial, Helvetica, sans-serif;
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: 8px;
   }
   .dps-copy-tag {
-    font-size: 9.5px;
+    font-size: 10px;
     font-weight: 900;
     color: #1e293b;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.4px;
   }
 
-  /* Metadata Grid: 2 Columns + Student Photo Frame */
+  /* Metadata Grid: 2 Balanced Columns */
   .dps-meta-grid {
     display: flex;
-    align-items: center;
-    padding: 7px 12px;
-    border-bottom: 1px solid #000000;
-    gap: 12px;
+    align-items: flex-start;
+    padding: 8px 14px;
+    border-bottom: 1.2px solid #0f172a;
+    gap: 14px;
     background: #ffffff;
   }
   .dps-meta-col {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 3.5px;
+    min-width: 0;
   }
   .dps-meta-col-left {
-    flex: 1.1;
+    flex: 1.18;
   }
   .dps-meta-col-right {
-    flex: 1;
+    flex: 0.95;
   }
   .dps-meta-row {
     display: flex;
     align-items: baseline;
-    font-size: 10.5px;
-    line-height: 1.35;
+    font-size: 11px;
+    line-height: 1.32;
   }
   .dps-label {
-    width: 78px;
+    width: 68px;
     flex-shrink: 0;
     font-weight: 700;
-    color: #000000;
+    color: #334155;
   }
   .dps-colon {
     width: 10px;
     flex-shrink: 0;
     text-align: center;
-    font-weight: 700;
-    color: #000000;
+    font-weight: 800;
+    color: #0f172a;
   }
   .dps-val {
     flex: 1;
-    color: #000000;
+    color: #0f172a;
+    min-width: 0;
     word-break: break-word;
   }
+  .dps-student-name-val {
+    font-size: 12px;
+    color: #000000;
+  }
   .font-bold { font-weight: 800; }
-  .font-semibold { font-weight: 600; }
+  .font-semibold { font-weight: 700; }
   .uppercase { text-transform: uppercase; }
 
-  /* Student Photo Box */
-  .dps-photo-col {
-    width: 64px;
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-  }
-  .dps-photo-box {
-    width: 62px;
-    height: 74px;
-    border: 1.2px solid #000000;
+  /* Last Paid & Last Due Summary Strip (Demand Slips) */
+  .dps-history-strip {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    border-bottom: 1.2px solid #0f172a;
     background: #f8fafc;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: hidden;
-    position: relative;
-    border-radius: 2px;
   }
-  .dps-student-img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    display: block;
-  }
-  .dps-photo-empty {
+  .dps-history-cell {
+    padding: 6px 14px;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    justify-content: center;
     gap: 2px;
-    color: #64748b;
-    font-size: 8px;
-    font-weight: 800;
-    letter-spacing: 0.5px;
-    user-select: none;
+  }
+  .dps-history-paid {
+    border-right: 1.2px solid #0f172a;
+    background: #f0fdf4;
+  }
+  .dps-history-due.has-due {
+    background: #fff1f2;
+  }
+  .dps-history-due.is-clear {
+    background: #f8fafc;
+  }
+  .dps-history-kicker {
+    font-size: 9px;
+    font-weight: 900;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    color: #334155;
+  }
+  .dps-history-paid .dps-history-kicker {
+    color: #166534;
+  }
+  .dps-history-due.has-due .dps-history-kicker {
+    color: #9f1239;
+  }
+  .dps-history-main {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .dps-history-amt {
+    font-size: 13.5px;
+    font-weight: 900;
+    color: #0f172a;
+    font-variant-numeric: tabular-nums;
+  }
+  .dps-history-paid .dps-history-amt {
+    color: #14532d;
+  }
+  .dps-history-due.has-due .dps-history-amt {
+    color: #be123c;
+  }
+  .dps-history-date {
+    font-size: 10px;
+    font-weight: 700;
+    color: #1e293b;
+    font-variant-numeric: tabular-nums;
+  }
+  .dps-history-due.has-due .dps-history-date {
+    color: #881337;
   }
 
-  /* Fee Table */
+  /* Elastic Itemized Fee Table */
   .dps-table-container {
+    flex: 1;
+    min-height: 90px;
+    display: flex;
+    flex-direction: column;
     padding: 0;
     background: #ffffff;
   }
   .dps-fee-table {
     width: 100%;
+    height: 100%;
     border-collapse: collapse;
-    font-size: 10.5px;
+    font-size: 11px;
   }
   .dps-fee-table thead th {
-    background: #ffffff;
-    border-bottom: 1.2px solid #000000;
+    background: #f1f5f9;
+    border-bottom: 1.2px solid #0f172a;
     border-right: 1px solid #475569;
-    padding: 3.5px 7px;
-    font-weight: 700;
-    color: #000000;
-    font-size: 10px;
+    padding: 5px 8px;
+    font-weight: 800;
+    color: #0f172a;
+    font-size: 10.5px;
   }
   .dps-fee-table thead th:last-child {
     border-right: none;
   }
   .dps-fee-table tbody td {
-    padding: 3.5px 7px;
+    padding: 5px 8px;
     border-right: 1px solid #475569;
-    color: #000000;
-    font-size: 10.5px;
+    color: #0f172a;
+    font-size: 11px;
     vertical-align: middle;
   }
   .dps-fee-table tbody td:last-child {
     border-right: none;
   }
   .fee-data-row {
-    border-bottom: 1px solid #e2e8f0;
+    height: 1px;
+    border-bottom: 1px solid #cbd5e1;
+  }
+  .dps-filler-row {
+    height: 100%;
+  }
+  .dps-filler-row td {
+    padding: 0 8px !important;
+    border-bottom: none;
   }
   .th-sl, .td-sl {
-    width: 44px;
+    width: 42px;
     text-align: center;
+    font-variant-numeric: tabular-nums;
   }
   .th-desc, .td-desc {
     text-align: left;
     padding-left: 10px !important;
   }
   .th-con, .td-con {
-    width: 54px;
+    width: 60px;
     text-align: right;
     font-variant-numeric: tabular-nums;
   }
   .th-num, .td-num {
-    width: 74px;
+    width: 86px;
     text-align: right;
     font-variant-numeric: tabular-nums;
   }
-  .empty-spacer-row td {
-    height: 16px;
-    border-bottom: none;
+  .th-demand-amt, .td-demand-amt {
+    width: 96px;
   }
 
-  /* Pay Mode Information */
+  /* Pay Mode Information (Paid Receipts) */
   .dps-paymode-grid {
-    padding: 6px 12px;
+    padding: 6px 14px;
     display: flex;
     flex-direction: column;
     gap: 3px;
-    font-size: 10.5px;
+    font-size: 11px;
+    border-bottom: 1px solid #0f172a;
     background: #ffffff;
   }
   .dps-pay-row {
@@ -1250,59 +1690,161 @@ export const DPS_RECEIPT_CSS = `
   .dps-pay-field {
     display: flex;
     align-items: baseline;
-    gap: 12px;
+    gap: 10px;
   }
   .dps-pay-label {
-    width: 60px;
-    font-weight: 500;
-    color: #000000;
+    width: 62px;
+    font-weight: 600;
+    color: #334155;
   }
   .dps-pay-val {
-    font-weight: 700;
-    color: #000000;
-  }
-
-  /* Pay Mode Subtotal Bar */
-  .dps-paymode-subtotal {
-    background: #d4d4d8 !important;
-    background-color: #d1d5db !important;
-    border-top: 1px solid #000000;
-    border-bottom: 1px solid #000000;
-    padding: 3px 12px;
-    display: flex;
-    justify-content: space-between;
     font-weight: 800;
-    font-size: 10.5px;
-    color: #000000;
+    color: #0f172a;
   }
 
-  /* Grand Total Row */
+  /* Grand Total & Net Payable Row */
   .dps-grand-total-row {
-    padding: 5px 12px;
+    padding: 6px 14px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    border-bottom: 1px solid #000000;
-    font-size: 12px;
+    border-top: 1.4px solid #0f172a;
+    border-bottom: 1.2px solid #0f172a;
+    font-size: 13px;
+    font-weight: 900;
+    color: #0f172a;
+    background: #f1f5f9;
+  }
+  .dps-grand-total-row.is-due-highlight {
+    background: #fef2f2;
+    color: #881337;
+  }
+  .dps-grand-total-row .grand-val {
+    font-size: 15.5px;
+    font-weight: 900;
+    color: #0f172a;
+  }
+  .dps-grand-total-row.is-due-highlight .grand-val {
+    color: #9f1239;
+  }
+  .dps-balance-due-row {
+    background: #fff1f2;
+    border-bottom: 1px solid #0f172a;
+    color: #9f1239;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 14px;
+    font-size: 11.5px;
     font-weight: 800;
-    color: #000000;
-    background: #ffffff;
   }
 
   /* Total in Words */
   .dps-words-box {
-    padding: 5px 12px;
-    border-bottom: 1px solid #000000;
-    font-size: 10px;
-    color: #000000;
+    padding: 5px 14px;
+    border-bottom: 1.2px solid #0f172a;
+    font-size: 10.5px;
+    color: #0f172a;
     display: flex;
-    gap: 5px;
-    align-items: baseline;
+    flex-direction: column;
+    gap: 2px;
     background: #ffffff;
   }
   .dps-words-box strong {
     font-weight: 800;
-    white-space: nowrap;
+  }
+  .dps-words-subnote {
+    font-size: 9px;
+    color: #b91c1c;
+    font-weight: 700;
+  }
+
+  /* Parent Payment Promise Box (Demand Slips Only) */
+  .dps-parent-promise-box {
+    border-bottom: 1.2px solid #0f172a;
+    background: #fffbeb;
+    color: #0f172a;
+  }
+  .dps-promise-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 3.5px 14px;
+    background: #fef3c7;
+    border-bottom: 1px dashed #64748b;
+    font-size: 9.5px;
+    font-weight: 900;
+    letter-spacing: 0.2px;
+    color: #0f172a;
+  }
+  .dps-promise-note {
+    font-size: 9px;
+    font-weight: 700;
+    color: #334155;
+  }
+  .dps-promise-grid {
+    display: flex;
+    align-items: stretch;
+  }
+  .dps-promise-col {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 6px 14px 8px;
+    gap: 6px;
+  }
+  .dps-promise-date-col {
+    flex: 1.08;
+    border-right: 1px dashed #475569;
+  }
+  .dps-promise-sign-col {
+    flex: 1;
+  }
+  .dps-promise-label {
+    font-size: 10px;
+    font-weight: 800;
+    color: #0f172a;
+    line-height: 1.2;
+  }
+  .dps-promise-date-slots {
+    display: flex;
+    align-items: flex-end;
+    gap: 5px;
+    padding-top: 6px;
+    font-size: 12px;
+    font-weight: 900;
+    color: #0f172a;
+    line-height: 1;
+  }
+  .dps-date-blank {
+    display: inline-block;
+    width: 34px;
+    height: 16px;
+    border-bottom: 1.4px solid #0f172a;
+  }
+  .dps-date-sep {
+    font-weight: 900;
+    color: #334155;
+    padding-bottom: 1px;
+  }
+  .dps-date-year {
+    display: inline-flex;
+    align-items: flex-end;
+    font-weight: 900;
+    color: #0f172a;
+  }
+  .dps-date-blank-yr {
+    display: inline-block;
+    width: 26px;
+    height: 16px;
+    border-bottom: 1.4px solid #0f172a;
+    margin-left: 1px;
+  }
+  .dps-promise-sign-line {
+    width: 100%;
+    height: 20px;
+    border-bottom: 1.4px dotted #0f172a;
   }
 
   /* Footer */
@@ -1310,7 +1852,7 @@ export const DPS_RECEIPT_CSS = `
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 7px 12px 8px;
+    padding: 7px 14px 8px;
     gap: 10px;
     background: #ffffff;
   }
@@ -1320,39 +1862,98 @@ export const DPS_RECEIPT_CSS = `
     gap: 8px;
   }
   .dps-qr-code {
-    width: 60px;
-    height: 60px;
+    width: 58px;
+    height: 58px;
     object-fit: contain;
     image-rendering: -webkit-optimize-contrast;
     image-rendering: crisp-edges;
     image-rendering: pixelated;
     shape-rendering: crispEdges;
-    border: 1.2px solid #000000;
+    border: 1.2px solid #0f172a;
     padding: 2px;
     background: #ffffff;
     display: block;
+    flex-shrink: 0;
+  }
+  .dps-qr-caption {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
   }
   .dps-note-text {
     font-size: 10px;
+    font-weight: 800;
+    color: #0f172a;
+  }
+  .dps-note-sub {
+    font-size: 9px;
+    font-weight: 600;
+    color: #334155;
+    line-height: 1.2;
+  }
+  .dps-upi-pay-box {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 1.2px dashed #0f766e;
+    background: #f0fdfa;
+    padding: 4px 8px;
+    border-radius: 4px;
+  }
+  .dps-upi-qr {
+    border-color: #0f766e;
+    width: 52px;
+    height: 52px;
+  }
+  .dps-upi-placeholder {
+    width: 50px;
+    height: 50px;
+    border: 1px dashed #0f766e;
+    background: #ffffff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font-size: 8px;
+    font-weight: 900;
+    color: #0f766e;
+    line-height: 1.15;
+    padding: 2px;
+    flex-shrink: 0;
+  }
+  .dps-upi-meta {
+    text-align: left;
+    line-height: 1.2;
+  }
+  .dps-upi-title {
+    font-size: 9px;
+    font-weight: 900;
+    color: #0f766e;
+    text-transform: uppercase;
+  }
+  .dps-upi-amt {
+    font-size: 11.5px;
+    font-weight: 900;
+    color: #0f172a;
+  }
+  .dps-upi-id {
+    font-size: 8px;
+    font-family: monospace;
     font-weight: 700;
-    color: #000000;
+    color: #334155;
   }
   .dps-footer-right {
-    flex: 1;
     text-align: right;
-  }
-  .dps-computer-gen {
-    margin: 0;
-    font-size: 9px;
-    font-weight: 700;
-    color: #000000;
-    letter-spacing: 0.1px;
+    display: flex;
+    justify-content: flex-end;
+    align-items: flex-end;
   }
   .dps-sign-block {
     display: inline-flex;
     flex-direction: column;
     align-items: center;
-    margin-bottom: 3px;
+    min-width: 78px;
   }
   .dps-sign-img {
     height: 26px;
@@ -1360,181 +1961,277 @@ export const DPS_RECEIPT_CSS = `
     object-fit: contain;
     margin-bottom: 2px;
   }
+  .dps-sign-manual-space {
+    width: 74px;
+    height: 22px;
+    border-bottom: 1px solid #334155;
+    margin-bottom: 3px;
+  }
   .dps-sign-title {
-    font-size: 8.5px;
+    font-size: 9.5px;
     font-weight: 800;
-    color: #000000;
+    color: #0f172a;
+    line-height: 1.15;
   }
   .dps-sign-role {
-    font-size: 7.5px;
+    font-size: 8px;
+    font-weight: 700;
     color: #475569;
     text-transform: uppercase;
+    letter-spacing: 0.3px;
   }
 
   /* ════════════════════════════════════════════════════════════════════
-     COMPACT 4-IN-1 RECEIPT CARD STYLES (FITS 4 ON 1 A4 SHEET)
+     COMPACT 4-IN-1 A4 SLIP STYLES (FULL-QUADRANT 99.4mm × 143.5mm CLARITY)
      ════════════════════════════════════════════════════════════════════ */
   .dps-receipt-card.is-compact {
     width: 100% !important;
     max-width: 100% !important;
     height: 100%;
-    max-height: 136.5mm;
-    border: 1.2px solid #000000;
-    font-size: 8px;
-    line-height: 1.2;
+    max-height: 143.5mm;
+    border: 1.3px solid #0f172a;
+    font-size: 9.2px;
+    line-height: 1.25;
     display: flex;
     flex-direction: column;
     overflow: hidden;
   }
   .is-compact .dps-header {
-    padding: 3.5px 6px 2.5px;
-    gap: 6px;
+    padding: 5px 8px 4px;
+    gap: 8px;
   }
   .is-compact .dps-logo-col {
-    width: 38px;
+    width: 40px;
     height: 44px;
   }
   .is-compact .dps-logo-col svg,
   .is-compact .dps-logo-img {
-    max-width: 36px;
+    max-width: 40px;
     max-height: 44px;
   }
   .is-compact .dps-school-info {
-    padding-right: 6px;
+    padding-right: 4px;
   }
   .is-compact .dps-school-name {
-    font-size: 13px;
-    margin: 0 0 1px 0;
-    font-weight: 800;
+    font-size: 15px;
+    margin: 0 0 2px 0;
+    font-weight: 900;
+    line-height: 1.12;
   }
   .is-compact .dps-school-address {
-    font-size: 7.5px;
-    line-height: 1.15;
+    font-size: 8.5px;
+    line-height: 1.2;
+    font-weight: 600;
   }
   .is-compact .dps-banner {
-    padding: 2px 4px;
-    font-size: 8px;
-    border-top-width: 1px;
-    border-bottom-width: 1px;
+    padding: 3px 6px;
+    font-size: 8.8px;
+    letter-spacing: 0.35px;
+    border-top-width: 1.1px;
+    border-bottom-width: 1.1px;
   }
   .is-compact .dps-copy-tag {
-    font-size: 7.5px;
+    font-size: 8px;
   }
   .is-compact .dps-meta-grid {
-    padding: 3px 6px;
-    gap: 6px;
-    border-bottom-width: 1px;
+    padding: 5px 8px;
+    gap: 8px;
+    border-bottom-width: 1.1px;
   }
   .is-compact .dps-meta-col {
-    gap: 1.5px;
+    gap: 2px;
   }
   .is-compact .dps-meta-row {
-    font-size: 7.5px;
-    line-height: 1.25;
+    font-size: 9px;
+    line-height: 1.28;
+  }
+  .is-compact .dps-student-name-val {
+    font-size: 9.6px;
   }
   .is-compact .dps-label {
-    width: 52px;
+    width: 48px;
   }
   .is-compact .dps-colon {
-    width: 8px;
+    width: 7px;
   }
-  .is-compact .dps-photo-col {
-    width: 38px;
+  .is-compact .dps-history-strip {
+    border-bottom-width: 1.1px;
   }
-  .is-compact .dps-photo-box {
-    width: 36px;
-    height: 44px;
-    border-width: 1px;
+  .is-compact .dps-history-cell {
+    padding: 4px 8px;
+    gap: 1.5px;
   }
-  .is-compact .dps-photo-empty svg {
-    width: 14px;
-    height: 14px;
+  .is-compact .dps-history-paid {
+    border-right-width: 1.1px;
   }
-  .is-compact .dps-photo-empty span {
-    font-size: 6.5px;
+  .is-compact .dps-history-kicker {
+    font-size: 7.4px;
+  }
+  .is-compact .dps-history-amt {
+    font-size: 10.6px;
+  }
+  .is-compact .dps-history-date {
+    font-size: 8.2px;
+  }
+  .is-compact .dps-table-container {
+    min-height: 0;
   }
   .is-compact .dps-fee-table {
-    font-size: 7.5px;
+    font-size: 9.2px;
   }
   .is-compact .dps-fee-table thead th {
-    padding: 2px 4px;
-    font-size: 7px;
+    padding: 3.5px 6px;
+    font-size: 8.6px;
+    border-bottom-width: 1.1px;
   }
   .is-compact .dps-fee-table tbody td {
-    padding: 2px 4px;
-    font-size: 7.5px;
+    padding: 3.8px 6px;
+    font-size: 9.2px;
   }
   .is-compact .th-sl, .is-compact .td-sl {
-    width: 30px;
+    width: 28px;
   }
   .is-compact .th-desc, .is-compact .td-desc {
-    padding-left: 6px !important;
+    padding-left: 7px !important;
   }
   .is-compact .th-con, .is-compact .td-con {
-    width: 38px;
+    width: 42px;
   }
   .is-compact .th-num, .is-compact .td-num {
-    width: 50px;
+    width: 58px;
   }
-  .is-compact .empty-spacer-row td {
-    height: 8px;
+  .is-compact .th-demand-amt, .is-compact .td-demand-amt {
+    width: 72px;
+    font-size: 9.6px;
   }
   .is-compact .dps-paymode-grid {
-    padding: 2.5px 6px;
-    gap: 1.5px;
-    font-size: 7.5px;
+    padding: 3.5px 8px;
+    gap: 2px;
+    font-size: 8.6px;
   }
   .is-compact .dps-pay-label {
-    width: 44px;
-  }
-  .is-compact .dps-paymode-subtotal {
-    padding: 2px 6px;
-    font-size: 7.8px;
+    width: 48px;
   }
   .is-compact .dps-grand-total-row {
-    padding: 2.5px 6px;
-    font-size: 8.5px;
+    padding: 4.5px 8px;
+    font-size: 10.2px;
+    border-top-width: 1.2px;
+    border-bottom-width: 1.1px;
+  }
+  .is-compact .dps-grand-total-row .grand-val {
+    font-size: 12.8px;
+  }
+  .is-compact .dps-balance-due-row {
+    padding: 3px 8px;
+    font-size: 9.2px;
   }
   .is-compact .dps-words-box {
-    padding: 2.5px 6px;
-    font-size: 7px;
-    line-height: 1.2;
+    padding: 3.5px 8px;
+    font-size: 8.2px;
+    line-height: 1.22;
+    border-bottom-width: 1.1px;
+  }
+  .is-compact .dps-words-subnote {
+    font-size: 7.4px;
+  }
+  .is-compact .dps-parent-promise-box {
+    border-bottom-width: 1.1px;
+  }
+  .is-compact .dps-promise-header {
+    padding: 2.5px 8px;
+    font-size: 7.6px;
+  }
+  .is-compact .dps-promise-note {
+    font-size: 7.2px;
+  }
+  .is-compact .dps-promise-col {
+    padding: 4px 8px 5px;
+    gap: 3.5px;
+  }
+  .is-compact .dps-promise-label {
+    font-size: 8.2px;
+  }
+  .is-compact .dps-promise-date-slots {
+    padding-top: 3px;
+    font-size: 9.6px;
+    gap: 3px;
+  }
+  .is-compact .dps-date-blank {
+    width: 24px;
+    height: 13px;
+    border-bottom-width: 1.2px;
+  }
+  .is-compact .dps-date-blank-yr {
+    width: 19px;
+    height: 13px;
+    border-bottom-width: 1.2px;
+  }
+  .is-compact .dps-promise-sign-line {
+    height: 16px;
+    border-bottom-width: 1.2px;
   }
   .is-compact .dps-footer {
-    padding: 3px 6px 4px;
+    padding: 4px 8px 5px;
     gap: 6px;
-    margin-top: auto;
   }
   .is-compact .dps-qr-code {
-    width: 38px;
-    height: 38px;
+    width: 42px;
+    height: 42px;
     border-width: 1px;
-    padding: 1px;
+    padding: 1.5px;
   }
   .is-compact .dps-note-text {
-    font-size: 7.5px;
+    font-size: 8.2px;
   }
-  .is-compact .dps-computer-gen {
+  .is-compact .dps-note-sub {
+    font-size: 7.2px;
+  }
+  .is-compact .dps-upi-pay-box {
+    gap: 5px;
+    padding: 3px 6px;
+  }
+  .is-compact .dps-upi-qr,
+  .is-compact .dps-upi-placeholder {
+    width: 40px;
+    height: 40px;
     font-size: 6.5px;
   }
+  .is-compact .dps-upi-title {
+    font-size: 7.4px;
+  }
+  .is-compact .dps-upi-amt {
+    font-size: 9.4px;
+  }
+  .is-compact .dps-upi-id {
+    font-size: 6.6px;
+  }
+  .is-compact .dps-sign-block {
+    min-width: 62px;
+  }
   .is-compact .dps-sign-img {
-    height: 18px;
-    max-width: 65px;
+    height: 20px;
+    max-width: 68px;
+  }
+  .is-compact .dps-sign-manual-space {
+    width: 58px;
+    height: 16px;
+    margin-bottom: 2px;
   }
   .is-compact .dps-sign-title {
-    font-size: 7px;
+    font-size: 8px;
   }
   .is-compact .dps-sign-role {
-    font-size: 6px;
+    font-size: 6.8px;
   }
 
   /* ════════════════════════════════════════════════════════════════════
-     6-IN-1 ULTRA-COMPACT (is-mini) STYLING (93mm max-height per receipt)
+     6-IN-1 ULTRA-COMPACT (is-mini) STYLING (94mm max-height per receipt)
      ════════════════════════════════════════════════════════════════════ */
   .is-mini.dps-receipt-card {
     border-width: 1px;
     font-size: 6.5px;
     line-height: 1.15;
+    max-height: 93mm;
   }
   .is-mini .dps-header {
     padding: 2px 4px 1px;
@@ -1544,27 +2241,24 @@ export const DPS_RECEIPT_CSS = `
     width: 24px;
     height: 28px;
   }
-  .is-mini .dps-logo-img {
+  .is-mini .dps-logo-img,
+  .is-mini .dps-logo-col svg {
     max-width: 24px;
     max-height: 28px;
-  }
-  .is-mini .dps-logo-crest {
-    width: 24px;
-    height: 28px;
   }
   .is-mini .dps-school-info {
     padding-right: 2px;
   }
   .is-mini .dps-school-name {
-    font-size: 10px;
+    font-size: 10.5px;
     margin-bottom: 0px;
   }
   .is-mini .dps-school-address {
-    font-size: 5.5px;
+    font-size: 6px;
   }
   .is-mini .dps-banner {
     padding: 1.5px 3px;
-    font-size: 7px;
+    font-size: 6.8px;
     border-top-width: 1px;
     border-bottom-width: 1px;
   }
@@ -1578,81 +2272,108 @@ export const DPS_RECEIPT_CSS = `
   .is-mini .dps-meta-col {
     gap: 0.5px;
   }
-  .is-mini .dps-meta-row {
+  .is-mini .dps-meta-row,
+  .is-mini .dps-student-name-val {
     font-size: 6.5px;
     line-height: 1.15;
   }
   .is-mini .dps-label {
-    width: 44px;
+    width: 38px;
   }
   .is-mini .dps-colon {
-    width: 6px;
+    width: 5px;
   }
-  .is-mini .dps-photo-col {
-    width: 26px;
+  .is-mini .dps-history-cell {
+    padding: 2px 4px;
   }
-  .is-mini .dps-photo-box {
-    width: 24px;
-    height: 30px;
-    border-width: 1px;
+  .is-mini .dps-history-kicker {
+    font-size: 5.5px;
   }
-  .is-mini .dps-photo-empty svg {
-    width: 10px;
-    height: 10px;
+  .is-mini .dps-history-amt {
+    font-size: 7.5px;
   }
-  .is-mini .dps-photo-empty span {
-    font-size: 5px;
+  .is-mini .dps-history-date {
+    font-size: 5.8px;
   }
   .is-mini .dps-fee-table {
     font-size: 6.5px;
   }
   .is-mini .dps-fee-table thead th {
-    padding: 1px 3px;
-    font-size: 5.8px;
+    padding: 1.5px 3px;
+    font-size: 6px;
   }
   .is-mini .dps-fee-table tbody td {
-    padding: 1px 3px;
+    padding: 1.5px 3px;
     font-size: 6.5px;
   }
   .is-mini .th-sl, .is-mini .td-sl {
     width: 18px;
   }
   .is-mini .th-con, .is-mini .td-con {
-    width: 24px;
+    width: 26px;
   }
-  .is-mini .th-num, .is-mini .td-num {
-    width: 36px;
-  }
-  .is-mini .empty-spacer-row td {
-    height: 3px;
+  .is-mini .th-num, .is-mini .td-num,
+  .is-mini .th-demand-amt, .is-mini .td-demand-amt {
+    width: 44px;
+    font-size: 6.8px;
   }
   .is-mini .dps-paymode-grid {
-    padding: 1px 4px;
+    padding: 1.5px 4px;
     gap: 1px;
     font-size: 6px;
   }
   .is-mini .dps-pay-label {
     width: 34px;
   }
-  .is-mini .dps-paymode-subtotal {
-    padding: 1px 4px;
-    font-size: 6.5px;
-  }
   .is-mini .dps-grand-total-row {
-    padding: 1.5px 4px;
+    padding: 2px 4px;
     font-size: 7.2px;
   }
+  .is-mini .dps-grand-total-row .grand-val {
+    font-size: 8.5px;
+  }
   .is-mini .dps-words-box {
-    padding: 1px 4px;
+    padding: 1.5px 4px;
     font-size: 5.8px;
     line-height: 1.1;
   }
-  .is-mini .dps-footer {
-    padding: 1.5px 4px;
-    gap: 4px;
-    margin-top: auto;
+  .is-mini .dps-promise-header {
+    padding: 1px 4px;
+    font-size: 5.5px;
   }
-  .is-mini .dps-qr-code {
+  .is-mini .dps-promise-note {
+    font-size: 5px;
+  }
+  .is-mini .dps-promise-col {
+    padding: 1.5px 4px 2px;
+    gap: 1.5px;
+  }
+  .is-mini .dps-promise-label {
+    font-size: 5.8px;
+  }
+  .is-mini .dps-promise-date-slots {
+    padding-top: 2px;
+    font-size: 6.8px;
+    gap: 2px;
+  }
+  .is-mini .dps-date-blank {
+    width: 16px;
+    height: 8px;
+  }
+  .is-mini .dps-date-blank-yr {
+    width: 13px;
+    height: 8px;
+  }
+  .is-mini .dps-promise-sign-line {
+    height: 10px;
+  }
+  .is-mini .dps-footer {
+    padding: 2px 4px;
+    gap: 4px;
+  }
+  .is-mini .dps-qr-code,
+  .is-mini .dps-upi-qr,
+  .is-mini .dps-upi-placeholder {
     width: 26px;
     height: 26px;
     border-width: 1px;
@@ -1661,7 +2382,17 @@ export const DPS_RECEIPT_CSS = `
   .is-mini .dps-note-text {
     font-size: 5.8px;
   }
-  .is-mini .dps-computer-gen {
+  .is-mini .dps-note-sub {
+    font-size: 5px;
+  }
+  .is-mini .dps-sign-manual-space {
+    width: 40px;
+    height: 10px;
+  }
+  .is-mini .dps-sign-title {
+    font-size: 6px;
+  }
+  .is-mini .dps-sign-role {
     font-size: 5px;
   }
 
@@ -1673,27 +2404,30 @@ export const DPS_RECEIPT_CSS = `
       justify-content: center;
     }
     .dps-receipt-card {
-      box-shadow: 0 4px 25px rgba(0, 0, 0, 0.18);
+      box-shadow: 0 4px 20px rgba(15, 23, 42, 0.14);
+    }
+    .dps-receipt-card.is-compact {
+      box-shadow: 0 1px 6px rgba(15, 23, 42, 0.08);
     }
     .dps-4in1-page {
       width: 100%;
-      max-width: 780px;
+      max-width: 794px;
       height: auto;
       max-height: none;
       grid-template-columns: 1fr 1fr;
-      grid-template-rows: auto auto;
-      box-shadow: 0 4px 25px rgba(0, 0, 0, 0.18);
+      grid-template-rows: 1fr 1fr;
+      box-shadow: 0 6px 28px rgba(15, 23, 42, 0.18);
       padding: 0;
       gap: 0;
       border: 1px solid #cbd5e1;
-      border-radius: 8px;
+      border-radius: 6px;
     }
     .dps-4in1-cell {
       width: 100%;
-      height: auto;
+      height: 100%;
       max-height: none;
-      min-height: 360px;
-      padding: 14px;
+      min-height: 540px;
+      padding: 9px 10px;
     }
     .dps-6in1-page {
       width: 100%;
@@ -1740,12 +2474,17 @@ export const DPS_RECEIPT_CSS = `
       width: 105mm !important;
       height: 148.5mm !important;
       max-height: 148.5mm !important;
-      padding: 6mm !important;
+      min-height: 148.5mm !important;
+      padding: 2.5mm 2.8mm !important;
+    }
+    .dps-receipt-card.is-compact {
+      box-shadow: none !important;
+      max-height: 143.5mm !important;
     }
     .dps-full-print-page {
       width: 210mm !important;
       height: 297mm !important;
-      padding: 14mm !important;
+      padding: 12mm !important;
       margin: 0 auto !important;
       box-sizing: border-box !important;
       display: flex !important;
@@ -1778,20 +2517,64 @@ export const DPS_RECEIPT_CSS = `
  * If 1 student: prints 4 official copies (Student Copy, Office Copy, Accounts Copy, Guardian Copy).
  * If multiple students: chunks them into 4 per A4 page!
  */
+export function printReceiptHtmlInIframe(htmlContent: string, title = "Fee Receipt"): void {
+  if (typeof document === "undefined") return;
+  const existing = document.getElementById("nst-receipt-print-iframe");
+  if (existing && existing.parentNode) {
+    existing.parentNode.removeChild(existing);
+  }
+
+  const iframe = document.createElement("iframe");
+  iframe.id = "nst-receipt-print-iframe";
+  iframe.title = title;
+  iframe.style.position = "fixed";
+  iframe.style.right = "0";
+  iframe.style.bottom = "0";
+  iframe.style.width = "0";
+  iframe.style.height = "0";
+  iframe.style.border = "0";
+  iframe.style.opacity = "0";
+  iframe.style.pointerEvents = "none";
+  document.body.appendChild(iframe);
+
+  const doc = iframe.contentWindow?.document;
+  if (!doc) return;
+  doc.open();
+  doc.write(htmlContent);
+  doc.close();
+
+  let printed = false;
+  const runPrint = () => {
+    if (printed) return;
+    printed = true;
+    try {
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+    } catch (err) {
+      console.warn("Iframe receipt print warning:", err);
+    } finally {
+      setTimeout(() => {
+        if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+      }, 4500);
+    }
+  };
+
+  iframe.onload = () => setTimeout(runPrint, 350);
+  setTimeout(runPrint, 900);
+}
+
+/**
+ * Prints 4 receipts per A4 sheet (standard Indian school 4-in-1 format).
+ * If 1 student: prints 4 official copies (Student Copy, Office Copy, Accounts Copy, Guardian Copy).
+ * If multiple students: chunks them into 4 per A4 page!
+ */
 export function printDpsReceipts4in1(
   receipts: DpsReceiptData[],
   options?: { customTitle?: string }
 ) {
-  const printWin = window.open("", "_blank", "width=900,height=950");
-  if (!printWin) {
-    alert("Please allow pop-ups to print 4-in-1 fee receipts.");
-    return;
-  }
-
   let pagesHtml = "";
 
   if (receipts.length === 1) {
-    // 1 student: print 4 copies on 1 A4 page
     const r = receipts[0];
     const copies = [
       { data: r, copyTitle: "STUDENT COPY" },
@@ -1801,7 +2584,6 @@ export function printDpsReceipts4in1(
     ];
     pagesHtml = generate4in1A4PageHtml(copies);
   } else {
-    // Multiple students: chunk into 4 per page
     for (let i = 0; i < receipts.length; i += 4) {
       const chunk = receipts.slice(i, i + 4).map((r, idx) => ({
         data: r,
@@ -1823,36 +2605,19 @@ export function printDpsReceipts4in1(
       </head>
       <body>
         ${pagesHtml}
-        <script>
-          window.onload = () => {
-            setTimeout(() => {
-              window.print();
-              window.close();
-            }, 250);
-          };
-        </script>
       </body>
     </html>
   `;
-  printWin.document.write(htmlContent);
-  printWin.document.close();
+  printReceiptHtmlInIframe(htmlContent, options?.customTitle || "Fee Receipts (4-in-1 A4 Sheet)");
 }
 
 /**
  * Prints 6 receipts per A4 sheet (2x3 grid Super Saver format).
- * If 1 student: prints 6 copies (Student, School, Accounts, Guardian, Audit, Counter Copy).
- * If multiple students: chunks into 6 per A4 page!
  */
 export function printDpsReceipts6in1(
   receipts: DpsReceiptData[],
   options?: { customTitle?: string }
 ) {
-  const printWin = window.open("", "_blank", "width=900,height=950");
-  if (!printWin) {
-    alert("Please allow pop-ups to print 6-in-1 fee receipts.");
-    return;
-  }
-
   let pagesHtml = "";
 
   if (receipts.length === 1) {
@@ -1888,19 +2653,10 @@ export function printDpsReceipts6in1(
       </head>
       <body>
         ${pagesHtml}
-        <script>
-          window.onload = () => {
-            setTimeout(() => {
-              window.print();
-              window.close();
-            }, 250);
-          };
-        </script>
       </body>
     </html>
   `;
-  printWin.document.write(htmlContent);
-  printWin.document.close();
+  printReceiptHtmlInIframe(htmlContent, options?.customTitle || "Fee Receipts (6-in-1 A4 Sheet)");
 }
 
 /**
@@ -1919,11 +2675,6 @@ export function printDpsReceiptDirect(
     return;
   }
 
-  const printWin = window.open("", "_blank", "width=850,height=900");
-  if (!printWin) {
-    alert("Please allow pop-ups to print the official fee receipt.");
-    return;
-  }
   const htmlContent = `
     <!DOCTYPE html>
     <html>
@@ -1938,17 +2689,442 @@ export function printDpsReceiptDirect(
         <div class="dps-full-print-page">
           ${generateDpsReceiptHtml(data, { layout: "full" })}
         </div>
-        <script>
-          window.onload = () => {
-            setTimeout(() => {
-              window.print();
-              window.close();
-            }, 250);
-          };
-        </script>
       </body>
     </html>
   `;
-  printWin.document.write(htmlContent);
-  printWin.document.close();
+  printReceiptHtmlInIframe(htmlContent, `Fee Receipt - ${data.studentName}`);
+}
+
+/**
+ * Common CSS Stylesheet for Mini Thermal POS Roll Printers (80mm / 58mm).
+ * Designed for crisp, zero-waste thermal printing with no margins and perfect roll cutting.
+ */
+export const POS_SLIP_CSS = `
+  @page {
+    size: 80mm auto;
+    margin: 0mm;
+  }
+  * {
+    box-sizing: border-box;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 80mm;
+    background: #ffffff;
+    color: #000000;
+    font-family: 'Courier New', Courier, monospace, system-ui;
+    font-size: 11px;
+    line-height: 1.3;
+  }
+  .pos-slip-card {
+    width: 76mm;
+    margin: 0 auto;
+    padding: 3mm 2mm 8mm;
+    background: #ffffff;
+    color: #000000;
+    box-sizing: border-box;
+  }
+  .pos-header {
+    text-align: center;
+    margin-bottom: 2mm;
+  }
+  .pos-school-name {
+    font-size: 15px;
+    font-weight: 900;
+    letter-spacing: 0.5px;
+    margin: 0 0 1mm;
+    text-transform: uppercase;
+    font-family: Arial, Helvetica, sans-serif;
+  }
+  .pos-school-sub {
+    font-size: 9.5px;
+    font-weight: 600;
+    margin: 0.5mm 0;
+    color: #111111;
+  }
+  .pos-divider-double {
+    border-top: 1.5px dashed #000000;
+    margin: 2mm 0;
+  }
+  .pos-divider-single {
+    border-top: 1px dashed #444444;
+    margin: 1.5mm 0;
+  }
+  .pos-title-badge {
+    text-align: center;
+    font-size: 11px;
+    font-weight: 900;
+    text-transform: uppercase;
+    padding: 1mm 0;
+    letter-spacing: 0.5px;
+    font-family: Arial, Helvetica, sans-serif;
+  }
+  .pos-status-badge {
+    text-align: center;
+    font-size: 10px;
+    font-weight: 800;
+    margin: 1mm 0;
+    padding: 1px 4px;
+    border: 1px solid #000000;
+    display: inline-block;
+  }
+  .pos-meta-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    margin: 0.8mm 0;
+  }
+  .pos-meta-label {
+    font-weight: 700;
+  }
+  .pos-meta-val {
+    font-weight: 800;
+    text-align: right;
+  }
+  .pos-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10px;
+    margin: 1mm 0;
+  }
+  .pos-table th {
+    border-bottom: 1px dashed #000000;
+    padding: 1mm 0.5mm;
+    text-align: left;
+    font-size: 9.5px;
+    font-weight: 800;
+  }
+  .pos-table td {
+    padding: 1mm 0.5mm;
+    vertical-align: top;
+  }
+  .pos-grand-paid {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 14px;
+    font-weight: 900;
+    padding: 1.5mm 0;
+    border-top: 1.5px solid #000000;
+    border-bottom: 1.5px solid #000000;
+    margin: 1.5mm 0;
+    font-family: Arial, Helvetica, sans-serif;
+  }
+  .pos-grand-due {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+    font-weight: 800;
+    padding: 1mm 0;
+    border-bottom: 1px dashed #000000;
+  }
+  .pos-words-box {
+    font-size: 9px;
+    margin: 1.5mm 0;
+    line-height: 1.25;
+  }
+  .pos-qr-box {
+    text-align: center;
+    margin: 3mm 0 1.5mm;
+  }
+  .pos-qr-img {
+    width: 85px;
+    height: 85px;
+    margin: 0 auto;
+    display: block;
+  }
+  .pos-footer-text {
+    text-align: center;
+    font-size: 8.5px;
+    color: #333333;
+    margin-top: 2mm;
+  }
+  @media screen {
+    .pos-preview-wrap {
+      width: 76mm;
+      max-width: 320px;
+      margin: 0 auto;
+      background: #ffffff;
+      box-shadow: 0 6px 25px rgba(0,0,0,0.22);
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      color: #000000;
+    }
+  }
+`;
+
+/**
+ * Generates compact, ultra-sharp HTML markup designed for 80mm / 58mm Thermal POS Printers.
+ */
+export function generatePosSlipHtml(
+  data: DpsReceiptData,
+  options: DpsReceiptRenderOptions = {}
+): string {
+  const escapeHtml = (val: unknown) =>
+    String(val ?? "").replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c] as string));
+
+  const totalDue = data.items.reduce((s, it) => s + (Number(it.due) || 0), 0);
+  const totalConcession = data.items.reduce((s, it) => s + (Number(it.con) || 0), 0);
+  const netPayable = Math.max(0, totalDue - totalConcession);
+  const totalPaid = data.items.reduce((s, it) => s + (Number(it.paid) || 0), 0);
+  const grandTotal = totalPaid > 0 ? totalPaid : netPayable;
+  const totalWords = numberToIndianWords(grandTotal);
+  const itemizedRemaining = Math.max(0, netPayable - totalPaid);
+  const calculatedBalDue = data.balanceDue !== undefined
+    ? Math.max(Number(data.balanceDue), itemizedRemaining)
+    : itemizedRemaining;
+  const isFullPaid = totalPaid > 0 && calculatedBalDue <= 0 && totalPaid >= netPayable;
+  const isPartial = !isFullPaid && totalPaid > 0;
+
+  const cleanSchoolId = data.schoolId || 'school_campus';
+  const cleanStudentId = data.studentId || '';
+  const cleanRollNo = data.rollNo || '';
+  const cleanClassId = data.className || '';
+  const cleanStudentName = data.studentName || '';
+  const cleanAdmissionNo = data.admissionNo || '';
+  const cleanPhone = data.phone || '';
+
+  const qrLoginPrefix = `NSTA-SCHOOL:${[
+    encodeURIComponent(cleanSchoolId),
+    encodeURIComponent(cleanStudentId),
+    encodeURIComponent(cleanRollNo),
+    encodeURIComponent(cleanClassId),
+    encodeURIComponent(cleanStudentName),
+    encodeURIComponent(cleanAdmissionNo),
+    encodeURIComponent(cleanPhone)
+  ].join(":")}`;
+
+  const cleanSession = formatAcademicSession(data.session);
+  const qrVerificationData = `${qrLoginPrefix}\nFEE-RECEIPT\nReceiptNo: ${data.receiptNo}\nAdmNo: ${data.admissionNo}\nStudent: ${data.studentName}\nClass: ${data.className}\nSession: ${cleanSession}\nTotalPaid: ₹${grandTotal}\nDate: ${data.receiptDate}`;
+  const qrSvgUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&format=svg&qzone=1&margin=1&data=${encodeURIComponent(qrVerificationData)}`;
+  const qrHighResPngUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&qzone=1&margin=1&data=${encodeURIComponent(qrVerificationData)}`;
+
+  let effectiveUpiId = (data.upiId || "").trim();
+  if (!effectiveUpiId && data.schoolId) {
+    const cachedSchools = getSchoolCacheSync<any[]>("nst_schools_local_cache", []);
+    const matchedSchool = Array.isArray(cachedSchools) ? cachedSchools.find((s) => s?.id === data.schoolId) : null;
+    if (matchedSchool?.upiId) effectiveUpiId = String(matchedSchool.upiId).trim();
+  }
+  const payableDue = totalPaid === 0 ? netPayable : calculatedBalDue;
+  const posUpiUri = effectiveUpiId && payableDue > 0
+    ? `upi://pay?pa=${encodeURIComponent(effectiveUpiId)}&pn=${encodeURIComponent((data.schoolName || "School").slice(0, 40))}&am=${payableDue}&cu=INR&tn=${encodeURIComponent(`Fee ${data.admissionNo || data.studentName}`)}`
+    : "";
+  const posUpiQrSvgUrl = posUpiUri
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=320x320&format=svg&qzone=1&margin=1&data=${encodeURIComponent(posUpiUri)}`
+    : "";
+
+  return `
+    <div class="pos-slip-card pos-preview-wrap">
+      <!-- School Header -->
+      <div class="pos-header">
+        <div class="pos-school-name">${escapeHtml(data.schoolName || "School")}</div>
+        ${data.schoolAffiliation ? `<div class="pos-school-sub">${escapeHtml(data.schoolAffiliation)}</div>` : ""}
+        ${data.schoolAddress ? `<div class="pos-school-sub">${escapeHtml(data.schoolAddress)}</div>` : ""}
+        ${data.schoolPhone ? `<div class="pos-school-sub">Helpline: ${escapeHtml(data.schoolPhone)}</div>` : ""}
+      </div>
+
+      <div class="pos-divider-double"></div>
+
+      <!-- Slip Title -->
+      <div class="pos-title-badge">
+        ${escapeHtml(data.receiptTitle || "OFFICIAL FEE PAYMENT RECEIPT")}
+      </div>
+
+      <div style="text-align:center;margin:1mm 0;">
+        <span class="pos-status-badge">
+          ${isFullPaid ? "*** FULL PAID (पूर्ण भुगतान) ***" : isPartial ? "** PARTIAL PAID (आंशिक भुगतान) **" : "* DEMAND SLIP (बकाया विवरण) *"}
+        </span>
+      </div>
+
+      <div class="pos-divider-single"></div>
+
+      <!-- Receipt Meta -->
+      <div class="pos-meta-row">
+        <span class="pos-meta-label">${totalPaid === 0 ? "Slip No:" : "Receipt No:"}</span>
+        <span class="pos-meta-val">${escapeHtml(data.receiptNo)}</span>
+      </div>
+      <div class="pos-meta-row">
+        <span class="pos-meta-label">Date &amp; Time:</span>
+        <span class="pos-meta-val">${escapeHtml(data.receiptDate)}</span>
+      </div>
+      <div class="pos-meta-row">
+        <span class="pos-meta-label">Session:</span>
+        <span class="pos-meta-val">${escapeHtml(cleanSession)}</span>
+      </div>
+      <div class="pos-meta-row">
+        <span class="pos-meta-label">Pay Mode:</span>
+        <span class="pos-meta-val">${escapeHtml(totalPaid === 0 ? "Payment Pending" : (data.payModeInfo.payMode || "Cash"))}</span>
+      </div>
+
+      <div class="pos-divider-single"></div>
+
+      <!-- Student Details -->
+      <div class="pos-meta-row">
+        <span class="pos-meta-label">Student:</span>
+        <span class="pos-meta-val uppercase" style="font-size:11px;">${escapeHtml(data.studentName)}</span>
+      </div>
+      <div class="pos-meta-row">
+        <span class="pos-meta-label">Class &amp; Roll:</span>
+        <span class="pos-meta-val">${escapeHtml(data.className)} | Roll: ${escapeHtml(data.rollNo || "—")}</span>
+      </div>
+      <div class="pos-meta-row">
+        <span class="pos-meta-label">Adm No:</span>
+        <span class="pos-meta-val">${escapeHtml(data.admissionNo)}</span>
+      </div>
+      <div class="pos-meta-row">
+        <span class="pos-meta-label">Installment:</span>
+        <span class="pos-meta-val">${escapeHtml(data.installment)}</span>
+      </div>
+
+      ${(!isFullPaid && !isPartial) ? (() => {
+        const posHist = computeStudentFeeHistorySummary({
+          studentId: data.studentId,
+          schoolId: data.schoolId,
+        });
+        const posLastPaid = data.lastPaidAmount !== undefined ? Number(data.lastPaidAmount) : posHist.lastPaidAmount;
+        const posLastPaidDate = (data.lastPaidDate || posHist.lastPaidDate || "").trim();
+        const posArrearsItem = data.items.find(it => it.id === "arrears" || /arrears|back due/i.test(it.description || ""));
+        const posLastDue = data.lastDueAmount !== undefined
+          ? Number(data.lastDueAmount)
+          : (posArrearsItem ? Number(posArrearsItem.due || 0) : posHist.lastDueAmount);
+        const posLastDueDate = (data.lastDueDate || posHist.lastDueDate || "").trim();
+        return `
+          <div class="pos-divider-single"></div>
+          <div class="pos-meta-row">
+            <span class="pos-meta-label">Last Paid (पिछला जमा):</span>
+            <span class="pos-meta-val">₹${posLastPaid.toLocaleString("en-IN")}${posLastPaid > 0 && posLastPaidDate ? ` (${escapeHtml(posLastPaidDate)})` : ""}</span>
+          </div>
+          <div class="pos-meta-row">
+            <span class="pos-meta-label">Last Due (पिछला बकाया):</span>
+            <span class="pos-meta-val">₹${posLastDue.toLocaleString("en-IN")}${posLastDue > 0 && posLastDueDate ? ` (${escapeHtml(posLastDueDate)})` : " (Clear)"}</span>
+          </div>
+        `;
+      })() : ""}
+
+      <div class="pos-divider-single"></div>
+
+      <!-- Itemized Table -->
+      <table class="pos-table">
+        <thead>
+          <tr>
+            <th style="width:16px;">#</th>
+            <th>Item / Head</th>
+            <th style="text-align:right;">Due</th>
+            <th style="text-align:right;">Paid</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${data.items.map((it, idx) => `
+            <tr>
+              <td>${idx + 1}</td>
+              <td style="font-weight:700;">${escapeHtml(it.description)}</td>
+              <td style="text-align:right;">₹${Number(it.due).toLocaleString("en-IN")}</td>
+              <td style="text-align:right;font-weight:800;">₹${Number(it.paid).toLocaleString("en-IN")}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+
+      <!-- Grand Total Bar -->
+      <div class="pos-grand-paid">
+        <span>${totalPaid === 0 ? "TOTAL DUE:" : "TOTAL PAID:"}</span>
+        <span>₹${grandTotal.toLocaleString("en-IN")}</span>
+      </div>
+
+      ${totalPaid > 0 && calculatedBalDue > 0 ? `
+        <div class="pos-grand-due">
+          <span>BALANCE DUE (शेष बकाया):</span>
+          <span style="font-weight:900;">₹${calculatedBalDue.toLocaleString("en-IN")}</span>
+        </div>
+      ` : ""}
+
+      <div class="pos-words-box">
+        <strong>In Words:</strong> ${escapeHtml(totalWords)}
+        ${totalPaid > 0 && calculatedBalDue > 0 ? `<br/><span style="font-size:8.5px;">* शेष बकाया ₹${calculatedBalDue.toLocaleString("en-IN")} अगले माह के बिल में जुड़ेगा।</span>` : ""}
+      </div>
+
+      ${posUpiQrSvgUrl && payableDue > 0 ? `
+        <div class="pos-qr-box" style="border:1px dashed #000;padding:2mm;border-radius:4px;">
+          <div style="font-size:9px;font-weight:900;margin-bottom:1mm;">SCAN UPI TO PAY ₹${payableDue.toLocaleString("en-IN")}</div>
+          <img src="${posUpiQrSvgUrl}" alt="UPI Pay QR" class="pos-qr-img" />
+          <div style="font-size:8px;font-weight:700;margin-top:1mm;">UPI: ${escapeHtml(effectiveUpiId)}</div>
+        </div>
+      ` : `
+        <div class="pos-qr-box">
+          <img 
+            src="${qrSvgUrl}" 
+            alt="QR Verification" 
+            class="pos-qr-img" 
+            onerror="this.onerror=null;this.src='${qrHighResPngUrl}'" 
+          />
+          <div style="font-size:8px;font-weight:700;margin-top:1mm;">SCAN FOR VERIFICATION</div>
+        </div>
+      `}
+
+      ${(!isFullPaid && !isPartial) ? `
+        <div style="border:1px solid #000000;padding:2mm;margin:2mm 0;border-radius:3px;">
+          <div style="font-size:8.5px;font-weight:900;text-align:center;border-bottom:1px dashed #444;padding-bottom:1mm;margin-bottom:1.5mm;">
+            अभिभावक वचनबद्धता / PARENT PROMISE
+          </div>
+          <div style="font-size:9px;font-weight:800;margin-bottom:2.5mm;">
+            जमा तिथि (Promise Date): ____ / ____ / 20____
+          </div>
+          <div style="font-size:9px;font-weight:800;padding-top:1mm;">
+            अभिभावक हस्ताक्षर (Sign): ___________________
+          </div>
+        </div>
+      ` : ""}
+
+      <div class="pos-divider-double"></div>
+
+      <!-- Signatory & Disclaimer -->
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-top:2mm;font-size:9px;">
+        <span style="font-size:8px;">Type: ${escapeHtml(totalPaid === 0 ? "DUE-SLIP" : (data.counterNo || "POS"))}</span>
+        <div style="text-align:right;">
+          ${data.showDigitalSignature && data.principalSignatureUrl ? `
+            <img src="${escapeHtml(data.principalSignatureUrl)}" alt="Signature" style="height:18px;max-width:60px;object-fit:contain;display:block;margin-left:auto;" />
+          ` : ""}
+          <span style="font-weight:800;border-top:1px solid #000000;display:inline-block;padding-top:1px;">
+            ${escapeHtml(data.principalName || "Principal")}
+          </span>
+        </div>
+      </div>
+
+      <div class="pos-footer-text">
+        *** Thank You • Keep this slip for record ***<br/>
+        Computer Generated Official Slip
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Direct print helper for Mini Thermal POS Roll Printers (80mm / 58mm).
+ */
+export function printPosSlipDirect(
+  data: DpsReceiptData,
+  rollWidthMm: number = 80
+) {
+  const htmlContent = `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>POS Receipt - ${data.studentName} - ${data.receiptNo}</title>
+        <style>
+          ${POS_SLIP_CSS}
+        </style>
+      </head>
+      <body>
+        ${generatePosSlipHtml(data, { rollWidthMm })}
+      </body>
+    </html>
+  `;
+  printReceiptHtmlInIframe(htmlContent, `POS Receipt - ${data.studentName}`);
 }

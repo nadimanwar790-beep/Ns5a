@@ -11,6 +11,7 @@ import { BLOOD_GROUPS } from "../../school-types";
 import type { School, SchoolClass, SchoolStudent, MonthlyFee, AttendanceRecord } from "../../school-types";
 import { OfficialFeeReceiptModal } from "./OfficialFeeReceiptModal";
 import { getSavedSchoolLogo } from "./feeReceiptUtils";
+import { AdmissionFormPrintModal, printHtmlInIframe } from "./AdmissionFormPrintModal";
 
 interface Props {
   isOpen: boolean;
@@ -47,6 +48,7 @@ export const StudentQuickActionModal: React.FC<Props> = ({
   const [expandedFeeMonths, setExpandedFeeMonths] = useState<string[]>([]);
   const [updatingBloodGroup, setUpdatingBloodGroup] = useState(false);
   const [bloodGroupUpdatedToast, setBloodGroupUpdatedToast] = useState(false);
+  const [showAdmissionFormModal, setShowAdmissionFormModal] = useState(false);
 
   useEffect(() => {
     setActiveStudent(student);
@@ -153,22 +155,34 @@ export const StudentQuickActionModal: React.FC<Props> = ({
       if (onFeeUpdated) onFeeUpdated();
     } catch (err) {
       console.error("Failed to update fee:", err);
-      alert("Fee update failed. Please retry.");
     } finally {
       setUpdatingFeeId(null);
     }
   };
 
-  // Print ID Card
+  // Print ID Card (Iframe-safe, Photo LEFT, Full Adm No, Attendance QR RIGHT, Office Helpline Footer)
   const handlePrintIdCard = () => {
     const cur = activeStudent || student;
-    const printWin = window.open("", "_blank", "width=800,height=600");
-    if (!printWin) {
-      alert("Please allow pop-ups to print the ID card.");
-      return;
-    }
-    const qrData = `STUDENT ID\nName: ${cur.name}\nRoll: ${cur.rollNo || ""}\nClass: ${className}\nAdm: ${cur.admissionNo || ""}\nBlood: ${cur.bloodGroup || "—"}\nSchool: ${schoolName}\nPhone: ${cur.phone || ""}`;
-    printWin.document.write(`<!doctype html>
+    const qrPayload = `NSTA-SCHOOL:${[
+      encodeURIComponent(school?.id || cur.schoolId || ""),
+      encodeURIComponent(cur.id || ""),
+      encodeURIComponent(cur.rollNo || ""),
+      encodeURIComponent(cur.classId || ""),
+      encodeURIComponent(cur.name || ""),
+      encodeURIComponent(cur.admissionNo || ""),
+      encodeURIComponent(cur.phone || ""),
+      encodeURIComponent(cur.fatherName || ""),
+      encodeURIComponent(cur.motherName || ""),
+      encodeURIComponent(cur.bloodGroup || ""),
+      encodeURIComponent(cur.dateOfBirth || cur.dob || ""),
+      encodeURIComponent(cur.address || ""),
+      encodeURIComponent(cur.monthlyFee !== undefined && cur.monthlyFee !== null ? String(cur.monthlyFee) : ""),
+      encodeURIComponent((cur as any).className || className || ""),
+      encodeURIComponent(school?.name || schoolName || "")
+    ].join(":")}`;
+    const qrImgUrl = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&margin=2&data=${encodeURIComponent(qrPayload)}`;
+
+    const htmlDoc = `<!doctype html>
       <html>
         <head>
           <meta charset="utf-8" />
@@ -178,7 +192,7 @@ export const StudentQuickActionModal: React.FC<Props> = ({
             * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
             body { margin: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #f8fafc; }
             .card {
-              width: 86mm;
+              width: 85.6mm;
               height: 54mm;
               background: #ffffff;
               border: 1.5px solid #1e3a8a;
@@ -192,23 +206,26 @@ export const StudentQuickActionModal: React.FC<Props> = ({
             .header {
               background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%);
               color: white;
-              padding: 3mm 4mm;
-              text-align: center;
+              padding: 2mm 3mm;
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
             }
-            .school-title { font-size: 8.5pt; font-weight: 800; text-transform: uppercase; letter-spacing: 0.3px; line-height: 1.2; }
-            .school-sub { font-size: 6pt; opacity: 0.9; margin-top: 1px; }
+            .school-title { font-size: 8pt; font-weight: 800; text-transform: uppercase; letter-spacing: 0.2px; line-height: 1.15; }
+            .school-sub { font-size: 5.5pt; opacity: 0.9; margin-top: 1px; }
+            .id-badge { background: #fbbf24; color: #0f172a; font-size: 5.5pt; font-weight: 900; padding: 1px 4px; border-radius: 3px; text-transform: uppercase; }
             .content {
               flex: 1;
-              padding: 2.5mm 3.5mm;
+              padding: 2mm 2.5mm;
               display: flex;
-              gap: 3mm;
+              gap: 2.2mm;
               align-items: center;
             }
             .photo-box {
-              width: 22mm;
-              height: 27mm;
+              width: 17mm;
+              height: 21.5mm;
               border: 1.5px solid #94a3b8;
-              border-radius: 4px;
+              border-radius: 5px;
               overflow: hidden;
               background: #f1f5f9;
               display: flex;
@@ -217,30 +234,46 @@ export const StudentQuickActionModal: React.FC<Props> = ({
               flex-shrink: 0;
             }
             .photo-box img { width: 100%; height: 100%; object-fit: cover; }
-            .photo-box .placeholder { font-size: 16pt; font-weight: bold; color: #1e3a8a; }
+            .photo-box .placeholder { font-size: 14pt; font-weight: bold; color: #1e3a8a; }
             .info { flex: 1; min-width: 0; }
-            .student-name { font-size: 9.5pt; font-weight: 800; color: #0f172a; margin-bottom: 2px; }
-            .meta-grid { display: grid; grid-template-columns: auto 1fr; gap: 1.2px 3mm; font-size: 6.5pt; color: #334155; }
-            .meta-label { font-weight: 600; color: #64748b; }
-            .meta-val { font-weight: 700; color: #0f172a; }
+            .student-name { font-size: 8.5pt; font-weight: 800; color: #0f172a; margin-bottom: 1.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+            .badges-row { display: flex; gap: 3px; align-items: center; margin-bottom: 2px; }
+            .cls-badge { font-size: 6pt; font-weight: 800; background: #e0e7ff; color: #1e3a8a; padding: 0.5px 5px; border-radius: 99px; }
+            .bg-badge { font-size: 6pt; font-weight: 800; background: #ffe4e6; color: #be123c; border: 1px solid #fecdd3; padding: 0.5px 4px; border-radius: 3px; }
+            .meta-grid { display: grid; grid-template-columns: auto 1fr; gap: 1px 2mm; font-size: 6pt; color: #334155; }
+            .meta-label { font-weight: 700; color: #64748b; }
+            .meta-val { font-weight: 700; color: #0f172a; white-space: nowrap; }
+            .qr-box {
+              width: 19mm;
+              flex-shrink: 0;
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              justify-content: center;
+            }
+            .qr-box img { width: 17.5mm; height: 17.5mm; border: 1px solid #cbd5e1; border-radius: 4px; padding: 1px; background: #fff; }
+            .qr-sub { font-size: 4.8pt; font-family: monospace; font-weight: 800; color: #475569; margin-top: 1px; white-space: nowrap; }
             .footer {
               background: #f8fafc;
               border-top: 1px solid #e2e8f0;
-              padding: 1.5mm 3.5mm;
+              padding: 1.2mm 3mm;
               display: flex;
               justify-content: space-between;
               align-items: flex-end;
-              font-size: 5.5pt;
-              color: #64748b;
+              font-size: 5.2pt;
+              color: #475569;
             }
-            .sig { font-weight: 700; color: #1e3a8a; border-top: 1px solid #1e3a8a; padding-top: 1px; }
+            .sig-label { font-weight: 800; color: #0f172a; text-transform: uppercase; font-size: 5.2pt; }
           </style>
         </head>
         <body>
           <div class="card">
             <div class="header">
-              <div class="school-title">${schoolName}</div>
-              <div class="school-sub">${school?.address || "Student Identity Card"}</div>
+              <div>
+                <div class="school-title">${schoolName}</div>
+                <div class="school-sub">${school?.tagline || school?.affiliation || "Student Identity Card"}</div>
+              </div>
+              <div class="id-badge">STUDENT ID</div>
             </div>
             <div class="content">
               <div class="photo-box">
@@ -248,29 +281,38 @@ export const StudentQuickActionModal: React.FC<Props> = ({
               </div>
               <div class="info">
                 <div class="student-name">${cur.name}</div>
+                <div class="badges-row">
+                  <span class="cls-badge">${className}</span>
+                  ${cur.bloodGroup ? `<span class="bg-badge">${cur.bloodGroup}</span>` : ""}
+                </div>
                 <div class="meta-grid">
-                  <div class="meta-label">Class:</div><div class="meta-val">${className}</div>
-                  <div class="meta-label">Roll No:</div><div class="meta-val">${cur.rollNo || "—"}</div>
-                  <div class="meta-label">Adm No:</div><div class="meta-val">${cur.admissionNo || "—"}</div>
-                  ${cur.bloodGroup ? `<div class="meta-label">Blood Grp:</div><div class="meta-val" style="color: #b91c1c; font-weight: 800;">🩸 ${cur.bloodGroup}</div>` : ""}
-                  ${cur.fatherName ? `<div class="meta-label">Father:</div><div class="meta-val">${cur.fatherName}</div>` : ""}
+                  <div class="meta-label">Roll:</div><div class="meta-val">#${cur.rollNo || "—"}</div>
+                  <div class="meta-label">Adm:</div><div class="meta-val" style="font-family: monospace;">${cur.admissionNo || "—"}</div>
+                  ${cur.fatherName ? `<div class="meta-label">Father:</div><div class="meta-val" style="overflow:hidden;text-overflow:ellipsis;">${cur.fatherName}</div>` : ""}
                   ${cur.phone ? `<div class="meta-label">Mobile:</div><div class="meta-val">${cur.phone}</div>` : ""}
                   ${cur.dateOfBirth ? `<div class="meta-label">DOB:</div><div class="meta-val">${cur.dateOfBirth}</div>` : ""}
                 </div>
               </div>
+              <div class="qr-box">
+                <img src="${qrImgUrl}" alt="Attendance QR" />
+                <div class="qr-sub">${cur.admissionNo || cur.rollNo || ""}</div>
+              </div>
             </div>
             <div class="footer">
-              <div>Card ID: ${cur.id.slice(-6).toUpperCase()}</div>
+              <div>
+                ${school?.address ? `<strong>${school.address}</strong>` : ""}
+                ${schoolPhone ? ` • Helpline: ${schoolPhone}` : ""}
+                ${school?.code ? ` • School Code: ${school.code}` : ""}
+              </div>
               <div style="text-align: right;">
-                ${school?.principalSignatureUrl ? `<img src="${school.principalSignatureUrl}" style="height: 18px; max-width: 65px; object-fit: contain; display: block; margin-left: auto; margin-bottom: 2px;" alt="Principal Sign" />` : ""}
-                <div class="sig">${school?.principalName || "Principal Signature"}</div>
+                ${school?.principalSignatureUrl ? `<img src="${school.principalSignatureUrl}" style="height: 15px; max-width: 60px; object-fit: contain; display: block; margin-left: auto; margin-bottom: 1px;" alt="Principal Sign" />` : (school?.principalName ? `<div style="font-style:italic;font-weight:700;color:#0f172a;font-size:6pt;">${school.principalName}</div>` : "")}
+                <div class="sig-label">Principal</div>
               </div>
             </div>
           </div>
-          <script>window.onload = () => setTimeout(() => { window.print(); window.close(); }, 250);</script>
         </body>
-      </html>`);
-    printWin.document.close();
+      </html>`;
+    printHtmlInIframe(htmlDoc, `ID Card - ${cur.name}`);
   };
 
   // WhatsApp reminder / info
@@ -278,7 +320,6 @@ export const StudentQuickActionModal: React.FC<Props> = ({
     const raw = student.phone?.trim() || "";
     const digits = raw.replace(/\D/g, "");
     if (!digits) {
-      alert("Student/Parent phone number nahi hai.");
       return;
     }
     const phoneNum = digits.length === 10 ? `91${digits}` : digits;
@@ -368,33 +409,50 @@ export const StudentQuickActionModal: React.FC<Props> = ({
           {/* ──────────────── TAB 1: ID CARD ──────────────── */}
           {activeTab === "id_card" && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
                 <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                   Student Identity Card Preview
                 </span>
-                <button
-                  onClick={handlePrintIdCard}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-colors shadow-sm"
-                >
-                  <Printer className="w-3.5 h-3.5" />
-                  <span>Print ID Card</span>
-                </button>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setShowAdmissionFormModal(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 rounded-lg text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    <ReceiptText className="w-3.5 h-3.5" />
+                    <span>Admission Form / रसीद</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handlePrintIdCard}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-colors shadow-sm cursor-pointer"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>Print ID Card</span>
+                  </button>
+                </div>
               </div>
 
-              {/* Realistic ID Card Card Preview */}
-              <div className="max-w-sm mx-auto bg-white rounded-2xl border-2 border-blue-900 shadow-xl overflow-hidden text-slate-800">
+              {/* Realistic ID Card Preview (Photo Left, Full Adm No Center, Attendance QR Right) */}
+              <div className="max-w-md mx-auto bg-white rounded-2xl border-2 border-blue-900 shadow-xl overflow-hidden text-slate-800">
                 {/* ID Card Top Banner */}
-                <div className="bg-gradient-to-r from-blue-900 to-indigo-800 text-white p-3 text-center">
-                  <p className="font-extrabold text-sm tracking-wide uppercase line-clamp-1">{schoolName}</p>
-                  <p className="text-[10px] text-blue-200 line-clamp-1">{school?.address || "Recognized High School"}</p>
+                <div className="bg-gradient-to-r from-blue-900 to-indigo-800 text-white px-3.5 py-2.5 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-extrabold text-sm tracking-wide uppercase truncate">{schoolName}</p>
+                    <p className="text-[10px] text-blue-200 truncate">{school?.tagline || school?.affiliation || "Student Identity Card"}</p>
+                  </div>
+                  <span className="px-2 py-0.5 rounded bg-amber-400 text-slate-950 text-[9px] font-black uppercase shrink-0">
+                    STUDENT ID
+                  </span>
                 </div>
 
                 {/* ID Card Details Grid */}
                 {(() => {
                   const cur = activeStudent || student;
                   return (
-                    <div className="p-3.5 flex gap-3 items-center">
-                      <div className="w-20 h-24 rounded-lg border-2 border-slate-300 bg-slate-100 flex items-center justify-center overflow-hidden flex-shrink-0 shadow-inner">
+                    <div className="p-3.5 flex gap-3 items-center justify-between">
+                      {/* 1. Photo on LEFT */}
+                      <div className="w-[68px] h-[84px] rounded-lg border-2 border-slate-300 bg-slate-100 flex items-center justify-center overflow-hidden flex-shrink-0 shadow-inner">
                         {cur.photoUrl ? (
                           <img src={cur.photoUrl} alt={cur.name} className="w-full h-full object-cover" />
                         ) : (
@@ -405,32 +463,30 @@ export const StudentQuickActionModal: React.FC<Props> = ({
                         )}
                       </div>
 
+                      {/* 2. Details in CENTER (Single Blood Badge, Full Adm No) */}
                       <div className="flex-1 min-w-0 space-y-1 text-xs">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <p className="font-extrabold text-sm text-slate-900 line-clamp-1">{cur.name}</p>
-                          {cur.bloodGroup && (
-                            <span className="text-[10px] font-black px-1.5 py-0.2 rounded bg-rose-50 text-rose-700 border border-rose-200">
-                              🩸 {cur.bloodGroup}
+                        <div>
+                          <p className="font-extrabold text-sm text-slate-900 truncate">{cur.name}</p>
+                          <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                            <span className="text-[10px] font-black px-2 py-0.2 rounded-full bg-indigo-100 text-indigo-800">
+                              {className}
                             </span>
-                          )}
+                            {cur.bloodGroup && (
+                              <span className="text-[10px] font-black px-1.5 py-0.2 rounded bg-rose-50 text-rose-700 border border-rose-200">
+                                {cur.bloodGroup}
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[11px] text-slate-600">
-                          <span className="font-semibold text-slate-400">Class:</span>
-                          <span className="font-bold text-slate-800">{className}</span>
-                          <span className="font-semibold text-slate-400">Roll No:</span>
-                          <span className="font-bold text-slate-800">{cur.rollNo || "—"}</span>
-                          <span className="font-semibold text-slate-400">Adm No:</span>
-                          <span className="font-bold text-slate-800">{cur.admissionNo || "—"}</span>
-                          {cur.bloodGroup && (
-                            <>
-                              <span className="font-semibold text-rose-600">Blood:</span>
-                              <span className="font-black text-rose-700">🩸 {cur.bloodGroup}</span>
-                            </>
-                          )}
+                        <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[10.5px] text-slate-600 pt-0.5">
+                          <span className="font-semibold text-slate-400">Roll:</span>
+                          <span className="font-black text-slate-900">#{cur.rollNo || "—"}</span>
+                          <span className="font-semibold text-slate-400">Adm:</span>
+                          <span className="font-mono font-black text-slate-900 whitespace-nowrap">{cur.admissionNo || "—"}</span>
                           {cur.fatherName && (
                             <>
                               <span className="font-semibold text-slate-400">Father:</span>
-                              <span className="font-bold text-slate-800 line-clamp-1">{cur.fatherName}</span>
+                              <span className="font-bold text-slate-800 truncate">{cur.fatherName}</span>
                             </>
                           )}
                           {cur.phone && (
@@ -442,11 +498,11 @@ export const StudentQuickActionModal: React.FC<Props> = ({
                         </div>
                       </div>
 
-                      {/* QR Code */}
-                      <div className="hidden sm:flex flex-col items-center justify-center p-1 bg-white rounded border border-slate-200">
+                      {/* 3. Scannable Attendance QR on RIGHT */}
+                      <div className="flex flex-col items-center justify-center p-1.5 bg-white rounded-lg border border-slate-300 shrink-0 shadow-2xs">
                         <QRCode
                           value={`NSTA-SCHOOL:${[
-                            encodeURIComponent(school?.id || cur.schoolId || "dps_gurgaon_sector45"),
+                            encodeURIComponent(school?.id || cur.schoolId || ""),
                             encodeURIComponent(cur.id || ""),
                             encodeURIComponent(cur.rollNo || ""),
                             encodeURIComponent(cur.classId || ""),
@@ -459,30 +515,40 @@ export const StudentQuickActionModal: React.FC<Props> = ({
                             encodeURIComponent(cur.dateOfBirth || cur.dob || ""),
                             encodeURIComponent(cur.address || ""),
                             encodeURIComponent(cur.monthlyFee !== undefined && cur.monthlyFee !== null ? String(cur.monthlyFee) : ""),
-                            encodeURIComponent((cur as any).className || ""),
+                            encodeURIComponent((cur as any).className || className || ""),
                             encodeURIComponent(school?.name || "")
                           ].join(":")}`}
-                          size={44}
+                          size={58}
                         />
-                        <span className="text-[8px] text-slate-400 mt-0.5">VERIFIED</span>
+                        <span className="text-[7px] font-mono font-bold text-slate-600 mt-0.5 whitespace-nowrap">
+                          {cur.admissionNo || cur.rollNo || "SCAN ID"}
+                        </span>
                       </div>
                     </div>
                   );
                 })()}
 
-                {/* ID Card Footer */}
-                <div className="bg-slate-50 border-t border-slate-200 px-3 py-1.5 flex items-center justify-between text-[10px] text-slate-500">
-                  <span>Card ID: {(activeStudent?.id || student.id).slice(-6).toUpperCase()}</span>
-                  <div className="flex flex-col items-end">
+                {/* ID Card Footer (School Helpline & Principal Signatory, No Personal Phones) */}
+                <div className="bg-slate-50 border-t border-slate-200 px-3 py-1.5 flex items-center justify-between gap-2 text-[9.5px] text-slate-600">
+                  <div className="min-w-0 flex-1 truncate">
+                    {school?.address ? <span className="font-bold text-slate-700">{school.address}</span> : null}
+                    {schoolPhone ? <span className="ml-1">• Helpline: {schoolPhone}</span> : null}
+                    {school?.code ? <span className="ml-1">• School Code: {school.code}</span> : null}
+                  </div>
+                  <div className="flex flex-col items-end shrink-0">
                     {school?.principalSignatureUrl ? (
                       <img
                         src={school.principalSignatureUrl}
                         alt="Principal Sign"
                         className="h-4 max-w-[65px] object-contain mb-0.5"
                       />
+                    ) : school?.principalName ? (
+                      <span className="font-serif italic font-bold text-slate-900 text-[10px] leading-none mb-0.5">
+                        {school.principalName}
+                      </span>
                     ) : null}
-                    <span className="font-bold text-blue-900 border-b border-blue-900 pb-0.5">
-                      {school?.principalName ? `${school.principalName}` : "Authorized Sign"}
+                    <span className="font-black text-blue-950 uppercase tracking-wider text-[9px]">
+                      Principal
                     </span>
                   </div>
                 </div>
@@ -657,17 +723,19 @@ export const StudentQuickActionModal: React.FC<Props> = ({
                               <span className="font-bold text-sm text-slate-800 dark:text-white">
                                 ₹{Number(fee.amount || 0).toLocaleString("en-IN")}
                               </span>
-                              {fee.paid && (
-                                <button
-                                  type="button"
-                                  onClick={() => setDpsReceiptFee(fee)}
-                                  className="px-2 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-xs font-bold hover:bg-indigo-100 dark:hover:bg-indigo-900/60 flex items-center gap-1 shadow-xs transition cursor-pointer"
-                                  title="Open Official DPS-Format Fee Receipt"
-                                >
-                                  <ReceiptText className="w-3.5 h-3.5 text-amber-500" />
-                                  <span className="hidden sm:inline">DPS Receipt</span>
-                                </button>
-                              )}
+                              <button
+                                type="button"
+                                onClick={() => setDpsReceiptFee(fee)}
+                                className={`px-2 py-1 rounded-lg border text-xs font-bold flex items-center gap-1 shadow-xs transition cursor-pointer ${
+                                  fee.paid
+                                    ? "bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/60"
+                                    : "bg-orange-50 dark:bg-orange-950/40 text-orange-700 dark:text-orange-300 border-orange-200 dark:border-orange-800 hover:bg-orange-100 dark:hover:bg-orange-900/60"
+                                }`}
+                                title={fee.paid ? "Open Official DPS-Format Fee Receipt" : "Open 4-in-1 Fee Due Demand Slip"}
+                              >
+                                <ReceiptText className={`w-3.5 h-3.5 ${fee.paid ? "text-amber-500" : "text-orange-600"}`} />
+                                <span className="hidden sm:inline">{fee.paid ? "DPS Receipt" : "Due Slip"}</span>
+                              </button>
                               <button
                                 onClick={() => handleToggleFeePaid(fee)}
                                 disabled={updatingFeeId === fee.month}
@@ -886,13 +954,30 @@ export const StudentQuickActionModal: React.FC<Props> = ({
             id: school?.id || "school",
             name: school?.name || schoolName || "School",
             address: school?.address || "Institutional Academic Campus, Educational Zone",
-            logoUrl: getSavedSchoolLogo(school?.logoUrl),
+            logoUrl: getSavedSchoolLogo(school?.logoUrl, school?.id),
             principalSignatureUrl: school?.principalSignatureUrl,
           } as any}
           fee={dpsReceiptFee}
           student={activeStudent || student}
           className={className}
-          sessionName="2026-2027"
+          sessionName="2026-27"
+          feeHistory={feeRecords}
+        />
+      )}
+
+      {showAdmissionFormModal && school && (
+        <AdmissionFormPrintModal
+          isOpen={showAdmissionFormModal}
+          onClose={() => setShowAdmissionFormModal(false)}
+          school={school}
+          student={activeStudent || student}
+          className={className}
+          sessionName="2026-27"
+          feeRecord={
+            feeRecords.find(
+              (f) => f.feeType === "admission" || f.receiptCategory === "admission"
+            ) || null
+          }
         />
       )}
     </div>

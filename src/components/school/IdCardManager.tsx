@@ -13,7 +13,7 @@ import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeade
 import { QuickAddStudentModal } from "./QuickAddStudentModal";
 import { DirectUploadButton } from "../DirectUploadButton";
 import { updateSchool, isStudentInClass } from "../../school-firebase";
-import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo } from "./feeReceiptUtils";
+import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo, formatAcademicSession } from "./feeReceiptUtils";
 
 interface Props {
   school: School;
@@ -63,9 +63,9 @@ export const IdCardManager: React.FC<Props> = ({
     address: school?.address || "",
     phone: school?.mobile || school?.phone || "",
     email: school?.email || "",
-    logoUrl: getSavedSchoolLogo(school?.logoUrl),
+    logoUrl: getSavedSchoolLogo(school?.logoUrl, school?.id),
     principalName: school?.principalName || "",
-    principalTitle: "Principal / Authorized Signatory",
+    principalTitle: "Principal",
     code: school?.code || "",
     principalPhone: school?.principalPhone || "",
     directorName: school?.directorName || "",
@@ -86,7 +86,7 @@ export const IdCardManager: React.FC<Props> = ({
       address: school.address || "",
       phone: school.mobile || school.phone || "",
       email: school.email || "",
-      logoUrl: getSavedSchoolLogo(school.logoUrl || previous.logoUrl),
+      logoUrl: getSavedSchoolLogo(school.logoUrl || previous.logoUrl, school.id),
       principalName: school.principalName || "",
       code: school.code || "",
       principalPhone: school.principalPhone || "",
@@ -279,13 +279,19 @@ export const IdCardManager: React.FC<Props> = ({
     ].join(":")}`;
     const isLandscape = cardOrientation === "landscape";
 
+    const cleanSessionLabel = formatAcademicSession(schoolDetails.session || "2026-27");
+    const resolvedSignatoryTitle =
+      schoolDetails.principalTitle && !/auth\.?\s*signatory/i.test(schoolDetails.principalTitle)
+        ? schoolDetails.principalTitle
+        : "Principal";
+
     if (isLandscape) {
       // ──────────────────────────────────────────────────────────────────────────
       // LANDSCAPE CR80 ID CARD (85.6mm x 54mm)
-      // PRINT SAFETY FIX:
-      // - QR Code on the LEFT
-      // - Auto-Placed Data in the CENTER
-      // - Student Photo on the RIGHT
+      // STANDARD IDENTITY LAYOUT:
+      // - Student Photo on the LEFT (Face noticed first)
+      // - Full Student Details in the CENTER (No Adm No truncation, no duplicate Blood Group)
+      // - Scannable Attendance QR on the RIGHT (Balanced size with crisp quiet-zone)
       // ──────────────────────────────────────────────────────────────────────────
       return (
         <div
@@ -296,9 +302,9 @@ export const IdCardManager: React.FC<Props> = ({
           {/* Top School Brand Header */}
           <div className={`${currentTheme.headerBg} px-2.5 py-1 text-white flex items-center justify-between shrink-0`}>
             <div className="flex items-center gap-1.5 min-w-0">
-              {getSavedSchoolLogo(schoolDetails.logoUrl) ? (
+              {getSavedSchoolLogo(schoolDetails.logoUrl, school?.id) ? (
                 <img
-                  src={cleanLogoUrl(getSavedSchoolLogo(schoolDetails.logoUrl))}
+                  src={cleanLogoUrl(getSavedSchoolLogo(schoolDetails.logoUrl, school?.id))}
                   alt="School Logo"
                   className="w-5 h-5 rounded-full bg-white object-contain p-0.5 shrink-0"
                   onError={(e) => {
@@ -308,91 +314,96 @@ export const IdCardManager: React.FC<Props> = ({
                   }}
                 />
               ) : null}
-              <div className={`w-5 h-5 rounded-full bg-white/20 items-center justify-center font-black text-[8.5px] text-white shrink-0 id-h-logo-fallback ${getSavedSchoolLogo(schoolDetails.logoUrl) ? 'hidden' : 'flex'}`}>
+              <div className={`w-5 h-5 rounded-full bg-white/20 items-center justify-center font-black text-[8.5px] text-white shrink-0 id-h-logo-fallback ${getSavedSchoolLogo(schoolDetails.logoUrl, school?.id) ? 'hidden' : 'flex'}`}>
                 {(schoolDetails.schoolName || "SC").slice(0, 2).toUpperCase()}
               </div>
               <div className="min-w-0 leading-tight">
-                {showSchoolDetail("schoolName") && <h3 className="font-black text-[10.5px] tracking-tight truncate max-w-[200px] text-white">{schoolDetails.schoolName}</h3>}
-                {showSchoolDetail("affiliation") && <p className="text-[6.5px] text-indigo-100 truncate max-w-[200px]">{schoolDetails.affiliation || schoolDetails.tagline}</p>}
+                {showSchoolDetail("schoolName") && <h3 className="font-black text-[10.5px] tracking-tight truncate max-w-[205px] text-white">{schoolDetails.schoolName}</h3>}
+                {showSchoolDetail("affiliation") && (schoolDetails.affiliation || schoolDetails.tagline) && (
+                  <p className="text-[6.5px] text-indigo-100 truncate max-w-[205px]">
+                    {(schoolDetails.affiliation || schoolDetails.tagline).replace(/affiliation\s*code/gi, "School Code")}
+                  </p>
+                )}
               </div>
             </div>
             <div className="text-right shrink-0">
               <span className="inline-block px-1.5 py-0.5 rounded-sm bg-amber-400 text-slate-950 text-[7px] font-black uppercase tracking-wider">
                 {isStaff ? "STAFF ID" : "STUDENT ID"}
               </span>
-              <p className="text-[6.5px] text-amber-200 font-bold mt-0.5 text-right">{schoolDetails.session || "2026-27"}</p>
+              <p className="text-[6.5px] text-amber-200 font-bold mt-0.5 text-right">{cleanSessionLabel}</p>
             </div>
           </div>
 
-          {/* Body: 3-Column Safe Layout (QR Left, Info Center, Pic Right) */}
+          {/* Body: 3-Column Standard Layout (1. Photo LEFT, 2. Info CENTER, 3. Attendance QR RIGHT) */}
           <div className="px-2.5 py-1.5 flex-1 flex items-center justify-between gap-2 bg-white">
-            {/* 1. LEFT COLUMN: QR Code (Never cut off during print) */}
-            <div className="flex flex-col items-center justify-center shrink-0 w-[96px]">
-              <div className="p-1 bg-white border border-slate-300 rounded-lg shadow-2xs flex items-center justify-center">
-                <QRCode value={qrVerifyUrl} size={84} level="M" />
+            {/* 1. LEFT COLUMN: Student Photo (Primary Face Recognition on Left) */}
+            <div className="flex flex-col items-center justify-center shrink-0">
+              <div className="w-[62px] h-[78px] rounded-lg border-2 border-slate-300 overflow-hidden bg-slate-100 shrink-0 flex items-center justify-center shadow-xs">
+                {item.photoUrl ? (
+                  <img src={item.photoUrl} alt={item.name} className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full flex flex-col items-center justify-center text-slate-300 bg-slate-50">
+                    <User className="w-7 h-7" />
+                    <span className="text-[6.5px] text-slate-400 mt-0.5 font-bold">Photo</span>
+                  </div>
+                )}
               </div>
-              <span className="text-[6.5px] font-black text-slate-600 uppercase tracking-tighter mt-0.5 flex items-center gap-0.5">
-                <ShieldCheck className="w-2.5 h-2.5 text-emerald-600 inline" /> Scan Verify
-              </span>
-              <span className="text-[6px] text-slate-500 font-mono font-bold">
-                {item.admissionNo || item.rollNo || item.id.slice(0, 5)}
-              </span>
             </div>
 
-            {/* 2. CENTER COLUMN: Auto-Placed Student Details */}
-            <div className="flex-1 min-w-0 text-[9.5px] leading-tight space-y-0.5">
+            {/* 2. CENTER COLUMN: Clean Student Details (Full Adm No, Single Blood Badge) */}
+            <div className="flex-1 min-w-0 text-[9px] leading-tight space-y-0.5">
               <div className="border-b border-slate-100 pb-0.5">
-                <h4 className="font-black text-xs text-slate-900 truncate">{item.name}</h4>
-                <div className="flex items-center gap-1.5 mt-0.5">
-                  <span className={`text-[8px] font-black px-1.5 py-0.2 rounded-full ${currentTheme.badge} uppercase tracking-wider`}>
+                <h4 className="font-black text-[11.5px] text-slate-900 truncate">{item.name}</h4>
+                <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                  <span className={`text-[7.5px] font-black px-1.5 py-0.2 rounded-full ${currentTheme.badge} uppercase tracking-wider`}>
                     {isStaff ? item.designation : className}
                   </span>
                   {fieldSettings.showBloodGroup && item.bloodGroup && (
-                    <span className="text-[7.5px] font-black px-1 py-0.2 rounded bg-rose-50 text-rose-700 border border-rose-200">
+                    <span className="text-[7.5px] font-black px-1.5 py-0.2 rounded bg-rose-50 text-rose-700 border border-rose-200">
                       {item.bloodGroup}
                     </span>
                   )}
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-x-1.5 gap-y-0.5 text-[8.5px] text-slate-700 pt-0.5">
+              <div className="grid grid-cols-2 gap-x-1.5 gap-y-0.5 text-[8px] text-slate-700 pt-0.5">
                 {!isStaff ? (
                   <>
                     {fieldSettings.showRollNo && (
-                      <p className="truncate">
+                      <p className="whitespace-nowrap">
                         <strong className="text-slate-400 font-bold">Roll:</strong>{" "}
                         <span className="font-black text-slate-900">#{item.rollNo || "—"}</span>
                       </p>
                     )}
-                    {fieldSettings.showAdmissionNo && (
+                    {fieldSettings.showDateOfBirth && item.dateOfBirth && (
                       <p className="truncate">
+                        <strong className="text-slate-400 font-bold">DOB:</strong>{" "}
+                        <span className="font-semibold text-slate-800">{item.dateOfBirth}</span>
+                      </p>
+                    )}
+                    {fieldSettings.showAdmissionNo && (
+                      <p className="col-span-2 whitespace-nowrap text-[7.8px] leading-tight">
                         <strong className="text-slate-400 font-bold">Adm:</strong>{" "}
-                        <span className="font-bold text-slate-800">{item.admissionNo || "—"}</span>
+                        <span className="font-mono font-black text-slate-900 tracking-tight">{item.admissionNo || "—"}</span>
                       </p>
                     )}
                     {fieldSettings.showFatherName && (
                       <p className="col-span-2 truncate">
                         <strong className="text-slate-400 font-bold">Father:</strong>{" "}
-                        <span className="font-medium text-slate-800">{item.fatherName || "—"}</span>
+                        <span className="font-semibold text-slate-800">{item.fatherName || "—"}</span>
                       </p>
                     )}
                     {fieldSettings.showPhone && (
                       <p className="col-span-2 truncate">
                         <strong className="text-slate-400 font-bold">Mobile:</strong>{" "}
-                        <span className="font-medium text-slate-800">{item.phone || "—"}</span>
+                        <span className="font-semibold text-slate-800">{item.phone || "—"}</span>
                       </p>
                     )}
                     {fieldSettings.showMotherName && item.motherName && (
                       <p className="col-span-2 truncate"><strong className="text-slate-400 font-bold">Mother:</strong>{" "}{item.motherName}</p>
                     )}
-                    {fieldSettings.showDateOfBirth && item.dateOfBirth && (
-                      <p className="truncate"><strong className="text-slate-400 font-bold">DOB:</strong>{" "}{item.dateOfBirth}</p>
-                    )}
-                    {fieldSettings.showBloodGroup && item.bloodGroup && (
-                      <p className="truncate"><strong className="text-slate-400 font-bold">Blood:</strong>{" "}<span className="font-black text-rose-700">🩸 {item.bloodGroup}</span></p>
-                    )}
                     {fieldSettings.showStudentAddress && item.address && (
-                      <p className="col-span-2 truncate"><strong className="text-slate-400 font-bold">Student address:</strong>{" "}{item.address}</p>
+                      <p className="col-span-2 truncate"><strong className="text-slate-400 font-bold">Addr:</strong>{" "}{item.address}</p>
                     )}
                     {fieldSettings.showStudentEmail && item.email && (
                       <p className="col-span-2 truncate"><strong className="text-slate-400 font-bold">Email:</strong>{" "}{item.email}</p>
@@ -400,11 +411,11 @@ export const IdCardManager: React.FC<Props> = ({
                   </>
                 ) : (
                   <>
-                    <p className="truncate">
+                    <p className="col-span-2 whitespace-nowrap">
                       <strong className="text-slate-400 font-bold">Emp ID:</strong>{" "}
-                      <span className="font-black text-slate-900">{item.employeeId || item.id.slice(0, 5).toUpperCase()}</span>
+                      <span className="font-mono font-black text-slate-900">{item.employeeId || item.id.slice(0, 6).toUpperCase()}</span>
                     </p>
-                    <p className="truncate">
+                    <p className="col-span-2 truncate">
                       <strong className="text-slate-400 font-bold">Dept:</strong>{" "}
                       <span className="font-bold text-slate-800">{item.department || "Academic"}</span>
                     </p>
@@ -417,32 +428,27 @@ export const IdCardManager: React.FC<Props> = ({
               </div>
             </div>
 
-            {/* 3. RIGHT COLUMN: Student Photo (Safe Right Edge) */}
-            <div className="flex flex-col items-center justify-center shrink-0">
-              <div className="w-[62px] h-[76px] rounded-lg border-2 border-slate-200 overflow-hidden bg-slate-100 shrink-0 flex items-center justify-center shadow-xs">
-                {item.photoUrl ? (
-                  <img src={item.photoUrl} alt={item.name} className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full flex flex-col items-center justify-center text-slate-300 bg-slate-50">
-                    <User className="w-7 h-7" />
-                    <span className="text-[6.5px] text-slate-400 mt-0.5 font-bold">Photo</span>
-                  </div>
-                )}
+            {/* 3. RIGHT COLUMN: High-Contrast Attendance QR Code (Balanced ~22% width, Fast Scan) */}
+            <div className="flex flex-col items-center justify-center shrink-0 w-[78px]">
+              <div className="p-1 bg-white border border-slate-300 rounded-lg shadow-2xs flex items-center justify-center">
+                <QRCode value={qrVerifyUrl} size={66} level="M" />
               </div>
+              <span className="text-[6px] font-black text-slate-600 uppercase tracking-tighter mt-0.5 flex items-center gap-0.5 whitespace-nowrap">
+                <ShieldCheck className="w-2.5 h-2.5 text-emerald-600 inline shrink-0" /> Scan ID
+              </span>
+              <span className="text-[5.8px] text-slate-600 font-mono font-bold whitespace-nowrap">
+                {item.admissionNo || item.rollNo || item.id.slice(0, 6)}
+              </span>
             </div>
           </div>
 
-          {/* Bottom Card Footer: Address & Principal Signature */}
+          {/* Bottom Card Footer: School Office Helpline & Principal Signatory (No Personal Phones) */}
           <div className="px-2.5 py-1 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-2 text-[6px] text-slate-600 shrink-0">
             <div className="min-w-0 flex-1 leading-tight break-words">
               {showSchoolDetail("address") && schoolDetails.address && <span className="font-bold text-slate-700">{schoolDetails.address}</span>}
-              {showSchoolDetail("phone") && schoolDetails.phone && <span className="ml-1 text-slate-500">• School: {schoolDetails.phone}</span>}
-              {showSchoolDetail("email") && schoolDetails.email && <span className="ml-1 text-slate-500">• Email: {schoolDetails.email}</span>}
-              {showSchoolDetail("code") && schoolDetails.code && <span className="ml-1 text-slate-500">• Code: {schoolDetails.code}</span>}
-              {showSchoolDetail("principalName") && schoolDetails.principalName && <span className="ml-1 text-slate-500">• Principal: {schoolDetails.principalName}</span>}
-              {showSchoolDetail("principalPhone") && schoolDetails.principalPhone && <span className="ml-1 text-slate-500">• P: {schoolDetails.principalPhone}</span>}
-              {showSchoolDetail("directorName") && schoolDetails.directorName && <span className="ml-1 text-slate-500">• Director: {schoolDetails.directorName}</span>}
-              {showSchoolDetail("directorPhone") && schoolDetails.directorPhone && <span className="ml-1 text-slate-500">• D: {schoolDetails.directorPhone}</span>}
+              {showSchoolDetail("phone") && schoolDetails.phone && <span className="ml-1 text-slate-600 font-semibold">• Helpline: {schoolDetails.phone}</span>}
+              {showSchoolDetail("email") && schoolDetails.email && <span className="ml-1 text-slate-500">• {schoolDetails.email}</span>}
+              {showSchoolDetail("code") && schoolDetails.code && <span className="ml-1 text-slate-500">• School Code: {schoolDetails.code}</span>}
               {customSchoolDetails && <span className="ml-1 text-slate-500">• {customSchoolDetails}</span>}
             </div>
             <div className="text-right shrink-0 flex flex-col items-end justify-end">
@@ -453,13 +459,13 @@ export const IdCardManager: React.FC<Props> = ({
                   className="h-4 max-w-[65px] object-contain block mb-0.5"
                 />
               ) : (
-                showSchoolDetail("principalName") && (
-                  <span className="font-serif italic font-bold text-slate-900 text-[7px] block">
-                    {schoolDetails.principalName ? `${schoolDetails.principalName}` : "Principal"}
+                showSchoolDetail("principalName") && schoolDetails.principalName ? (
+                  <span className="font-serif italic font-bold text-slate-900 text-[7px] block leading-none mb-0.5">
+                    {schoolDetails.principalName}
                   </span>
-                )
+                ) : null
               )}
-              <p className="text-[5.5px] uppercase tracking-tighter text-slate-400">Auth. Signatory</p>
+              <p className="text-[6px] font-black uppercase tracking-wider text-slate-700">{resolvedSignatoryTitle}</p>
             </div>
           </div>
         </div>
@@ -468,11 +474,11 @@ export const IdCardManager: React.FC<Props> = ({
 
     // ──────────────────────────────────────────────────────────────────────────
     // PORTRAIT CR80 ID CARD (54mm x 85.6mm)
-    // PRINT SAFETY FIX:
+    // STANDARD IDENTITY LAYOUT:
     // - Top header with Lanyard slot & school details
-    // - QR Code on the LEFT & Student Photo on the RIGHT
-    // - Center Auto-Placed Details
-    // - Bottom Address & Principal Signature
+    // - Student Photo on the LEFT & Scannable Attendance QR on the RIGHT
+    // - Center Details (Full Admission No, Single Blood Badge)
+    // - Bottom School Helpline & Principal Signature (No Personal Phones)
     // ──────────────────────────────────────────────────────────────────────────
     return (
       <div
@@ -486,9 +492,9 @@ export const IdCardManager: React.FC<Props> = ({
         {/* Header with School Branding */}
         <div className={`${currentTheme.headerBg} pt-3 pb-1.5 px-2 text-center text-white relative shrink-0`}>
           <div className="flex items-center justify-center gap-1.5 mb-0.5">
-            {getSavedSchoolLogo(schoolDetails.logoUrl) ? (
+            {getSavedSchoolLogo(schoolDetails.logoUrl, school?.id) ? (
               <img
-                src={cleanLogoUrl(getSavedSchoolLogo(schoolDetails.logoUrl))}
+                src={cleanLogoUrl(getSavedSchoolLogo(schoolDetails.logoUrl, school?.id))}
                 alt="School Logo"
                 className="w-5 h-5 rounded-full bg-white p-0.5 object-contain shrink-0"
                 onError={(e) => {
@@ -498,35 +504,26 @@ export const IdCardManager: React.FC<Props> = ({
                 }}
               />
             ) : null}
-            <div className={`w-5 h-5 rounded-full bg-white/20 items-center justify-center font-black text-[8px] text-white shrink-0 id-logo-fallback ${getSavedSchoolLogo(schoolDetails.logoUrl) ? 'hidden' : 'flex'}`}>
+            <div className={`w-5 h-5 rounded-full bg-white/20 items-center justify-center font-black text-[8px] text-white shrink-0 id-logo-fallback ${getSavedSchoolLogo(schoolDetails.logoUrl, school?.id) ? 'hidden' : 'flex'}`}>
               {(schoolDetails.schoolName || "SC").slice(0, 2).toUpperCase()}
             </div>
             {showSchoolDetail("schoolName") && <h3 className="font-black text-[11px] tracking-tight leading-tight line-clamp-1">{schoolDetails.schoolName}</h3>}
           </div>
-          {showSchoolDetail("affiliation") && <p className="text-[6.5px] text-indigo-100 truncate mb-1">{schoolDetails.affiliation || schoolDetails.tagline}</p>}
+          {showSchoolDetail("affiliation") && (schoolDetails.affiliation || schoolDetails.tagline) && (
+            <p className="text-[6.5px] text-indigo-100 truncate mb-1">
+              {(schoolDetails.affiliation || schoolDetails.tagline).replace(/affiliation\s*code/gi, "School Code")}
+            </p>
+          )}
           <div className="inline-block px-2 py-0.2 rounded-full bg-amber-400 text-slate-950 text-[7px] font-black uppercase tracking-widest">
-            {isStaff ? "STAFF ID CARD" : "STUDENT ID CARD"} • {schoolDetails.session || "2026-27"}
+            {isStaff ? "STAFF ID CARD" : "STUDENT ID CARD"} • {cleanSessionLabel}
           </div>
         </div>
 
-        {/* Identity Row: QR on the LEFT and Photo on the RIGHT */}
+        {/* Identity Row: Student Photo on the LEFT and Attendance QR on the RIGHT */}
         <div className="px-3 pt-2 pb-1 flex items-center justify-between gap-2 shrink-0 bg-white">
-          {/* QR Code on LEFT */}
-          <div className="flex flex-col items-center justify-center shrink-0 w-[80px]">
-            <div className="p-1 bg-white border border-slate-300 rounded-lg shadow-2xs flex items-center justify-center">
-              <QRCode value={qrVerifyUrl} size={68} level="M" />
-            </div>
-            <span className="text-[7px] text-slate-600 font-black uppercase tracking-tighter mt-0.5">
-              Scan Verify
-            </span>
-            <span className="text-[6.5px] text-slate-500 font-mono font-bold">
-              {item.admissionNo || item.rollNo || item.id.slice(0, 5)}
-            </span>
-          </div>
-
-          {/* Student Photo on RIGHT */}
+          {/* Student Photo on LEFT */}
           <div className="flex flex-col items-center justify-center shrink-0">
-            <div className="w-[66px] h-[78px] rounded-xl border-2 border-slate-200 overflow-hidden shadow-xs bg-slate-50 flex items-center justify-center">
+            <div className="w-[68px] h-[80px] rounded-xl border-2 border-slate-300 overflow-hidden shadow-xs bg-slate-50 flex items-center justify-center">
               {item.photoUrl ? (
                 <img src={item.photoUrl} alt={item.name} className="w-full h-full object-cover" />
               ) : (
@@ -536,6 +533,19 @@ export const IdCardManager: React.FC<Props> = ({
                 </div>
               )}
             </div>
+          </div>
+
+          {/* Scannable Attendance QR on RIGHT */}
+          <div className="flex flex-col items-center justify-center shrink-0 w-[76px]">
+            <div className="p-1 bg-white border border-slate-300 rounded-lg shadow-2xs flex items-center justify-center">
+              <QRCode value={qrVerifyUrl} size={62} level="M" />
+            </div>
+            <span className="text-[6.5px] text-slate-600 font-black uppercase tracking-tighter mt-0.5">
+              Scan ID
+            </span>
+            <span className="text-[6px] text-slate-600 font-mono font-bold whitespace-nowrap">
+              {item.admissionNo || item.rollNo || item.id.slice(0, 6)}
+            </span>
           </div>
         </div>
 
@@ -550,15 +560,15 @@ export const IdCardManager: React.FC<Props> = ({
             </span>
             {fieldSettings.showBloodGroup && item.bloodGroup && (
               <span className="text-[7.5px] font-black px-1.5 py-0.2 rounded bg-rose-50 text-rose-700 border border-rose-200">
-                Blood: {item.bloodGroup}
+                {item.bloodGroup}
               </span>
             )}
           </div>
         </div>
 
-        {/* Auto-Placed Details Table */}
-        <div className="px-3 py-1 flex-1 text-[9px] text-slate-700 space-y-0.5 leading-tight overflow-hidden">
-                {!isStaff ? (
+        {/* Auto-Placed Details Table (Full Admission No, No Duplicate Blood Row) */}
+        <div className="px-3 py-1 flex-1 text-[8.5px] text-slate-700 space-y-0.5 leading-tight overflow-hidden">
+          {!isStaff ? (
             <>
               {fieldSettings.showRollNo && (
                 <div className="flex justify-between border-b border-slate-100 pb-0.5">
@@ -567,15 +577,15 @@ export const IdCardManager: React.FC<Props> = ({
                 </div>
               )}
               {fieldSettings.showAdmissionNo && (
-                <div className="flex justify-between border-b border-slate-100 pb-0.5">
-                  <span className="text-slate-400 font-bold">Admission No:</span>
-                  <span className="font-bold text-slate-800">{item.admissionNo || "—"}</span>
+                <div className="flex justify-between gap-1 border-b border-slate-100 pb-0.5">
+                  <span className="text-slate-400 font-bold shrink-0">Adm No:</span>
+                  <span className="font-mono font-black text-slate-900 whitespace-nowrap">{item.admissionNo || "—"}</span>
                 </div>
               )}
               {fieldSettings.showFatherName && (
                 <div className="flex justify-between border-b border-slate-100 pb-0.5">
                   <span className="text-slate-400 font-bold">Father's Name:</span>
-                  <span className="font-bold text-slate-800 truncate max-w-[120px]">{item.fatherName || "—"}</span>
+                  <span className="font-bold text-slate-800 truncate max-w-[125px]">{item.fatherName || "—"}</span>
                 </div>
               )}
               {fieldSettings.showPhone && (
@@ -584,25 +594,22 @@ export const IdCardManager: React.FC<Props> = ({
                   <span className="font-bold text-slate-800">{item.phone || "—"}</span>
                 </div>
               )}
-                  {fieldSettings.showMotherName && item.motherName && (
-                    <div className="flex justify-between border-b border-slate-100 pb-0.5"><span className="text-slate-400 font-bold">Mother's Name:</span><span className="font-bold text-slate-800 truncate max-w-[120px]">{item.motherName}</span></div>
-                  )}
-                  {fieldSettings.showDateOfBirth && item.dateOfBirth && (
-                    <div className="flex justify-between border-b border-slate-100 pb-0.5"><span className="text-slate-400 font-bold">Date of Birth:</span><span className="font-bold text-slate-800">{item.dateOfBirth}</span></div>
-                  )}
-                  {fieldSettings.showBloodGroup && item.bloodGroup && (
-                    <div className="flex justify-between border-b border-slate-100 pb-0.5"><span className="text-slate-400 font-bold">Blood Group:</span><span className="font-black text-rose-700">🩸 {item.bloodGroup}</span></div>
-                  )}
-                  {fieldSettings.showStudentAddress && item.address && (
-                    <div className="flex justify-between border-b border-slate-100 pb-0.5"><span className="text-slate-400 font-bold">Address:</span><span className="font-bold text-slate-800 truncate max-w-[120px]">{item.address}</span></div>
-                  )}
-                  {fieldSettings.showStudentEmail && item.email && (
-                    <div className="flex justify-between border-b border-slate-100 pb-0.5"><span className="text-slate-400 font-bold">Email:</span><span className="font-bold text-slate-800 truncate max-w-[120px]">{item.email}</span></div>
-                  )}
+              {fieldSettings.showMotherName && item.motherName && (
+                <div className="flex justify-between border-b border-slate-100 pb-0.5"><span className="text-slate-400 font-bold">Mother's Name:</span><span className="font-bold text-slate-800 truncate max-w-[125px]">{item.motherName}</span></div>
+              )}
+              {fieldSettings.showDateOfBirth && item.dateOfBirth && (
+                <div className="flex justify-between border-b border-slate-100 pb-0.5"><span className="text-slate-400 font-bold">Date of Birth:</span><span className="font-bold text-slate-800">{item.dateOfBirth}</span></div>
+              )}
+              {fieldSettings.showStudentAddress && item.address && (
+                <div className="flex justify-between border-b border-slate-100 pb-0.5"><span className="text-slate-400 font-bold">Address:</span><span className="font-bold text-slate-800 truncate max-w-[125px]">{item.address}</span></div>
+              )}
+              {fieldSettings.showStudentEmail && item.email && (
+                <div className="flex justify-between border-b border-slate-100 pb-0.5"><span className="text-slate-400 font-bold">Email:</span><span className="font-bold text-slate-800 truncate max-w-[125px]">{item.email}</span></div>
+              )}
               {fieldSettings.showSession && (
                 <div className="flex justify-between">
                   <span className="text-slate-400 font-bold">Academic Session:</span>
-                  <span className="font-black text-emerald-700">{schoolDetails.session || "2026-27"}</span>
+                  <span className="font-black text-emerald-700">{cleanSessionLabel}</span>
                 </div>
               )}
             </>
@@ -610,7 +617,7 @@ export const IdCardManager: React.FC<Props> = ({
             <>
               <div className="flex justify-between border-b border-slate-100 pb-0.5">
                 <span className="text-slate-400 font-bold">Emp ID:</span>
-                <span className="font-black text-slate-900">{item.employeeId || item.id.slice(0, 5).toUpperCase()}</span>
+                <span className="font-mono font-black text-slate-900">{item.employeeId || item.id.slice(0, 6).toUpperCase()}</span>
               </div>
               <div className="flex justify-between border-b border-slate-100 pb-0.5">
                 <span className="text-slate-400 font-bold">Department:</span>
@@ -622,22 +629,19 @@ export const IdCardManager: React.FC<Props> = ({
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400 font-bold">Valid Till:</span>
-                <span className="font-black text-emerald-700">{schoolDetails.session || "2026-27"}</span>
+                <span className="font-black text-emerald-700">{cleanSessionLabel}</span>
               </div>
             </>
           )}
         </div>
 
-        {/* Footer: Campus Address & Principal Signature */}
+        {/* Footer: Campus Address, Office Helpline & Principal Signature (No Personal Phones) */}
         <div className="px-2.5 py-1 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-[7px] text-slate-600 shrink-0 mt-auto">
           <div className="min-w-0 flex-1 text-[6px] leading-tight break-words space-y-0.5">
             {showSchoolDetail("address") && schoolDetails.address && <span className="font-bold text-slate-700 truncate block">{schoolDetails.address}</span>}
-            {showSchoolDetail("phone") && schoolDetails.phone && <span className="text-slate-500 text-[6px] block">School: {schoolDetails.phone}</span>}
-            {showSchoolDetail("email") && schoolDetails.email && <span className="text-slate-500 text-[6px] block">Email: {schoolDetails.email}</span>}
-            {showSchoolDetail("code") && schoolDetails.code && <span className="text-slate-400 text-[6px]">Reg: {schoolDetails.code}</span>}
-            {showSchoolDetail("directorName") && schoolDetails.directorName && <span className="text-slate-500 text-[6px] block">Director: {schoolDetails.directorName}</span>}
-            {showSchoolDetail("directorPhone") && schoolDetails.directorPhone && <span className="text-slate-500 text-[6px] block">Director mobile: {schoolDetails.directorPhone}</span>}
-            {showSchoolDetail("principalPhone") && schoolDetails.principalPhone && <span className="text-slate-500 text-[6px] block">Principal mobile: {schoolDetails.principalPhone}</span>}
+            {showSchoolDetail("phone") && schoolDetails.phone && <span className="text-slate-600 font-semibold text-[6px] block">Helpline: {schoolDetails.phone}</span>}
+            {showSchoolDetail("email") && schoolDetails.email && <span className="text-slate-500 text-[6px] block">{schoolDetails.email}</span>}
+            {showSchoolDetail("code") && schoolDetails.code && <span className="text-slate-500 text-[6px]">School Code: {schoolDetails.code}</span>}
             {customSchoolDetails && <span className="text-slate-500 text-[6px] block truncate">{customSchoolDetails}</span>}
           </div>
           <div className="text-right shrink-0 flex flex-col items-end justify-end">
@@ -648,9 +652,11 @@ export const IdCardManager: React.FC<Props> = ({
                 className="h-4.5 max-w-[70px] object-contain block mb-0.5"
               />
             ) : (
-              showSchoolDetail("principalName") && <span className="font-serif italic font-black text-slate-900 text-[7.5px] block">{schoolDetails.principalName || "Principal"}</span>
+              showSchoolDetail("principalName") && schoolDetails.principalName ? (
+                <span className="font-serif italic font-black text-slate-900 text-[7px] block leading-none mb-0.5">{schoolDetails.principalName}</span>
+              ) : null
             )}
-            {fieldSettings.showSignatory && <span className="text-[6px] text-slate-400 uppercase tracking-tighter">Sign &amp; Seal</span>}
+            {fieldSettings.showSignatory && <span className="text-[6px] font-black text-slate-700 uppercase tracking-wider">{resolvedSignatoryTitle}</span>}
           </div>
         </div>
       </div>
@@ -989,7 +995,7 @@ export const IdCardManager: React.FC<Props> = ({
               </label>
             </div>
             <p className="text-[11px] text-emerald-700 dark:text-emerald-300 mb-3">
-              Jab ye option active hota hai, har student ka <strong>Name, Roll No, Adm No, Father Name, Mobile, Blood Group</strong> card ke center me, <strong>QR Code LEFT me</strong> aur <strong>Photo RIGHT me</strong> automatically map ho jata hai!
+              Jab ye option active hota hai, har student ka <strong>Photo LEFT me</strong>, <strong>pura Admission No + Details CENTER me</strong> aur <strong>Attendance QR Code RIGHT me</strong> automatically map ho jata hai!
             </p>
             <div className="flex flex-wrap gap-2 pt-2 border-t border-emerald-200 dark:border-emerald-900">
               {Object.entries({
@@ -1027,7 +1033,7 @@ export const IdCardManager: React.FC<Props> = ({
                 QR Code ID Card Generator
               </h1>
               <p className="text-xs text-slate-500 mt-0.5">
-                Print ke dauran katne se bachne ke liye <strong>QR Code LEFT me</strong> aur <strong>Photo RIGHT me</strong> set hai.
+                Standard ID card rule ke hisab se <strong>Student Photo LEFT me</strong> aur <strong>Attendance QR Code RIGHT me</strong> set hai.
               </p>
             </div>
 
@@ -1111,7 +1117,7 @@ export const IdCardManager: React.FC<Props> = ({
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-indigo-600 shrink-0" />
             <span>
-              <strong>Print Safety Active:</strong> QR Code baayein (left) taraf aur student ka photo daayein (right) taraf safe margins ke sath fit hai taaki print karne par koi bhi detail na kate!
+              <strong>Standard ID Layout Active:</strong> Student ki Photo baayein (LEFT) taraf, pura Admission No center me aur Attendance QR daayein (RIGHT) taraf balanced size me set hai!
             </span>
           </div>
           <div className="flex items-center gap-1">
@@ -1245,7 +1251,7 @@ export const IdCardManager: React.FC<Props> = ({
                   Live Card Preview (CR80 Standard Dimensions)
                 </span>
                 <span className="text-[11px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full">
-                  ✓ QR: Left | Photo: Right
+                  ✓ Photo: Left | Attendance QR: Right
                 </span>
               </div>
 

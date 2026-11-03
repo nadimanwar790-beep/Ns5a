@@ -168,18 +168,8 @@ export function App() {
     if (initial?.role === 'SUPERADMIN' || initial?.role === 'ADMIN') {
       return 'ADMIN';
     }
-    if (
-      initial?.role === 'SCHOOL_ADMIN' ||
-      initial?.role === 'PRINCIPAL' ||
-      initial?.role === 'TEACHER' ||
-      initial?.role === 'STAFF' ||
-      initial?.provider === 'qr_teacher_id' ||
-      initial?.provider === 'qr_student_id' ||
-      isSchoolAdminEmail(initial?.email)
-    ) {
-      return 'SCHOOL_ERP';
-    }
-    return 'STUDENT';
+    // Direct default view is School ERP (School ID Card se judein gateway)
+    return 'SCHOOL_ERP';
   });
   const [settings, setSettings] = useState<any>(getInitialSettings);
   const [studentTab, setStudentTab] = useState<any>('HOME');
@@ -234,22 +224,8 @@ export function App() {
       return;
     }
 
-    // 2. School Admin / Principal -> School Admin Portal
-    // 3. Teacher -> Teacher Portal
-    // 4. Student (via School QR or school ID) -> Student Portal
-    if (
-      newUser?.role === 'SCHOOL_ADMIN' ||
-      newUser?.role === 'PRINCIPAL' ||
-      newUser?.role === 'TEACHER' ||
-      newUser?.role === 'STAFF' ||
-      newUser?.provider === 'qr_teacher_id' ||
-      newUser?.provider === 'qr_student_id' ||
-      isSchoolAdminEmail(newUser?.email)
-    ) {
-      setView('SCHOOL_ERP');
-    } else {
-      setView('STUDENT');
-    }
+    // 2. Direct Routing: User jab login kare ya account create kare, to seedhe School ERP (School ID Card se judein gateway) par le jana hai
+    setView('SCHOOL_ERP');
   };
 
   const handleLogout = async () => {

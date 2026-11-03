@@ -1,18 +1,60 @@
 // @ts-nocheck
-import React, { useState, useEffect } from "react";
-import type { School, SchoolClass, SchoolSession, AdmissionApplication, SchoolStudent } from "../../school-types";
+import React, { useState, useEffect, useMemo } from "react";
 import {
-  getAdmissionApplications, saveAdmissionApplication, updateAdmissionStatus,
-  saveStudent, generateId, saveFee, saveSchoolUserProfile, getLocalStudents, setLocalStudents
+  ChevronLeft,
+  UserPlus,
+  CheckCircle2,
+  XCircle,
+  Clock,
+  Search,
+  Check,
+  X,
+  Phone,
+  FileText,
+  GraduationCap,
+  Send,
+  IndianRupee,
+  Printer,
+  ShieldCheck,
+  ReceiptText,
+  Bus,
+  Plus,
+  Trash2,
+  Scissors,
+  AlertCircle,
+  FileCheck2,
+} from "lucide-react";
+import type {
+  School,
+  SchoolClass,
+  SchoolSession,
+  AdmissionApplication,
+  SchoolStudent,
+  MonthlyFee,
+} from "../../school-types";
+import {
+  BLOOD_GROUPS,
+  ADMISSION_CATEGORIES,
+  ADMISSION_DOCUMENT_OPTIONS,
+} from "../../school-types";
+import {
+  getAdmissionApplications,
+  saveAdmissionApplication,
+  updateAdmissionStatus,
+  saveStudent,
+  saveFee,
+  generateId,
+  generateNextAdmissionNo,
+  getLocalStudents,
+  setLocalStudents,
+  getLocalFees,
+  saveSchoolUserProfile,
+  isStudentInClass,
 } from "../../school-firebase";
 import { saveUserToLive } from "../../firebase";
+import { DirectUploadButton } from "../DirectUploadButton";
 import { OfficialFeeReceiptModal } from "./OfficialFeeReceiptModal";
-import type { MonthlyFee } from "../../school-types";
-import {
-  UserPlus, CheckCircle2, XCircle, Clock, ChevronLeft, Search, Filter,
-  Printer, Download, Phone, Mail, Calendar, MapPin, Building2, User,
-  Sparkles, Check, AlertCircle, FileText, CreditCard, ShieldCheck
-} from "lucide-react";
+import { AdmissionFormPrintModal, type AdmissionPrintMode } from "./AdmissionFormPrintModal";
 
 interface Props {
   school: School;
@@ -23,159 +65,289 @@ interface Props {
   onBack: () => void;
 }
 
+interface FeeItemRow {
+  id: string;
+  description: string;
+  due: number;
+}
+
 export const OnlineAdmissionManager: React.FC<Props> = ({
   school,
-  classes = [],
-  sessions = [],
+  classes,
+  sessions,
   activeSession,
   isAdmin = true,
   onBack,
 }) => {
-  if (!school) {
-    return (
-      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-white">
-        <p className="text-sm font-bold text-slate-300">School Profile Loading...</p>
-        {onBack && (
-          <button onClick={onBack} className="mt-4 px-4 py-1.5 rounded-lg bg-white/10 text-xs font-bold hover:bg-white/20">
-            Back
-          </button>
-        )}
-      </div>
-    );
-  }
-
-  const [tab, setTab] = useState<"admin_list" | "apply_form">("admin_list");
+  const [activeTab, setActiveTab] = useState<"applications" | "new_form">(
+    isAdmin ? "applications" : "new_form"
+  );
   const [applications, setApplications] = useState<AdmissionApplication[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
-  const [search, setSearch] = useState("");
-  const [selectedApp, setSelectedApp] = useState<AdmissionApplication | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submittedApp, setSubmittedApp] = useState<AdmissionApplication | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
 
-  // Enrollment Modal & Admission Fee Structure
+  // Enroll Modal State
   const [showEnrollModal, setShowEnrollModal] = useState(false);
   const [enrollingApp, setEnrollingApp] = useState<AdmissionApplication | null>(null);
   const [enrollClassId, setEnrollClassId] = useState("");
   const [enrollRollNo, setEnrollRollNo] = useState("");
-  const [enrollMonthlyFee, setEnrollMonthlyFee] = useState<number>(1500);
+  const [enrollMonthlyFee, setEnrollMonthlyFee] = useState("0");
+  const [enrollPhotoUrl, setEnrollPhotoUrl] = useState("");
   const [enrollStudentAadhaar, setEnrollStudentAadhaar] = useState("");
   const [enrollFatherAadhaar, setEnrollFatherAadhaar] = useState("");
   const [enrollMotherAadhaar, setEnrollMotherAadhaar] = useState("");
-  
-  // Admission Fee Heads
-  const [enrollAdmissionFee, setEnrollAdmissionFee] = useState<number>(2500);
-  const [enrollRegistrationFee, setEnrollRegistrationFee] = useState<number>(350);
-  const [enrollDevelopmentFee, setEnrollDevelopmentFee] = useState<number>(1200);
-  const [enrollIdKitFee, setEnrollIdKitFee] = useState<number>(450);
-  const [enrollExamFund, setEnrollExamFund] = useState<number>(800);
-  const [enrollPayMode, setEnrollPayMode] = useState<string>("Cash");
-  const [enrollPaidAmount, setEnrollPaidAmount] = useState<number>(5300);
-  
+  const [enrollApaarId, setEnrollApaarId] = useState("");
+  const [enrollUsesBus, setEnrollUsesBus] = useState(false);
+  const [enrollBusRoute, setEnrollBusRoute] = useState("");
+  const [enrollBusFee, setEnrollBusFee] = useState(0);
+  const [enrollSubmittedDocs, setEnrollSubmittedDocs] = useState<string[]>([]);
+
+  // Dynamic Admission Fee Items in Enroll Modal
+  const [enrollFeeItems, setEnrollFeeItems] = useState<FeeItemRow[]>([]);
+  const [enrollConcession, setEnrollConcession] = useState<number>(0);
+  const [enrollPaidAmount, setEnrollPaidAmount] = useState<string>("");
+  const [enrollPaidManual, setEnrollPaidManual] = useState<boolean>(false);
+  const [enrollPayMode, setEnrollPayMode] = useState("Cash");
+  const [enrollPayRef, setEnrollPayRef] = useState("");
   const [enrolling, setEnrolling] = useState(false);
+  const [enrollError, setEnrollError] = useState<string | null>(null);
   const [successToast, setSuccessToast] = useState<string | null>(null);
 
-  // Admission Receipt Modal State
-  const [receiptModalOpen, setReceiptModalOpen] = useState(false);
-  const [receiptModalFee, setReceiptModalFee] = useState<MonthlyFee | null>(null);
-  const [receiptModalStudent, setReceiptModalStudent] = useState<SchoolStudent | null>(null);
+  // Inline Reject Confirmation State (Replaces window.confirm)
+  const [rejectingAppId, setRejectingAppId] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState<string>("Criteria / Documents incomplete");
 
-  // New Application Form State with Aadhaar Cards
+  // Print & Receipt Modals
+  const [printStudioState, setPrintStudioState] = useState<{
+    open: boolean;
+    student?: Partial<SchoolStudent> | null;
+    application?: Partial<AdmissionApplication> | null;
+    className?: string;
+    feeRecord?: MonthlyFee | null;
+    mode?: AdmissionPrintMode;
+  }>({ open: false });
+
+  const [posReceiptState, setPosReceiptState] = useState<{
+    open: boolean;
+    student: SchoolStudent | null;
+    fee: MonthlyFee | null;
+  }>({ open: false, student: null, fee: null });
+
+  // Form State
   const [form, setForm] = useState({
     studentName: "",
-    gender: "male" as "male" | "female" | "other",
     dateOfBirth: "",
-    bloodGroup: "O+",
+    gender: "male" as "male" | "female" | "other",
     category: "General",
+    bloodGroup: "",
+    apaarId: "",
+    photoUrl: "",
     classId: classes[0]?.id || "",
-    className: classes[0]?.name || "Class 1",
     previousSchool: "",
     previousMarks: "",
     fatherName: "",
     fatherOccupation: "",
     motherName: "",
     motherOccupation: "",
-    studentAadhaar: "",
+    aadhaarNo: "",
     fatherAadhaar: "",
     motherAadhaar: "",
     phone: "",
+    whatsappNo: "",
     email: "",
     address: "",
     city: "",
     pincode: "",
+    usesBus: false,
+    busRoute: "",
+    submittedDocs: [
+      "Birth Certificate (जन्म प्रमाण पत्र)",
+      "Student Aadhaar Card (छात्र आधार)",
+      "Passport Photos (पासपोर्ट फोटो)",
+    ] as string[],
   });
-  const [submitting, setSubmitting] = useState(false);
-  const [submittedAppNo, setSubmittedAppNo] = useState<string | null>(null);
-
-  const fetchApplications = async () => {
-    setLoading(true);
-    try {
-      const list = await getAdmissionApplications(school.id);
-      setApplications(list);
-    } catch {
-      setApplications([]);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   useEffect(() => {
     fetchApplications();
   }, [school.id]);
 
-  const filteredApps = applications.filter(a => {
-    const matchStatus = statusFilter === "all" || a.status === statusFilter;
-    const matchSearch = !search.trim() ||
-      a.studentName.toLowerCase().includes(search.toLowerCase()) ||
-      a.applicationNo.toLowerCase().includes(search.toLowerCase()) ||
-      (a.aadhaarNo && a.aadhaarNo.includes(search)) ||
-      a.phone.includes(search);
-    return matchStatus && matchSearch;
-  });
+  const fetchApplications = async () => {
+    setLoading(true);
+    const data = await getAdmissionApplications(school.id);
+    setApplications(data);
+    setLoading(false);
+  };
 
-  const handleApplySubmit = async (e: React.FormEvent) => {
+  const buildDefaultFeeItems = (cls: SchoolClass | undefined, withBus: boolean, customBusAmt?: number): FeeItemRow[] => {
+    const fs = cls?.feeStructure;
+    const rows: FeeItemRow[] = [];
+    if (fs) {
+      if (Number(fs.admissionFee) > 0) {
+        rows.push({ id: "fs_adm", description: "Admission Fee (प्रवेश शुल्क)", due: Number(fs.admissionFee) });
+      }
+      if (Number(fs.tuitionFee) > 0) {
+        rows.push({ id: "fs_tui", description: "1st Month Tuition Fee (प्रथम माह शिक्षण शुल्क)", due: Number(fs.tuitionFee) });
+      }
+      if (Number(fs.annualCharges) > 0) {
+        rows.push({ id: "fs_ann", description: "Annual & Development Charges (वार्षिक विकास शुल्क)", due: Number(fs.annualCharges) });
+      }
+      if (Number(fs.cautionMoney) > 0) {
+        rows.push({ id: "fs_cau", description: "Caution Money / Registration", due: Number(fs.cautionMoney) });
+      }
+      if (Array.isArray(fs.customHeads)) {
+        fs.customHeads.forEach((h, i) => {
+          if (Number(h.amount) > 0) {
+            rows.push({ id: `fs_c_${i}`, description: h.name, due: Number(h.amount) });
+          }
+        });
+      }
+      if (withBus) {
+        const bAmt = customBusAmt !== undefined ? customBusAmt : Number(fs.busFee || 0);
+        if (bAmt > 0) {
+          rows.push({ id: "fs_bus", description: "Transport / Bus Fee (वाहन शुल्क)", due: bAmt });
+        }
+      }
+    }
+
+    if (rows.length === 0) {
+      const defTuition = Number(cls?.defaultFee || 0);
+      rows.push(
+        { id: "adm_1", description: "Admission Fee (नामांकन / प्रवेश शुल्क)", due: 1500 },
+        { id: "adm_2", description: "Registration & Form Fee (पंजीकरण फॉर्म)", due: 250 },
+        { id: "adm_3", description: "Annual / Development Fund (वार्षिक विकास कोष)", due: 800 },
+        { id: "adm_4", description: "Student Kit, ID Card & Diary (आईडी कार्ड व डायरी)", due: 350 }
+      );
+      if (defTuition > 0) {
+        rows.push({ id: "adm_tui", description: "1st Month Tuition Fee (प्रथम माह शुल्क)", due: defTuition });
+      }
+      if (withBus && (customBusAmt || 0) > 0) {
+        rows.push({ id: "fs_bus", description: "Transport / Bus Fee (वाहन शुल्क)", due: Number(customBusAmt) });
+      }
+    }
+    return rows;
+  };
+
+  const openEnrollModal = (app: AdmissionApplication) => {
+    const selectedCls = classes.find((c) => c.id === app.classId) || classes[0];
+    const targetClsId = selectedCls?.id || app.classId || "";
+    const localStudents = getLocalStudents(school.id);
+    const clsStudents = localStudents.filter((s) => isStudentInClass(s, targetClsId, selectedCls?.name));
+    const maxRoll = clsStudents.reduce((m, s) => {
+      const n = parseInt(String(s.rollNo || "").replace(/\D/g, ""), 10);
+      return !isNaN(n) && n > m ? n : m;
+    }, 0);
+
+    const defMonthly = Number(selectedCls?.feeStructure?.tuitionFee ?? selectedCls?.defaultFee ?? 0);
+    const defBus = Number(app.busFee ?? selectedCls?.feeStructure?.busFee ?? 0);
+    const wantsBus = Boolean(app.usesBus);
+
+    setEnrollingApp(app);
+    setEnrollClassId(targetClsId);
+    setEnrollRollNo(String(maxRoll + 1));
+    setEnrollMonthlyFee(String(defMonthly));
+    setEnrollPhotoUrl(app.photoUrl || "");
+    setEnrollStudentAadhaar(app.aadhaarNo || "");
+    setEnrollFatherAadhaar(app.fatherAadhaar || "");
+    setEnrollMotherAadhaar(app.motherAadhaar || "");
+    setEnrollApaarId(app.apaarId || "");
+    setEnrollUsesBus(wantsBus);
+    setEnrollBusRoute(app.busRoute || "");
+    setEnrollBusFee(defBus);
+    setEnrollSubmittedDocs(
+      app.submittedDocs && app.submittedDocs.length > 0
+        ? app.submittedDocs
+        : ["Birth Certificate (जन्म प्रमाण पत्र)", "Student Aadhaar Card (छात्र आधार)", "Passport Photos (पासपोर्ट फोटो)"]
+    );
+    setEnrollFeeItems(buildDefaultFeeItems(selectedCls, wantsBus, defBus));
+    setEnrollConcession(0);
+    setEnrollPaidManual(false);
+    setEnrollPayMode("Cash");
+    setEnrollPayRef("");
+    setEnrollError(null);
+    setShowEnrollModal(true);
+  };
+
+  // Sync bus fee row inside Enroll Modal
+  useEffect(() => {
+    if (!showEnrollModal) return;
+    setEnrollFeeItems((prev) => {
+      const rest = prev.filter((r) => r.id !== "fs_bus");
+      if (enrollUsesBus && Number(enrollBusFee) > 0) {
+        return [...rest, { id: "fs_bus", description: `Transport / Bus Fee (${enrollBusRoute || "Bus"})`, due: Number(enrollBusFee) }];
+      }
+      return rest;
+    });
+  }, [enrollUsesBus, enrollBusFee, enrollBusRoute, showEnrollModal]);
+
+  const enrollGrossTotal = useMemo(
+    () => enrollFeeItems.reduce((sum, r) => sum + (Number(r.due) || 0), 0),
+    [enrollFeeItems]
+  );
+  const enrollNetPayable = Math.max(0, enrollGrossTotal - (Number(enrollConcession) || 0));
+
+  useEffect(() => {
+    if (!enrollPaidManual) {
+      setEnrollPaidAmount(String(enrollNetPayable));
+    }
+  }, [enrollNetPayable, enrollPaidManual]);
+
+  const handleSubmitForm = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.studentName.trim() || !form.phone.trim()) {
-      alert("Please fill student name and contact number.");
+    if (!form.studentName.trim() || !form.fatherName.trim() || !form.phone.trim()) {
+      setFormError("कृपया छात्र का नाम, पिता का नाम और मोबाइल नंबर अवश्य भरें।");
       return;
     }
+
     setSubmitting(true);
+    setFormError(null);
     try {
-      const selectedCls = classes.find(c => c.id === form.classId);
-      const appNo = `ADM-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+      const selectedCls = classes.find((c) => c.id === form.classId);
+      const appNo = generateNextAdmissionNo(school, applications.length);
       const newApp: AdmissionApplication = {
         id: generateId(),
-        applicationNo: appNo,
         schoolId: school.id,
-        sessionId: activeSession?.id || "",
-        classId: form.classId,
-        className: selectedCls?.name || form.className,
+        applicationNo: appNo,
         studentName: form.studentName.trim(),
-        gender: form.gender,
         dateOfBirth: form.dateOfBirth,
-        bloodGroup: form.bloodGroup,
+        gender: form.gender,
         category: form.category,
-        previousSchool: form.previousSchool,
-        previousMarks: form.previousMarks,
+        bloodGroup: form.bloodGroup || undefined,
+        apaarId: form.apaarId.trim() || undefined,
+        photoUrl: form.photoUrl || undefined,
+        classId: form.classId,
+        className: selectedCls ? `${selectedCls.name} ${selectedCls.section || ""}`.trim() : "General",
+        previousSchool: form.previousSchool.trim() || undefined,
+        previousMarks: form.previousMarks.trim() || undefined,
         fatherName: form.fatherName.trim(),
-        fatherOccupation: form.fatherOccupation,
+        fatherOccupation: form.fatherOccupation.trim() || undefined,
         motherName: form.motherName.trim(),
-        motherOccupation: form.motherOccupation,
-        aadhaarNo: form.studentAadhaar.trim() || undefined,
+        motherOccupation: form.motherOccupation.trim() || undefined,
+        aadhaarNo: form.aadhaarNo.trim() || undefined,
         fatherAadhaar: form.fatherAadhaar.trim() || undefined,
         motherAadhaar: form.motherAadhaar.trim() || undefined,
         phone: form.phone.trim(),
-        email: form.email.trim(),
+        whatsappNo: form.whatsappNo.trim() || undefined,
+        email: form.email.trim() || undefined,
         address: form.address.trim(),
-        city: form.city.trim(),
-        pincode: form.pincode.trim(),
+        city: form.city.trim() || undefined,
+        pincode: form.pincode.trim() || undefined,
+        usesBus: form.usesBus,
+        busRoute: form.usesBus ? form.busRoute.trim() : undefined,
+        busFee: form.usesBus ? Number(selectedCls?.feeStructure?.busFee || 0) : 0,
+        submittedDocs: form.submittedDocs,
         status: "pending",
         appliedAt: new Date().toISOString(),
       };
 
       await saveAdmissionApplication(school.id, newApp);
-      setSubmittedAppNo(appNo);
+      setSubmittedApp(newApp);
       fetchApplications();
     } catch (err: any) {
-      alert("Submission failed: " + (err?.message || "Unknown error"));
+      setFormError("आवेदन जमा करने में त्रुटि: " + (err?.message || "पुनः प्रयास करें"));
     } finally {
       setSubmitting(false);
     }
@@ -184,963 +356,1512 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
   const handleApproveAndEnroll = async () => {
     if (!enrollingApp || !enrollClassId) return;
     setEnrolling(true);
+    setEnrollError(null);
     try {
-      // 1. Create Student record with Aadhaar numbers
-      const selectedCls = classes.find(c => c.id === enrollClassId);
+      const selectedCls = classes.find((c) => c.id === enrollClassId);
       const studentId = generateId();
+      const paidAdmissionAmt = Math.max(0, Number(enrollPaidAmount) || 0);
+      const balanceAmt = Math.max(0, enrollNetPayable - paidAdmissionAmt);
+      const receiptNo = `ADM-${Math.floor(10000 + Math.random() * 90000)}`;
+      const paidIso = new Date().toISOString();
+
       const newStudent: SchoolStudent = {
         id: studentId,
         schoolId: school.id,
         sessionId: activeSession?.id || sessions[0]?.id || "",
         classId: enrollClassId,
-        className: selectedCls?.name || enrollingApp.className || "Class",
+        className: selectedCls ? `${selectedCls.name} ${selectedCls.section || ""}`.trim() : enrollingApp.className || "Class",
         name: enrollingApp.studentName,
-        rollNo: enrollRollNo || String(Math.floor(10 + Math.random() * 89)),
+        rollNo: enrollRollNo.trim() || "1",
         admissionNo: enrollingApp.applicationNo,
+        gender: enrollingApp.gender,
+        category: enrollingApp.category || "General",
+        apaarId: enrollApaarId.trim() || enrollingApp.apaarId || undefined,
         fatherName: enrollingApp.fatherName,
+        fatherOccupation: enrollingApp.fatherOccupation,
         motherName: enrollingApp.motherName,
+        motherOccupation: enrollingApp.motherOccupation,
         aadhaarNo: enrollStudentAadhaar.trim() || enrollingApp.aadhaarNo || undefined,
         fatherAadhaar: enrollFatherAadhaar.trim() || enrollingApp.fatherAadhaar || undefined,
         motherAadhaar: enrollMotherAadhaar.trim() || enrollingApp.motherAadhaar || undefined,
         phone: enrollingApp.phone,
+        whatsappNo: enrollingApp.whatsappNo,
+        email: enrollingApp.email,
         dateOfBirth: enrollingApp.dateOfBirth,
         bloodGroup: enrollingApp.bloodGroup || undefined,
         address: enrollingApp.address,
+        city: enrollingApp.city,
+        pincode: enrollingApp.pincode,
+        previousSchool: enrollingApp.previousSchool,
+        previousMarks: enrollingApp.previousMarks,
+        photoUrl: enrollPhotoUrl || enrollingApp.photoUrl || undefined,
+        usesBus: enrollUsesBus,
+        busRoute: enrollUsesBus ? enrollBusRoute.trim() : undefined,
+        busFee: enrollUsesBus ? Number(enrollBusFee) || 0 : 0,
+        submittedDocs: enrollSubmittedDocs,
+        admissionReceiptNo: receiptNo,
         monthlyFee: Number(enrollMonthlyFee) || 0,
-        joinDate: new Date().toISOString().split("T")[0],
+        joinDate: paidIso.slice(0, 10),
         active: true,
-        createdAt: new Date().toISOString(),
+        createdAt: paidIso,
       };
-      await saveStudent(newStudent);
 
-      // Ensure local school students cache is updated across both school.id and default
+      const savedStudent = await saveStudent(newStudent);
+
+      // Strictly school-isolated cache & login profile (no cross-school copying!)
       try {
         const curLocals = getLocalStudents(school.id);
-        setLocalStudents(school.id, [newStudent, ...curLocals.filter(s => s.id !== newStudent.id)]);
-        if (school.id !== 'dps_gurgaon_sector45') {
-          const defLocals = getLocalStudents('dps_gurgaon_sector45');
-          setLocalStudents('dps_gurgaon_sector45', [newStudent, ...defLocals.filter(s => s.id !== newStudent.id)]);
-        }
+        setLocalStudents(school.id, [savedStudent, ...curLocals.filter((s) => s.id !== savedStudent.id)]);
 
-        const studentUserPayload = {
-          id: newStudent.id,
-          uid: newStudent.id,
-          displayId: `ROLL-${newStudent.rollNo}`,
-          name: newStudent.name,
-          email: enrollingApp.email || `${newStudent.admissionNo.toLowerCase().replace(/[^a-z0-9]/g, '')}@student.dps.edu.in`,
-          mobile: newStudent.phone,
-          role: 'STUDENT',
-          schoolId: school.id,
-          classLevel: enrollClassId,
-          stream: 'General',
-          credits: 100,
-          diamonds: 50,
-          streak: 1,
-          totalScore: 0,
-          profileCompleted: true,
-          subscriptionTier: 'PRO',
-          provider: 'qr_student_id',
-          isQrLogin: true,
-          admissionNo: newStudent.admissionNo,
-          rollNo: newStudent.rollNo,
-          fatherName: newStudent.fatherName,
-          motherName: newStudent.motherName,
-          bloodGroup: newStudent.bloodGroup,
-          monthlyFee: newStudent.monthlyFee,
-        };
+        const safeSlug = (school.code || school.id || "school").toLowerCase().replace(/[^a-z0-9]/g, "") || "school";
+        const studentEmail =
+          enrollingApp.email ||
+          `${savedStudent.admissionNo.toLowerCase().replace(/[^a-z0-9]/g, "")}@${safeSlug}.edu.in`;
 
-        localStorage.setItem(`nst_school_user_${newStudent.id}`, JSON.stringify({
-          uid: newStudent.id,
+        await saveSchoolUserProfile({
+          uid: savedStudent.id,
           schoolId: school.id,
-          role: 'SCHOOL_STUDENT',
-          name: newStudent.name,
-          email: studentUserPayload.email,
-          studentRef: newStudent.id,
+          role: "SCHOOL_STUDENT",
+          name: savedStudent.name,
+          email: studentEmail,
+          studentRef: savedStudent.id,
           classId: enrollClassId,
-          sessionId: '2026-27'
-        }));
-
-        saveSchoolUserProfile({
-          uid: newStudent.id,
-          schoolId: school.id,
-          role: 'SCHOOL_STUDENT',
-          name: newStudent.name,
-          email: studentUserPayload.email,
-          studentRef: newStudent.id,
-          classId: enrollClassId,
-          sessionId: '2026-27'
+          sessionId: activeSession?.id || "2026-27",
         }).catch(() => {});
 
-        saveUserToLive(studentUserPayload, { immediate: true }).catch(() => {});
+        saveUserToLive(
+          {
+            id: savedStudent.id,
+            uid: savedStudent.id,
+            displayId: `ROLL-${savedStudent.rollNo}`,
+            name: savedStudent.name,
+            email: studentEmail,
+            mobile: savedStudent.phone,
+            role: "STUDENT",
+            schoolId: school.id,
+            classLevel: enrollClassId,
+            stream: "General",
+            credits: 100,
+            diamonds: 50,
+            streak: 1,
+            totalScore: 0,
+            profileCompleted: true,
+            subscriptionTier: "PRO",
+            provider: "qr_student_id",
+            isQrLogin: true,
+            admissionNo: savedStudent.admissionNo,
+            rollNo: savedStudent.rollNo,
+            fatherName: savedStudent.fatherName,
+            motherName: savedStudent.motherName,
+            bloodGroup: savedStudent.bloodGroup,
+            monthlyFee: savedStudent.monthlyFee,
+          },
+          { immediate: true }
+        ).catch(() => {});
       } catch (cacheErr) {
-        console.warn('Student profile cache notice:', cacheErr);
+        console.warn("Student profile sync notice:", cacheErr);
       }
 
-      // 2. Compute Admission Fee Record & Receipts
-      const totalAdmissionPayable =
-        Number(enrollAdmissionFee) +
-        Number(enrollRegistrationFee) +
-        Number(enrollDevelopmentFee) +
-        Number(enrollIdKitFee) +
-        Number(enrollExamFund);
-
-      const paidAdmissionAmt = Number(enrollPaidAmount) || totalAdmissionPayable;
-      const receiptNo = `ADM-${Math.floor(10000 + Math.random() * 90000)}`;
+      const finalItems = enrollFeeItems
+        .filter((it) => it.description.trim() && Number(it.due) >= 0)
+        .map((it, idx) => ({
+          id: it.id,
+          slNo: idx + 1,
+          description: it.description.trim(),
+          due: Number(it.due) || 0,
+          con: idx === 0 ? Math.min(Number(it.due) || 0, Number(enrollConcession) || 0) : 0,
+          paid: Number(it.due) || 0,
+        }));
 
       const admissionFeeRecord: MonthlyFee = {
         schoolId: school.id,
-        studentId: studentId,
-        studentName: enrollingApp.studentName,
-        rollNo: newStudent.rollNo,
+        sessionId: activeSession?.id || "2026-27",
+        studentId: savedStudent.id,
+        studentName: savedStudent.name,
+        rollNo: savedStudent.rollNo,
         classId: enrollClassId,
-        month: new Date().toISOString().slice(0, 7),
-        amount: totalAdmissionPayable,
+        month: paidIso.slice(0, 7),
+        amount: enrollNetPayable,
         monthlyAmount: Number(enrollMonthlyFee) || 0,
-        paid: paidAdmissionAmt >= totalAdmissionPayable,
-        paidDate: new Date().toISOString(),
-        receiptNo: receiptNo,
+        paid: paidAdmissionAmt >= enrollNetPayable,
+        paidDate: paidIso,
+        receiptNo,
         paidAmount: paidAdmissionAmt,
-        balanceDue: Math.max(0, totalAdmissionPayable - paidAdmissionAmt),
-        concession: 0,
-        feeType: 'admission',
-        receiptCategory: 'admission',
+        balanceDue: balanceAmt,
+        concession: Number(enrollConcession) || 0,
+        feeType: "admission",
+        receiptCategory: "admission",
+        includeBusFee: enrollUsesBus,
+        busFeeAmount: enrollUsesBus ? Number(enrollBusFee) || 0 : 0,
+        busRoute: enrollUsesBus ? enrollBusRoute : undefined,
         payModeInfo: {
           payMode: enrollPayMode,
-          date: new Date().toLocaleDateString('en-GB'),
-          bank: enrollPayMode === "Cash" ? "" : "Bank / QR",
-          number: `REF-${Math.floor(100000 + Math.random() * 900000)}`,
+          date: new Date().toLocaleDateString("en-GB"),
+          bank: enrollPayMode === "Cash" ? "School Counter" : enrollPayMode,
+          number: enrollPayRef.trim() || "-",
         },
-        items: [
-          { id: "adm_1", slNo: 1, description: "Admission Fee (नामांकन / प्रवेश शुल्क)", due: Number(enrollAdmissionFee), con: 0, paid: Number(enrollAdmissionFee) },
-          { id: "adm_2", slNo: 2, description: "Registration & Prospectus Form (पंजीकरण फॉर्म)", due: Number(enrollRegistrationFee), con: 0, paid: Number(enrollRegistrationFee) },
-          { id: "adm_3", slNo: 3, description: "Annual Development & Building Fund (विकास कोष)", due: Number(enrollDevelopmentFee), con: 0, paid: Number(enrollDevelopmentFee) },
-          { id: "adm_4", slNo: 4, description: "Student Kit, ID Card & Diary (आईडी कार्ड, डायरी व किट)", due: Number(enrollIdKitFee), con: 0, paid: Number(enrollIdKitFee) },
-          { id: "adm_5", slNo: 5, description: "Annual Exam & Activity Charges (वार्षिक परीक्षा कोष)", due: Number(enrollExamFund), con: 0, paid: Number(enrollExamFund) },
-        ]
+        items: finalItems,
       };
 
       await saveFee(admissionFeeRecord);
 
-      // 3. Update Application Status
+      const savedFeeDetails: AdmissionApplication["admissionFeeDetails"] = {
+        admissionFee: finalItems[0]?.due || 0,
+        registrationFee: finalItems[1]?.due || 0,
+        developmentFee: finalItems[2]?.due || 0,
+        idKitFee: finalItems[3]?.due || 0,
+        examFund: finalItems[4]?.due || 0,
+        concession: Number(enrollConcession) || 0,
+        totalPayable: enrollNetPayable,
+        paidAmount: paidAdmissionAmt,
+        balanceDue: balanceAmt,
+        paymentMode: enrollPayMode,
+        receiptNo,
+        paidDate: paidIso,
+        items: finalItems,
+      };
+
       await updateAdmissionStatus(school.id, enrollingApp.id, "approved", {
-        assignedRollNo: newStudent.rollNo,
-        remarks: `Enrolled. Admission Receipt #${receiptNo} generated.`,
+        enrolledStudentId: savedStudent.id,
+        assignedRollNo: savedStudent.rollNo,
+        classId: enrollClassId,
+        className: savedStudent.className,
+        photoUrl: savedStudent.photoUrl,
+        aadhaarNo: savedStudent.aadhaarNo,
+        fatherAadhaar: savedStudent.fatherAadhaar,
+        motherAadhaar: savedStudent.motherAadhaar,
+        apaarId: savedStudent.apaarId,
+        usesBus: savedStudent.usesBus,
+        busRoute: savedStudent.busRoute,
+        busFee: savedStudent.busFee,
+        submittedDocs: enrollSubmittedDocs,
+        monthlyFee: savedStudent.monthlyFee,
+        admissionFeeDetails: savedFeeDetails,
+        remarks: `Enrolled (Roll #${savedStudent.rollNo}). Receipt #${receiptNo}`,
       });
 
       setShowEnrollModal(false);
-      setSuccessToast(`🎉 ${enrollingApp.studentName} नामांकित हो गए (Roll #${newStudent.rollNo})! प्रवेश रसीद तैयार है।`);
-      
-      // Auto open Admission Fee Receipt Modal for instant print/download
-      setReceiptModalStudent(newStudent);
-      setReceiptModalFee(admissionFeeRecord);
-      setReceiptModalOpen(true);
-
+      setSuccessToast(`🎉 ${savedStudent.name} नामांकित हो गए (Roll #${savedStudent.rollNo})! फॉर्म + रसीद प्रिंट तैयार है।`);
       setTimeout(() => setSuccessToast(null), 5000);
       fetchApplications();
+
+      // Open Combined Single A4 Print Studio (Form + Receipt)
+      setPrintStudioState({
+        open: true,
+        student: savedStudent,
+        application: { ...enrollingApp, admissionFeeDetails: savedFeeDetails, assignedRollNo: savedStudent.rollNo },
+        className: savedStudent.className,
+        feeRecord: admissionFeeRecord,
+        mode: "combined",
+      });
     } catch (err: any) {
-      alert("Enrollment failed: " + (err?.message || "Error"));
+      setEnrollError("Enrollment failed: " + (err?.message || "Please retry"));
     } finally {
       setEnrolling(false);
     }
   };
 
-  const handleOpenExistingAdmissionReceipt = (app: AdmissionApplication) => {
-    const student: SchoolStudent = {
-      id: app.id,
+  // Resolve real student & real admission fee for any approved application (Zero fake ₹5300!)
+  const resolveApplicationStudentAndFee = (app: AdmissionApplication): { student: SchoolStudent; fee: MonthlyFee | null } => {
+    const locals = getLocalStudents(school.id);
+    const matchedStudent =
+      locals.find(
+        (s) =>
+          (app.enrolledStudentId && s.id === app.enrolledStudentId) ||
+          (s.admissionNo && s.admissionNo === app.applicationNo)
+      ) || null;
+
+    const student: SchoolStudent = matchedStudent || {
+      id: app.enrolledStudentId || app.id,
       schoolId: school.id,
-      sessionId: activeSession?.id || "",
+      sessionId: activeSession?.id || "2026-27",
       classId: app.classId,
+      className: app.className,
       name: app.studentName,
-      rollNo: app.assignedRollNo || "01",
+      rollNo: app.assignedRollNo || "1",
       admissionNo: app.applicationNo,
+      gender: app.gender,
+      category: app.category,
+      apaarId: app.apaarId,
       fatherName: app.fatherName,
+      fatherOccupation: app.fatherOccupation,
       motherName: app.motherName,
+      motherOccupation: app.motherOccupation,
       aadhaarNo: app.aadhaarNo,
       fatherAadhaar: app.fatherAadhaar,
       motherAadhaar: app.motherAadhaar,
       phone: app.phone,
+      whatsappNo: app.whatsappNo,
+      email: app.email,
       dateOfBirth: app.dateOfBirth,
-      monthlyFee: 1500,
-      joinDate: app.appliedAt.slice(0, 10),
+      bloodGroup: app.bloodGroup,
+      address: app.address,
+      city: app.city,
+      pincode: app.pincode,
+      previousSchool: app.previousSchool,
+      previousMarks: app.previousMarks,
+      photoUrl: app.photoUrl,
+      usesBus: app.usesBus,
+      busRoute: app.busRoute,
+      busFee: app.busFee,
+      submittedDocs: app.submittedDocs,
+      monthlyFee: Number(app.monthlyFee || 0),
+      joinDate: (app.reviewedAt || app.appliedAt).slice(0, 10),
       active: true,
       createdAt: app.appliedAt,
     };
 
-    const fee: MonthlyFee = {
-      schoolId: school.id,
-      studentId: app.id,
-      studentName: app.studentName,
-      rollNo: app.assignedRollNo || "01",
-      classId: app.classId,
-      month: app.appliedAt.slice(0, 7),
-      amount: 5300,
-      monthlyAmount: 1500,
-      paid: true,
-      paidDate: app.appliedAt,
-      receiptNo: `ADM-${app.applicationNo.replace(/\D/g, '').slice(-5) || "55241"}`,
-      paidAmount: 5300,
-      balanceDue: 0,
-      concession: 0,
-      feeType: 'admission',
-      receiptCategory: 'admission',
-      payModeInfo: {
-        payMode: "Cash",
-        date: new Date(app.appliedAt).toLocaleDateString('en-GB'),
-        bank: "",
-        number: "PAID-OFFICE",
-      },
-      items: [
-        { id: "adm_1", slNo: 1, description: "Admission Fee (नामांकन / प्रवेश शुल्क)", due: 2500, con: 0, paid: 2500 },
-        { id: "adm_2", slNo: 2, description: "Registration & Prospectus Form (पंजीकरण फॉर्म)", due: 350, con: 0, paid: 350 },
-        { id: "adm_3", slNo: 3, description: "Annual Development & Building Fund (विकास कोष)", due: 1200, con: 0, paid: 1200 },
-        { id: "adm_4", slNo: 4, description: "Student Kit, ID Card & Diary (आईडी कार्ड, डायरी व किट)", due: 450, con: 0, paid: 450 },
-        { id: "adm_5", slNo: 5, description: "Annual Exam & Activity Charges (वार्षिक परीक्षा कोष)", due: 800, con: 0, paid: 800 },
-      ]
-    };
+    const localFees = getLocalFees(school.id);
+    const savedFee =
+      localFees.find((f) => {
+        const isAdm = f.feeType === "admission" || f.receiptCategory === "admission";
+        if (!isAdm) return false;
+        if (app.admissionFeeDetails?.receiptNo && f.receiptNo === app.admissionFeeDetails.receiptNo) return true;
+        if (student.id && f.studentId === student.id) return true;
+        return false;
+      }) || null;
 
-    setReceiptModalStudent(student);
-    setReceiptModalFee(fee);
-    setReceiptModalOpen(true);
+    if (savedFee) {
+      return { student, fee: savedFee };
+    }
+
+    if (app.admissionFeeDetails) {
+      const d = app.admissionFeeDetails;
+      const items =
+        d.items && d.items.length > 0
+          ? d.items
+          : [
+              d.admissionFee > 0 && { id: "1", slNo: 1, description: "Admission Fee (प्रवेश शुल्क)", due: d.admissionFee, con: 0, paid: d.admissionFee },
+              d.registrationFee > 0 && { id: "2", slNo: 2, description: "Registration & Form Fee", due: d.registrationFee, con: 0, paid: d.registrationFee },
+              d.developmentFee > 0 && { id: "3", slNo: 3, description: "Annual / Development Fund", due: d.developmentFee, con: 0, paid: d.developmentFee },
+              d.idKitFee > 0 && { id: "4", slNo: 4, description: "Student Kit, ID Card & Diary", due: d.idKitFee, con: 0, paid: d.idKitFee },
+              d.examFund > 0 && { id: "5", slNo: 5, description: "Exam & Activity Charges", due: d.examFund, con: 0, paid: d.examFund },
+            ].filter(Boolean);
+
+      return {
+        student,
+        fee: {
+          schoolId: school.id,
+          sessionId: activeSession?.id || "2026-27",
+          studentId: student.id,
+          studentName: student.name,
+          rollNo: student.rollNo,
+          classId: student.classId,
+          month: (d.paidDate || app.appliedAt).slice(0, 7),
+          amount: d.totalPayable,
+          monthlyAmount: student.monthlyFee,
+          paid: d.paidAmount >= d.totalPayable,
+          paidDate: d.paidDate || app.reviewedAt || app.appliedAt,
+          receiptNo: d.receiptNo || `ADM-${app.applicationNo.replace(/\D/g, "").slice(-5) || "1001"}`,
+          paidAmount: d.paidAmount,
+          balanceDue: d.balanceDue,
+          concession: d.concession || 0,
+          feeType: "admission",
+          receiptCategory: "admission",
+          payModeInfo: {
+            payMode: d.paymentMode || "Cash",
+            date: new Date(d.paidDate || app.appliedAt).toLocaleDateString("en-GB"),
+            bank: "",
+            number: "-",
+          },
+          items,
+        },
+      };
+    }
+
+    return { student, fee: null };
   };
 
-  const handleReject = async (app: AdmissionApplication) => {
-    if (!window.confirm(`Reject admission application for ${app.studentName}?`)) return;
-    await updateAdmissionStatus(school.id, app.id, "rejected", { remarks: "Did not meet criteria" });
+  const handleConfirmReject = async (app: AdmissionApplication) => {
+    await updateAdmissionStatus(school.id, app.id, "rejected", {
+      remarks: rejectReason.trim() || "Application declined",
+    });
+    setRejectingAppId(null);
     fetchApplications();
   };
+
+  const toggleFormDoc = (docLabel: string) => {
+    setForm((prev) => ({
+      ...prev,
+      submittedDocs: prev.submittedDocs.includes(docLabel)
+        ? prev.submittedDocs.filter((d) => d !== docLabel)
+        : [...prev.submittedDocs, docLabel],
+    }));
+  };
+
+  const toggleEnrollDoc = (docLabel: string) => {
+    setEnrollSubmittedDocs((prev) =>
+      prev.includes(docLabel) ? prev.filter((d) => d !== docLabel) : [...prev, docLabel]
+    );
+  };
+
+  const filteredApps = applications.filter((a) => {
+    if (statusFilter !== "all" && a.status !== statusFilter) return false;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      return (
+        a.studentName.toLowerCase().includes(q) ||
+        a.applicationNo.toLowerCase().includes(q) ||
+        a.fatherName.toLowerCase().includes(q) ||
+        a.phone.includes(q)
+      );
+    }
+    return true;
+  });
 
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-slate-900 pb-16">
       {/* Top Navbar */}
       <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-blue-950 px-4 py-4 text-white shadow-lg sticky top-0 z-30">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+        <div className="max-w-6xl mx-auto flex items-center justify-between gap-2">
           <button
             onClick={onBack}
-            className="flex items-center gap-1.5 text-blue-200 hover:text-white text-sm font-bold transition-colors"
+            className="flex items-center gap-1.5 text-blue-200 hover:text-white text-sm font-bold transition-colors cursor-pointer"
           >
-            <ChevronLeft className="w-4 h-4" /> School Dashboard
+            <ChevronLeft className="w-5 h-5" />
+            <span>Back</span>
           </button>
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => { setTab("admin_list"); setSubmittedAppNo(null); }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                tab === "admin_list" ? "bg-blue-600 text-white shadow" : "bg-white/10 text-slate-300 hover:text-white"
-              }`}
-            >
-              📋 Admissions List ({applications.length})
-            </button>
-            <button
-              onClick={() => setTab("apply_form")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-                tab === "apply_form" ? "bg-amber-500 text-slate-950 font-black shadow" : "bg-white/10 text-slate-300 hover:text-white"
-              }`}
-            >
-              <UserPlus className="w-3.5 h-3.5" /> + New Online Admission Form
-            </button>
+            <UserPlus className="w-5 h-5 text-amber-400" />
+            <h1 className="text-base sm:text-lg font-black tracking-tight">
+              Online Admission &amp; Print Portal
+            </h1>
+          </div>
+          <div className="text-xs text-blue-200 hidden sm:block font-semibold">
+            {school.name}
           </div>
         </div>
       </div>
 
+      {/* Success Toast */}
       {successToast && (
-        <div className="max-w-xl mx-auto mt-4 px-4">
-          <div className="p-3 bg-emerald-600 text-white rounded-xl shadow-lg flex items-center gap-2 text-sm font-bold">
+        <div className="max-w-6xl mx-auto px-4 mt-4">
+          <div className="bg-emerald-600 text-white px-4 py-3 rounded-xl font-bold text-sm shadow-lg flex items-center gap-2">
             <CheckCircle2 className="w-5 h-5 shrink-0" />
             <span>{successToast}</span>
           </div>
         </div>
       )}
 
-      {/* VIEW A: ADMIN ADMISSION LIST */}
-      {tab === "admin_list" && (
-        <div className="max-w-6xl mx-auto px-4 py-6 space-y-5">
-          {/* Header Stats */}
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white dark:bg-slate-800 p-5 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700">
-            <div>
-              <h2 className="text-xl font-black text-slate-900 dark:text-white flex items-center gap-2">
-                <UserPlus className="w-6 h-6 text-indigo-600" />
-                Online Admission &amp; Registration Portal
-              </h2>
-              <p className="text-xs text-slate-500 mt-1">
-                Manage online registrations, verify documents, and admit candidates directly into classes.
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <span className="px-3 py-1.5 rounded-xl bg-amber-50 text-amber-700 border border-amber-200 text-xs font-bold">
-                Pending: {applications.filter(a => a.status === "pending").length}
-              </span>
-              <span className="px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold">
-                Enrolled: {applications.filter(a => a.status === "approved").length}
-              </span>
-            </div>
+      <div className="max-w-6xl mx-auto px-4 mt-5">
+        {/* Mode Tabs */}
+        {isAdmin && (
+          <div className="flex gap-2 bg-white dark:bg-slate-800 p-1.5 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 mb-6 w-fit">
+            <button
+              onClick={() => setActiveTab("applications")}
+              className={`px-4 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 transition cursor-pointer ${
+                activeTab === "applications"
+                  ? "bg-blue-600 text-white shadow"
+                  : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+              }`}
+            >
+              <FileText className="w-4 h-4" /> Applications ({applications.length})
+            </button>
+            <button
+              onClick={() => {
+                setSubmittedApp(null);
+                setActiveTab("new_form");
+              }}
+              className={`px-4 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 transition cursor-pointer ${
+                activeTab === "new_form"
+                  ? "bg-blue-600 text-white shadow"
+                  : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+              }`}
+            >
+              <UserPlus className="w-4 h-4" /> + New Admission Form
+            </button>
           </div>
+        )}
 
-          {/* Filters & Search */}
-          <div className="flex flex-col sm:flex-row gap-3">
-            <div className="relative flex-1">
-              <Search className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
-              <input
-                type="text"
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="Search by student name, application no, or phone..."
-                className="w-full pl-9 pr-4 py-2.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-sm"
-              />
-            </div>
-            <div className="flex gap-1.5 bg-white dark:bg-slate-800 p-1 rounded-xl border border-slate-200 dark:border-slate-700">
-              {(["all", "pending", "approved", "rejected"] as const).map(st => (
-                <button
-                  key={st}
-                  onClick={() => setStatusFilter(st)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold capitalize transition ${
-                    statusFilter === st ? "bg-slate-900 text-white dark:bg-blue-600" : "text-slate-600 dark:text-slate-300 hover:bg-slate-100"
-                  }`}
-                >
-                  {st}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Applications List */}
-          {loading ? (
-            <div className="text-center py-12 text-slate-400">Loading applications...</div>
-          ) : filteredApps.length === 0 ? (
-            <div className="text-center py-16 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700">
-              <UserPlus className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-              <h3 className="text-slate-700 dark:text-slate-300 font-bold">No Applications Found</h3>
-              <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                No admission forms matching your filter. Click "+ New Online Admission Form" to register a candidate or share the school website link.
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {filteredApps.map(app => (
-                <div
-                  key={app.id}
-                  className="bg-white dark:bg-slate-800 rounded-2xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm space-y-3 hover:shadow-md transition"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <span className="font-mono text-[10px] font-black px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
-                        {app.applicationNo}
-                      </span>
-                      <h4 className="text-base font-black text-slate-900 dark:text-white mt-1">
-                        {app.studentName}
-                      </h4>
-                      <p className="text-xs text-indigo-600 dark:text-indigo-400 font-bold">
-                        Applied for: {app.className || "Standard"}
-                      </p>
-                    </div>
-
-                    <span className={`px-2.5 py-1 rounded-full text-[11px] font-black uppercase ${
-                      app.status === "approved" ? "bg-emerald-100 text-emerald-800" :
-                      app.status === "rejected" ? "bg-rose-100 text-rose-800" :
-                      "bg-amber-100 text-amber-800"
-                    }`}>
-                      {app.status}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2 text-xs text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-900/50 p-2.5 rounded-xl font-medium">
-                    <div>
-                      <span className="text-slate-400 block text-[10px]">Father:</span>
-                      <span className="font-bold">{app.fatherName}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-400 block text-[10px]">Phone:</span>
-                      <span className="font-bold">{app.phone}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-400 block text-[10px]">DOB:</span>
-                      <span>{app.dateOfBirth || "—"}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-400 block text-[10px]">Prev. School:</span>
-                      <span className="truncate block">{app.previousSchool || "Fresh admission"}</span>
-                    </div>
-                  </div>
-
-                  {/* Aadhaar Badge if available */}
-                  {(app.aadhaarNo || app.fatherAadhaar) && (
-                    <div className="flex items-center gap-2 flex-wrap text-[10px] font-bold">
-                      {app.aadhaarNo && (
-                        <span className="px-2 py-0.5 rounded-md bg-blue-50 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 flex items-center gap-1">
-                          <ShieldCheck className="w-3 h-3 text-blue-600" /> Student UID: {app.aadhaarNo}
-                        </span>
-                      )}
-                      {app.fatherAadhaar && (
-                        <span className="px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                          Father UID: {app.fatherAadhaar}
-                        </span>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Actions */}
-                  <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-700">
-                    <span className="text-[10px] text-slate-400">
-                      Applied: {new Date(app.appliedAt).toLocaleDateString()}
-                    </span>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {app.status === "pending" && (
-                        <>
-                          <button
-                            onClick={() => {
-                              setEnrollingApp(app);
-                              setEnrollClassId(app.classId || classes[0]?.id || "");
-                              setEnrollRollNo("");
-                              setEnrollStudentAadhaar(app.aadhaarNo || "");
-                              setEnrollFatherAadhaar(app.fatherAadhaar || "");
-                              setEnrollMotherAadhaar(app.motherAadhaar || "");
-                              setEnrollMonthlyFee((classes.find(c => c.id === (app.classId || classes[0]?.id)) as any)?.defaultFee || 1500);
-                              setEnrollPaidAmount(5300);
-                              setShowEnrollModal(true);
-                            }}
-                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1 shadow-xs"
-                          >
-                            <Check className="w-3.5 h-3.5" /> Approve &amp; Enroll
-                          </button>
-                          <button
-                            onClick={() => handleReject(app)}
-                            className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg text-xs font-bold"
-                          >
-                            Reject
-                          </button>
-                        </>
-                      )}
-                      {app.status === "approved" && (
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-bold text-emerald-600 flex items-center gap-1">
-                            <CheckCircle2 className="w-4 h-4" /> Roll #{app.assignedRollNo || "✓"}
-                          </span>
-                          <button
-                            onClick={() => handleOpenExistingAdmissionReceipt(app)}
-                            className="px-2.5 py-1 bg-amber-500/15 hover:bg-amber-500/25 text-amber-800 dark:text-amber-300 border border-amber-400/30 rounded-lg text-xs font-bold flex items-center gap-1 transition"
-                            title="Print or view official admission fee receipt"
-                          >
-                            <Printer className="w-3.5 h-3.5 text-amber-600" />
-                            <span>प्रवेश रसीद</span>
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+        {/* 1. ADMIN APPLICATIONS REVIEW LIST */}
+        {activeTab === "applications" && isAdmin && (
+          <div className="space-y-4">
+            {/* Stats Row */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {[
+                { label: "Total Applications", count: applications.length, color: "text-blue-600", bg: "bg-blue-50 dark:bg-blue-950/30" },
+                { label: "Pending Review", count: applications.filter((a) => a.status === "pending").length, color: "text-amber-600", bg: "bg-amber-50 dark:bg-amber-950/30" },
+                { label: "Approved & Enrolled", count: applications.filter((a) => a.status === "approved").length, color: "text-emerald-600", bg: "bg-emerald-50 dark:bg-emerald-950/30" },
+                { label: "Rejected", count: applications.filter((a) => a.status === "rejected").length, color: "text-rose-600", bg: "bg-rose-50 dark:bg-rose-950/30" },
+              ].map((s, idx) => (
+                <div key={idx} className={`${s.bg} p-4 rounded-2xl border border-slate-200/60 dark:border-slate-700`}>
+                  <p className="text-xs font-bold text-slate-500 dark:text-slate-400">{s.label}</p>
+                  <p className={`text-2xl font-black mt-1 tabular-nums ${s.color}`}>{s.count}</p>
                 </div>
               ))}
             </div>
-          )}
-        </div>
-      )}
 
-      {/* VIEW B: ONLINE ADMISSION APPLICATION FORM */}
-      {tab === "apply_form" && (
-        <div className="max-w-3xl mx-auto px-4 py-8">
-          {submittedAppNo ? (
-            <div className="bg-white dark:bg-slate-800 rounded-3xl p-8 border border-emerald-300 dark:border-emerald-700 shadow-xl text-center space-y-4">
-              <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-inner">
-                <CheckCircle2 className="w-10 h-10" />
+            {/* Search & Filter */}
+            <div className="bg-white dark:bg-slate-800 p-4 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row gap-3 items-center justify-between">
+              <div className="relative w-full sm:w-80">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search name, App No, phone..."
+                  className="w-full pl-9 pr-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-medium"
+                />
               </div>
-              <h3 className="text-2xl font-black text-slate-900 dark:text-white">
-                Application Submitted Successfully!
-              </h3>
-              <p className="text-sm text-slate-600 dark:text-slate-300 max-w-md mx-auto">
-                Your online admission application has been recorded in the school registry.
-              </p>
-              <div className="p-4 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl inline-block">
-                <span className="text-xs font-bold text-slate-500 uppercase block">Application Number</span>
-                <span className="text-xl font-black font-mono text-indigo-600 dark:text-indigo-400">{submittedAppNo}</span>
-              </div>
-              <div className="pt-4 flex justify-center gap-3">
-                <button
-                  onClick={() => { setSubmittedAppNo(null); setTab("admin_list"); }}
-                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow"
-                >
-                  View in Applications List
-                </button>
-                <button
-                  onClick={() => window.print()}
-                  className="px-5 py-2.5 bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-bold flex items-center gap-1.5"
-                >
-                  <Printer className="w-4 h-4" /> Print Application Slip
-                </button>
+              <div className="flex gap-1.5 w-full sm:w-auto overflow-x-auto">
+                {(["all", "pending", "approved", "rejected"] as const).map((st) => (
+                  <button
+                    key={st}
+                    onClick={() => setStatusFilter(st)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold capitalize transition cursor-pointer ${
+                      statusFilter === st
+                        ? "bg-slate-900 dark:bg-white text-white dark:text-slate-900"
+                        : "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"
+                    }`}
+                  >
+                    {st}
+                  </button>
+                ))}
               </div>
             </div>
-          ) : (
-            <div className="bg-white dark:bg-slate-800 rounded-3xl p-6 sm:p-8 border border-slate-200 dark:border-slate-700 shadow-lg">
-              <div className="border-b border-slate-200 dark:border-slate-700 pb-4 mb-6">
-                <span className="px-3 py-1 rounded-full bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 text-xs font-black uppercase tracking-wider">
-                  Official Admission Form 2026-27
+
+            {/* Applications List */}
+            {loading ? (
+              <div className="bg-white dark:bg-slate-800 rounded-2xl p-12 text-center text-slate-400 text-sm font-bold">
+                Loading admission applications...
+              </div>
+            ) : filteredApps.length === 0 ? (
+              <div className="bg-white dark:bg-slate-800 rounded-2xl p-12 text-center border border-slate-200 dark:border-slate-700">
+                <UserPlus className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+                <h3 className="font-black text-slate-700 dark:text-slate-200 text-base">
+                  No Admission Applications Yet
+                </h3>
+                <p className="text-xs text-slate-500 mt-1 mb-4">
+                  नया आवेदन भरने के लिए "+ New Admission Form" पर क्लिक करें।
+                </p>
+                <button
+                  onClick={() => setActiveTab("new_form")}
+                  className="px-4 py-2 rounded-xl bg-blue-600 text-white font-bold text-xs cursor-pointer"
+                >
+                  + Fill New Admission Form
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {filteredApps.map((app) => (
+                  <div
+                    key={app.id}
+                    className="bg-white dark:bg-slate-800 rounded-2xl p-4 sm:p-5 shadow-sm border border-slate-200 dark:border-slate-700 space-y-3"
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="flex items-start gap-3">
+                        <div className="w-12 h-14 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 overflow-hidden flex items-center justify-center shrink-0 font-black text-blue-600">
+                          {app.photoUrl ? (
+                            <img src={app.photoUrl} alt={app.studentName} className="w-full h-full object-cover" />
+                          ) : (
+                            <span>{app.studentName.charAt(0).toUpperCase()}</span>
+                          )}
+                        </div>
+
+                        <div className="space-y-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="px-2.5 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 font-mono text-[11px] font-black">
+                              {app.applicationNo}
+                            </span>
+                            <span className="px-2.5 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 text-[11px] font-bold">
+                              Class: {app.className}
+                            </span>
+                            {app.status === "pending" && (
+                              <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[11px] font-black flex items-center gap-1">
+                                <Clock className="w-3 h-3" /> Pending
+                              </span>
+                            )}
+                            {app.status === "approved" && (
+                              <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[11px] font-black flex items-center gap-1">
+                                <CheckCircle2 className="w-3 h-3" /> Enrolled {app.assignedRollNo ? `(Roll #${app.assignedRollNo})` : ""}
+                              </span>
+                            )}
+                            {app.status === "rejected" && (
+                              <span className="px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 text-[11px] font-black flex items-center gap-1">
+                                <XCircle className="w-3 h-3" /> Rejected
+                              </span>
+                            )}
+                          </div>
+
+                          <h3 className="text-base font-black text-slate-900 dark:text-white">
+                            {app.studentName}{" "}
+                            <span className="text-xs font-normal text-slate-500">
+                              ({app.gender}, DOB: {app.dateOfBirth || "N/A"})
+                            </span>
+                            {app.bloodGroup && (
+                              <span className="ml-2 px-2 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-bold">
+                                🩸 {app.bloodGroup}
+                              </span>
+                            )}
+                          </h3>
+
+                          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 dark:text-slate-300">
+                            <span>👨 Father: <strong>{app.fatherName}</strong></span>
+                            <span>👩 Mother: <strong>{app.motherName || "—"}</strong></span>
+                            <span className="flex items-center gap-1">
+                              <Phone className="w-3 h-3 text-emerald-600" /> {app.phone}
+                            </span>
+                            {app.admissionFeeDetails && (
+                              <span className="text-emerald-700 dark:text-emerald-400 font-bold">
+                                💰 Paid: ₹{Number(app.admissionFeeDetails.paidAmount || 0).toLocaleString("en-IN")}
+                                {app.admissionFeeDetails.balanceDue > 0 ? ` (Due ₹${app.admissionFeeDetails.balanceDue})` : ""}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Actions */}
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        {app.status === "pending" && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPrintStudioState({
+                                  open: true,
+                                  application: app,
+                                  className: app.className,
+                                  mode: "form_only",
+                                })
+                              }
+                              className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                            >
+                              <Printer className="w-3.5 h-3.5" /> फॉर्म प्रिंट
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openEnrollModal(app)}
+                              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black flex items-center gap-1.5 shadow cursor-pointer"
+                            >
+                              <Check className="w-4 h-4" /> Approve &amp; Enroll
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRejectingAppId(rejectingAppId === app.id ? null : app.id);
+                                setRejectReason("Criteria / Documents incomplete");
+                              }}
+                              className="px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                            >
+                              <X className="w-4 h-4" /> Reject
+                            </button>
+                          </>
+                        )}
+
+                        {app.status === "approved" && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const { student, fee } = resolveApplicationStudentAndFee(app);
+                                setPrintStudioState({
+                                  open: true,
+                                  student,
+                                  application: app,
+                                  className: student.className || app.className,
+                                  feeRecord: fee,
+                                  mode: fee ? "combined" : "form_only",
+                                });
+                              }}
+                              className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-black flex items-center gap-1.5 shadow cursor-pointer"
+                            >
+                              <Scissors className="w-3.5 h-3.5" /> फॉर्म + रसीद (A4)
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const { student, fee } = resolveApplicationStudentAndFee(app);
+                                if (fee) {
+                                  setPosReceiptState({ open: true, student, fee });
+                                } else {
+                                  setPrintStudioState({
+                                    open: true,
+                                    student,
+                                    application: app,
+                                    className: student.className || app.className,
+                                    mode: "form_only",
+                                  });
+                                }
+                              }}
+                              className="px-3 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-xs font-black flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <ReceiptText className="w-3.5 h-3.5" /> POS / रसीद
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Inline Reject Confirmation Bar */}
+                    {rejectingAppId === app.id && (
+                      <div className="pt-3 border-t border-rose-200 dark:border-rose-900/60 flex flex-col sm:flex-row items-center gap-2 bg-rose-50/60 dark:bg-rose-950/20 p-3 rounded-xl">
+                        <span className="text-xs font-bold text-rose-700 dark:text-rose-300">
+                          Reject {app.studentName}? Reason:
+                        </span>
+                        <input
+                          type="text"
+                          value={rejectReason}
+                          onChange={(e) => setRejectReason(e.target.value)}
+                          className="flex-1 px-3 py-1.5 rounded-lg border border-rose-300 bg-white dark:bg-slate-900 text-xs"
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleConfirmReject(app)}
+                            className="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold cursor-pointer"
+                          >
+                            Confirm Reject
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRejectingAppId(null)}
+                            className="px-3 py-1.5 rounded-lg bg-slate-200 dark:bg-slate-700 text-xs font-bold cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 2. ADMISSION APPLICATION FORM */}
+        {activeTab === "new_form" && (
+          <div className="max-w-3xl mx-auto">
+            {submittedApp ? (
+              <div className="bg-white dark:bg-slate-800 rounded-3xl p-8 text-center shadow-xl border border-emerald-200 dark:border-emerald-800">
+                <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-4">
+                  <CheckCircle2 className="w-9 h-9" />
+                </div>
+                <span className="px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-black uppercase">
+                  Application Registered
                 </span>
                 <h2 className="text-2xl font-black text-slate-900 dark:text-white mt-2">
-                  Student Registration &amp; Admission
+                  Admission Form Submitted!
                 </h2>
-                <p className="text-xs text-slate-500 mt-1">
-                  Fill candidate and parent details accurately for verification.
+                <p className="text-sm text-slate-600 dark:text-slate-300 mt-1">
+                  Application Number:{" "}
+                  <strong className="font-mono text-indigo-600 text-base">
+                    {submittedApp.applicationNo}
+                  </strong>
                 </p>
-              </div>
 
-              <form onSubmit={handleApplySubmit} className="space-y-6">
-                {/* 1. Student Particulars */}
-                <div className="space-y-4">
-                  <h4 className="text-xs font-black uppercase tracking-wider text-slate-500 border-b pb-1">
-                    1. Student Particulars
-                  </h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="my-6 p-4 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-left text-xs space-y-2 max-w-md mx-auto">
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Student Name:</span>
+                    <strong className="text-slate-800 dark:text-white">{submittedApp.studentName}</strong>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Class Applied:</span>
+                    <strong className="text-slate-800 dark:text-white">{submittedApp.className}</strong>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Father's Name:</span>
+                    <strong className="text-slate-800 dark:text-white">{submittedApp.fatherName}</strong>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Contact Mobile:</span>
+                    <strong className="text-slate-800 dark:text-white">{submittedApp.phone}</strong>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPrintStudioState({
+                        open: true,
+                        application: submittedApp,
+                        className: submittedApp.className,
+                        mode: "form_only",
+                      })
+                    }
+                    className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-black flex items-center gap-1.5 shadow cursor-pointer"
+                  >
+                    <Printer className="w-4 h-4" /> Print / Download Admission Form (A4)
+                  </button>
+
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const appToEnroll = submittedApp;
+                        setSubmittedApp(null);
+                        setActiveTab("applications");
+                        openEnrollModal(appToEnroll);
+                      }}
+                      className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black flex items-center gap-1.5 shadow cursor-pointer"
+                    >
+                      <Check className="w-4 h-4" /> Approve &amp; Collect Fee Now
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => setSubmittedApp(null)}
+                    className="px-5 py-2.5 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-white text-xs font-black cursor-pointer"
+                  >
+                    Submit Another Form
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <form
+                onSubmit={handleSubmitForm}
+                className="bg-white dark:bg-slate-800 rounded-3xl p-6 sm:p-8 shadow-lg border border-slate-200 dark:border-slate-700 space-y-6"
+              >
+                <div className="border-b border-slate-200 dark:border-slate-700 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-md shrink-0">
+                      <GraduationCap className="w-6 h-6" />
+                    </div>
                     <div>
-                      <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                        Full Name of Candidate *
+                      <h2 className="text-xl font-black text-slate-900 dark:text-white">
+                        {school.name} — Admission Form
+                      </h2>
+                      <p className="text-xs text-slate-500">
+                        Academic Session {activeSession?.name || "2026-27"} • Official Registration
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Photo Upload in Form */}
+                  <div className="flex items-center gap-3 bg-slate-50 dark:bg-slate-900 p-2.5 rounded-2xl border border-slate-200 dark:border-slate-700">
+                    <div className="w-12 h-14 rounded-lg border border-dashed border-indigo-400 overflow-hidden flex items-center justify-center bg-white dark:bg-slate-800 shrink-0">
+                      {form.photoUrl ? (
+                        <img src={form.photoUrl} alt="Applicant" className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="text-[9px] text-slate-400 text-center font-bold px-1">Photo</span>
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-bold text-slate-700 dark:text-slate-200 mb-1">Student Photo</p>
+                      <DirectUploadButton
+                        kind="image"
+                        compact
+                        currentUrl={form.photoUrl}
+                        onUploaded={(url) => setForm((p) => ({ ...p, photoUrl: url }))}
+                        onClear={() => setForm((p) => ({ ...p, photoUrl: "" }))}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {formError && (
+                  <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{formError}</span>
+                  </div>
+                )}
+
+                {/* Student Bio-Data */}
+                <div>
+                  <h3 className="text-xs font-black uppercase tracking-wider text-indigo-600 mb-3">
+                    1. Student Bio-Data (छात्र का विवरण)
+                  </h3>
+                  <div className="grid sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Student Full Name *
                       </label>
                       <input
                         type="text"
                         required
                         value={form.studentName}
-                        onChange={e => setForm(p => ({ ...p, studentName: e.target.value }))}
-                        placeholder="e.g. Rohan Sharma"
-                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-sm"
+                        onChange={(e) => setForm({ ...form, studentName: e.target.value })}
+                        placeholder="e.g. Aarav Kumar"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm"
                       />
                     </div>
-
                     <div>
-                      <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                        Class Applying For *
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Applying For Class *
                       </label>
                       <select
                         value={form.classId}
-                        onChange={e => {
-                          const cls = classes.find(c => c.id === e.target.value);
-                          setForm(p => ({ ...p, classId: e.target.value, className: cls?.name || "" }));
-                        }}
-                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-sm"
+                        onChange={(e) => setForm({ ...form, classId: e.target.value })}
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm font-semibold"
                       >
-                        {classes.map(c => (
-                          <option key={c.id} value={c.id}>{c.name} {c.section ? `(${c.section})` : ""}</option>
+                        {classes.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name} {c.section ? `(${c.section})` : ""}
+                          </option>
                         ))}
                       </select>
                     </div>
-
                     <div>
-                      <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                        Date of Birth
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Date of Birth *
                       </label>
                       <input
                         type="date"
+                        required
                         value={form.dateOfBirth}
-                        onChange={e => setForm(p => ({ ...p, dateOfBirth: e.target.value }))}
-                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-sm"
+                        onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })}
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm"
+                      />
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                          Gender
+                        </label>
+                        <select
+                          value={form.gender}
+                          onChange={(e) => setForm({ ...form, gender: e.target.value as any })}
+                          className="w-full px-2.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-semibold"
+                        >
+                          <option value="male">Male</option>
+                          <option value="female">Female</option>
+                          <option value="other">Other</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-rose-600 mb-1">
+                          Blood Grp
+                        </label>
+                        <select
+                          value={form.bloodGroup}
+                          onChange={(e) => setForm({ ...form, bloodGroup: e.target.value })}
+                          className="w-full px-2.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-semibold"
+                        >
+                          <option value="">Optional</option>
+                          {BLOOD_GROUPS.map((bg) => (
+                            <option key={bg} value={bg}>
+                              {bg}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                          Category
+                        </label>
+                        <select
+                          value={form.category}
+                          onChange={(e) => setForm({ ...form, category: e.target.value })}
+                          className="w-full px-2.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-semibold"
+                        >
+                          {ADMISSION_CATEGORIES.map((cat) => (
+                            <option key={cat} value={cat}>
+                              {cat}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Student Aadhaar (12-Digit)
+                      </label>
+                      <input
+                        type="text"
+                        maxLength={14}
+                        value={form.aadhaarNo}
+                        onChange={(e) => setForm({ ...form, aadhaarNo: e.target.value.replace(/[^\d\s]/g, "") })}
+                        placeholder="XXXX XXXX XXXX"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        APAAR ID / PEN No. (Optional)
+                      </label>
+                      <input
+                        type="text"
+                        value={form.apaarId}
+                        onChange={(e) => setForm({ ...form, apaarId: e.target.value })}
+                        placeholder="UDISE+ APAAR / PEN"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm font-mono"
                       />
                     </div>
 
                     <div>
-                      <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                        Gender
-                      </label>
-                      <select
-                        value={form.gender}
-                        onChange={e => setForm(p => ({ ...p, gender: e.target.value as any }))}
-                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-sm"
-                      >
-                        <option value="male">Male</option>
-                        <option value="female">Female</option>
-                        <option value="other">Other</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                        Previous School Attended (If any)
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Previous School Name
                       </label>
                       <input
                         type="text"
                         value={form.previousSchool}
-                        onChange={e => setForm(p => ({ ...p, previousSchool: e.target.value }))}
-                        placeholder="e.g. St. Xavier's Convent"
-                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-sm"
+                        onChange={(e) => setForm({ ...form, previousSchool: e.target.value })}
+                        placeholder="Last attended school"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm"
                       />
                     </div>
-
                     <div>
-                      <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                        Last Class Marks / %
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Previous Class / Marks %
                       </label>
                       <input
                         type="text"
                         value={form.previousMarks}
-                        onChange={e => setForm(p => ({ ...p, previousMarks: e.target.value }))}
-                        placeholder="e.g. 84.5% or A Grade"
-                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-sm"
+                        onChange={(e) => setForm({ ...form, previousMarks: e.target.value })}
+                        placeholder="e.g. 88% in Class 5"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm"
                       />
                     </div>
                   </div>
                 </div>
 
-                {/* 2. Parent & Contact Details */}
-                <div className="space-y-4">
-                  <h4 className="text-xs font-black uppercase tracking-wider text-slate-500 border-b pb-1">
-                    2. Parent / Guardian Details
-                  </h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Parent & Contact Details */}
+                <div>
+                  <h3 className="text-xs font-black uppercase tracking-wider text-indigo-600 mb-3">
+                    2. Parent &amp; Contact Information (अभिभावक विवरण)
+                  </h3>
+                  <div className="grid sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
                         Father's Name *
                       </label>
                       <input
                         type="text"
                         required
                         value={form.fatherName}
-                        onChange={e => setForm(p => ({ ...p, fatherName: e.target.value }))}
-                        placeholder="Shri..."
-                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-sm"
+                        onChange={(e) => setForm({ ...form, fatherName: e.target.value })}
+                        placeholder="Father's Full Name"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm"
                       />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Father's Occupation &amp; Aadhaar
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="text"
+                          value={form.fatherOccupation}
+                          onChange={(e) => setForm({ ...form, fatherOccupation: e.target.value })}
+                          placeholder="Occupation"
+                          className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs"
+                        />
+                        <input
+                          type="text"
+                          maxLength={14}
+                          value={form.fatherAadhaar}
+                          onChange={(e) => setForm({ ...form, fatherAadhaar: e.target.value.replace(/[^\d\s]/g, "") })}
+                          placeholder="Father Aadhaar"
+                          className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-mono"
+                        />
+                      </div>
                     </div>
 
                     <div>
-                      <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                        Mother's Name *
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Mother's Name
                       </label>
                       <input
                         type="text"
-                        required
                         value={form.motherName}
-                        onChange={e => setForm(p => ({ ...p, motherName: e.target.value }))}
-                        placeholder="Smt..."
-                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-sm"
+                        onChange={(e) => setForm({ ...form, motherName: e.target.value })}
+                        placeholder="Mother's Full Name"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm"
                       />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Mother's Occupation &amp; Aadhaar
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="text"
+                          value={form.motherOccupation}
+                          onChange={(e) => setForm({ ...form, motherOccupation: e.target.value })}
+                          placeholder="Occupation"
+                          className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs"
+                        />
+                        <input
+                          type="text"
+                          maxLength={14}
+                          value={form.motherAadhaar}
+                          onChange={(e) => setForm({ ...form, motherAadhaar: e.target.value.replace(/[^\d\s]/g, "") })}
+                          placeholder="Mother Aadhaar"
+                          className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-mono"
+                        />
+                      </div>
                     </div>
 
                     <div>
-                      <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                        Primary Mobile / WhatsApp Number *
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Primary Mobile Number *
                       </label>
                       <input
                         type="tel"
                         required
                         value={form.phone}
-                        onChange={e => setForm(p => ({ ...p, phone: e.target.value }))}
-                        placeholder="+91..."
-                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-sm"
+                        onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                        placeholder="10-digit Mobile Number"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm"
                       />
                     </div>
-
-                    <div>
-                      <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                        Email Address
-                      </label>
-                      <input
-                        type="email"
-                        value={form.email}
-                        onChange={e => setForm(p => ({ ...p, email: e.target.value }))}
-                        placeholder="parent@example.com"
-                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-sm"
-                      />
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                          WhatsApp No.
+                        </label>
+                        <input
+                          type="tel"
+                          value={form.whatsappNo}
+                          onChange={(e) => setForm({ ...form, whatsappNo: e.target.value })}
+                          placeholder="WhatsApp"
+                          className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                          Email (Optional)
+                        </label>
+                        <input
+                          type="email"
+                          value={form.email}
+                          onChange={(e) => setForm({ ...form, email: e.target.value })}
+                          placeholder="parent@email.com"
+                          className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs"
+                        />
+                      </div>
                     </div>
 
-                    <div className="sm:col-span-2">
-                      <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                        Residential Address
-                      </label>
-                      <textarea
-                        rows={2}
-                        value={form.address}
-                        onChange={e => setForm(p => ({ ...p, address: e.target.value }))}
-                        placeholder="House No, Village/Ward, Post, District..."
-                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-sm"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* 3. Aadhaar Card Verification (अनिवार्य U-DISE+ / DBT / Scholarship) */}
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between border-b pb-1">
-                    <h4 className="text-xs font-black uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
-                      <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                      <span>3. Aadhaar Card Details (आधार कार्ड विवरण - U-DISE+ / DBT)</span>
-                    </h4>
-                    <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full">
-                      Govt. Verified Format
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div>
-                      <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                        Student's 12-Digit Aadhaar No.
-                      </label>
-                      <input
-                        type="text"
-                        maxLength={12}
-                        value={form.studentAadhaar}
-                        onChange={e => setForm(p => ({ ...p, studentAadhaar: e.target.value.replace(/\D/g, '') }))}
-                        placeholder="XXXX-XXXX-XXXX"
-                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-sm font-mono tracking-wider"
-                      />
-                      <span className="text-[10px] text-slate-400 mt-0.5 block">छात्र का आधार नंबर</span>
-                    </div>
-
-                    <div>
-                      <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                        Father's 12-Digit Aadhaar No.
-                      </label>
-                      <input
-                        type="text"
-                        maxLength={12}
-                        value={form.fatherAadhaar}
-                        onChange={e => setForm(p => ({ ...p, fatherAadhaar: e.target.value.replace(/\D/g, '') }))}
-                        placeholder="XXXX-XXXX-XXXX"
-                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-sm font-mono tracking-wider"
-                      />
-                      <span className="text-[10px] text-slate-400 mt-0.5 block">पिता का आधार नंबर</span>
-                    </div>
-
-                    <div>
-                      <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                        Mother's 12-Digit Aadhaar No.
-                      </label>
-                      <input
-                        type="text"
-                        maxLength={12}
-                        value={form.motherAadhaar}
-                        onChange={e => setForm(p => ({ ...p, motherAadhaar: e.target.value.replace(/\D/g, '') }))}
-                        placeholder="XXXX-XXXX-XXXX"
-                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-sm font-mono tracking-wider"
-                      />
-                      <span className="text-[10px] text-slate-400 mt-0.5 block">माता का आधार नंबर</span>
+                    <div className="sm:col-span-2 grid sm:grid-cols-4 gap-3">
+                      <div className="sm:col-span-2">
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                          Residential Address *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={form.address}
+                          onChange={(e) => setForm({ ...form, address: e.target.value })}
+                          placeholder="House / Village / Street"
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                          City / District
+                        </label>
+                        <input
+                          type="text"
+                          value={form.city}
+                          onChange={(e) => setForm({ ...form, city: e.target.value })}
+                          placeholder="City"
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                          PIN Code
+                        </label>
+                        <input
+                          type="text"
+                          maxLength={6}
+                          value={form.pincode}
+                          onChange={(e) => setForm({ ...form, pincode: e.target.value.replace(/\D/g, "") })}
+                          placeholder="PIN Code"
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm font-mono"
+                        />
+                      </div>
                     </div>
                   </div>
                 </div>
 
-                <div className="pt-4 flex items-center justify-end gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setTab("admin_list")}
-                    className="px-5 py-2.5 bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-sm font-bold"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={submitting}
-                    className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-black shadow-lg disabled:opacity-60 flex items-center gap-2"
-                  >
-                    {submitting ? "Submitting..." : "Submit Admission Application"}
-                  </button>
+                {/* Transport & Documents */}
+                <div className="space-y-4 pt-2 border-t border-slate-200 dark:border-slate-700">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={form.usesBus}
+                        onChange={(e) => setForm({ ...form, usesBus: e.target.checked })}
+                        className="w-4 h-4 accent-amber-600"
+                      />
+                      <Bus className="w-4 h-4 text-amber-600" />
+                      <span className="text-xs font-bold text-slate-800 dark:text-white">
+                        School Bus / Transport Facility Required
+                      </span>
+                    </label>
+                    {form.usesBus && (
+                      <input
+                        type="text"
+                        value={form.busRoute}
+                        onChange={(e) => setForm({ ...form, busRoute: e.target.value })}
+                        placeholder="Nearest Bus Stop / Route"
+                        className="px-3.5 py-2 rounded-xl border border-amber-300 bg-amber-50/40 dark:bg-slate-900 text-xs font-semibold sm:w-64"
+                      />
+                    )}
+                  </div>
+
+                  {isAdmin && (
+                    <div>
+                      <p className="text-xs font-black text-slate-700 dark:text-slate-200 mb-2 flex items-center gap-1.5">
+                        <FileCheck2 className="w-4 h-4 text-emerald-600" />
+                        <span>Documents Submitted with Form:</span>
+                      </p>
+                      <div className="grid sm:grid-cols-2 gap-2">
+                        {ADMISSION_DOCUMENT_OPTIONS.map((docItem) => {
+                          const checked = form.submittedDocs.includes(docItem);
+                          return (
+                            <label
+                              key={docItem}
+                              className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-semibold cursor-pointer ${
+                                checked
+                                  ? "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-400 text-emerald-800 dark:text-emerald-200"
+                                  : "bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400"
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleFormDoc(docItem)}
+                                className="w-3.5 h-3.5 accent-emerald-600"
+                              />
+                              <span className="truncate">{docItem}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
+
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white font-black text-sm shadow-lg flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-60"
+                >
+                  <Send className="w-4 h-4" />
+                  <span>{submitting ? "Submitting Application..." : "Submit Admission Application"}</span>
+                </button>
               </form>
-            </div>
-          )}
-        </div>
-      )}
+            )}
+          </div>
+        )}
+      </div>
 
-      {/* ENROLLMENT & ADMISSION FEE MODAL */}
+      {/* APPROVE & ENROLL + ADMISSION FEE RECEIPT MODAL */}
       {showEnrollModal && enrollingApp && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="bg-white dark:bg-slate-800 rounded-3xl max-w-xl w-full p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-slate-700 space-y-4 my-auto">
-            <div className="border-b border-slate-200 dark:border-slate-700 pb-3">
-              <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">
-                Enrollment &amp; Admission Fee Receipt
-              </span>
-              <h3 className="text-xl font-black text-slate-900 dark:text-white mt-1">
-                नामांकन व प्रवेश शुल्क: {enrollingApp.studentName}
-              </h3>
-              <p className="text-xs text-slate-500">
-                कक्षा, रोल नंबर, आधार और प्रवेश शुल्क विवरण भरें। सबमिट करते ही प्रवेश रसीद बन जाएगी।
-              </p>
-            </div>
-
-            <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
-              {/* Class & Roll No */}
-              <div className="grid grid-cols-2 gap-3 bg-slate-50 dark:bg-slate-900/50 p-3 rounded-2xl border border-slate-200 dark:border-slate-700">
-                <div>
-                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                    Class Assigned *
-                  </label>
-                  <select
-                    value={enrollClassId}
-                    onChange={e => setEnrollClassId(e.target.value)}
-                    className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl text-xs font-bold bg-white dark:bg-slate-800"
-                  >
-                    {classes.map(c => (
-                      <option key={c.id} value={c.id}>{c.name} {c.section ? `(${c.section})` : ""}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                    Roll Number *
-                  </label>
-                  <input
-                    type="text"
-                    value={enrollRollNo}
-                    onChange={e => setEnrollRollNo(e.target.value)}
-                    placeholder="e.g. 01 or 105"
-                    className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl text-xs font-bold bg-white dark:bg-slate-800"
-                  >
-                  </input>
-                </div>
-
-                <div>
-                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                    Monthly Tuition Fee (मासिक शुल्क ₹)
-                  </label>
-                  <input
-                    type="number"
-                    value={enrollMonthlyFee}
-                    onChange={e => setEnrollMonthlyFee(Number(e.target.value))}
-                    className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl text-xs font-bold bg-white dark:bg-slate-800"
-                  />
-                  <span className="text-[10px] text-slate-400">हर महीने की नियमित ट्यूशन फीस</span>
-                </div>
-
-                <div>
-                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                    Payment Mode (भुगतान माध्यम)
-                  </label>
-                  <select
-                    value={enrollPayMode}
-                    onChange={e => setEnrollPayMode(e.target.value)}
-                    className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl text-xs font-bold bg-white dark:bg-slate-800"
-                  >
-                    <option value="Cash">Cash (नकद)</option>
-                    <option value="UPI / QR">UPI / QR Code</option>
-                    <option value="Bank Transfer">Bank Transfer / NEFT</option>
-                    <option value="Cheque">Cheque</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Aadhaar Numbers */}
-              <div className="bg-blue-50/60 dark:bg-blue-950/20 p-3 rounded-2xl border border-blue-200 dark:border-blue-800/60 space-y-2">
-                <span className="text-xs font-black text-blue-900 dark:text-blue-300 uppercase tracking-wider block">
-                  Aadhaar Card Records (आधार कार्ड नंबर)
+        <div className="fixed inset-0 z-50 bg-black/65 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white dark:bg-slate-800 rounded-3xl max-w-2xl w-full p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-slate-700 my-6 max-h-[92vh] overflow-y-auto space-y-4">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-200 dark:border-slate-700 pb-3">
+              <div>
+                <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black uppercase">
+                  Direct Student Enrollment &amp; Receipt
                 </span>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-600 dark:text-slate-400 block mb-0.5">
-                      Student Aadhaar (12 Digits)
-                    </label>
-                    <input
-                      type="text"
-                      maxLength={12}
-                      value={enrollStudentAadhaar}
-                      onChange={e => setEnrollStudentAadhaar(e.target.value.replace(/\D/g, ''))}
-                      placeholder="Student 12-digit UID"
-                      className="w-full px-2.5 py-1.5 text-xs font-mono font-bold border rounded-lg bg-white dark:bg-slate-900"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-600 dark:text-slate-400 block mb-0.5">
-                      Father / Parent Aadhaar (12 Digits)
-                    </label>
-                    <input
-                      type="text"
-                      maxLength={12}
-                      value={enrollFatherAadhaar}
-                      onChange={e => setEnrollFatherAadhaar(e.target.value.replace(/\D/g, ''))}
-                      placeholder="Father 12-digit UID"
-                      className="w-full px-2.5 py-1.5 text-xs font-mono font-bold border rounded-lg bg-white dark:bg-slate-900"
-                    />
-                  </div>
-                </div>
+                <h3 className="text-lg font-black text-slate-900 dark:text-white mt-1">
+                  Approve &amp; Enroll: {enrollingApp.studentName}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  App No: <strong className="font-mono">{enrollingApp.applicationNo}</strong> • Father: {enrollingApp.fatherName}
+                </p>
               </div>
-
-              {/* One-Time Admission Fee Breakup */}
-              <div className="bg-emerald-50/50 dark:bg-emerald-950/20 p-3.5 rounded-2xl border border-emerald-200 dark:border-emerald-800/60 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-black text-emerald-950 dark:text-emerald-300 uppercase tracking-wider">
-                    प्रवेश शुल्क विवरण (Admission Fee Heads)
-                  </span>
-                  <span className="text-xs font-black text-emerald-700 dark:text-emerald-400">
-                    Total: ₹{(
-                      Number(enrollAdmissionFee) +
-                      Number(enrollRegistrationFee) +
-                      Number(enrollDevelopmentFee) +
-                      Number(enrollIdKitFee) +
-                      Number(enrollExamFund)
-                    ).toLocaleString("en-IN")}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-600 dark:text-slate-400 block mb-0.5">
-                      Admission Fee (नामांकन) ₹
-                    </label>
-                    <input
-                      type="number"
-                      value={enrollAdmissionFee}
-                      onChange={e => setEnrollAdmissionFee(Number(e.target.value))}
-                      className="w-full px-2.5 py-1.5 font-bold border rounded-lg bg-white dark:bg-slate-900"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-600 dark:text-slate-400 block mb-0.5">
-                      Registration / Form ₹
-                    </label>
-                    <input
-                      type="number"
-                      value={enrollRegistrationFee}
-                      onChange={e => setEnrollRegistrationFee(Number(e.target.value))}
-                      className="w-full px-2.5 py-1.5 font-bold border rounded-lg bg-white dark:bg-slate-900"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-600 dark:text-slate-400 block mb-0.5">
-                      Development Fund ₹
-                    </label>
-                    <input
-                      type="number"
-                      value={enrollDevelopmentFee}
-                      onChange={e => setEnrollDevelopmentFee(Number(e.target.value))}
-                      className="w-full px-2.5 py-1.5 font-bold border rounded-lg bg-white dark:bg-slate-900"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-600 dark:text-slate-400 block mb-0.5">
-                      ID Card, Diary &amp; Kit ₹
-                    </label>
-                    <input
-                      type="number"
-                      value={enrollIdKitFee}
-                      onChange={e => setEnrollIdKitFee(Number(e.target.value))}
-                      className="w-full px-2.5 py-1.5 font-bold border rounded-lg bg-white dark:bg-slate-900"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-600 dark:text-slate-400 block mb-0.5">
-                      Annual Exam / Lab Fund ₹
-                    </label>
-                    <input
-                      type="number"
-                      value={enrollExamFund}
-                      onChange={e => setEnrollExamFund(Number(e.target.value))}
-                      className="w-full px-2.5 py-1.5 font-bold border rounded-lg bg-white dark:bg-slate-900"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-600 dark:text-slate-400 block mb-0.5">
-                      Amount Received (जमा) ₹
-                    </label>
-                    <input
-                      type="number"
-                      value={enrollPaidAmount}
-                      onChange={e => setEnrollPaidAmount(Number(e.target.value))}
-                      className="w-full px-2.5 py-1.5 font-bold border border-emerald-500 rounded-lg bg-white dark:bg-slate-900 text-emerald-700"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
               <button
                 type="button"
                 onClick={() => setShowEnrollModal(false)}
-                className="flex-1 py-2.5 bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold"
+                className="p-1.5 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {enrollError && (
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold">
+                {enrollError}
+              </div>
+            )}
+
+            {/* Photo + Class + Roll + Monthly Fee */}
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-slate-50 dark:bg-slate-900/60 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700">
+              <div className="flex items-center gap-3">
+                <div className="w-14 h-16 rounded-xl border border-slate-300 bg-white overflow-hidden flex items-center justify-center shrink-0">
+                  {enrollPhotoUrl ? (
+                    <img src={enrollPhotoUrl} alt="Student" className="w-full h-full object-cover" />
+                  ) : (
+                    <span className="text-[10px] text-slate-400 font-bold text-center px-1">Photo</span>
+                  )}
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1">Student Photo</p>
+                  <DirectUploadButton
+                    kind="image"
+                    compact
+                    currentUrl={enrollPhotoUrl}
+                    onUploaded={(url) => setEnrollPhotoUrl(url)}
+                    onClear={() => setEnrollPhotoUrl("")}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2.5 flex-1 w-full">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 mb-1">Assign Class</label>
+                  <select
+                    value={enrollClassId}
+                    onChange={(e) => {
+                      const nextId = e.target.value;
+                      setEnrollClassId(nextId);
+                      const cls = classes.find((c) => c.id === nextId);
+                      setEnrollMonthlyFee(String(cls?.feeStructure?.tuitionFee ?? cls?.defaultFee ?? 0));
+                      setEnrollFeeItems(buildDefaultFeeItems(cls, enrollUsesBus, Number(cls?.feeStructure?.busFee || 0)));
+                      setEnrollPaidManual(false);
+                    }}
+                    className="w-full px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
+                  >
+                    {classes.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} {c.section ? `(${c.section})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 mb-1">Roll No.</label>
+                  <input
+                    type="text"
+                    value={enrollRollNo}
+                    onChange={(e) => setEnrollRollNo(e.target.value)}
+                    className="w-full px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 mb-1">Monthly Fee (₹)</label>
+                  <input
+                    type="number"
+                    value={enrollMonthlyFee}
+                    onChange={(e) => setEnrollMonthlyFee(e.target.value)}
+                    className="w-full px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Aadhaar / APAAR & Bus */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 mb-1">Student Aadhaar</label>
+                <input
+                  type="text"
+                  maxLength={14}
+                  value={enrollStudentAadhaar}
+                  onChange={(e) => setEnrollStudentAadhaar(e.target.value.replace(/[^\d\s]/g, ""))}
+                  placeholder="12-digit"
+                  className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 mb-1">Father Aadhaar</label>
+                <input
+                  type="text"
+                  maxLength={14}
+                  value={enrollFatherAadhaar}
+                  onChange={(e) => setEnrollFatherAadhaar(e.target.value.replace(/[^\d\s]/g, ""))}
+                  placeholder="12-digit"
+                  className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 mb-1">Mother Aadhaar</label>
+                <input
+                  type="text"
+                  maxLength={14}
+                  value={enrollMotherAadhaar}
+                  onChange={(e) => setEnrollMotherAadhaar(e.target.value.replace(/[^\d\s]/g, ""))}
+                  placeholder="12-digit"
+                  className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 mb-1">APAAR / PEN ID</label>
+                <input
+                  type="text"
+                  value={enrollApaarId}
+                  onChange={(e) => setEnrollApaarId(e.target.value)}
+                  placeholder="Optional"
+                  className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-mono"
+                />
+              </div>
+            </div>
+
+            {/* Documents Verified Checklist */}
+            <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 space-y-2">
+              <p className="text-[11px] font-black uppercase text-slate-600 dark:text-slate-300">
+                Documents Verified (प्रवेश फॉर्म पर [✓] छपेगा)
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                {ADMISSION_DOCUMENT_OPTIONS.map((docItem) => {
+                  const active = enrollSubmittedDocs.includes(docItem);
+                  return (
+                    <label
+                      key={docItem}
+                      className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold cursor-pointer ${
+                        active
+                          ? "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-400 text-emerald-800 dark:text-emerald-200"
+                          : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-500"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={active}
+                        onChange={() => toggleEnrollDoc(docItem)}
+                        className="w-3.5 h-3.5 accent-emerald-600"
+                      />
+                      <span className="truncate">{docItem}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Dynamic Admission Fee Items */}
+            <div className="p-4 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/25 border border-emerald-200 dark:border-emerald-800/60 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-black uppercase tracking-wider text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+                  <IndianRupee className="w-4 h-4" /> Admission Fee Breakdown (प्रवेश शुल्क रसीद)
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEnrollFeeItems((p) => [
+                        ...p,
+                        { id: `bk_${Date.now()}`, description: "Books & Stationery Set (किताबें)", due: 1200 },
+                      ])
+                    }
+                    className="px-2 py-1 rounded-lg bg-white dark:bg-slate-800 border border-emerald-300 text-[11px] font-bold text-emerald-700 cursor-pointer"
+                  >
+                    + Books
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEnrollFeeItems((p) => [
+                        ...p,
+                        { id: `dr_${Date.now()}`, description: "School Uniform / Dress (ड्रेस)", due: 950 },
+                      ])
+                    }
+                    className="px-2 py-1 rounded-lg bg-white dark:bg-slate-800 border border-emerald-300 text-[11px] font-bold text-emerald-700 cursor-pointer"
+                  >
+                    + Dress
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEnrollFeeItems((p) => [
+                        ...p,
+                        { id: `cu_${Date.now()}`, description: "Other Admission Charge", due: 0 },
+                      ])
+                    }
+                    className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3 h-3" /> Add Row
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                {enrollFeeItems.map((row, idx) => (
+                  <div key={row.id} className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-slate-400 w-5">{idx + 1}.</span>
+                    <input
+                      type="text"
+                      value={row.description}
+                      onChange={(e) =>
+                        setEnrollFeeItems((p) =>
+                          p.map((r) => (r.id === row.id ? { ...r, description: e.target.value } : r))
+                        )
+                      }
+                      className="flex-1 px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold"
+                    />
+                    <input
+                      type="number"
+                      value={row.due}
+                      onChange={(e) =>
+                        setEnrollFeeItems((p) =>
+                          p.map((r) => (r.id === row.id ? { ...r, due: Math.max(0, Number(e.target.value)) } : r))
+                        )
+                      }
+                      className="w-24 px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-black text-right"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setEnrollFeeItems((p) => p.filter((r) => r.id !== row.id))}
+                      className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-2 border-t border-emerald-200 dark:border-emerald-800/60">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Concession (₹)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={enrollConcession}
+                    onChange={(e) => setEnrollConcession(Math.max(0, Number(e.target.value)))}
+                    className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white dark:bg-slate-900 text-xs font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-emerald-700 mb-1">Amount Paid Now (₹)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={enrollPaidAmount}
+                    onChange={(e) => {
+                      setEnrollPaidManual(true);
+                      setEnrollPaidAmount(e.target.value);
+                    }}
+                    className="w-full px-2.5 py-1.5 rounded-xl border-2 border-emerald-500 bg-white dark:bg-slate-900 text-xs font-black text-emerald-700"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Pay Mode</label>
+                  <select
+                    value={enrollPayMode}
+                    onChange={(e) => setEnrollPayMode(e.target.value)}
+                    className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white dark:bg-slate-900 text-xs font-bold"
+                  >
+                    <option value="Cash">Cash (नकद)</option>
+                    <option value="Online / UPI">UPI / QR</option>
+                    <option value="Bank Transfer">Bank Transfer</option>
+                    <option value="Cheque">Cheque</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Ref / UTR No</label>
+                  <input
+                    type="text"
+                    value={enrollPayRef}
+                    onChange={(e) => setEnrollPayRef(e.target.value)}
+                    placeholder="Optional"
+                    className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white dark:bg-slate-900 text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between text-xs bg-white dark:bg-slate-900 px-3 py-2 rounded-xl border border-emerald-200">
+                <span>
+                  Net Payable: <strong>₹{enrollNetPayable.toLocaleString("en-IN")}</strong>
+                </span>
+                <span className="font-black text-emerald-700">
+                  Paid: ₹{(Number(enrollPaidAmount) || 0).toLocaleString("en-IN")} • Due: ₹
+                  {Math.max(0, enrollNetPayable - (Number(enrollPaidAmount) || 0)).toLocaleString("en-IN")}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowEnrollModal(false)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs cursor-pointer"
               >
                 Cancel
               </button>
@@ -1148,26 +1869,45 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                 type="button"
                 onClick={handleApproveAndEnroll}
                 disabled={enrolling}
-                className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-lg disabled:opacity-60 flex items-center justify-center gap-1.5"
+                className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs shadow-lg flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
               >
-                <Check className="w-4 h-4" />
-                <span>{enrolling ? "Enrolling..." : "नामांकन करें व रसीद बनाएं"}</span>
+                <Printer className="w-4 h-4" />
+                <span>{enrolling ? "Enrolling..." : "Confirm & Print Form + Receipt"}</span>
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* OFFICIAL ADMISSION FEE RECEIPT MODAL */}
-      {receiptModalOpen && receiptModalFee && (
-        <OfficialFeeReceiptModal
-          isOpen={receiptModalOpen}
-          onClose={() => setReceiptModalOpen(false)}
+      {/* COMBINED A4 ADMISSION FORM + RECEIPT PRINT STUDIO */}
+      {printStudioState.open && (
+        <AdmissionFormPrintModal
+          isOpen={printStudioState.open}
+          onClose={() => setPrintStudioState({ open: false })}
           school={school}
-          fee={receiptModalFee}
-          student={receiptModalStudent}
-          className={classes.find(c => c.id === receiptModalFee.classId)?.name || "Standard"}
-          sessionName={activeSession?.name || "2026-2027"}
+          student={printStudioState.student}
+          application={printStudioState.application}
+          className={printStudioState.className}
+          sessionName={activeSession?.name || "2026-27"}
+          feeRecord={printStudioState.feeRecord || null}
+          initialMode={printStudioState.mode}
+        />
+      )}
+
+      {/* STANDALONE POS / WHATSAPP RECEIPT MODAL */}
+      {posReceiptState.open && posReceiptState.fee && posReceiptState.student && (
+        <OfficialFeeReceiptModal
+          isOpen={posReceiptState.open}
+          onClose={() => setPosReceiptState({ open: false, student: null, fee: null })}
+          school={school}
+          fee={posReceiptState.fee}
+          student={posReceiptState.student}
+          className={
+            classes.find((c) => c.id === posReceiptState.student?.classId)?.name ||
+            posReceiptState.student?.className ||
+            "Class"
+          }
+          sessionName={activeSession?.name || "2026-27"}
         />
       )}
     </div>

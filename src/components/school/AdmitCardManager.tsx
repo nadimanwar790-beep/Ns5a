@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeaderEditorModal";
 import { QuickAddStudentModal } from "./QuickAddStudentModal";
-import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo } from "./feeReceiptUtils";
+import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo, formatAcademicSession } from "./feeReceiptUtils";
 
 interface Props {
   school: School;
@@ -48,14 +48,14 @@ export const AdmitCardManager: React.FC<Props> = ({
   const [schoolDetails, setSchoolDetails] = useState<SchoolHeaderDetails>({
     schoolName: school?.name || "National Academy",
     tagline: school?.tagline || "Learn • Grow • Lead",
-    affiliation: school?.affiliation || "Affiliated to State / Central Board of Secondary Education",
+    affiliation: school?.affiliation || school?.tagline || "CBSE Pattern Curriculum",
     address: school?.address || "Main Campus Examination Center",
-    phone: school?.mobile || school?.phone || "+91 98765 43210",
-    email: school?.email || "info@school.org",
-    logoUrl: getSavedSchoolLogo(school?.logoUrl),
-    principalName: school?.principalName || "Dr. Rajeshwar Sharma",
-    principalTitle: "Principal / Authorized Signatory",
-    code: school?.code || "SCH-001",
+    phone: school?.mobile || school?.phone || "",
+    email: school?.email || "",
+    logoUrl: getSavedSchoolLogo(school?.logoUrl, school?.id),
+    principalName: school?.principalName || "Principal",
+    principalTitle: "Principal",
+    code: school?.code || "0002",
     principalSignatureUrl: school?.principalSignatureUrl || "",
     directorSignatureUrl: school?.directorSignatureUrl || "",
   });
@@ -70,7 +70,7 @@ export const AdmitCardManager: React.FC<Props> = ({
       address: school.address || prev.address,
       phone: school.mobile || school.phone || prev.phone,
       email: school.email || prev.email,
-      logoUrl: getSavedSchoolLogo(school.logoUrl || prev.logoUrl),
+      logoUrl: getSavedSchoolLogo(school.logoUrl || prev.logoUrl, school.id),
       principalName: school.principalName || prev.principalName,
       code: school.code || prev.code,
       principalSignatureUrl: school.principalSignatureUrl || "",
@@ -80,14 +80,14 @@ export const AdmitCardManager: React.FC<Props> = ({
   }, [school]);
 
   // Exam & Center Info
-  const [examName, setExamName] = useState("Annual Board Examination 2026-27");
-  const [sessionName, setSessionName] = useState(activeSession?.name || "2026-27");
+  const [examName, setExamName] = useState("Annual Examination 2026-27");
+  const [sessionName, setSessionName] = useState(() => formatAcademicSession(activeSession?.name || "2026-27"));
   const [centerName, setCenterName] = useState(schoolDetails.schoolName + ", Main Campus Examination Hall");
 
   // Signatory & Authority
   const [centerSuperintendent, setCenterSuperintendent] = useState("Center Superintendent");
-  const [principalTitle, setPrincipalTitle] = useState("Principal / Authorized Signatory");
-  const [principalName, setPrincipalName] = useState(school?.principalName || "Dr. Rajeshwar Sharma");
+  const [principalTitle, setPrincipalTitle] = useState("Principal");
+  const [principalName, setPrincipalName] = useState(school?.principalName || "Principal");
 
   // Candidate Details Editable State (Allows overriding student details for print)
   const [candidateName, setCandidateName] = useState("");
@@ -125,19 +125,19 @@ export const AdmitCardManager: React.FC<Props> = ({
   ]);
 
   // Load Exam Presets
-  const loadTimetablePreset = (presetType: "class10" | "class12sci" | "class12com" | "midterm") => {
+  const loadTimetablePreset = (presetType: "class10" | "class12sci" | "class12com" | "midterm" | "termend") => {
     if (presetType === "class10") {
-      setExamName("Secondary School Examination (Class X) 2026-27");
+      setExamName("Annual Examination (Class X) 2026-27");
       setTimetable([
-        { id: "tt_1", subject: "Mathematics (Standard / Basic)", date: "2026-11-10", time: "09:30 AM - 12:30 PM", room: "Hall A" },
+        { id: "tt_1", subject: "Mathematics", date: "2026-11-10", time: "09:30 AM - 12:30 PM", room: "Hall A" },
         { id: "tt_2", subject: "Science (Theory & Pract.)", date: "2026-11-12", time: "09:30 AM - 12:30 PM", room: "Hall A" },
         { id: "tt_3", subject: "Social Science", date: "2026-11-15", time: "09:30 AM - 12:30 PM", room: "Hall B" },
         { id: "tt_4", subject: "English Language & Literature", date: "2026-11-18", time: "09:30 AM - 12:30 PM", room: "Hall B" },
-        { id: "tt_5", subject: "Hindi Course-A / Regional", date: "2026-11-21", time: "09:30 AM - 12:30 PM", room: "Hall A" },
-        { id: "tt_6", subject: "Information Technology (IT 402)", date: "2026-11-24", time: "09:30 AM - 11:30 AM", room: "Lab 1" },
+        { id: "tt_5", subject: "Hindi / Regional Lang.", date: "2026-11-21", time: "09:30 AM - 12:30 PM", room: "Hall A" },
+        { id: "tt_6", subject: "Information Technology (ICT)", date: "2026-11-24", time: "09:30 AM - 11:30 AM", room: "Lab 1" },
       ]);
     } else if (presetType === "class12sci") {
-      setExamName("Senior Secondary Examination (Class XII Science) 2026-27");
+      setExamName("Annual Examination (Class XII Science) 2026-27");
       setTimetable([
         { id: "tt_1", subject: "English Core (301)", date: "2026-11-10", time: "09:30 AM - 12:30 PM", room: "Hall A" },
         { id: "tt_2", subject: "Physics (042)", date: "2026-11-13", time: "09:30 AM - 12:30 PM", room: "Hall A" },
@@ -147,7 +147,7 @@ export const AdmitCardManager: React.FC<Props> = ({
         { id: "tt_6", subject: "Computer Science (083)", date: "2026-11-26", time: "09:30 AM - 12:30 PM", room: "Lab 2" },
       ]);
     } else if (presetType === "class12com") {
-      setExamName("Senior Secondary Examination (Class XII Commerce) 2026-27");
+      setExamName("Annual Examination (Class XII Commerce) 2026-27");
       setTimetable([
         { id: "tt_1", subject: "English Core (301)", date: "2026-11-10", time: "09:30 AM - 12:30 PM", room: "Hall A" },
         { id: "tt_2", subject: "Accountancy (055)", date: "2026-11-14", time: "09:30 AM - 12:30 PM", room: "Hall A" },
@@ -155,8 +155,17 @@ export const AdmitCardManager: React.FC<Props> = ({
         { id: "tt_4", subject: "Economics (030)", date: "2026-11-21", time: "09:30 AM - 12:30 PM", room: "Hall B" },
         { id: "tt_5", subject: "Applied Mathematics / IP", date: "2026-11-25", time: "09:30 AM - 12:30 PM", room: "Hall A" },
       ]);
+    } else if (presetType === "termend") {
+      setExamName("Term-End Examination 2026-27");
+      setTimetable([
+        { id: "tt_1", subject: "English", date: "2026-11-10", time: "09:30 AM - 12:30 PM", room: "Room 101" },
+        { id: "tt_2", subject: "Mathematics", date: "2026-11-12", time: "09:30 AM - 12:30 PM", room: "Room 101" },
+        { id: "tt_3", subject: "General Science / EVS", date: "2026-11-14", time: "09:30 AM - 12:30 PM", room: "Room 102" },
+        { id: "tt_4", subject: "Social Studies", date: "2026-11-17", time: "09:30 AM - 12:30 PM", room: "Room 102" },
+        { id: "tt_5", subject: "Hindi / Regional Lang.", date: "2026-11-19", time: "09:30 AM - 12:30 PM", room: "Room 101" },
+      ]);
     } else {
-      setExamName("Half-Yearly Summative Assessment 2026-27");
+      setExamName("Half-Yearly Examination 2026-27");
       setTimetable([
         { id: "tt_1", subject: "English", date: "2026-09-15", time: "09:00 AM - 12:00 PM", room: "Room 101" },
         { id: "tt_2", subject: "Mathematics", date: "2026-09-17", time: "09:00 AM - 12:00 PM", room: "Room 101" },
@@ -283,7 +292,7 @@ export const AdmitCardManager: React.FC<Props> = ({
               <h1 className="text-xl font-black uppercase tracking-wider text-slate-950 leading-tight">{schoolDetails.schoolName}</h1>
               {schoolDetails.address && <p className="text-xs text-slate-600">{schoolDetails.address}</p>}
               <p className="text-[10px] text-slate-500 font-semibold tracking-wide uppercase">
-                {schoolDetails.affiliation || "Official Examination Board"} &bull; Affiliation Code: {schoolDetails.code || "SCH-001"} &bull; Ph: {schoolDetails.phone || ""}
+                {(schoolDetails.affiliation || "CBSE Pattern Curriculum").replace(/affiliation\s*code/gi, "Center / School Code").replace(/\(?\s*cbse\s+full\s+year\s*\)?/gi, "CBSE Pattern Curriculum")} &bull; Center / School Code: {schoolDetails.code || "0002"}{schoolDetails.phone ? ` • Helpline: ${schoolDetails.phone}` : ""}
               </p>
             </div>
           </div>
@@ -293,7 +302,7 @@ export const AdmitCardManager: React.FC<Props> = ({
               EXAMINATION ADMIT CARD / HALL TICKET
             </span>
             <p className="text-xs font-bold text-indigo-950 mt-1 uppercase tracking-wide">
-              {examName} &bull; Session: {sessionName}
+              {examName.replace(/\bBOARD\s+/gi, "")} &bull; Session: {formatAcademicSession(sessionName)}
             </p>
           </div>
         </div>
@@ -640,7 +649,13 @@ export const AdmitCardManager: React.FC<Props> = ({
                   onClick={() => loadTimetablePreset("class10")}
                   className="px-2.5 py-1 bg-white dark:bg-slate-700 hover:bg-indigo-50 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-100 rounded-lg font-bold border border-slate-300 dark:border-slate-500 shadow-xs"
                 >
-                  📘 Class 10 Board
+                  📘 Class 10 Annual Exam
+                </button>
+                <button
+                  onClick={() => loadTimetablePreset("termend")}
+                  className="px-2.5 py-1 bg-white dark:bg-slate-700 hover:bg-indigo-50 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-100 rounded-lg font-bold border border-slate-300 dark:border-slate-500 shadow-xs"
+                >
+                  📋 Term-End Exam
                 </button>
                 <button
                   onClick={() => loadTimetablePreset("class12sci")}

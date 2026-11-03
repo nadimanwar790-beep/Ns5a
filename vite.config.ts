@@ -1,5 +1,4 @@
 import tailwindcss from '@tailwindcss/vite';
-import react from '@vitejs/plugin-react';
 import { buildSync } from 'esbuild';
 import fs from 'fs';
 import path from 'path';
@@ -44,8 +43,11 @@ export default defineConfig(({ command }) => {
       minifySyntax: isBuild,
       minifyWhitespace: isBuild,
     },
+    optimizeDeps: {
+      entries: ['src/main.tsx'],
+      holdUntilCrawlEnd: false,
+    },
     plugins: [
-      ...(!isBuild ? [react()] : []),
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
@@ -91,6 +93,17 @@ export default defineConfig(({ command }) => {
       reportCompressedSize: false,
       chunkSizeWarningLimit: 5000,
       rollupOptions: {
+        onwarn(warning, defaultHandler) {
+          if (
+            warning.code === 'MODULE_LEVEL_DIRECTIVE' ||
+            (typeof warning.message === 'string' &&
+              (warning.message.includes('Module level directives cause errors when bundled') ||
+                warning.message.includes('"use client"')))
+          ) {
+            return;
+          }
+          defaultHandler(warning);
+        },
         treeshake: {
           propertyReadSideEffects: false,
           tryCatchDeoptimization: false,

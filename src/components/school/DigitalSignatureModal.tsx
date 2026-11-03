@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import type { School } from "../../school-types";
 import { updateSchool } from "../../school-firebase";
+import { uploadImageToImgBB } from "../../services/imgbbService";
 
 interface Props {
   isOpen: boolean;
@@ -40,6 +41,7 @@ export const DigitalSignatureModal: React.FC<Props> = ({
   const [penWidth, setPenWidth] = useState<number>(3);
   const [saving, setSaving] = useState(false);
   const [savedSuccessMsg, setSavedSuccessMsg] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Sync state if school prop updates
@@ -234,9 +236,10 @@ export const DigitalSignatureModal: React.FC<Props> = ({
 
   // Apply current drawn signature to active tab
   const handleApplyDrawnSignature = () => {
+    setErrorMsg(null);
     const dataUrl = exportCanvasAsPng();
     if (!dataUrl) {
-      alert("Kripya pehle screen par signature draw karein.");
+      setErrorMsg("Kripya pehle screen par signature draw karein.");
       return;
     }
     if (activeTab === "principal") {
@@ -251,9 +254,10 @@ export const DigitalSignatureModal: React.FC<Props> = ({
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setErrorMsg(null);
 
     if (!file.type.startsWith("image/")) {
-      alert("Kripya image file (PNG, JPG) select karein.");
+      setErrorMsg("Kripya image file (PNG, JPG) select karein.");
       return;
     }
 
@@ -272,9 +276,9 @@ export const DigitalSignatureModal: React.FC<Props> = ({
     e.target.value = "";
   };
 
-  // Save to Firebase & School profile
+  // Save to Firebase & School profile (auto-uploading Base64 to Cloud CDN so Firestore doc stays ~1KB)
   const handleSaveEverywhere = async () => {
-    // If there are unapplied strokes on canvas, apply them first
+    setErrorMsg(null);
     let finalPrincipal = principalSig;
     let finalDirector = directorSig;
 
@@ -288,6 +292,23 @@ export const DigitalSignatureModal: React.FC<Props> = ({
 
     setSaving(true);
     try {
+      if (finalPrincipal && finalPrincipal.startsWith("data:image/")) {
+        try {
+          finalPrincipal = await uploadImageToImgBB(finalPrincipal, `sig_principal_${schoolId}_${Date.now()}.png`);
+          setPrincipalSig(finalPrincipal);
+        } catch (uploadErr) {
+          console.warn("[DigitalSignatureModal] Principal sig CDN upload fallback:", uploadErr);
+        }
+      }
+      if (finalDirector && finalDirector.startsWith("data:image/")) {
+        try {
+          finalDirector = await uploadImageToImgBB(finalDirector, `sig_director_${schoolId}_${Date.now()}.png`);
+          setDirectorSig(finalDirector);
+        } catch (uploadErr) {
+          console.warn("[DigitalSignatureModal] Director sig CDN upload fallback:", uploadErr);
+        }
+      }
+
       await updateSchool(schoolId, {
         principalSignatureUrl: finalPrincipal || "",
         directorSignatureUrl: finalDirector || "",
@@ -300,14 +321,14 @@ export const DigitalSignatureModal: React.FC<Props> = ({
         });
       }
 
-      setSavedSuccessMsg("✅ Signature successfully save ho gaya! Ab yeh ID Card, Fee Receipt, Certificate, Marksheet aur Admit Card par automatic lag gaya hai.");
+      setSavedSuccessMsg("✅ Signature Cloud CDN par save ho gaya! Ab yeh ID Card, Fee Receipt, Certificate, Marksheet aur Admit Card par automatic lag gaya hai.");
       setTimeout(() => {
         setSavedSuccessMsg(null);
         onClose();
       }, 1600);
     } catch (err: any) {
       console.error("Failed to save signatures:", err);
-      alert("Signature save karne mein error aaya: " + (err?.message || "Please retry"));
+      setErrorMsg("Signature save karne mein error aaya: " + (err?.message || "Kripya dobara try karein."));
     } finally {
       setSaving(false);
     }
@@ -379,6 +400,12 @@ export const DigitalSignatureModal: React.FC<Props> = ({
 
         {/* Body */}
         <div className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1">
+          {errorMsg && (
+            <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-500/40 rounded-2xl text-rose-700 dark:text-rose-300 text-xs font-bold flex items-center gap-2 animate-in fade-in">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
           {savedSuccessMsg && (
             <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-500/40 rounded-2xl text-emerald-800 dark:text-emerald-300 text-xs font-bold flex items-center gap-2 animate-in fade-in">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />

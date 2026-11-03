@@ -9,6 +9,8 @@ import {
   Plus, ChevronLeft, Save, Trash2, Award, FileText, Printer,
   BookOpen, Check, X, BarChart2, Users, AlertCircle, ArrowLeft, Sparkles
 } from "lucide-react";
+import { printHtmlInIframe } from "./AdmissionFormPrintModal";
+import { formatAcademicSession } from "./feeReceiptUtils";
 
 interface Props {
   schoolId: string;
@@ -75,6 +77,12 @@ export const ExamResultsPanel: React.FC<Props> = ({
   const [loading, setLoading] = useState(true);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [isCustomSubject, setIsCustomSubject] = useState(false);
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
+
+  const showStatus = (msg: string) => {
+    setStatusMsg(msg);
+    setTimeout(() => setStatusMsg(null), 3500);
+  };
 
   useEffect(() => {
     if (initialSubjects && initialSubjects.length > 0) {
@@ -124,18 +132,22 @@ export const ExamResultsPanel: React.FC<Props> = ({
     await loadData();
     setSelectedExam(prev => ({ ...prev!, studentMarks }));
     setSaving(false);
-    alert("Marks save ho gaye!");
+    showStatus("✅ Marks save ho gaye!");
   };
 
   const handleAddExam = async () => {
-    if (!addForm.examName.trim()) return alert("Exam ka naam daalo");
+    if (!addForm.examName.trim()) {
+      showStatus("⚠️ Kripya Exam ka naam daalein");
+      return;
+    }
 
     let finalSubjectId = addForm.subjectId;
     let finalSubjectName = "";
 
     if (isCustomSubject) {
       if (!addForm.customSubjectName.trim()) {
-        return alert("Kripya Extra Subject / Book ka naam daalein");
+        showStatus("⚠️ Kripya Extra Subject / Book ka naam daalein");
+        return;
       }
       finalSubjectName = addForm.customSubjectName.trim();
       finalSubjectId = generateId();
@@ -156,7 +168,10 @@ export const ExamResultsPanel: React.FC<Props> = ({
         console.error("Error saving new subject", e);
       }
     } else {
-      if (!addForm.subjectId) return alert("Subject select karo");
+      if (!addForm.subjectId) {
+        showStatus("⚠️ Kripya Subject select karein");
+        return;
+      }
       const sub = subjectsList.find(s => s.id === addForm.subjectId);
       finalSubjectName = sub?.name || "";
     }
@@ -226,6 +241,8 @@ export const ExamResultsPanel: React.FC<Props> = ({
     const allExamNames = [...new Set(studentExams.map(e => e.examName))];
     const examHeaders = allExamNames.map(n => `<th style="border:1px solid #cbd5e1;padding:8px;background:#f1f5f9;text-align:center;font-size:12px;">${n}</th>`).join("");
 
+    const cleanSession = formatAcademicSession(sessionId || "2026-27");
+
     const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -234,46 +251,44 @@ export const ExamResultsPanel: React.FC<Props> = ({
 <style>
   @media print { body { margin: 0; } .no-print { display: none; } }
   body { font-family: Arial, sans-serif; padding: 24px; background: #fff; color: #1e293b; }
-  .header { text-align: center; border-bottom: 3px double #1e40af; padding-bottom: 16px; margin-bottom: 20px; }
-  .school-name { font-size: 22px; font-weight: bold; color: #1e40af; }
-  .sub-title { font-size: 14px; color: #475569; margin: 4px 0; }
-  .marksheet-title { font-size: 16px; font-weight: bold; background: #1e40af; color: white; padding: 6px 20px; display: inline-block; border-radius: 4px; margin: 10px 0; }
-  .info-grid { display: flex; gap: 20px; margin-bottom: 20px; align-items: flex-start; }
+  .header { text-align: center; border-bottom: 3px double #1e40af; padding-bottom: 14px; margin-bottom: 18px; }
+  .school-name { font-size: 22px; font-weight: bold; color: #0f172a; text-transform: uppercase; }
+  .sub-title { font-size: 12px; color: #475569; margin: 4px 0; font-weight: 600; text-transform: uppercase; }
+  .marksheet-title { font-size: 14px; font-weight: bold; background: #0f172a; color: white; padding: 5px 18px; display: inline-block; border-radius: 99px; margin: 8px 0 4px; letter-spacing: 0.5px; }
+  .info-grid { display: flex; gap: 20px; margin-bottom: 16px; align-items: flex-start; }
   .info-box { flex: 1; }
-  .info-row { display: flex; margin-bottom: 8px; font-size: 14px; }
+  .info-row { display: flex; margin-bottom: 6px; font-size: 13px; }
   .info-label { width: 130px; color: #64748b; font-weight: 600; }
-  .info-value { flex: 1; border-bottom: 1px solid #cbd5e1; padding-bottom: 2px; }
-  .photo-box { width: 110px; height: 130px; border: 2px solid #cbd5e1; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border-radius: 4px; overflow: hidden; }
-  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; }
-  th { border: 1px solid #cbd5e1; padding: 8px; background: #1e40af; color: white; text-align: left; }
-  .result-bar { display: flex; justify-content: space-between; background: #f1f5f9; padding: 12px 16px; border-radius: 8px; margin: 16px 0; font-weight: bold; }
-  .result-highlight { font-size: 20px; color: ${getGradeColor(pct)}; }
-  .sign-row { display: flex; justify-content: space-between; margin-top: 48px; }
+  .info-value { flex: 1; border-bottom: 1px solid #cbd5e1; padding-bottom: 2px; font-weight: 700; }
+  .photo-box { width: 95px; height: 115px; border: 2px solid #334155; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border-radius: 6px; overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13px; }
+  th { border: 1px solid #cbd5e1; padding: 8px; background: #0f172a; color: white; text-align: left; }
+  .attendance-bar { display: flex; justify-content: space-between; border: 1.5px solid #334155; background: #f8fafc; padding: 8px 14px; border-radius: 6px; margin: 10px 0; font-size: 12px; font-weight: 700; }
+  .result-bar { display: flex; justify-content: space-between; background: #eef2ff; border: 1px solid #c7d2fe; padding: 10px 16px; border-radius: 8px; margin: 10px 0 18px; font-weight: bold; }
+  .result-highlight { font-size: 18px; color: ${getGradeColor(pct)}; }
+  .sign-row { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 44px; }
   .sign-box { text-align: center; }
-  .sign-line { border-top: 1px solid #1e293b; width: 160px; margin-bottom: 4px; }
-  .sign-label { font-size: 12px; color: #64748b; }
-  .footer { text-align: center; margin-top: 30px; font-size: 11px; color: #94a3b8; }
+  .sign-line { border-top: 1px solid #1e293b; width: 155px; margin-bottom: 4px; }
+  .sign-label { font-size: 12px; color: #0f172a; font-weight: 700; text-transform: uppercase; }
+  .stamp-circle { width: 48px; height: 48px; border: 1px dashed #64748b; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 8px; color: #64748b; font-weight: bold; text-transform: uppercase; margin-right: 10px; vertical-align: bottom; }
+  .footer { text-align: center; margin-top: 24px; font-size: 10px; color: #94a3b8; }
 </style>
 </head>
 <body>
-<div class="no-print" style="margin-bottom:16px;">
-  <button onclick="window.print()" style="padding:10px 24px;background:#1e40af;color:white;border:none;border-radius:8px;font-size:14px;font-weight:bold;cursor:pointer;">🖨️ Print Marksheet</button>
-</div>
-
 <div class="header">
   <div class="school-name">${schoolName || "School Name"}</div>
-  <div class="sub-title">${className} — Academic Result</div>
-  <div class="marksheet-title">PROGRESS REPORT / MARKSHEET</div>
+  <div class="sub-title">CBSE Pattern Curriculum &bull; Annual Examination ${cleanSession}</div>
+  <div class="marksheet-title">ACADEMIC TRANSCRIPT &amp; PROGRESS REPORT</div>
 </div>
 
 <div class="info-grid">
   <div class="info-box">
     <div class="info-row"><span class="info-label">Student Name:</span><span class="info-value">${student.name}</span></div>
-    <div class="info-row"><span class="info-label">Father's Name:</span><span class="info-value">${(student as any).fatherName || ""}</span></div>
-    <div class="info-row"><span class="info-label">Roll No:</span><span class="info-value">${student.rollNo}</span></div>
-    <div class="info-row"><span class="info-label">Adm. No:</span><span class="info-value">${(student as any).admissionNo || ""}</span></div>
+    <div class="info-row"><span class="info-label">Father's Name:</span><span class="info-value">${(student as any).fatherName || "—"}</span></div>
+    <div class="info-row"><span class="info-label">Roll No:</span><span class="info-value">${student.rollNo || "—"}</span></div>
+    <div class="info-row"><span class="info-label">Adm / Reg No:</span><span class="info-value">${(student as any).admissionNo || "—"}</span></div>
     <div class="info-row"><span class="info-label">Class:</span><span class="info-value">${className}</span></div>
-    <div class="info-row"><span class="info-label">Date:</span><span class="info-value">${new Date().toLocaleDateString("en-IN")}</span></div>
+    <div class="info-row"><span class="info-label">Session:</span><span class="info-value">${cleanSession}</span></div>
   </div>
   ${photoUrl ? `<div class="photo-box"><img src="${photoUrl}" style="width:100%;height:100%;object-fit:cover;" /></div>` : ""}
 </div>
@@ -293,28 +308,33 @@ export const ExamResultsPanel: React.FC<Props> = ({
   </tbody>
 </table>
 
+<div class="attendance-bar">
+  <div>Total Working Days: <span>220</span></div>
+  <div>Student Attendance: <span>198</span></div>
+  <div>Attendance Percentage: <span style="color:#15803d;">90%</span></div>
+</div>
+
 <div class="result-bar">
   <div>Grand Total: <span style="font-size:16px;">${totalObtained} / ${totalMax}</span></div>
   <div>Percentage: <span class="result-highlight">${pct}%</span></div>
   <div>Overall Grade: <span class="result-highlight">${grade}</span></div>
-  <div>Result: <span style="color:${pct >= 33 ? "#16a34a" : "#dc2626"};font-size:18px;">${pct >= 33 ? "PASSED" : "FAILED"}</span></div>
+  <div>Result: <span style="color:${pct >= 33 ? "#16a34a" : "#dc2626"};font-size:16px;">${pct >= 33 ? "PASSED" : "FAILED"}</span></div>
 </div>
 
 <div class="sign-row">
   <div class="sign-box"><div class="sign-line"></div><div class="sign-label">Class Teacher</div></div>
   <div class="sign-box"><div class="sign-line"></div><div class="sign-label">Exam Controller</div></div>
-  <div class="sign-box"><div class="sign-line"></div><div class="sign-label">Principal</div></div>
+  <div class="sign-box" style="display:flex;align-items:flex-end;">
+    <div class="stamp-circle">School<br>Stamp</div>
+    <div><div class="sign-line"></div><div class="sign-label">Principal</div></div>
+  </div>
 </div>
 
-<div class="footer">Computer Generated Marksheet</div>
+<div class="footer">Official Academic Progress Transcript • Session ${cleanSession}</div>
 </body>
 </html>`;
 
-    const w = window.open("", "_blank");
-    if (w) {
-      w.document.write(html);
-      w.document.close();
-    }
+    printHtmlInIframe(html, `Marksheet — ${student.name}`);
   };
 
   return (
@@ -370,6 +390,15 @@ export const ExamResultsPanel: React.FC<Props> = ({
           )}
         </div>
       </div>
+
+      {statusMsg && (
+        <div className="max-w-2xl mx-auto px-4 pt-3">
+          <div className="px-3.5 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-bold shadow-md flex items-center justify-between">
+            <span>{statusMsg}</span>
+            <button type="button" onClick={() => setStatusMsg(null)} className="text-slate-400 hover:text-white ml-2">✕</button>
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex items-center justify-center py-20 text-slate-400">

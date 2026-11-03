@@ -23,9 +23,40 @@ import type {
   SchoolSession
 } from "../../school-types";
 
+import { getSchoolCacheSync, setSchoolCacheSync } from "../../utils/schoolIndexedDb";
+
 export const DEMO_SESSION_ID = "demo_session_2026_27";
 export const DEMO_SESSION_NAME = "DEMO • 2026-27 (Full 1-Year Auto-Filled)";
 export const DEMO_STORAGE_KEY = "nst_demo_school_1year_dataset_v3";
+export const DEMO_DATA_TOGGLE_KEY = "nst_demo_data_enabled";
+
+// Demo Data Toggle (User requested: option to turn demo data ON / OFF so real data shines)
+export function isDemoDataEnabled(): boolean {
+  const cachedFlag = getSchoolCacheSync<boolean | null>(DEMO_DATA_TOGGLE_KEY, null);
+  if (typeof cachedFlag === "boolean") {
+    return cachedFlag;
+  }
+  try {
+    const val = localStorage.getItem(DEMO_DATA_TOGGLE_KEY);
+    if (val !== null) {
+      const parsed = val === "true";
+      setSchoolCacheSync(DEMO_DATA_TOGGLE_KEY, parsed);
+      return parsed;
+    }
+  } catch {}
+  return true; // Default to ON for default demo preview school until user turns it OFF
+}
+
+export function setDemoDataEnabled(enabled: boolean): void {
+  setSchoolCacheSync(DEMO_DATA_TOGGLE_KEY, enabled);
+  try {
+    localStorage.setItem(DEMO_DATA_TOGGLE_KEY, enabled ? "true" : "false");
+    inMemoryDataset = null; // Flush cache so change takes effect immediately
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("nst_demo_toggle_changed", { detail: { enabled } }));
+    }
+  } catch {}
+}
 
 export interface FestivalHoliday {
   id: string;
@@ -736,28 +767,47 @@ export function generateFull1YearDemoDataset(schoolId: string = "demo_school", a
   };
 
   inMemoryDataset = dataset;
-  try {
-    localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(dataset));
-  } catch (e) {
-    console.warn("Local storage write skipped (dataset active in memory):", e);
-  }
+  setSchoolCacheSync(DEMO_STORAGE_KEY, dataset);
 
   return dataset;
 }
 
+export const EMPTY_DEMO_DATASET: FullDemoSchoolDataset = {
+  session: {
+    id: "real_school_active_session",
+    schoolId: "real",
+    name: "Real School Academic Session",
+    startDate: "2026-04-01",
+    endDate: "2027-03-31",
+    active: true,
+    createdAt: new Date().toISOString()
+  },
+  classes: [],
+  subjects: [],
+  teachers: [],
+  students: [],
+  staffEmployees: [],
+  exams: [],
+  fees: [],
+  notices: [],
+  holidays: [],
+  attendanceSummary: {},
+  teacherLatePenalties: [],
+  createdAt: new Date().toISOString()
+};
+
 // Get Cached Dataset (Loads from memory or localStorage, or initializes on demand)
+// When Demo Data is switched OFF by user, returns completely empty dataset so real school data shines!
 export function getDemoSchoolDataset(): FullDemoSchoolDataset {
+  if (!isDemoDataEnabled()) {
+    return EMPTY_DEMO_DATASET;
+  }
   if (inMemoryDataset) return inMemoryDataset;
-  try {
-    const raw = localStorage.getItem(DEMO_STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed && parsed.students && parsed.students.length >= 900) {
-        inMemoryDataset = parsed;
-        return parsed;
-      }
-    }
-  } catch {}
+  const cached = getSchoolCacheSync<FullDemoSchoolDataset | null>(DEMO_STORAGE_KEY, null);
+  if (cached && cached.students && cached.students.length >= 900) {
+    inMemoryDataset = cached;
+    return cached;
+  }
   return generateFull1YearDemoDataset();
 }
 
@@ -772,9 +822,7 @@ export function addCustomHoliday(holiday: Omit<FestivalHoliday, "id">): Festival
   current.holidays.push(newHoliday);
   current.holidays.sort((a, b) => a.date.localeCompare(b.date));
   inMemoryDataset = current;
-  try {
-    localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(current));
-  } catch {}
+  setSchoolCacheSync(DEMO_STORAGE_KEY, current);
   return newHoliday;
 }
 
@@ -783,9 +831,7 @@ export function removeCustomHoliday(id: string): boolean {
   const current = getDemoSchoolDataset();
   current.holidays = current.holidays.filter(h => h.id !== id);
   inMemoryDataset = current;
-  try {
-    localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(current));
-  } catch {}
+  setSchoolCacheSync(DEMO_STORAGE_KEY, current);
   return true;
 }
 
@@ -799,14 +845,13 @@ export function addCustomNotice(notice: Omit<SchoolNotice, "id" | "createdAt">):
   };
   current.notices.unshift(newNotice);
   inMemoryDataset = current;
-  try {
-    localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(current));
-  } catch {}
+  setSchoolCacheSync(DEMO_STORAGE_KEY, current);
   return newNotice;
 }
 
 // Check if a specific date is a festival / school holiday
 export function isHolidayDate(dateStr: string): FestivalHoliday | undefined {
+  if (!isDemoDataEnabled()) return undefined;
   const current = getDemoSchoolDataset();
   return current.holidays.find(h => {
     if (h.date === dateStr) return true;
@@ -814,3 +859,4 @@ export function isHolidayDate(dateStr: string): FestivalHoliday | undefined {
     return false;
   });
 }
+

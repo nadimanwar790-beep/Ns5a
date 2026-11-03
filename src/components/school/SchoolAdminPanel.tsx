@@ -7,7 +7,8 @@ import {
   updateSchool, updateSession, updateClass, updateTeacher,
   generateId, getSchool, getSessions, setSchoolLockCode,
   assignSchoolSubAdminByEmail, getSchoolAdmins, removeSchoolUserByUid,
-  getAllMonthlyFees, currentMonthStr, saveFee, markFeePaid, isStudentInClass
+  getAllMonthlyFees, currentMonthStr, saveFee, markFeePaid, isStudentInClass, isDemoRecord,
+  shouldUseDemoForSchool
 } from "../../school-firebase";
 import type { SchoolUserProfile } from "../../school-types";
 import type {
@@ -15,6 +16,7 @@ import type {
 } from "../../school-types";
 import { BLOOD_GROUPS } from "../../school-types";
 import { DEMO_SESSION_ID, seedDemoSchoolData } from "./demoSchoolData";
+import { isDemoDataEnabled, setDemoDataEnabled } from "./demoDataStore";
 import { ContentManager } from "./ContentManager";
 import { SmartClass } from "./SmartClass";
 import { AttendanceManager } from "./AttendanceManager";
@@ -34,6 +36,7 @@ import { HolidayManager } from "./HolidayManager";
 import { SchoolReportsHub } from "./SchoolReportsHub";
 import { PublicSchoolWebsite } from "./PublicSchoolWebsite";
 import { OnlineAdmissionManager } from "./OnlineAdmissionManager";
+import { SchoolCommunityFeed } from "./SchoolCommunityFeed";
 import { getStaffEmployees } from "../../school-firebase";
 import type { MonthlyFee, StaffEmployee } from "../../school-types";
 import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeaderEditorModal";
@@ -46,22 +49,28 @@ import {
   Lock, Eye, EyeOff, Shield, ArrowLeft, ShoppingBag, AlertTriangle, Crown,
   CreditCard, Megaphone, TrendingUp, Briefcase, FileSpreadsheet,
   ClipboardList, Globe, UserPlus, QrCode, GraduationCap, CheckCircle2,
-  Printer, Search, Sparkles, Mail, PenTool, Loader2, AlertCircle
+  Printer, Search, Sparkles, Mail, PenTool, Loader2, AlertCircle, LogOut,
+  Home, Image as ImageIcon
 } from "lucide-react";
 import { SchoolStore } from "./SchoolStore";
 import { SchoolPlanView } from "./SchoolPlanView";
 import { ClassQrCodeModal } from "./ClassQrCodeModal";
 import { StudentQuickActionModal } from "./StudentQuickActionModal";
 import { ClassFeeStructureSection } from "./ClassFeeStructureSection";
+import { DirectAdmissionModal } from "./DirectAdmissionModal";
+import { AdmissionFormPrintModal } from "./AdmissionFormPrintModal";
 
 interface Props {
   schoolId: string;
   adminUid: string;
   onBack?: () => void;
+  onOpenPlatformContent?: () => void;
+  onLogout?: () => void;
 }
 
 type AdminView =
   | "dashboard"
+  | "community"
   | "sessions" | "classes" | "subjects" | "teachers" | "students"
   | "content" | "attendance" | "fees" | "fee_class" | "fee_all" | "fee_structure" | "report_card" | "marks" | "results"
   | "store" | "subscription"
@@ -69,7 +78,7 @@ type AdminView =
   | "public_website" | "online_admissions";
 
 
-export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }) => {
+export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, onLogout }) => {
   const [school, setSchool] = useState<School | null>(null);
   const [schoolLoading, setSchoolLoading] = useState(true);
   const [sessions, setSessions] = useState<SchoolSession[]>([]);
@@ -105,12 +114,27 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
   const [showLockCode, setShowLockCode]       = useState(false);
   const [savingLockCode, setSavingLockCode]   = useState(false);
   const [lockCodeSaved, setLockCodeSaved]     = useState(false);
+  const [lockCodeDrawerOpen, setLockCodeDrawerOpen] = useState(false);
+
+  const handlePerformLogout = () => {
+    if (onLogout) {
+      onLogout();
+    } else {
+      try {
+        localStorage.removeItem('nst_current_user');
+        localStorage.removeItem('nsta_cached_user');
+        localStorage.setItem('nst_logged_out', 'true');
+        window.location.reload();
+      } catch {}
+    }
+  };
 
   // Sub-admin management
   const [subAdmins, setSubAdmins]             = useState<SchoolUserProfile[]>([]);
   const [subAdminEmail, setSubAdminEmail]     = useState('');
   const [assigningSubAdmin, setAssigningSubAdmin] = useState(false);
   const [subAdminResult, setSubAdminResult]   = useState<{ ok: boolean; msg: string } | null>(null);
+  const [subAdminExpanded, setSubAdminExpanded] = useState(false);
   const [quickActionStudent, setQuickActionStudent] = useState<SchoolStudent | null>(null);
   const [quickActionInitialTab, setQuickActionInitialTab] = useState<"id_card" | "fees" | "attendance">("id_card");
 
@@ -133,7 +157,17 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
   const [editingTeacherId, setEditingTeacherId] = useState<string | null>(null);
   const [editTeacherForm, setEditTeacherForm] = useState({ name: "", email: "", phone: "", employeeId: "" });
   const [editingStudentId, setEditingStudentId] = useState<string | null>(null);
-  const [editStudentForm, setEditStudentForm] = useState<any>({ name: "", rollNo: "", admissionNo: "", fatherName: "", motherName: "", phone: "", dateOfBirth: "", monthlyFee: 0, photoUrl: "", bloodGroup: "", chargePhotoFee: false });
+  const [editStudentForm, setEditStudentForm] = useState<any>({
+    name: "", rollNo: "", admissionNo: "", fatherName: "", motherName: "",
+    phone: "", dateOfBirth: "", monthlyFee: 0, photoUrl: "", bloodGroup: "",
+    gender: "", category: "", aadhaarNo: "", address: ""
+  });
+  const [showDirectAdmissionModal, setShowDirectAdmissionModal] = useState(false);
+  const [admissionPrintPayload, setAdmissionPrintPayload] = useState<{
+    student: SchoolStudent;
+    fee?: MonthlyFee | null;
+    mode?: "combined" | "form_only";
+  } | null>(null);
 
   // Fee summary state
   const [feeMonth, setFeeMonth] = useState(currentMonthStr());
@@ -142,6 +176,44 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
   const [feeClassSelected, setFeeClassSelected] = useState<SchoolClass | null>(null);
   const [demoGenerating, setDemoGenerating] = useState(false);
   const [demoMessage, setDemoMessage] = useState("");
+  const [demoEnabled, setDemoEnabled] = useState<boolean>(() => isDemoDataEnabled());
+
+  useEffect(() => {
+    const handleDemoChange = (e: any) => {
+      if (typeof e?.detail?.enabled === "boolean") {
+        setDemoEnabled(e.detail.enabled);
+      }
+    };
+    window.addEventListener("nst_demo_toggle_changed", handleDemoChange);
+    return () => window.removeEventListener("nst_demo_toggle_changed", handleDemoChange);
+  }, []);
+
+  const handleToggleDemoData = (val: boolean) => {
+    setDemoDataEnabled(val);
+    setDemoEnabled(val);
+    if (typeof window !== "undefined") {
+      window.location.reload();
+    }
+  };
+
+  const isDefaultDemoSchool = schoolId === "dps_gurgaon_sector45" || schoolId === "demo_school";
+  const schoolDemoActive = demoEnabled && shouldUseDemoForSchool(schoolId);
+
+  const displayedStudents = React.useMemo(() => {
+    return schoolDemoActive ? students : students.filter(s => !isDemoRecord(s));
+  }, [students, schoolDemoActive]);
+
+  const displayedClasses = React.useMemo(() => {
+    return schoolDemoActive ? classes : classes.filter(c => !isDemoRecord(c));
+  }, [classes, schoolDemoActive]);
+
+  const displayedTeachers = React.useMemo(() => {
+    return schoolDemoActive ? teachers : teachers.filter(t => !isDemoRecord(t));
+  }, [teachers, schoolDemoActive]);
+
+  const displayedSessions = React.useMemo(() => {
+    return schoolDemoActive ? sessions : sessions.filter(s => !isDemoRecord(s));
+  }, [sessions, schoolDemoActive]);
 
   // Advanced Class Card states
   const [expandedToolsClassId, setExpandedToolsClassId] = useState<string | null>(null);
@@ -203,6 +275,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
   useEffect(() => {
     const handleSchoolUpdated = (e: any) => {
       const detail = e?.detail;
+      if (detail?.schoolId && detail.schoolId !== schoolId) return;
       if (detail?.logoUrl !== undefined || detail?.data) {
         setSchool(prev => {
           if (!prev) return prev;
@@ -217,23 +290,24 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
     };
     window.addEventListener("school-profile-updated", handleSchoolUpdated);
     return () => window.removeEventListener("school-profile-updated", handleSchoolUpdated);
-  }, []);
+  }, [schoolId]);
 
   useEffect(() => {
     if (!activeSession) return;
     const unsubClasses = subscribeToClasses(schoolId, activeSession.id, setClasses);
     return unsubClasses;
-  }, [activeSession]);
+  }, [schoolId, activeSession]);
 
   useEffect(() => {
-    // If active session is the demo session and classes still have old split classes (_a or _b), auto re-seed to 13 classes x 70 students
+    // Only auto upgrade demo dataset if demo mode is active for the default demo school
+    if (!schoolDemoActive) return;
     if (activeSession?.id === DEMO_SESSION_ID && classes.length > 0) {
       const hasOldSplit = classes.some(c => c.id.includes("_a") || c.id.includes("_b"));
       if (hasOldSplit && !demoGenerating) {
         seedDemoSchoolData(schoolId, adminUid).catch(err => console.warn("Auto demo upgrade:", err));
       }
     }
-  }, [activeSession, classes, demoGenerating, schoolId, adminUid]);
+  }, [activeSession, classes, demoGenerating, schoolId, adminUid, schoolDemoActive]);
 
   useEffect(() => {
     if (!selectedClass) return;
@@ -372,27 +446,21 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
 
   const handleDeleteSession = async (session: SchoolSession) => {
     if (sessions.length <= 1) {
-      alert("Aap aakhiri session delete nahi kar sakte. School me kam se kam ek academic session hona zaroori hai.");
+      setDemoMessage("⚠️ Aap aakhiri session delete nahi kar sakte. School me kam se kam ek academic session hona zaroori hai.");
       return;
     }
-    const isCurrentActive = activeSession?.id === session.id;
-    const confirmMsg = isCurrentActive
-      ? `⚠️ Chetwani: "${session.name}" abhi ACTIVE session hai!\n\nKya aap sach me is session ko delete karna chahte hain?`
-      : `Kya aap session "${session.name}" ko sach me delete karna chahte hain?`;
-
-    if (!window.confirm(confirmMsg)) return;
 
     setSaving(true);
     try {
       await deleteSession(schoolId, session.id);
       const remainingSessions = sessions.filter(s => s.id !== session.id);
       setSessions(remainingSessions);
-      if (isCurrentActive && remainingSessions.length > 0) {
+      if (activeSession?.id === session.id && remainingSessions.length > 0) {
         await handleActivateSession(remainingSessions[0]);
       }
     } catch (err) {
       console.error("Error deleting session:", err);
-      alert("Session delete karne me samasya aayi.");
+      setDemoMessage("⚠️ Session delete karne me samasya aayi.");
     } finally {
       setSaving(false);
     }
@@ -439,37 +507,23 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
   const saveEditStudent = async () => {
     if (!editingStudentId || !editStudentForm.name.trim()) return;
     setSaving(true);
-    const student = students.find(s => s.id === editingStudentId);
-    const oldPhoto = (student as any)?.photoUrl || "";
     const newPhoto = editStudentForm.photoUrl || "";
-    const photoChanged = newPhoto !== oldPhoto;
     await updateStudent(schoolId, editingStudentId, {
       name: editStudentForm.name.trim(),
       rollNo: editStudentForm.rollNo,
+      admissionNo: editStudentForm.admissionNo || undefined,
       fatherName: editStudentForm.fatherName,
       motherName: editStudentForm.motherName,
       phone: editStudentForm.phone,
+      dateOfBirth: editStudentForm.dateOfBirth || undefined,
+      gender: editStudentForm.gender || undefined,
+      category: editStudentForm.category || undefined,
+      aadhaarNo: editStudentForm.aadhaarNo || undefined,
+      address: editStudentForm.address || undefined,
       bloodGroup: editStudentForm.bloodGroup || "",
       monthlyFee: Number(editStudentForm.monthlyFee) || 0,
       photoUrl: newPhoto || undefined,
     });
-    // If photo was updated and charge is enabled, add ₹50 fee
-    if (photoChanged && newPhoto && editStudentForm.chargePhotoFee && activeSession) {
-      const now = new Date();
-      const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-      const feeRecord: any = {
-        schoolId, sessionId: activeSession.id,
-        studentId: editingStudentId,
-        studentName: student?.name || editStudentForm.name,
-        rollNo: editStudentForm.rollNo,
-        classId: student?.classId || "",
-        month,
-        amount: 50,
-        paid: false,
-        note: "Photo update charge"
-      };
-      await saveFee(feeRecord);
-    }
     setEditingStudentId(null);
     setSaving(false);
   };
@@ -675,32 +729,72 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
     );
   }
 
+  const renderAdminBottomNav = () => {
+    const navItems = [
+      { key: "dashboard", label: "Home", active: view === "dashboard", icon: Home, onClick: () => setView("dashboard") },
+      { key: "students", label: "Students", active: view === "students" || view === "classes", icon: Users, onClick: () => setView("students") },
+      { key: "fees", label: "Fees", active: view === "fees" || view === "fee_class" || view === "fee_all" || view === "fee_structure", icon: IndianRupee, onClick: () => setView("fees") },
+      { key: "community", label: "Community", active: view === "community" || view === "notices" || view === "holidays", icon: Megaphone, onClick: () => setView("community") },
+      { key: "marksheet_hub", label: "Results", active: view === "marksheet_hub" || view === "reports_hub", icon: FileSpreadsheet, onClick: () => setView("marksheet_hub") },
+    ];
+    return (
+      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border-t border-slate-200 dark:border-slate-800 shadow-[0_-8px_24px_rgba(0,0,0,0.08)] print:hidden">
+        <div className="max-w-2xl mx-auto grid grid-cols-5 px-2 py-1.5">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.key}
+                type="button"
+                onClick={item.onClick}
+                className={`flex flex-col items-center justify-center gap-0.5 py-1.5 rounded-xl transition cursor-pointer ${
+                  item.active
+                    ? "text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/50 font-black"
+                    : "text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 font-semibold"
+                }`}
+              >
+                <Icon className={`w-5 h-5 ${item.active ? "stroke-[2.5]" : ""}`} />
+                <span className="text-[10px] leading-tight tracking-tight">{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+    );
+  };
+
   if (view === "fee_class" && feeClassSelected) {
     return (
-      <FeeManager
-        schoolId={schoolId}
-        classId={feeClassSelected.id}
-        className={feeClassSelected.name}
-        schoolName={school?.name}
-        school={school || undefined}
-        sessionId={activeSession?.id || ""}
-        adminId={adminUid}
-        onBack={() => setView("fees")}
-      />
+      <div className="pb-20">
+        <FeeManager
+          schoolId={schoolId}
+          classId={feeClassSelected.id}
+          className={feeClassSelected.name}
+          schoolName={school?.name}
+          school={school || undefined}
+          sessionId={activeSession?.id || ""}
+          adminId={adminUid}
+          onBack={() => setView("fees")}
+        />
+        {renderAdminBottomNav()}
+      </div>
     );
   }
 
   if (view === "fee_all") {
     return (
-      <FeeManager
-        schoolId={schoolId}
-        className="All Classes"
-        schoolName={school?.name}
-        school={school || undefined}
-        sessionId={activeSession?.id || ""}
-        adminId={adminUid}
-        onBack={() => setView("fees")}
-      />
+      <div className="pb-20">
+        <FeeManager
+          schoolId={schoolId}
+          className="All Classes"
+          schoolName={school?.name}
+          school={school || undefined}
+          sessionId={activeSession?.id || ""}
+          adminId={adminUid}
+          onBack={() => setView("fees")}
+        />
+        {renderAdminBottomNav()}
+      </div>
     );
   }
 
@@ -785,47 +879,59 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
 
   if (view === "marksheet_hub") {
     return (
-      <MarksheetGenerator
-        school={school!}
-        classes={classes}
-        students={students}
-        activeSession={activeSession}
-        onBack={() => setView("dashboard")}
-      />
+      <div className="pb-20">
+        <MarksheetGenerator
+          school={school!}
+          classes={classes}
+          students={students}
+          activeSession={activeSession}
+          onBack={() => setView("dashboard")}
+        />
+        {renderAdminBottomNav()}
+      </div>
     );
   }
 
   if (view === "promotion") {
     return (
-      <StudentPromotionManager
-        schoolId={schoolId}
-        sessions={sessions}
-        classes={classes}
-        students={students}
-        onBack={() => setView("dashboard")}
-      />
+      <div className="pb-20">
+        <StudentPromotionManager
+          schoolId={schoolId}
+          sessions={sessions}
+          classes={classes}
+          students={students}
+          onBack={() => setView("dashboard")}
+        />
+        {renderAdminBottomNav()}
+      </div>
     );
   }
 
   if (view === "notices") {
     return (
-      <NoticeBoardManager
-        schoolId={schoolId}
-        adminUid={adminUid}
-        isAdmin={true}
-        onBack={() => setView("dashboard")}
-      />
+      <div className="pb-20">
+        <NoticeBoardManager
+          schoolId={schoolId}
+          adminUid={adminUid}
+          isAdmin={true}
+          onBack={() => setView("dashboard")}
+        />
+        {renderAdminBottomNav()}
+      </div>
     );
   }
 
   if (view === "holidays") {
     return (
-      <HolidayManager
-        schoolId={schoolId}
-        adminUid={adminUid}
-        schoolName={school?.name}
-        onBack={() => setView("dashboard")}
-      />
+      <div className="pb-20">
+        <HolidayManager
+          schoolId={schoolId}
+          adminUid={adminUid}
+          schoolName={school?.name}
+          onBack={() => setView("dashboard")}
+        />
+        {renderAdminBottomNav()}
+      </div>
     );
   }
 
@@ -883,37 +989,73 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
 
   if (view === "fee_structure") {
     return (
-      <ClassFeeStructureSection
-        schoolId={schoolId}
-        sessionId={activeSession?.id}
-        classes={classes}
-        onBack={() => setView("dashboard")}
-        onClassesUpdated={() => {}}
-      />
+      <div className="pb-20">
+        <ClassFeeStructureSection
+          schoolId={schoolId}
+          sessionId={activeSession?.id}
+          classes={classes}
+          onBack={() => setView("dashboard")}
+          onClassesUpdated={() => {}}
+        />
+        {renderAdminBottomNav()}
+      </div>
+    );
+  }
+
+  if (view === "community") {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 pb-24">
+        <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 px-4 py-4 border-b border-indigo-800/40 shadow-md">
+          <div className="max-w-2xl mx-auto flex items-center justify-between gap-3">
+            <button
+              onClick={() => setView("dashboard")}
+              className="flex items-center gap-1.5 text-blue-200 hover:text-white text-xs sm:text-sm font-bold bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-xl border border-white/15 transition cursor-pointer"
+            >
+              <ChevronLeft className="w-4 h-4" /> Back to Dashboard
+            </button>
+            <span className="text-xs font-black text-rose-300 bg-rose-500/20 border border-rose-400/30 px-2.5 py-1 rounded-lg">
+              School Community Hub
+            </span>
+          </div>
+        </div>
+        <div className="p-3 sm:p-4 max-w-2xl mx-auto">
+          <SchoolCommunityFeed
+            schoolId={schoolId}
+            schoolName={school?.name || "School"}
+            currentUserId={adminUid}
+            currentUserName={school?.principalName || "Principal / Admin"}
+            currentUserRole="ADMIN"
+            classes={displayedClasses}
+            onBack={() => setView("dashboard")}
+          />
+        </div>
+        {renderAdminBottomNav()}
+      </div>
     );
   }
 
   const menuItems = [
-    { label: "Sessions", icon: <Calendar className="w-5 h-5 text-blue-500" />, view: "sessions", count: sessions.length, locked: false },
-    { label: "Classes", icon: <BookOpen className="w-5 h-5 text-purple-500" />, view: "classes", count: classes.length, locked: false },
-    { label: "Class Fee Setup", icon: <IndianRupee className="w-5 h-5 text-emerald-600" />, view: "fee_structure", count: "5 Heads", locked: false },
-    { label: "Teachers", icon: <Users className="w-5 h-5 text-green-500" />, view: "teachers", count: teachers.length, locked: false },
-    { label: "Students", icon: <Users className="w-5 h-5 text-orange-500" />, view: "students", count: students.length, locked: false },
-    { label: "Fee Collection", icon: <IndianRupee className="w-5 h-5 text-emerald-500" />, view: "fees", count: null, locked: false },
-    // 9-MODULE EXTENSIONS
-    { label: "QR ID Cards", icon: <CreditCard className="w-5 h-5 text-indigo-500" />, view: "id_cards", count: "Live QR", locked: false },
-    { label: "Admit Cards", icon: <FileText className="w-5 h-5 text-rose-500" />, view: "admit_cards", count: "Hall Ticket", locked: false },
-    { label: "Certificates", icon: <Award className="w-5 h-5 text-amber-500" />, view: "certificates", count: "TC & Merit", locked: false },
-    { label: "Marksheet (रिजल्ट)", icon: <FileSpreadsheet className="w-5 h-5 text-emerald-600" />, view: "marksheet_hub", count: "Official Print", locked: false },
-    { label: "Class Promotion", icon: <TrendingUp className="w-5 h-5 text-blue-600" />, view: "promotion", count: "Promote", locked: false },
-    { label: "Notice Board", icon: <Megaphone className="w-5 h-5 text-purple-600" />, view: "notices", count: "Circulars", locked: false },
-    { label: "Festival Holidays (छुट्टियां)", icon: <Calendar className="w-5 h-5 text-pink-500" />, view: "holidays", count: "20+ Holidays", locked: false },
-    { label: "Staff HRM & Leaves", icon: <Briefcase className="w-5 h-5 text-teal-600" />, view: "staff_hrm", count: "Salaries", locked: false },
-    { label: "Reports & Print", icon: <FileSpreadsheet className="w-5 h-5 text-cyan-600" />, view: "reports_hub", count: "40+ Reports", locked: false },
-    { label: "Public Website & Portal", icon: <Globe className="w-5 h-5 text-indigo-500" />, view: "public_website", count: "Live", locked: false },
-    { label: "Online Admissions", icon: <UserPlus className="w-5 h-5 text-amber-500" />, view: "online_admissions", count: "Portal", locked: false },
+    { label: "School Community", subtitle: "Photo, Video & Chhutti Post", icon: <ImageIcon className="w-5 h-5 text-rose-500" />, view: "community", count: "LIVE", locked: false, featured: true },
+    { label: "Students", subtitle: "Admissions & Profiles", icon: <Users className="w-5 h-5 text-orange-500" />, view: "students", count: displayedStudents.length, locked: false },
+    { label: "Fee Collection", subtitle: "Monthly Ledger & Receipts", icon: <IndianRupee className="w-5 h-5 text-emerald-500" />, view: "fees", count: "Live Sync", locked: false },
+    { label: "QR ID Cards", subtitle: "Print & Scan Student ID", icon: <CreditCard className="w-5 h-5 text-indigo-500" />, view: "id_cards", count: "Live QR", locked: false },
+    { label: "Classes", subtitle: "Sections, Attendance & Marks", icon: <BookOpen className="w-5 h-5 text-purple-500" />, view: "classes", count: displayedClasses.length, locked: false },
+    { label: "Teachers", subtitle: "Faculty Accounts & Access", icon: <Users className="w-5 h-5 text-green-500" />, view: "teachers", count: displayedTeachers.length, locked: false },
+    { label: "Class Fee Setup", subtitle: "Monthly & Head Structure", icon: <IndianRupee className="w-5 h-5 text-emerald-600" />, view: "fee_structure", count: "5 Heads", locked: false },
+    { label: "Marksheet (रिजल्ट)", subtitle: "Report Card & Print", icon: <FileSpreadsheet className="w-5 h-5 text-emerald-600" />, view: "marksheet_hub", count: "Official", locked: false },
+    { label: "Festival Holidays", subtitle: "Chhutti Calendar & Push", icon: <Calendar className="w-5 h-5 text-pink-500" />, view: "holidays", count: "Calendar", locked: false },
+    { label: "Notice Board", subtitle: "Official Circulars", icon: <Megaphone className="w-5 h-5 text-purple-600" />, view: "notices", count: "Circulars", locked: false },
+    { label: "Admit Cards", subtitle: "Exam Hall Tickets", icon: <FileText className="w-5 h-5 text-rose-500" />, view: "admit_cards", count: "Hall Ticket", locked: false },
+    { label: "Certificates", subtitle: "TC, Bonafide & Merit", icon: <Award className="w-5 h-5 text-amber-500" />, view: "certificates", count: "TC & Merit", locked: false },
+    { label: "Class Promotion", subtitle: "Next Session Upgrade", icon: <TrendingUp className="w-5 h-5 text-blue-600" />, view: "promotion", count: "Promote", locked: false },
+    { label: "Staff HRM & Leaves", subtitle: "Payroll & Attendance", icon: <Briefcase className="w-5 h-5 text-teal-600" />, view: "staff_hrm", count: "Salaries", locked: false },
+    { label: "Reports & Print", subtitle: "40+ Register Sheets", icon: <FileSpreadsheet className="w-5 h-5 text-cyan-600" />, view: "reports_hub", count: "40+ Reports", locked: false },
+    { label: "Sessions", subtitle: "Academic Years", icon: <Calendar className="w-5 h-5 text-blue-500" />, view: "sessions", count: displayedSessions.length, locked: false },
+    { label: "Public Website", subtitle: "Live School Portal", icon: <Globe className="w-5 h-5 text-indigo-500" />, view: "public_website", count: "Live", locked: false },
+    { label: "Online Admissions", subtitle: "New Enquiries", icon: <UserPlus className="w-5 h-5 text-amber-500" />, view: "online_admissions", count: "Portal", locked: false },
     {
       label: "Mera Plan",
+      subtitle: "Subscription Status",
       icon: <Crown className="w-5 h-5 text-amber-500" />,
       view: "subscription",
       count: null,
@@ -921,6 +1063,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
     },
     {
       label: "Store / Plans",
+      subtitle: "Upgrade Features",
       icon: <ShoppingBag className="w-5 h-5 text-violet-500" />,
       view: "store",
       count: null,
@@ -933,20 +1076,6 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
     if (view === "sessions") {
       return (
         <div className="p-4 space-y-3 max-w-2xl mx-auto">
-          <button
-            onClick={handleGenerateDemoData}
-            disabled={demoGenerating}
-            className="w-full py-3 bg-violet-600 hover:bg-violet-700 disabled:opacity-60 text-white rounded-xl font-semibold flex items-center justify-center gap-2"
-          >
-            <Sparkles className="w-4 h-4" />
-            {demoGenerating ? "Creating demo data..." : sessions.some(session => session.id === DEMO_SESSION_ID) ? "Refresh Demo Session" : "Create Demo Session"}
-          </button>
-          <p className="text-xs text-slate-500 px-1">Play se Class 10 tak 11 classes; har class mein 10 students aur 10 subjects. Demo records alag session mein rehte hain.</p>
-          {demoMessage && (
-            <p role="status" className="rounded-lg bg-violet-50 p-3 text-xs text-violet-800 dark:bg-violet-900/20 dark:text-violet-200">
-              {demoMessage}
-            </p>
-          )}
           <button onClick={() => { setShowForm("session"); setEditingSessionId(null); }}
             className="w-full py-3 bg-blue-600 text-white rounded-xl font-medium flex items-center justify-center gap-2">
             <Plus className="w-4 h-4" /> Add Session
@@ -968,7 +1097,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
               </div>
             </div>
           )}
-          {sessions.map((s, idx) => (
+          {displayedSessions.map((s, idx) => (
             <div key={s.id || `session-${s.name || idx}-${idx}`} className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm">
               {editingSessionId === s.id ? (
                 <div className="space-y-3">
@@ -1034,7 +1163,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
     }
 
     if (view === "classes") {
-      const sortedClasses = [...classes].sort((a, b) => {
+      const sortedClasses = [...displayedClasses].sort((a, b) => {
         const na = parseInt(a.name.replace(/\D+/g, '')) || 0;
         const nb = parseInt(b.name.replace(/\D+/g, '')) || 0;
         return na !== nb ? na - nb : a.name.localeCompare(b.name);
@@ -1073,9 +1202,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                     </span>
                   </div>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex items-center gap-2 flex-wrap">
-                    <span>{classes.length} Total Classes</span>
+                    <span>{displayedClasses.length} Total Classes</span>
                     <span>•</span>
-                    <span>{students.length} Enrolled Students</span>
+                    <span>{displayedStudents.length} Enrolled Students</span>
                     <span>•</span>
                     <span>{subjects.length} Subjects</span>
                   </p>
@@ -1232,7 +1361,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                 </div>
               ) : (
                 filteredClasses.map((cls, idx) => {
-                  const classStudents = students.filter(s => isStudentInClass(s, cls.id, cls.name));
+                  const classStudents = displayedStudents.filter(s => isStudentInClass(s, cls.id, cls.name));
                   const classSubjects = subjects.filter(s => s.classId === cls.id);
                   const defaultFee = Number((cls as any).defaultFee) || 0;
                   const isToolsExpanded = expandedToolsClassId === cls.id;
@@ -1724,7 +1853,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
               </div>
             </div>
           )}
-          {teachers.map((t, idx) => (
+          {displayedTeachers.map((t, idx) => (
             <div key={t.id || `teacher-${t.name || idx}-${idx}`} className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm">
               {editingTeacherId === t.id ? (
                 <div className="space-y-3">
@@ -1770,107 +1899,105 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
     }
 
     if (view === "students") {
-      const classStudents = selectedClass ? students.filter(s => isStudentInClass(s, selectedClass.id, selectedClass.name)) : students;
+      const classStudents = selectedClass ? displayedStudents.filter(s => isStudentInClass(s, selectedClass.id, selectedClass.name)) : displayedStudents;
       return (
         <div className="p-4 space-y-3 max-w-2xl mx-auto">
-          {selectedClass && <p className="text-sm text-slate-500">Students in <strong className="text-slate-700 dark:text-slate-200">{selectedClass.name}</strong></p>}
-          {selectedClass && (
-            <>
-              <button onClick={() => {
-                setShowForm("student");
-                setEditingStudentId(null);
-                setStudentForm({ name: "", rollNo: "", admissionNo: "", fatherName: "", motherName: "", phone: "", dateOfBirth: "", bloodGroup: "", monthlyFee: (selectedClass as any)?.defaultFee || 0 });
-              }}
-                className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium flex items-center justify-center gap-2 shadow-sm transition">
-                <Plus className="w-4 h-4" /> Add Student
-              </button>
-              {showForm === "student" && !editingStudentId && (
-                <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm space-y-3 border border-slate-200 dark:border-slate-700">
-                  <p className="text-xs font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider">Naya Student Registration</p>
-                  {[
-                    ["name", "Full Name *", "text"], ["rollNo", "Roll Number *", "text"],
-                    ["admissionNo", "Admission No", "text"], ["fatherName", "Father's Name", "text"],
-                    ["motherName", "Mother's Name", "text"], ["phone", "Phone / Mobile", "tel"],
-                  ].map(([k, label, type], idx) => (
-                    <input key={`student-field-${k}-${idx}`} type={type} value={(studentForm as any)[k]}
-                      onChange={e => setStudentForm(p => ({ ...p, [k]: e.target.value }))}
-                      placeholder={label}
-                      className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
-                  ))}
-
-                  {/* DOB & Blood Group Row */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    <div>
-                      <label className="text-xs text-slate-500 mb-1 block">Date of Birth</label>
-                      <input type="date" value={studentForm.dateOfBirth}
-                        onChange={e => setStudentForm(p => ({ ...p, dateOfBirth: e.target.value }))}
-                        className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
-                    </div>
-                    <div>
-                      <label className="text-xs text-slate-500 mb-1 block font-bold text-rose-600 dark:text-rose-400">🩸 Blood Group</label>
-                      <select
-                        value={studentForm.bloodGroup || ""}
-                        onChange={e => setStudentForm(p => ({ ...p, bloodGroup: e.target.value }))}
-                        className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm font-semibold"
-                      >
-                        <option value="">Select Blood Group (Optional)</option>
-                        {BLOOD_GROUPS.map((bg, idx) => (
-                          <option key={`student-bg-${bg}-${idx}`} value={bg}>{bg}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="space-y-0.5">
-                    <div className="flex items-center gap-2">
-                      <label className="text-xs text-slate-500 whitespace-nowrap">Monthly Fee (₹):</label>
-                      <input type="number" value={studentForm.monthlyFee}
-                        onChange={e => setStudentForm(p => ({ ...p, monthlyFee: Number(e.target.value) }))}
-                        className="flex-1 px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
-                    </div>
-                    {(selectedClass as any)?.defaultFee > 0 && (
-                      <p className="text-[11px] text-blue-500 pl-1">
-                        {selectedClass.name} ka default fee: ₹{(selectedClass as any).defaultFee}/mo
-                      </p>
-                    )}
-                  </div>
-                  <div className="flex gap-2 pt-1">
-                    <button onClick={addStudent} disabled={saving} className="flex-1 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-60">Save</button>
-                    <button onClick={() => setShowForm(null)} className="flex-1 py-2 bg-slate-100 dark:bg-slate-700 rounded-lg text-sm">Cancel</button>
-                  </div>
-                </div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm text-slate-500">
+              {selectedClass ? (
+                <>Students in <strong className="text-slate-700 dark:text-slate-200">{selectedClass.name}</strong> ({classStudents.length})</>
+              ) : (
+                <>All Enrolled Students (<strong className="text-slate-700 dark:text-slate-200">{classStudents.length}</strong>)</>
               )}
-            </>
-          )}
+            </p>
+            {selectedClass && (
+              <button
+                type="button"
+                onClick={() => setSelectedClass(null)}
+                className="text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+              >
+                Show All Classes
+              </button>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setEditingStudentId(null);
+              setShowDirectAdmissionModal(true);
+            }}
+            className="w-full py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-sm transition cursor-pointer"
+          >
+            <UserPlus className="w-4 h-4" />
+            <span>+ New Student Admission (Quick / Full Form + Receipt)</span>
+          </button>
+
           {classStudents.map((s, idx) => (
             <div key={s.id || `student-${s.rollNo || idx}-${idx}`} className="bg-white dark:bg-slate-800 rounded-xl p-3 shadow-sm border border-slate-100 dark:border-slate-700">
               {editingStudentId === s.id ? (
                 <div className="space-y-3">
-                  <p className="text-xs font-semibold text-orange-500 uppercase tracking-wider">Edit Student Details</p>
-                  {[
-                    ["name", "Full Name *", "text"], ["rollNo", "Roll Number", "text"],
-                    ["fatherName", "Father's Name", "text"], ["motherName", "Mother's Name", "text"],
-                    ["phone", "Phone", "tel"]
-                  ].map(([k, label, type], idx) => (
-                    <input key={`edit-student-field-${k}-${idx}`} type={type} value={(editStudentForm as any)[k]}
-                      onChange={e => setEditStudentForm(p => ({ ...p, [k]: e.target.value }))}
-                      placeholder={label}
-                      className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
-                  ))}
-
-                  {/* Blood Group in Edit Form */}
-                  <div>
-                    <label className="text-xs text-slate-500 mb-1 block font-bold text-rose-600 dark:text-rose-400">🩸 Blood Group</label>
-                    <select
-                      value={editStudentForm.bloodGroup || ""}
-                      onChange={e => setEditStudentForm(p => ({ ...p, bloodGroup: e.target.value }))}
-                      className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm font-semibold"
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold text-orange-500 uppercase tracking-wider">Edit Student Details</p>
+                    <button
+                      type="button"
+                      onClick={() => setAdmissionPrintPayload({ student: s })}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-300 text-xs font-bold cursor-pointer"
                     >
-                      <option value="">Select Blood Group</option>
-                      {BLOOD_GROUPS.map((bg, idx) => (
-                        <option key={`edit-student-bg-${bg}-${idx}`} value={bg}>{bg}</option>
-                      ))}
-                    </select>
+                      <Printer className="w-3.5 h-3.5" /> Print Admission Form
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {[
+                      ["name", "Full Name *", "text"],
+                      ["rollNo", "Roll Number", "text"],
+                      ["admissionNo", "Admission No", "text"],
+                      ["phone", "Phone / Mobile", "tel"],
+                      ["fatherName", "Father's Name", "text"],
+                      ["motherName", "Mother's Name", "text"],
+                      ["aadhaarNo", "Student Aadhaar (12-digit)", "text"],
+                      ["address", "Address", "text"],
+                    ].map(([k, label, type], fIdx) => (
+                      <input key={`edit-student-field-${k}-${fIdx}`} type={type} value={(editStudentForm as any)[k] || ""}
+                        onChange={e => setEditStudentForm(p => ({ ...p, [k]: e.target.value }))}
+                        placeholder={label}
+                        className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div>
+                      <label className="text-xs text-slate-500 mb-1 block">Date of Birth</label>
+                      <input type="date" value={editStudentForm.dateOfBirth || ""}
+                        onChange={e => setEditStudentForm(p => ({ ...p, dateOfBirth: e.target.value }))}
+                        className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-slate-500 mb-1 block">Gender</label>
+                      <select
+                        value={editStudentForm.gender || ""}
+                        onChange={e => setEditStudentForm(p => ({ ...p, gender: e.target.value }))}
+                        className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm font-semibold"
+                      >
+                        <option value="">Select Gender</option>
+                        <option value="male">Male</option>
+                        <option value="female">Female</option>
+                        <option value="other">Other</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs text-slate-500 mb-1 block font-bold text-rose-600 dark:text-rose-400">🩸 Blood Group</label>
+                      <select
+                        value={editStudentForm.bloodGroup || ""}
+                        onChange={e => setEditStudentForm(p => ({ ...p, bloodGroup: e.target.value }))}
+                        className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm font-semibold"
+                      >
+                        <option value="">Select Blood Group</option>
+                        {BLOOD_GROUPS.map((bg, bgIdx) => (
+                          <option key={`edit-student-bg-${bg}-${bgIdx}`} value={bg}>{bg}</option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
 
                   <div className="flex items-center gap-2">
@@ -1881,7 +2008,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                   </div>
                   <div className="space-y-1.5 p-2.5 bg-orange-50/50 dark:bg-orange-950/20 rounded-xl border border-orange-200 dark:border-orange-800">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
-                      <label className="text-xs font-bold text-slate-700 dark:text-slate-300">Student Photo (Phone se Direct Upload):</label>
+                      <label className="text-xs font-bold text-slate-700 dark:text-slate-300">Student Photo (Camera / Gallery Upload):</label>
                       <DirectUploadButton
                         kind="image"
                         compact
@@ -1890,25 +2017,23 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                         onClear={() => setEditStudentForm(p => ({ ...p, photoUrl: '' }))}
                       />
                     </div>
-                    <p className="text-[11px] text-slate-400">Photo marksheet aur profile par dikhegi.</p>
+                    <p className="text-[11px] text-slate-400">Photo ID Card, Marksheet aur Admission Form par dikhegi.</p>
                   </div>
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <input type="checkbox" checked={editStudentForm.chargePhotoFee || false}
-                      onChange={e => setEditStudentForm(p => ({ ...p, chargePhotoFee: e.target.checked }))}
-                      className="w-4 h-4 accent-orange-500" />
-                    <span className="text-xs text-slate-600 dark:text-slate-300">Photo update ke liye ₹50 charge karo student ko</span>
-                  </label>
                   <div className="flex gap-2">
-                    <button onClick={saveEditStudent} disabled={saving} className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-orange-500 text-white rounded-lg text-sm font-medium disabled:opacity-60">
+                    <button onClick={saveEditStudent} disabled={saving} className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-orange-500 text-white rounded-lg text-sm font-medium disabled:opacity-60 cursor-pointer">
                       <Save className="w-3.5 h-3.5" /> {saving ? "Saving..." : "Save"}
                     </button>
-                    <button onClick={() => setEditingStudentId(null)} className="flex-1 py-2 bg-slate-100 dark:bg-slate-700 rounded-lg text-sm">Cancel</button>
+                    <button onClick={() => setEditingStudentId(null)} className="flex-1 py-2 bg-slate-100 dark:bg-slate-700 rounded-lg text-sm cursor-pointer">Cancel</button>
                   </div>
                 </div>
               ) : (
                 <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-full bg-orange-100 dark:bg-orange-900/30 flex items-center justify-center font-bold text-orange-700 text-sm flex-shrink-0">
-                    {s.rollNo || "?"}
+                  <div className="w-9 h-9 rounded-full bg-orange-100 dark:bg-orange-900/30 flex items-center justify-center font-bold text-orange-700 text-sm flex-shrink-0 overflow-hidden">
+                    {s.photoUrl ? (
+                      <img src={s.photoUrl} alt={s.name} className="w-full h-full object-cover" />
+                    ) : (
+                      s.rollNo || "?"
+                    )}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5 flex-wrap">
@@ -1918,7 +2043,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                           setQuickActionStudent(s);
                           setQuickActionInitialTab("id_card");
                         }}
-                        className="group text-left font-bold text-slate-800 dark:text-white text-sm hover:text-blue-600 dark:hover:text-blue-400 flex items-center gap-1.5 transition-colors"
+                        className="group text-left font-bold text-slate-800 dark:text-white text-sm hover:text-blue-600 dark:hover:text-blue-400 flex items-center gap-1.5 transition-colors cursor-pointer"
                         title="Tap to view ID Card, Fee Details & Attendance"
                       >
                         <span className="underline decoration-dotted decoration-slate-300 group-hover:decoration-blue-500">{s.name}</span>
@@ -1932,13 +2057,42 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                         </span>
                       )}
                     </div>
-                    <p className="text-xs text-slate-400">{s.admissionNo || "No Adm No"} • Fee: ₹{s.monthlyFee}/mo</p>
+                    <p className="text-xs text-slate-400">
+                      {s.admissionNo || "No Adm No"} • Roll #{s.rollNo || "—"} • Fee: ₹{s.monthlyFee}/mo
+                    </p>
                   </div>
-                  <button onClick={() => { setEditingStudentId(s.id); setEditStudentForm({ name: s.name, rollNo: s.rollNo || "", fatherName: s.fatherName || "", motherName: s.motherName || "", phone: s.phone || "", monthlyFee: s.monthlyFee || 0, photoUrl: (s as any).photoUrl || "", bloodGroup: (s as any).bloodGroup || "", chargePhotoFee: false }); setShowForm(null); }}
-                    className="p-1.5 rounded-lg hover:bg-orange-50 dark:hover:bg-orange-900/20 text-orange-500">
+                  <button
+                    type="button"
+                    onClick={() => setAdmissionPrintPayload({ student: s })}
+                    className="p-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-600 dark:text-blue-400 cursor-pointer"
+                    title="Print Admission Form / Receipt"
+                  >
+                    <Printer className="w-4 h-4" />
+                  </button>
+                  <button onClick={() => {
+                    setEditingStudentId(s.id);
+                    setEditStudentForm({
+                      name: s.name,
+                      rollNo: s.rollNo || "",
+                      admissionNo: s.admissionNo || "",
+                      fatherName: s.fatherName || "",
+                      motherName: s.motherName || "",
+                      phone: s.phone || "",
+                      dateOfBirth: s.dateOfBirth || "",
+                      gender: s.gender || "",
+                      category: s.category || "",
+                      aadhaarNo: s.aadhaarNo || "",
+                      address: s.address || "",
+                      monthlyFee: s.monthlyFee || 0,
+                      photoUrl: s.photoUrl || "",
+                      bloodGroup: s.bloodGroup || "",
+                    });
+                    setShowForm(null);
+                  }}
+                    className="p-1.5 rounded-lg hover:bg-orange-50 dark:hover:bg-orange-900/20 text-orange-500 cursor-pointer">
                     <Edit3 className="w-4 h-4" />
                   </button>
-                  <button onClick={() => deleteStudent(schoolId, s.id)} className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-red-400">
+                  <button onClick={() => deleteStudent(schoolId, s.id)} className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-red-400 cursor-pointer">
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
@@ -1955,7 +2109,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
       );
     }
     if (view === "fees") {
-      const sortedClasses = [...classes].sort((a, b) => {
+      const sortedClasses = [...displayedClasses].sort((a, b) => {
         const na = parseInt(a.name.replace(/\D+/g, '')) || 0;
         const nb = parseInt(b.name.replace(/\D+/g, '')) || 0;
         return na !== nb ? na - nb : a.name.localeCompare(b.name);
@@ -1973,7 +2127,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
       };
       if (allFees.length === 0 && !feeSummaryLoading) { loadFeeSummary(); }
 
-      const schoolTotal = students.reduce((sum, s) => sum + (s.monthlyFee || 0), 0);
+      const schoolTotal = displayedStudents.reduce((sum, s) => sum + (s.monthlyFee || 0), 0);
       const schoolCollected = allFees.filter(f => f.paid).reduce((sum, f) => sum + (f.amount || 0), 0);
       const schoolDue = allFees.filter(f => !f.paid).reduce((sum, f) => sum + (f.amount || 0), 0);
 
@@ -2013,7 +2167,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
           {feeSummaryLoading ? (
             <div className="text-center py-10 text-slate-400 text-sm">Loading fees...</div>
           ) : sortedClasses.map((cls, idx) => {
-            const classStudents = students.filter(s => isStudentInClass(s, cls.id, cls.name));
+            const classStudents = displayedStudents.filter(s => isStudentInClass(s, cls.id, cls.name));
             const classFees = allFees.filter(f => f.classId === cls.id);
             const expected = classStudents.reduce((sum, s) => sum + (s.monthlyFee || 0), 0);
             const collected = classFees.filter(f => f.paid).reduce((sum, f) => sum + (f.amount || 0), 0);
@@ -2055,76 +2209,70 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 pb-24">
       {/* Header */}
-      <div className="bg-gradient-to-r from-blue-900 to-indigo-900 px-4 py-5">
-        {view === "dashboard" && onBack ? (
-          <button onClick={onBack} className="flex items-center gap-1.5 text-blue-300 hover:text-white text-sm font-medium mb-3 transition-colors">
-            <ArrowLeft className="w-4 h-4" /> Student Dashboard
+      <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 px-4 py-4 sm:py-5 border-b border-indigo-800/40 shadow-md">
+        <div className="max-w-2xl mx-auto flex items-center justify-between gap-3">
+          {view === "dashboard" ? (
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="text-blue-300 text-[11px] font-bold uppercase tracking-wider bg-blue-500/20 px-2 py-0.5 rounded-md border border-blue-400/30">
+                  School Admin ERP
+                </span>
+                {activeSession && (
+                  <span className="text-slate-300 text-xs font-semibold">
+                    Session: {activeSession.name}
+                  </span>
+                )}
+              </div>
+              <h1 className="text-xl sm:text-2xl font-black text-white truncate mt-1 leading-tight">
+                {school?.name || "Loading..."}
+              </h1>
+            </div>
+          ) : (
+            <div className="flex-1 min-w-0 flex items-center gap-2">
+              <button
+                onClick={() => {
+                  if (view === "subjects" || view === "students" || view === "attendance" || view === "marks" || view === "report_card") setView("classes");
+                  else if (view === "content") { setView("subjects"); }
+                  else setView("dashboard");
+                }}
+                className="flex items-center gap-1.5 text-blue-200 hover:text-white text-xs sm:text-sm font-bold bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-xl border border-white/15 transition cursor-pointer"
+              >
+                <ChevronLeft className="w-4 h-4" /> {view === "store" ? "Dashboard" : "Back to Dashboard"}
+              </button>
+            </div>
+          )}
+
+          {/* Log Out Button */}
+          <button
+            onClick={handlePerformLogout}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 active:bg-rose-500/40 border border-rose-400/40 text-rose-200 hover:text-white text-xs font-bold transition-all cursor-pointer active:scale-95 shadow-sm shrink-0"
+            title="School Admin ERP se Log Out karein"
+          >
+            <LogOut className="w-4 h-4 text-rose-400" />
+            <span>Log Out</span>
           </button>
-        ) : view !== "dashboard" ? (
-          <button onClick={() => {
-            if (view === "subjects" || view === "students" || view === "attendance" || view === "marks" || view === "report_card") setView("classes");
-            else if (view === "content") { setView("subjects"); }
-            else setView("dashboard");
-          }} className="flex items-center gap-1 text-blue-300 text-sm mb-2 hover:text-white">
-            <ChevronLeft className="w-4 h-4" /> {view === "store" ? "Dashboard" : "Back"}
-          </button>
-        ) : null}
-        <p className="text-blue-300 text-xs font-medium uppercase tracking-wider mb-1">School Admin</p>
-        <h1 className="text-xl font-bold text-white">{school?.name || "Loading..."}</h1>
-        {activeSession && <p className="text-slate-300 text-sm mt-0.5">Session: {activeSession.name}</p>}
+        </div>
       </div>
 
       {view === "dashboard" ? (
         <div className="p-4 max-w-2xl mx-auto space-y-4">
 
-          {/* ── 1-CLICK 1-YEAR COMPREHENSIVE ACADEMIC DATASET LAUNCHER ── */}
-          <div className="bg-gradient-to-r from-violet-950 via-indigo-950 to-slate-900 border-2 border-amber-500/30 rounded-3xl p-4 sm:p-5 text-white shadow-xl relative overflow-hidden">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Sparkles className="w-5 h-5 text-amber-400 shrink-0" />
-                  <h3 className="font-black text-sm sm:text-base text-white">Full 1-Year Academic Dataset (910 Students)</h3>
-                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                    DPS / CBSE Pattern
-                  </span>
-                </div>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  13 Classes (Nursery to 10), 70 Students/Class (910 total), 1:35 Teacher Ratio (Salaries ₹5K-₹15K, Principal ₹25K, 3-Day Late Rule), 6 Bi-Monthly Exams (PA 40M / Term 100M), 1-Year Fee Receipts with 3-12 Month Dues &amp; Festival Holidays.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={handleGenerateDemoData}
-                disabled={demoGenerating}
-                className="px-4 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs sm:text-sm rounded-xl shadow-lg shadow-amber-500/25 flex items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer shrink-0 disabled:opacity-60"
-              >
-                <Sparkles className="w-4 h-4 text-slate-950" />
-                {demoGenerating ? "Generating 910 Students..." : "⚡ 1-Click Load 1-Year Dataset"}
-              </button>
-            </div>
-            {demoMessage && (
-              <div className="mt-3 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3 text-xs text-amber-200 font-semibold flex items-center gap-2">
-                <span>{demoMessage}</span>
-              </div>
-            )}
-          </div>
-
-          {/* ── PROFESSIONAL INSTITUTIONAL IDENTITY HERO CARD ─────────────────────────────── */}
+          {/* ── UNIFIED ALL-IN-ONE INSTITUTIONAL MASTER CARD (Identity + Dataset + Controls in 1 Place) ── */}
           {school && (
-            <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900 via-indigo-950 to-blue-950 text-white shadow-xl border border-indigo-500/25 mb-5 transition-all">
+            <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900 via-indigo-950 to-blue-950 text-white shadow-2xl border border-indigo-500/30 mb-5 transition-all">
               {/* Decorative ambient background glows */}
-              <div className="absolute -top-16 -right-16 w-56 h-56 bg-blue-500/15 rounded-full blur-3xl pointer-events-none" />
-              <div className="absolute -bottom-16 -left-16 w-56 h-56 bg-indigo-500/15 rounded-full blur-3xl pointer-events-none" />
+              <div className="absolute -top-16 -right-16 w-64 h-64 bg-blue-500/15 rounded-full blur-3xl pointer-events-none" />
+              <div className="absolute -bottom-16 -left-16 w-64 h-64 bg-indigo-500/15 rounded-full blur-3xl pointer-events-none" />
 
               <div className="relative p-5 sm:p-6 space-y-4">
-                {/* Top Row: School Badge & Identity */}
+                {/* 1. TOP SECTION: School Badge & Identity */}
                 <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                   <div className="flex items-start gap-3.5 min-w-0">
                     {/* Logo / Crest frame */}
                     {(() => {
-                      const displaySchoolLogo = getSavedSchoolLogo(school.logoUrl);
+                      const displaySchoolLogo = getSavedSchoolLogo(school.logoUrl, schoolId);
                       return (
                         <div className="relative group flex-shrink-0">
                           <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 p-1 flex items-center justify-center shadow-inner overflow-hidden">
@@ -2182,7 +2330,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                       ) : (
                         <button
                           onClick={() => setShowFullSchoolProfileEditor(true)}
-                          className="text-xs text-blue-300/70 hover:text-blue-200 italic mt-1 flex items-center gap-1 group"
+                          className="text-xs text-blue-300/70 hover:text-blue-200 italic mt-1 flex items-center gap-1 group cursor-pointer"
                         >
                           <Plus className="w-3 h-3 text-blue-300" />
                           <span>Add school motto / tagline</span>
@@ -2199,7 +2347,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                         ) : (
                           <button
                             onClick={() => setShowFullSchoolProfileEditor(true)}
-                            className="inline-flex items-center gap-1 text-[11px] bg-white/10 hover:bg-white/15 border border-white/15 text-slate-300 px-2.5 py-0.5 rounded-full"
+                            className="inline-flex items-center gap-1 text-[11px] bg-white/10 hover:bg-white/15 border border-white/15 text-slate-300 px-2.5 py-0.5 rounded-full cursor-pointer"
                           >
                             <Plus className="w-3 h-3 text-amber-300" /> Add Board / Affiliation
                           </button>
@@ -2211,6 +2359,27 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                             Session: {activeSession.name}
                           </span>
                         )}
+
+                        {/* Prominent Demo Mode ON/OFF Switcher (only for default demo school) */}
+                        {isDefaultDemoSchool ? (
+                          <button
+                            onClick={() => handleToggleDemoData(!demoEnabled)}
+                            className={`inline-flex items-center gap-1.5 text-xs px-3 py-1 rounded-full font-bold transition-all shadow-sm cursor-pointer border ${
+                              demoEnabled
+                                ? "bg-amber-500/25 border-amber-400 text-amber-200 hover:bg-amber-500/35"
+                                : "bg-emerald-500/25 border-emerald-400 text-emerald-200 hover:bg-emerald-500/35"
+                            }`}
+                            title={demoEnabled ? "Demo Data ON (13 classes, 910 demo students). Click to turn OFF and show Real School Data Only." : "Real School Mode Active. Click to turn Demo ON."}
+                          >
+                            <span className={`w-2 h-2 rounded-full ${demoEnabled ? "bg-amber-400 animate-pulse" : "bg-emerald-400"}`} />
+                            <span>Demo Data: <strong>{demoEnabled ? "ON (डेमो चालू)" : "OFF (Real Only)"}</strong></span>
+                          </button>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 text-xs px-3 py-1 rounded-full font-bold bg-emerald-500/25 border border-emerald-400 text-emerald-200">
+                            <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                            <span>100% Real Isolated DB</span>
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -2219,7 +2388,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                   <div className="flex flex-row sm:flex-col gap-2 flex-shrink-0 pt-1 sm:pt-0">
                     <button
                       onClick={() => setShowFullSchoolProfileEditor(true)}
-                      className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs sm:text-sm font-bold shadow-lg shadow-blue-900/40 border border-blue-400/30 active:scale-95 transition-all"
+                      className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs sm:text-sm font-bold shadow-lg shadow-blue-900/40 border border-blue-400/30 active:scale-95 transition-all cursor-pointer"
                     >
                       <Edit3 className="w-4 h-4 text-white" />
                       <span>Edit School Details</span>
@@ -2227,7 +2396,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                     <div className="flex gap-1.5">
                       <button
                         onClick={() => setShowFullSchoolProfileEditor(true)}
-                        className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-semibold border border-white/20 transition-all"
+                        className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-semibold border border-white/20 transition-all cursor-pointer"
                       >
                         <Plus className="w-3.5 h-3.5 text-emerald-400" />
                         <span>Add Details</span>
@@ -2244,7 +2413,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                   </div>
                 </div>
 
-                {/* Key Institutional Details Matrix */}
+                {/* 2. Key Institutional Details Matrix */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-3 border-t border-white/10 text-xs text-slate-200">
                   {/* Address */}
                   <div className="flex items-start gap-2.5 bg-white/5 hover:bg-white/10 rounded-xl p-2.5 border border-white/5 transition-colors">
@@ -2256,7 +2425,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                       ) : (
                         <button
                           onClick={() => setShowFullSchoolProfileEditor(true)}
-                          className="text-blue-300 hover:underline flex items-center gap-1 mt-0.5 text-xs font-medium"
+                          className="text-blue-300 hover:underline flex items-center gap-1 mt-0.5 text-xs font-medium cursor-pointer"
                         >
                           <Plus className="w-3 h-3" /> Add school address
                         </button>
@@ -2276,7 +2445,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                       ) : (
                         <button
                           onClick={() => setShowFullSchoolProfileEditor(true)}
-                          className="text-emerald-300 hover:underline flex items-center gap-1 mt-0.5 text-xs font-medium"
+                          className="text-emerald-300 hover:underline flex items-center gap-1 mt-0.5 text-xs font-medium cursor-pointer"
                         >
                           <Plus className="w-3 h-3" /> Add phone / mobile
                         </button>
@@ -2293,7 +2462,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                         {school.principalSignatureUrl ? (
                           <span className="text-[9.5px] bg-emerald-500/25 border border-emerald-400/40 text-emerald-300 px-1.5 py-0.2 rounded font-bold">✍️ Sign OK</span>
                         ) : (
-                          <button onClick={() => setShowDigitalSignatureModal(true)} className="text-[10px] text-amber-300 hover:underline font-bold">+ Add Sign</button>
+                          <button onClick={() => setShowDigitalSignatureModal(true)} className="text-[10px] text-amber-300 hover:underline font-bold cursor-pointer">+ Add Sign</button>
                         )}
                       </div>
                       {school.principalName ? (
@@ -2306,7 +2475,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                       ) : (
                         <button
                           onClick={() => setShowFullSchoolProfileEditor(true)}
-                          className="text-amber-300 hover:underline flex items-center gap-1 mt-0.5 text-xs font-medium"
+                          className="text-amber-300 hover:underline flex items-center gap-1 mt-0.5 text-xs font-medium cursor-pointer"
                         >
                           <Plus className="w-3 h-3" /> Add Principal Name
                         </button>
@@ -2314,7 +2483,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                       {school.principalSignatureUrl && (
                         <div className="mt-1 flex items-center gap-2">
                           <img src={school.principalSignatureUrl} alt="Principal Signature" className="h-4 max-w-[70px] object-contain bg-white/90 rounded px-1" />
-                          <button onClick={() => setShowDigitalSignatureModal(true)} className="text-[10px] text-blue-300 hover:underline">Change</button>
+                          <button onClick={() => setShowDigitalSignatureModal(true)} className="text-[10px] text-blue-300 hover:underline cursor-pointer">Change</button>
                         </div>
                       )}
                     </div>
@@ -2329,7 +2498,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                         {school.directorSignatureUrl ? (
                           <span className="text-[9.5px] bg-emerald-500/25 border border-emerald-400/40 text-emerald-300 px-1.5 py-0.2 rounded font-bold">✍️ Sign OK</span>
                         ) : school.directorName ? (
-                          <button onClick={() => setShowDigitalSignatureModal(true)} className="text-[10px] text-sky-300 hover:underline font-bold">+ Add Sign</button>
+                          <button onClick={() => setShowDigitalSignatureModal(true)} className="text-[10px] text-sky-300 hover:underline font-bold cursor-pointer">+ Add Sign</button>
                         ) : null}
                       </div>
                       {school.email || school.directorName ? (
@@ -2342,7 +2511,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                       ) : (
                         <button
                           onClick={() => setShowFullSchoolProfileEditor(true)}
-                          className="text-sky-300 hover:underline flex items-center gap-1 mt-0.5 text-xs font-medium"
+                          className="text-sky-300 hover:underline flex items-center gap-1 mt-0.5 text-xs font-medium cursor-pointer"
                         >
                           <Plus className="w-3 h-3" /> Add official email
                         </button>
@@ -2350,41 +2519,41 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                       {school.directorSignatureUrl && (
                         <div className="mt-1 flex items-center gap-2">
                           <img src={school.directorSignatureUrl} alt="Director Signature" className="h-4 max-w-[70px] object-contain bg-white/90 rounded px-1" />
-                          <button onClick={() => setShowDigitalSignatureModal(true)} className="text-[10px] text-blue-300 hover:underline">Change</button>
+                          <button onClick={() => setShowDigitalSignatureModal(true)} className="text-[10px] text-blue-300 hover:underline cursor-pointer">Change</button>
                         </div>
                       )}
                     </div>
                   </div>
                 </div>
 
-                {/* Custom Fields Chips (UDISE, Reg No, Medium, etc. if any) */}
-                {Array.isArray(school.customFields) && school.customFields.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 pt-1">
-                    {school.customFields.filter(f => f.label && f.value).map((f, i) => (
-                      <span key={`custom-field-${f.label}-${i}`} className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-white/10 border border-white/10 text-[11px] text-blue-100 font-mono">
-                        <span className="font-semibold text-slate-300">{f.label}:</span>
-                        <span>{f.value}</span>
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                {/* Footer Action Bar: Website & Quick inline details */}
-                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/10 text-xs">
-                  <div className="flex items-center gap-2">
+                {/* 3. INTEGRATED ACTIONS & LOCK CODE TOOLBAR (Inside the Master Card) */}
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-white/10 text-xs">
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
                       onClick={() => setView("public_website")}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-medium transition-colors"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-medium transition-colors cursor-pointer"
                     >
                       <Globe className="w-3.5 h-3.5 text-cyan-300" />
                       <span>Live Public Website</span>
                     </button>
                     <button
                       onClick={() => setShowFullSchoolProfileEditor(true)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-medium transition-colors"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-medium transition-colors cursor-pointer"
                     >
                       <Printer className="w-3.5 h-3.5 text-indigo-300" />
-                      <span>Print Header Settings</span>
+                      <span>Print Header</span>
+                    </button>
+                    <button
+                      onClick={() => setLockCodeDrawerOpen(p => !p)}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold border transition-colors cursor-pointer ${
+                        lockCodeActive
+                          ? "bg-amber-400/20 border-amber-400/40 text-amber-200"
+                          : "bg-white/10 border-white/15 text-slate-300 hover:text-white"
+                      }`}
+                    >
+                      <Shield className="w-3.5 h-3.5 text-amber-400" />
+                      <span>{lockCodeActive ? "🔒 Lock Code: Active" : "Lock Code Setup"}</span>
+                      {lockCodeDrawerOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                     </button>
                   </div>
 
@@ -2393,21 +2562,73 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                       if (!schoolCardExpanded) openEditSchoolInfo();
                       setSchoolCardExpanded(p => !p);
                     }}
-                    className="inline-flex items-center gap-1 text-[11px] text-slate-300 hover:text-white transition-colors"
+                    className="inline-flex items-center gap-1 text-[11px] text-slate-300 hover:text-white transition-colors cursor-pointer"
                   >
-                    <span>{schoolCardExpanded ? "Hide Quick Inline Edit" : "Fast Inline Edit"}</span>
+                    <span>{schoolCardExpanded ? "Hide Inline Edit" : "Quick Inline Edit"}</span>
                     {schoolCardExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                   </button>
                 </div>
 
-                {/* Fast Inline Edit Drawer (optional expand) */}
+                {/* 5. INTEGRATED LOCK CODE DRAWER (Inside Master Card) */}
+                {lockCodeDrawerOpen && (
+                  <div className="mt-3 pt-3 border-t border-white/15 bg-black/30 rounded-2xl p-4 space-y-3 animate-in fade-in">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Shield className="w-4 h-4 text-amber-400" />
+                        <h4 className="font-bold text-sm text-white">School Security Lock Code</h4>
+                      </div>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${lockCodeActive ? 'bg-amber-400/20 text-amber-300 border border-amber-400/30' : 'bg-white/10 text-slate-400'}`}>
+                        {lockCodeActive ? '🔒 Active' : 'Inactive'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-300">
+                      Jab active hoga, students ko school portal se judne ke liye yeh secret code enter karna hoga.
+                    </p>
+                    <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-200">
+                      <input
+                        type="checkbox"
+                        checked={lockCodeActive}
+                        onChange={e => setLockCodeActive(e.target.checked)}
+                        className="w-4 h-4 accent-amber-500 cursor-pointer"
+                      />
+                      <span>Lock Code Enable Karo</span>
+                    </label>
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <input
+                          type={showLockCode ? "text" : "password"}
+                          placeholder="Secret code enter karein"
+                          value={lockCodeInput}
+                          onChange={e => setLockCodeInput(e.target.value)}
+                          className="w-full px-3 py-2 bg-white/10 border border-white/20 rounded-xl text-white placeholder-slate-400 text-xs focus:outline-none focus:ring-2 focus:ring-amber-400 pr-9"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowLockCode(!showLockCode)}
+                          className="absolute right-2.5 top-2.5 text-slate-400 hover:text-white cursor-pointer"
+                        >
+                          {showLockCode ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                      <button
+                        onClick={saveLockCode}
+                        disabled={savingLockCode}
+                        className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${lockCodeSaved ? 'bg-emerald-500 text-white' : 'bg-amber-500 hover:bg-amber-400 text-slate-950'} disabled:opacity-60`}
+                      >
+                        {savingLockCode ? 'Saving...' : lockCodeSaved ? '✓ Saved!' : 'Save Code'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* 6. Fast Inline Edit Drawer (optional expand) */}
                 {schoolCardExpanded && (
                   <div className="mt-3 pt-3 border-t border-white/15 bg-black/20 rounded-2xl p-4 space-y-3">
                     <div className="flex items-center justify-between">
                       <p className="text-xs font-semibold text-white">⚡ Quick Field Update</p>
                       <button
                         onClick={() => setShowFullSchoolProfileEditor(true)}
-                        className="text-xs text-blue-300 hover:underline flex items-center gap-1 font-medium"
+                        className="text-xs text-blue-300 hover:underline flex items-center gap-1 font-medium cursor-pointer"
                       >
                         <Sparkles className="w-3 h-3" /> Open Full Editor with Logo &amp; Print Header
                       </button>
@@ -2439,14 +2660,14 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
                       <button
                         onClick={saveSchoolInfo}
                         disabled={savingSchoolInfo}
-                        className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold disabled:opacity-60 shadow"
+                        className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold disabled:opacity-60 shadow cursor-pointer"
                       >
                         <Save className="w-3.5 h-3.5" />
                         {savingSchoolInfo ? "Saving..." : "Save Quick Updates"}
                       </button>
                       <button
                         onClick={() => setSchoolCardExpanded(false)}
-                        className="px-4 py-2 bg-white/10 hover:bg-white/20 text-slate-200 rounded-lg text-xs"
+                        className="px-4 py-2 bg-white/10 hover:bg-white/20 text-slate-200 rounded-lg text-xs cursor-pointer"
                       >
                         Close
                       </button>
@@ -2457,133 +2678,116 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
             </div>
           )}
 
-          {/* ── LOCK CODE CARD ─────────────────────────────────────── */}
-          {school && (
-            <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm mb-4 border border-slate-100 dark:border-slate-700 p-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <Shield className="w-4 h-4 text-amber-500" />
-                <h3 className="font-semibold text-slate-800 dark:text-white">School Lock Code</h3>
-                <span className={`ml-auto text-xs px-2 py-0.5 rounded-full font-bold ${lockCodeActive ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'}`}>
-                  {lockCodeActive ? '🔒 Active' : 'Inactive'}
-                </span>
-              </div>
-              <p className="text-xs text-slate-400">Jab active hoga, students ko school join karne ke liye yeh code enter karna padega. Sirf aap aur super admin ko pata rahega.</p>
-
-              <label className="flex items-center gap-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={lockCodeActive}
-                  onChange={e => setLockCodeActive(e.target.checked)}
-                  className="w-4 h-4 accent-amber-500"
-                />
-                <span className="text-sm text-slate-700 dark:text-slate-200 font-medium">Lock Code Enable Karo</span>
-              </label>
-
-              <div className="relative">
-                <label className="text-xs text-slate-500 mb-1 block">Lock Code</label>
-                <input
-                  type={showLockCode ? "text" : "password"}
-                  placeholder="Apna secret code likhiye"
-                  value={lockCodeInput}
-                  onChange={e => setLockCodeInput(e.target.value)}
-                  className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm pr-10"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowLockCode(!showLockCode)}
-                  className="absolute right-3 top-7 text-slate-400 hover:text-slate-600"
-                >
-                  {showLockCode ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-
-              <button
-                onClick={saveLockCode}
-                disabled={savingLockCode}
-                className={`w-full py-2 rounded-lg text-sm font-bold transition-all ${lockCodeSaved ? 'bg-green-500 text-white' : 'bg-amber-500 hover:bg-amber-600 text-white'} disabled:opacity-60`}
-              >
-                {savingLockCode ? 'Saving...' : lockCodeSaved ? '✓ Saved!' : 'Lock Code Save Karo'}
-              </button>
-            </div>
-          )}
-
-          {/* ── SUB-ADMIN MANAGEMENT ──────────────────────────────────── */}
-          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm mb-4 border border-slate-100 dark:border-slate-700 p-4 space-y-3">
-            <div className="flex items-center gap-2">
-              <Users className="w-4 h-4 text-purple-500" />
-              <h3 className="font-semibold text-slate-800 dark:text-white">Sub-Admin Manage Karo</h3>
-            </div>
-            <p className="text-xs text-slate-400">
-              Apne school ke kisi trusted member ko sub-admin banao — woh bhi content, classes, students manage kar sakta hai.
-            </p>
-
-            {/* Existing sub-admins list */}
-            {subAdmins.filter(p => p.role === 'SCHOOL_SUB_ADMIN').length > 0 && (
-              <div className="space-y-2">
-                {subAdmins.filter(p => p.role === 'SCHOOL_SUB_ADMIN').map((p, idx) => (
-                  <div key={p.uid || p.email || `subadmin-${idx}`} className="flex items-center gap-3 bg-purple-50 dark:bg-purple-900/20 rounded-xl px-3 py-2">
-                    <div className="w-8 h-8 rounded-full bg-purple-200 dark:bg-purple-700 flex items-center justify-center text-sm font-bold text-purple-700 dark:text-purple-200 flex-shrink-0">
-                      {(p.name || p.email).slice(0, 1).toUpperCase()}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-slate-800 dark:text-white truncate">{p.name}</p>
-                      <p className="text-[10px] text-slate-400 truncate">{p.email}</p>
-                    </div>
-                    <button
-                      onClick={() => handleRemoveSubAdmin(p.uid)}
-                      className="p-1.5 rounded-lg text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors"
-                      title="Remove sub-admin"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Assign new sub-admin */}
-            <div>
-              <label className="text-xs text-slate-500 mb-1 block">Sub-Admin ka Email (IIC app wala)</label>
-              <input
-                type="email"
-                placeholder="subadmin@example.com"
-                value={subAdminEmail}
-                onChange={e => { setSubAdminEmail(e.target.value); setSubAdminResult(null); }}
-                className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm"
-              />
-            </div>
-            {subAdminResult && (
-              <div className={`text-xs px-3 py-2 rounded-lg font-medium ${subAdminResult.ok ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'}`}>
-                {subAdminResult.msg}
-              </div>
-            )}
+          {/* Quick KPI Strip */}
+          <div className="grid grid-cols-4 gap-2 mb-3">
             <button
-              onClick={handleAssignSubAdmin}
-              disabled={assigningSubAdmin || !subAdminEmail.trim()}
-              className="w-full py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm font-bold disabled:opacity-60 flex items-center justify-center gap-2"
+              type="button"
+              onClick={() => setView("students")}
+              className="bg-white dark:bg-slate-800 rounded-2xl p-3 shadow-sm border border-slate-200/70 dark:border-slate-700 text-left hover:border-blue-400 transition cursor-pointer"
             >
-              {assigningSubAdmin ? 'Searching...' : '👥 Sub-Admin Banao'}
+              <p className="text-[10px] font-bold uppercase text-slate-400">Students</p>
+              <p className="text-xl font-black tabular-nums text-blue-600 dark:text-blue-400 mt-0.5">{displayedStudents.length}</p>
+            </button>
+            <button
+              type="button"
+              onClick={() => setView("teachers")}
+              className="bg-white dark:bg-slate-800 rounded-2xl p-3 shadow-sm border border-slate-200/70 dark:border-slate-700 text-left hover:border-emerald-400 transition cursor-pointer"
+            >
+              <p className="text-[10px] font-bold uppercase text-slate-400">Teachers</p>
+              <p className="text-xl font-black tabular-nums text-emerald-600 dark:text-emerald-400 mt-0.5">{displayedTeachers.length}</p>
+            </button>
+            <button
+              type="button"
+              onClick={() => setView("classes")}
+              className="bg-white dark:bg-slate-800 rounded-2xl p-3 shadow-sm border border-slate-200/70 dark:border-slate-700 text-left hover:border-purple-400 transition cursor-pointer"
+            >
+              <p className="text-[10px] font-bold uppercase text-slate-400">Classes</p>
+              <p className="text-xl font-black tabular-nums text-purple-600 dark:text-purple-400 mt-0.5">{displayedClasses.length}</p>
+            </button>
+            <button
+              type="button"
+              onClick={() => setView("community")}
+              className="bg-white dark:bg-slate-800 rounded-2xl p-3 shadow-sm border border-rose-200/80 dark:border-rose-800/60 text-left hover:border-rose-400 transition cursor-pointer"
+            >
+              <p className="text-[10px] font-bold uppercase text-rose-500">Community</p>
+              <p className="text-xl font-black text-rose-600 dark:text-rose-400 mt-0.5">Live</p>
             </button>
           </div>
 
-          {/* Stats */}
-          <div className="grid grid-cols-2 gap-3 mb-4">
-            <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm">
-              <p className="text-xs text-slate-500">Total Students</p>
-              <p className="text-2xl font-bold text-blue-500">{students.length}</p>
-            </div>
-            <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm">
-              <p className="text-xs text-slate-500">Total Teachers</p>
-              <p className="text-2xl font-bold text-green-500">{teachers.length}</p>
-            </div>
-            <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm">
-              <p className="text-xs text-slate-500">Classes</p>
-              <p className="text-2xl font-bold text-purple-500">{classes.length}</p>
-            </div>
-            <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm">
-              <p className="text-xs text-slate-500">Sessions</p>
-              <p className="text-2xl font-bold text-orange-500">{sessions.length}</p>
-            </div>
+          {/* ── COLLAPSIBLE SUB-ADMIN MANAGEMENT ──────────────────────── */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm mb-3 border border-slate-200/70 dark:border-slate-700 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setSubAdminExpanded(prev => !prev)}
+              className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-slate-50 dark:hover:bg-slate-700/40 transition cursor-pointer"
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-purple-100 dark:bg-purple-900/40 flex items-center justify-center text-purple-600 dark:text-purple-300">
+                  <Users className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-slate-800 dark:text-white">Sub-Admin Access Manage Karo</h3>
+                  <p className="text-[11px] text-slate-400">
+                    {subAdmins.filter(p => p.role === 'SCHOOL_SUB_ADMIN').length} active sub-admin(s)
+                  </p>
+                </div>
+              </div>
+              {subAdminExpanded ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+            </button>
+
+            {subAdminExpanded && (
+              <div className="px-4 pb-4 pt-2 border-t border-slate-100 dark:border-slate-700 space-y-3">
+                <p className="text-xs text-slate-400">
+                  Apne school ke kisi trusted member ko sub-admin banao — woh bhi content, classes, students manage kar sakta hai.
+                </p>
+
+                {subAdmins.filter(p => p.role === 'SCHOOL_SUB_ADMIN').length > 0 && (
+                  <div className="space-y-2">
+                    {subAdmins.filter(p => p.role === 'SCHOOL_SUB_ADMIN').map((p, idx) => (
+                      <div key={p.uid || p.email || `subadmin-${idx}`} className="flex items-center gap-3 bg-purple-50 dark:bg-purple-900/20 rounded-xl px-3 py-2">
+                        <div className="w-8 h-8 rounded-full bg-purple-200 dark:bg-purple-700 flex items-center justify-center text-sm font-bold text-purple-700 dark:text-purple-200 flex-shrink-0">
+                          {(p.name || p.email).slice(0, 1).toUpperCase()}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-slate-800 dark:text-white truncate">{p.name}</p>
+                          <p className="text-[10px] text-slate-400 truncate">{p.email}</p>
+                        </div>
+                        <button
+                          onClick={() => handleRemoveSubAdmin(p.uid)}
+                          className="p-1.5 rounded-lg text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors cursor-pointer"
+                          title="Remove sub-admin"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Sub-Admin ka Email</label>
+                  <input
+                    type="email"
+                    placeholder="subadmin@example.com"
+                    value={subAdminEmail}
+                    onChange={e => { setSubAdminEmail(e.target.value); setSubAdminResult(null); }}
+                    className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm"
+                  />
+                </div>
+                {subAdminResult && (
+                  <div className={`text-xs px-3 py-2 rounded-lg font-medium ${subAdminResult.ok ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'}`}>
+                    {subAdminResult.msg}
+                  </div>
+                )}
+                <button
+                  onClick={handleAssignSubAdmin}
+                  disabled={assigningSubAdmin || !subAdminEmail.trim()}
+                  className="w-full py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm font-bold disabled:opacity-60 flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  {assigningSubAdmin ? 'Searching...' : 'Sub-Admin Banao'}
+                </button>
+              </div>
+            )}
           </div>
 
           {/* ── Plan timer card ─────────────────────────────── */}
@@ -2683,17 +2887,55 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
             );
           })()}
 
-          {/* Menu */}
-          <div className="space-y-2">
-            {menuItems.map((item, idx) => (
-              <button key={item.view || `menu-item-${item.label}-${idx}`} onClick={() => setView(item.view as AdminView)}
-                className="w-full bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm flex items-center gap-3 hover:shadow-md transition-shadow text-left">
-                {item.icon}
-                <span className="flex-1 font-medium text-slate-800 dark:text-white">{item.label}</span>
-                {item.count !== null && <span className="text-sm text-slate-400">{item.count}</span>}
-                <ChevronRight className="w-4 h-4 text-slate-300" />
-              </button>
-            ))}
+          {/* Clean App Feature Grid (Every section opens cleanly in its own view) */}
+          <div className="space-y-2.5">
+            <div className="flex items-center justify-between px-1">
+              <h3 className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                School ERP Modules (Tap to Open)
+              </h3>
+              <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                All Links Live Synced
+              </span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {menuItems.map((item: any, idx) => (
+                <button
+                  key={item.view || `menu-item-${item.label}-${idx}`}
+                  type="button"
+                  onClick={() => setView(item.view as AdminView)}
+                  className={`rounded-2xl p-3.5 shadow-sm border flex flex-col justify-between gap-2.5 hover:shadow-md transition active:scale-[0.98] text-left cursor-pointer ${
+                    item.featured
+                      ? "col-span-2 sm:col-span-1 bg-gradient-to-br from-rose-500/10 via-white to-amber-500/10 dark:from-rose-950/40 dark:via-slate-800 dark:to-amber-950/30 border-rose-200/80 dark:border-rose-800/60 hover:border-rose-400"
+                      : "bg-white dark:bg-slate-800 border-slate-200/70 dark:border-slate-700 hover:border-blue-400"
+                  }`}
+                >
+                  <div className="flex items-center justify-between w-full gap-2">
+                    <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-700/70 flex items-center justify-center shrink-0">
+                      {item.icon}
+                    </div>
+                    {item.count !== null && item.count !== undefined && (
+                      <span className={`px-2 py-0.5 rounded-md text-[10px] font-black tabular-nums ${
+                        item.featured
+                          ? "bg-rose-600 text-white"
+                          : "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"
+                      }`}>
+                        {item.count}
+                      </span>
+                    )}
+                  </div>
+                  <div>
+                    <p className="font-black text-slate-800 dark:text-white text-sm leading-snug">
+                      {item.label}
+                    </p>
+                    {item.subtitle && (
+                      <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
+                        {item.subtitle}
+                      </p>
+                    )}
+                  </div>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       ) : (
@@ -2802,7 +3044,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
             address: school.address || "",
             phone: school.mobile || school.phone || "",
             email: school.email || "",
-            logoUrl: getSavedSchoolLogo(school.logoUrl),
+            logoUrl: getSavedSchoolLogo(school.logoUrl, schoolId),
             principalName: school.principalName || "",
             principalTitle: "Principal / Head of Institution",
             code: school.code || "",
@@ -2863,6 +3105,46 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack }
         adminUid={adminUid}
         initialTab={quickActionInitialTab}
       />
+      {school && showDirectAdmissionModal && (
+        <DirectAdmissionModal
+          isOpen={showDirectAdmissionModal}
+          onClose={() => setShowDirectAdmissionModal(false)}
+          school={school}
+          classes={displayedClasses}
+          activeSession={activeSession}
+          defaultClassId={selectedClass?.id || displayedClasses[0]?.id}
+          existingStudents={displayedStudents}
+          adminUid={adminUid}
+          onSuccess={(newStudent, admFee) => {
+            setShowDirectAdmissionModal(false);
+            setStudents(prev => [newStudent, ...prev.filter(s => s.id !== newStudent.id)]);
+            setAdmissionPrintPayload({
+              student: newStudent,
+              fee: admFee || null,
+              mode: admFee ? "combined" : "form_only",
+            });
+          }}
+        />
+      )}
+      {school && admissionPrintPayload && (
+        <AdmissionFormPrintModal
+          isOpen={Boolean(admissionPrintPayload)}
+          onClose={() => setAdmissionPrintPayload(null)}
+          school={school}
+          student={admissionPrintPayload.student}
+          className={
+            displayedClasses.find(c => c.id === admissionPrintPayload.student.classId)?.name ||
+            admissionPrintPayload.student.className ||
+            ""
+          }
+          sessionName={activeSession?.name || "2026-27"}
+          feeRecord={admissionPrintPayload.fee || null}
+          initialMode={admissionPrintPayload.mode}
+        />
+      )}
+      {renderAdminBottomNav()}
     </div>
   );
 };
+
+export default SchoolAdminPanel;

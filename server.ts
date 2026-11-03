@@ -1,0 +1,632 @@
+import express from "express";
+import fs from "fs";
+import path from "path";
+import crypto from "crypto";
+import webpush from "web-push";
+
+const PORT = Number(process.env.PORT || 3000);
+const isProduction = process.env.NODE_ENV === "production";
+const ROOT_DIR = process.cwd();
+const VAPID_FILE = path.join(ROOT_DIR, ".vapid-keys.json");
+const SUBS_FILE = path.join(ROOT_DIR, ".push-subscriptions.json");
+const RTDB_BASE_URL = "https://iic-nst-default-rtdb.firebaseio.com";
+
+export interface LinkedStudentPushMeta {
+  id: string;
+  schoolId: string;
+  schoolName?: string;
+  classId?: string;
+  className?: string;
+  name: string;
+  rollNo?: string;
+  admissionNo?: string;
+  pendingDues?: number;
+  monthlyFee?: number;
+}
+
+export interface StoredPushSubscription {
+  id: string;
+  userId: string;
+  subscription: webpush.PushSubscription;
+  students: LinkedStudentPushMeta[];
+  autoMonthlyEnabled: boolean;
+  notifiedMonthsByStudent: Record<string, string>;
+  updatedAt: string;
+}
+
+interface StudentDueSnapshot {
+  studentId: string;
+  schoolId: string;
+  schoolName?: string;
+  studentName?: string;
+  classId?: string;
+  className?: string;
+  rollNo?: string;
+  pendingDues: number;
+  monthlyFee?: number;
+  updatedAt: string;
+}
+
+const subscriptionsMap = new Map<string, StoredPushSubscription>();
+const studentDuesMap = new Map<string, StudentDueSnapshot>();
+
+function getCurrentMonthCode(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function hashEndpoint(endpoint: string): string {
+  return crypto.createHash("sha256").update(endpoint).digest("hex").slice(0, 28);
+}
+
+async function rtdbGet<T = any>(rtdbPath: string): Promise<T | null> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3500);
+    const res = await fetch(`${RTDB_BASE_URL}/${rtdbPath}.json`, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function rtdbPut(rtdbPath: string, payload: unknown): Promise<void> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3500);
+    await fetch(`${RTDB_BASE_URL}/${rtdbPath}.json`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+  } catch {
+    // Non-fatal fallback to local disk
+  }
+}
+
+async function rtdbDelete(rtdbPath: string): Promise<void> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3500);
+    await fetch(`${RTDB_BASE_URL}/${rtdbPath}.json`, {
+      method: "DELETE",
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+  } catch {
+    // Ignore
+  }
+}
+
+function saveLocalSubscriptions(): void {
+  try {
+    const obj = {
+      subscriptions: Array.from(subscriptionsMap.values()),
+      dues: Array.from(studentDuesMap.values()),
+    };
+    fs.writeFileSync(SUBS_FILE, JSON.stringify(obj, null, 2), "utf8");
+  } catch {
+    // Ignore write failure on read-only fs
+  }
+}
+
+async function initPushEngine(): Promise<{ publicKey: string; privateKey: string }> {
+  let publicKey = process.env.VAPID_PUBLIC_KEY || "";
+  let privateKey = process.env.VAPID_PRIVATE_KEY || "";
+
+  if (!publicKey || !privateKey) {
+    try {
+      if (fs.existsSync(VAPID_FILE)) {
+        const saved = JSON.parse(fs.readFileSync(VAPID_FILE, "utf8"));
+        if (saved?.publicKey && saved?.privateKey) {
+          publicKey = saved.publicKey;
+          privateKey = saved.privateKey;
+        }
+      }
+    } catch {}
+  }
+
+  if (!publicKey || !privateKey) {
+    const remoteKeys = await rtdbGet<{ publicKey?: string; privateKey?: string }>("system_config/school_webpush_vapid");
+    if (remoteKeys?.publicKey && remoteKeys?.privateKey) {
+      publicKey = remoteKeys.publicKey;
+      privateKey = remoteKeys.privateKey;
+      try {
+        fs.writeFileSync(VAPID_FILE, JSON.stringify({ publicKey, privateKey }, null, 2), "utf8");
+      } catch {}
+    }
+  }
+
+  if (!publicKey || !privateKey) {
+    const generated = webpush.generateVAPIDKeys();
+    publicKey = generated.publicKey;
+    privateKey = generated.privateKey;
+    try {
+      fs.writeFileSync(VAPID_FILE, JSON.stringify({ publicKey, privateKey }, null, 2), "utf8");
+    } catch {}
+    await rtdbPut("system_config/school_webpush_vapid", { publicKey, privateKey });
+  }
+
+  const subject = process.env.VAPID_SUBJECT || "mailto:support@nsta.app";
+  webpush.setVapidDetails(subject, publicKey, privateKey);
+
+  // Hydrate subscriptions from local disk & RTDB
+  try {
+    if (fs.existsSync(SUBS_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(SUBS_FILE, "utf8"));
+      if (Array.isArray(parsed?.subscriptions)) {
+        for (const sub of parsed.subscriptions) {
+          if (sub?.id && sub?.subscription?.endpoint) {
+            subscriptionsMap.set(sub.id, sub);
+          }
+        }
+      }
+      if (Array.isArray(parsed?.dues)) {
+        for (const d of parsed.dues) {
+          if (d?.schoolId && d?.studentId) {
+            studentDuesMap.set(`${d.schoolId}__${d.studentId}`, d);
+          }
+        }
+      }
+    }
+  } catch {}
+
+  const remoteSubs = await rtdbGet<Record<string, StoredPushSubscription>>("school_webpush_subs");
+  if (remoteSubs && typeof remoteSubs === "object") {
+    for (const [id, sub] of Object.entries(remoteSubs)) {
+      if (sub && sub.subscription?.endpoint) {
+        subscriptionsMap.set(id, {
+          ...sub,
+          id,
+          students: Array.isArray(sub.students) ? sub.students : [],
+          notifiedMonthsByStudent: sub.notifiedMonthsByStudent || {},
+        });
+      }
+    }
+  }
+
+  const remoteDues = await rtdbGet<Record<string, StudentDueSnapshot>>("school_webpush_dues");
+  if (remoteDues && typeof remoteDues === "object") {
+    for (const [key, snap] of Object.entries(remoteDues)) {
+      if (snap && snap.studentId) {
+        studentDuesMap.set(key, snap);
+      }
+    }
+  }
+
+  saveLocalSubscriptions();
+  return { publicKey, privateKey };
+}
+
+async function dispatchWebPush(
+  record: StoredPushSubscription,
+  payload: {
+    title: string;
+    body: string;
+    type?: string;
+    url?: string;
+    studentId?: string;
+    schoolId?: string;
+    urgent?: boolean;
+  }
+): Promise<boolean> {
+  try {
+    await webpush.sendNotification(
+      record.subscription,
+      JSON.stringify({
+        notification: {
+          title: payload.title,
+          body: payload.body,
+          icon: "/icons/icon-192.png",
+        },
+        data: {
+          title: payload.title,
+          body: payload.body,
+          type: payload.type || "SCHOOL_ALERT",
+          url: payload.url || "/",
+          studentId: payload.studentId || "",
+          schoolId: payload.schoolId || "",
+          urgent: payload.urgent !== false ? "1" : "0",
+        },
+      }),
+      {
+        TTL: 60 * 60 * 24 * 7, // Hold up to 7 days if phone is switched off / offline
+        urgency: "high",
+      }
+    );
+    return true;
+  } catch (err: any) {
+    if (err?.statusCode === 404 || err?.statusCode === 410) {
+      subscriptionsMap.delete(record.id);
+      saveLocalSubscriptions();
+      void rtdbDelete(`school_webpush_subs/${record.id}`);
+    }
+    return false;
+  }
+}
+
+async function runMonthlyAutoFeeNotifier(): Promise<number> {
+  const monthCode = getCurrentMonthCode();
+  const monthLabel = new Date(`${monthCode}-01T00:00:00`).toLocaleDateString("en-IN", {
+    month: "long",
+    year: "numeric",
+  });
+  let sentCount = 0;
+
+  for (const record of subscriptionsMap.values()) {
+    if (record.autoMonthlyEnabled === false) continue;
+    let changed = false;
+
+    for (const st of record.students || []) {
+      if (!st?.id) continue;
+      const dueKey = `${st.schoolId}__${st.id}`;
+      const latestSnap = studentDuesMap.get(dueKey);
+      const pendingDues =
+        latestSnap !== undefined
+          ? Number(latestSnap.pendingDues || 0)
+          : Number(st.pendingDues || 0);
+
+      if (pendingDues <= 0) continue;
+      if (record.notifiedMonthsByStudent?.[st.id] === monthCode) continue;
+
+      const sName = latestSnap?.studentName || st.name || "Student";
+      const clsLabel = latestSnap?.className || st.className || "";
+      const schName = latestSnap?.schoolName || st.schoolName || "School";
+
+      const ok = await dispatchWebPush(record, {
+        title: `🏫 ${schName} • मासिक शुल्क अनुस्मारक`,
+        body: `${sName}${clsLabel ? ` (${clsLabel})` : ""} का ${monthLabel} तक कुल देय शुल्क ₹${pendingDues.toLocaleString("en-IN")} जमा करना बाकी है। पासबुक देखने के लिए टैप करें।`,
+        type: "MONTHLY_FEE",
+        studentId: st.id,
+        schoolId: st.schoolId,
+        url: `/?schoolPortal=1&studentId=${encodeURIComponent(st.id)}&schoolTab=fees`,
+        urgent: true,
+      });
+
+      if (ok) {
+        record.notifiedMonthsByStudent = {
+          ...(record.notifiedMonthsByStudent || {}),
+          [st.id]: monthCode,
+        };
+        changed = true;
+        sentCount++;
+      }
+    }
+
+    if (changed) {
+      record.updatedAt = new Date().toISOString();
+      subscriptionsMap.set(record.id, record);
+      void rtdbPut(`school_webpush_subs/${record.id}`, record);
+    }
+  }
+
+  if (sentCount > 0) {
+    saveLocalSubscriptions();
+  }
+  return sentCount;
+}
+
+async function startServer() {
+  const { publicKey } = await initPushEngine();
+  const app = express();
+
+  app.use(express.json({ limit: "5mb" }));
+
+  // 1. Public VAPID key for browser PushManager.subscribe()
+  app.get("/api/school-push/vapid-public-key", (_req, res) => {
+    res.json({ publicKey });
+  });
+
+  // 2. Subscribe or update linked students for a device (supports Multi-Student under 1 User ID)
+  app.post("/api/school-push/subscribe", async (req, res) => {
+    try {
+      const { userId, subscription, students, autoMonthlyEnabled = true } = req.body || {};
+      if (!subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
+        return res.status(400).json({ error: "Invalid Web Push subscription payload" });
+      }
+
+      const subId = hashEndpoint(subscription.endpoint);
+      const existing = subscriptionsMap.get(subId);
+
+      // Merge student list cleanly so multiple QR-scanned children stay registered
+      const incomingStudents: LinkedStudentPushMeta[] = Array.isArray(students) ? students : [];
+      const mergedMap = new Map<string, LinkedStudentPushMeta>();
+      for (const prev of existing?.students || []) {
+        if (prev?.id) mergedMap.set(prev.id, prev);
+      }
+      for (const next of incomingStudents) {
+        if (next?.id) {
+          const prev = mergedMap.get(next.id);
+          mergedMap.set(next.id, { ...(prev || {}), ...next });
+
+          if (typeof next.pendingDues === "number") {
+            const dKey = `${next.schoolId}__${next.id}`;
+            const dueSnap: StudentDueSnapshot = {
+              studentId: next.id,
+              schoolId: next.schoolId,
+              schoolName: next.schoolName,
+              studentName: next.name,
+              classId: next.classId,
+              className: next.className,
+              rollNo: next.rollNo,
+              pendingDues: next.pendingDues,
+              monthlyFee: next.monthlyFee,
+              updatedAt: new Date().toISOString(),
+            };
+            studentDuesMap.set(dKey, dueSnap);
+            void rtdbPut(`school_webpush_dues/${dKey}`, dueSnap);
+          }
+        }
+      }
+
+      // If caller explicitly sent replaceStudents: true, use exact incoming list
+      const finalStudents =
+        req.body?.replaceStudents === true ? incomingStudents : Array.from(mergedMap.values());
+
+      const record: StoredPushSubscription = {
+        id: subId,
+        userId: String(userId || existing?.userId || "guest"),
+        subscription,
+        students: finalStudents,
+        autoMonthlyEnabled: Boolean(autoMonthlyEnabled),
+        notifiedMonthsByStudent: existing?.notifiedMonthsByStudent || {},
+        updatedAt: new Date().toISOString(),
+      };
+
+      subscriptionsMap.set(subId, record);
+      saveLocalSubscriptions();
+      await rtdbPut(`school_webpush_subs/${subId}`, record);
+
+      // Trigger monthly check asynchronously so newly opted-in parents get this month's pending due summary if unpaid
+      setTimeout(() => {
+        void runMonthlyAutoFeeNotifier();
+      }, 1500);
+
+      return res.json({ ok: true, subId, linkedCount: finalStudents.length });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || "Failed to save subscription" });
+    }
+  });
+
+  // 3. Unsubscribe device
+  app.post("/api/school-push/unsubscribe", async (req, res) => {
+    const endpoint = req.body?.endpoint;
+    if (endpoint) {
+      const subId = hashEndpoint(String(endpoint));
+      subscriptionsMap.delete(subId);
+      saveLocalSubscriptions();
+      await rtdbDelete(`school_webpush_subs/${subId}`);
+    }
+    res.json({ ok: true });
+  });
+
+  // 4. Sync latest pending dues for a student (from Admin Fee Manager or Student Ledger)
+  app.post("/api/school-push/sync-dues", async (req, res) => {
+    const items = Array.isArray(req.body?.items) ? req.body.items : req.body?.studentId ? [req.body] : [];
+    for (const item of items) {
+      if (!item?.studentId || !item?.schoolId) continue;
+      const dKey = `${item.schoolId}__${item.studentId}`;
+      const snap: StudentDueSnapshot = {
+        studentId: String(item.studentId),
+        schoolId: String(item.schoolId),
+        schoolName: item.schoolName || "",
+        studentName: item.studentName || "",
+        classId: item.classId || "",
+        className: item.className || "",
+        rollNo: item.rollNo || "",
+        pendingDues: Math.max(0, Number(item.pendingDues || 0)),
+        monthlyFee: Number(item.monthlyFee || 0),
+        updatedAt: new Date().toISOString(),
+      };
+      studentDuesMap.set(dKey, snap);
+      void rtdbPut(`school_webpush_dues/${dKey}`, snap);
+    }
+    saveLocalSubscriptions();
+    res.json({ ok: true, count: items.length });
+  });
+
+  // 5. Send instant Lock Screen Push Notification (Notices, Holidays, Fee Receipts, Homework, or Test)
+  app.post("/api/school-push/send", async (req, res) => {
+    try {
+      const {
+        schoolId,
+        classId,
+        studentIds,
+        userId,
+        title,
+        body,
+        type = "SCHOOL_NOTICE",
+        url = "/?schoolPortal=1",
+        urgent = true,
+      } = req.body || {};
+
+      if (!title || !body) {
+        return res.status(400).json({ error: "title and body are required" });
+      }
+
+      const targetStudentSet = Array.isArray(studentIds) && studentIds.length > 0
+        ? new Set(studentIds.map(String))
+        : null;
+
+      let delivered = 0;
+      let matchedDevices = 0;
+
+      for (const record of subscriptionsMap.values()) {
+        let matchedStudent: LinkedStudentPushMeta | undefined;
+
+        if (userId && record.userId === String(userId)) {
+          matchedStudent = record.students?.[0];
+        }
+
+        if (!matchedStudent && targetStudentSet) {
+          matchedStudent = (record.students || []).find((s) => targetStudentSet.has(String(s.id)));
+        }
+
+        if (!matchedStudent && schoolId && !targetStudentSet && !userId) {
+          matchedStudent = (record.students || []).find((s) => {
+            if (s.schoolId !== schoolId) return false;
+            if (classId && s.classId && s.classId !== classId) return false;
+            return true;
+          });
+        }
+
+        if (!matchedStudent && !(userId && record.userId === String(userId))) continue;
+        matchedDevices++;
+
+        const targetUrl =
+          matchedStudent?.id && !url.includes("studentId=")
+            ? `${url}${url.includes("?") ? "&" : "?"}studentId=${encodeURIComponent(matchedStudent.id)}`
+            : url;
+
+        const ok = await dispatchWebPush(record, {
+          title,
+          body,
+          type,
+          url: targetUrl,
+          studentId: matchedStudent?.id,
+          schoolId: matchedStudent?.schoolId || schoolId,
+          urgent,
+        });
+        if (ok) delivered++;
+      }
+
+      return res.json({ ok: true, matchedDevices, delivered });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || "Push send failed" });
+    }
+  });
+
+  // 6. Trigger Monthly Fee Due Push Notifications (manual 1-click from Admin OR automated)
+  app.post("/api/school-push/trigger-monthly", async (req, res) => {
+    try {
+      const { schoolId, schoolName, monthLabel, duesList } = req.body || {};
+      // If Admin passed explicit live duesList from FeeManager, update snapshots & push customized per-student amounts
+      if (Array.isArray(duesList) && duesList.length > 0) {
+        let delivered = 0;
+        let matchedStudents = 0;
+        const dueLookup = new Map<string, any>();
+
+        for (const item of duesList) {
+          if (!item?.studentId) continue;
+          const sid = String(schoolId || item.schoolId || "");
+          const lookupKey = sid ? `${sid}__${item.studentId}` : String(item.studentId);
+          dueLookup.set(lookupKey, item);
+          if (sid) {
+            const dKey = `${sid}__${item.studentId}`;
+            const snap: StudentDueSnapshot = {
+              studentId: String(item.studentId),
+              schoolId: sid,
+              schoolName: schoolName || item.schoolName || "",
+              studentName: item.studentName || "",
+              classId: item.classId || "",
+              className: item.className || "",
+              rollNo: item.rollNo || "",
+              pendingDues: Math.max(0, Number(item.pendingDues || 0)),
+              monthlyFee: Number(item.monthlyFee || 0),
+              updatedAt: new Date().toISOString(),
+            };
+            studentDuesMap.set(dKey, snap);
+            void rtdbPut(`school_webpush_dues/${dKey}`, snap);
+          }
+        }
+        saveLocalSubscriptions();
+
+        const mCode = getCurrentMonthCode();
+        for (const record of subscriptionsMap.values()) {
+          for (const st of record.students || []) {
+            const targetSchoolId = String(st.schoolId || schoolId || "");
+            const compositeKey = targetSchoolId ? `${targetSchoolId}__${st.id}` : String(st.id);
+            const dueItem =
+              dueLookup.get(compositeKey) ||
+              (!schoolId || st.schoolId === schoolId ? dueLookup.get(String(st.id)) : undefined);
+            if (!dueItem || Number(dueItem.pendingDues || 0) <= 0) continue;
+            matchedStudents++;
+            const amt = Number(dueItem.pendingDues);
+            const sName = dueItem.studentName || st.name || "Student";
+            const cName = dueItem.className || st.className || "";
+            const schTitle = schoolName || dueItem.schoolName || st.schoolName || "School";
+
+            const ok = await dispatchWebPush(record, {
+              title: `🏫 ${schTitle} • मासिक शुल्क सूचना`,
+              body: `${sName}${cName ? ` (${cName})` : ""} का ${monthLabel || mCode} तक कुल देय शुल्क ₹${amt.toLocaleString("en-IN")} बकाया है। विवरण देखने के लिए टैप करें।`,
+              type: "MONTHLY_FEE",
+              studentId: st.id,
+              schoolId: targetSchoolId,
+              url: `/?schoolPortal=1&schoolId=${encodeURIComponent(targetSchoolId)}&studentId=${encodeURIComponent(st.id)}&schoolTab=fees`,
+              urgent: true,
+            });
+            if (ok) {
+              delivered++;
+              record.notifiedMonthsByStudent = {
+                ...(record.notifiedMonthsByStudent || {}),
+                [compositeKey]: mCode,
+              };
+              subscriptionsMap.set(record.id, record);
+              void rtdbPut(`school_webpush_subs/${record.id}`, record);
+            }
+          }
+        }
+        saveLocalSubscriptions();
+        return res.json({ ok: true, matchedStudents, delivered });
+      }
+
+      const autoSent = await runMonthlyAutoFeeNotifier();
+      return res.json({ ok: true, delivered: autoSent });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || "Monthly trigger failed" });
+    }
+  });
+
+  // Also handle legacy /api/notifications/push gracefully if called by NotificationManager
+  app.post("/api/notifications/push", async (req, res) => {
+    const { recipientIds, title, body, url, type } = req.body || {};
+    let delivered = 0;
+    if (title && body) {
+      for (const record of subscriptionsMap.values()) {
+        if (
+          !Array.isArray(recipientIds) ||
+          recipientIds.length === 0 ||
+          recipientIds.includes(record.userId) ||
+          record.students.some((s) => recipientIds.includes(s.id))
+        ) {
+          const ok = await dispatchWebPush(record, { title, body, type, url, urgent: true });
+          if (ok) delivered++;
+        }
+      }
+    }
+    res.json({ ok: true, delivered });
+  });
+
+  // Periodic background scheduler (checks every 15 minutes for new month's pending fee alerts)
+  setInterval(() => {
+    void runMonthlyAutoFeeNotifier();
+  }, 15 * 60 * 1000);
+
+  if (!isProduction) {
+    const { createServer: createViteServer } = await import("vite");
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(ROOT_DIR, "dist");
+    app.use(express.static(distPath));
+    app.use((req, res, next) => {
+      if (req.method !== "GET" || req.path.startsWith("/api/")) {
+        return next();
+      }
+      res.sendFile(path.join(distPath, "index.html"));
+    });
+  }
+
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`[Server] Running on http://0.0.0.0:${PORT} (${isProduction ? "production" : "development"})`);
+  });
+}
+
+void startServer();

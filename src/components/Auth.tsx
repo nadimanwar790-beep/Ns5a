@@ -88,8 +88,6 @@ const DEFAULT_QUESTIONS = [
 setPersistence(auth, browserLocalPersistence).catch(() => {});
 
 export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpenGuestStudyRoom }) => {
-  // Toggle: Default is false (QR Scanner visible). Tapping App Name toggles the original Auth card!
-  const [showManualAuth, setShowManualAuth] = useState(false);
   const [view, setView] = useState<AuthView>('LOGIN');
   const [generatedId, setGeneratedId] = useState<string>('');
 
@@ -148,20 +146,11 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
     }
   }, []);
 
-  // ── SCANNER LIFECYCLE ──────────────────────────────────────────────────────
   useEffect(() => {
-    if (!showManualAuth) {
-      const timer = setTimeout(() => {
-        startScanner();
-      }, 250);
-      return () => {
-        clearTimeout(timer);
-        stopScanner();
-      };
-    } else {
+    return () => {
       stopScanner();
-    }
-  }, [showManualAuth, facingMode]);
+    };
+  }, []);
 
   const startScanner = async () => {
     try {
@@ -462,12 +451,46 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
             } catch {}
           }
 
+          // Scan parts for human-readable class name (e.g. "Class 9", "Nursery", "KG 1")
+          // Never check parts[0..2] (schoolId, studentId, rollNo) or phone/fee fields!
+          let discoveredClassName = embeddedTitle?.trim() || '';
+          if (!discoveredClassName || discoveredClassName.length >= 18 || /^[0-9a-zA-Z]{15,}$/.test(discoveredClassName)) {
+            discoveredClassName = '';
+            for (let i = 3; i < parts.length; i++) {
+              if (i === 4 || i === 5 || i === 6 || i === 7 || i === 8 || i === 9 || i === 10 || i === 11 || i === 12 || i === 14) continue;
+              const p = parts[i]?.trim();
+              if (p && (/^Class\s*\d+/i.test(p) || /^(Nursery|LKG|UKG|KG|Play|Prep)/i.test(p) || /^\d+(st|nd|rd|th)(\s*[A-Z])?$/i.test(p))) {
+                discoveredClassName = p;
+                break;
+              }
+            }
+          }
+
+          // Scan parts for embedded monthly fee if index shifted
+          let resolvedFee = embeddedMonthlyFee;
+          if (resolvedFee === undefined) {
+            for (let i = 0; i < parts.length; i++) {
+              const p = parts[i]?.trim();
+              if (p && !isNaN(Number(p)) && Number(p) >= 200 && Number(p) <= 50000 && i !== 2 && i !== 6) {
+                resolvedFee = Number(p);
+                break;
+              }
+            }
+          }
+
+          const isCrypticClassId = cleanClassOrDept && cleanClassOrDept.length >= 14 && /[A-Z]/.test(cleanClassOrDept) && /[0-9]/.test(cleanClassOrDept);
           // ALWAYS prioritize the EMBEDDED student data inside the QR code
           const realStudentId = cleanEntityId || found?.id || `stu_${(embeddedAdmNo || embeddedName || Date.now()).toString().replace(/[^a-zA-Z0-9]/g, '_')}`;
           const realName = embeddedName || found?.name || (cleanRollOrEmp ? `Student (Roll ${cleanRollOrEmp})` : `Student (${realStudentId.slice(-4)})`);
           const realRollNo = cleanRollOrEmp || found?.rollNo || '01';
-          const realAdmissionNo = embeddedAdmNo || found?.admissionNo || '';
-          const realClassName = embeddedTitle || found?.className || (cleanClassOrDept ? cleanClassOrDept.replace(/^cls_/i, '') : '') || (realName.toLowerCase().includes('nadim') ? 'NURSERY' : '10');
+          const realAdmissionNo = (embeddedAdmNo && !embeddedAdmNo.startsWith('NSTA-') && !embeddedAdmNo.includes(':'))
+            ? embeddedAdmNo
+            : (found?.admissionNo || `ADM-${(cleanEntityId || realStudentId).slice(-6).toUpperCase()}`);
+          const realClassName =
+            discoveredClassName ||
+            found?.className ||
+            (!isCrypticClassId && cleanClassOrDept ? cleanClassOrDept.replace(/^cls_/i, '') : '') ||
+            'Class 9';
           const realClass = cleanClassOrDept || found?.classGrade || found?.classId || 'cls_10';
           const realPhone = embeddedPhone || found?.phone || '9876543210';
           const realFather = embeddedFatherName || found?.fatherName || (realName.toLowerCase().includes('nadim') ? 'Mustak' : '');
@@ -475,9 +498,10 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
           const realBlood = embeddedBloodGroup || found?.bloodGroup || (realName.toLowerCase().includes('nadim') ? 'O+' : '');
           const realDob = embeddedDob || found?.dateOfBirth || (realName.toLowerCase().includes('nadim') ? '2002-11-01' : '');
           const realAddress = embeddedAddress || found?.address || (realName.toLowerCase().includes('nadim') ? 'Chapra' : '');
-          const realFee = (embeddedMonthlyFee !== undefined && embeddedMonthlyFee > 0)
-            ? embeddedMonthlyFee
-            : ((found?.monthlyFee !== undefined && found.monthlyFee > 0) ? found.monthlyFee : 1800);
+          // Prioritize authentic live database monthly fee over static printed QR fee
+          const realFee = (found?.monthlyFee !== undefined && found.monthlyFee > 0)
+            ? found.monthlyFee
+            : ((resolvedFee !== undefined && resolvedFee > 0) ? resolvedFee : 1800);
           const realSchoolName = embeddedSchoolName || found?.schoolName || 'Nstz';
           const realEmail = found?.email || (realAdmissionNo ? `${realAdmissionNo.toLowerCase().replace(/[^a-z0-9]/g, '')}@student.nstz.edu.in` : `student_${realStudentId.slice(-6)}@nstz.app`);
 
@@ -1254,10 +1278,9 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
       };
 
       await saveUserToLive(newUser, { immediate: true });
-      setGeneratedId(newId);
-      setPendingLoginUser(newUser);
-      setView('SUCCESS_ID');
-      setLoading(false);
+      localStorage.setItem('nst_last_registered_id', newId);
+      // Direct navigation: User account creation instantly transitions to the School ID Card gateway screen
+      triggerLoginSuccess(newUser);
     } catch (err: any) {
       setError(err?.message || 'Account create nahi ho saka.');
       setLoading(false);
@@ -1352,13 +1375,7 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
   const isFlipped = view === 'SIGNUP';
 
   return (
-    <div className="min-h-screen min-h-[100dvh] w-full flex-1 flex flex-col justify-start items-center bg-gradient-to-b from-slate-100 via-slate-50 to-slate-100 text-slate-800 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 dark:text-slate-100 px-2 sm:px-4 pt-1 sm:pt-2 pb-12 select-none font-sans relative overflow-x-hidden">
-      {/* Premium Ambient Luminous Orbs */}
-      <div className="absolute -top-32 -left-32 w-80 h-80 rounded-full bg-slate-400/10 blur-[90px] pointer-events-none" />
-      <div className="absolute -bottom-32 -right-32 w-80 h-80 rounded-full bg-indigo-500/8 blur-[90px] pointer-events-none" />
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 rounded-full bg-slate-300/10 blur-[100px] pointer-events-none" />
-      <div className="absolute inset-0 bg-[radial-gradient(#64748b_1px,transparent_1px)] [background-size:24px_24px] opacity-[0.035] pointer-events-none" />
-
+    <div className="min-h-screen min-h-[100dvh] w-full flex flex-col justify-between bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans relative overflow-x-hidden select-none">
       <CustomAlert
         isOpen={alertConfig.isOpen}
         message={alertConfig.message}
@@ -1370,17 +1387,9 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
 
       {showGuide && <LoginGuide onClose={() => setShowGuide(false)} />}
 
-      {/* ── TOP HEADER: NATURAL SCHOOL BRANDING (Stealth tap on Logo / Name) ── */}
-      <header className="w-full max-w-md mx-auto flex items-center justify-between px-2 pt-1 pb-2 z-20 shrink-0">
-        <button
-          type="button"
-          onClick={() => {
-            setShowManualAuth(prev => !prev);
-            setError(null);
-          }}
-          className="flex items-center gap-2.5 p-1 -ml-1 rounded-2xl active:scale-95 transition text-left cursor-pointer group"
-          title={settings?.appName || 'NSTA'}
-        >
+      {/* ── TOP HEADER: NATURAL SCHOOL BRANDING ── */}
+      <header className="w-full max-w-md mx-auto flex items-center justify-between px-5 pt-3 pb-2 z-20 shrink-0">
+        <div className="flex items-center gap-2.5 text-left">
           {/* Logo */}
           <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex items-center justify-center shadow-md shadow-indigo-950/20 p-1 border border-indigo-500/20 ring-1 ring-indigo-500/10">
             {settings?.appLogo ? (
@@ -1398,10 +1407,10 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
               Digital Smart Campus
             </p>
           </div>
-        </button>
+        </div>
 
-        {/* Discreet status badge (No hints, no clues) */}
-        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-200/50 dark:bg-slate-800/60 border border-slate-300/40 dark:border-slate-700/50 text-[11px] font-bold text-slate-600 dark:text-slate-300 select-none">
+        {/* Discreet Status Badge */}
+        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-200/60 dark:bg-slate-800/60 border border-slate-300/40 dark:border-slate-700/50 text-[11px] font-bold text-slate-600 dark:text-slate-300">
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
           <span>Live Portal</span>
         </div>
@@ -1418,461 +1427,403 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
         </div>
       )}
 
-      {/* ── MAIN CONTENT AREA ── */}
-      <div className="flex-1 w-full flex flex-col items-center justify-start sm:justify-center px-1 sm:px-2 py-1 min-h-0 overflow-y-auto no-scrollbar overscroll-contain z-10 pb-16">
-        <div className="w-full max-w-[415px] mx-auto my-0 sm:my-auto">
-          {/* ═══════════════════════════════════════════════════════════════════ */}
-          {/* 1. DEFAULT ACTIVE VIEW: QR CODE SCANNER (Clean Official Scanner)    */}
-          {/* ═══════════════════════════════════════════════════════════════════ */}
-          {!showManualAuth && (
-            <div className="w-full rounded-3xl bg-white/95 dark:bg-slate-900/95 backdrop-blur-2xl shadow-[0_20px_50px_-12px_rgba(15,23,42,0.12),0_1px_3px_rgba(0,0,0,0.05)] border border-slate-200/90 dark:border-slate-800 p-5 sm:p-6 flex flex-col items-center relative overflow-hidden animate-in fade-in duration-200">
-              <div className="absolute top-0 left-8 right-8 h-[2px] bg-gradient-to-r from-transparent via-emerald-500 to-transparent" />
-
-              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-[10px] font-black uppercase tracking-wider mb-2 shadow-xs border border-slate-800">
-                <Sparkles size={11} className="text-amber-400" />
-                <span>Instant QR Login</span>
+      {/* ── MAIN CONTENT AREA: FULL PAGE SEAMLESS EXPERIENCE ── */}
+      <main className="flex-1 w-full max-w-md mx-auto px-5 py-4 flex flex-col justify-center z-10">
+        {/* ── SUB-VIEW: RECOVERY ── */}
+        {view === 'RECOVERY' && (
+          <div className="w-full space-y-4 animate-in fade-in duration-200">
+            <div className="text-center">
+              <div className="w-12 h-12 rounded-2xl bg-rose-100 dark:bg-rose-950/40 text-rose-600 flex items-center justify-center mx-auto mb-2 border border-rose-200 dark:border-rose-900/50">
+                <KeyRound size={22} />
               </div>
-
-              <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight leading-none mb-1 text-center">
-                Scan ID Card or QR
+              <h2 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">
+                Instant Recovery
               </h2>
-              <p className="text-[11px] sm:text-xs font-medium text-slate-500 mb-3 text-center">
-                Student ID ya Teacher ID scan karein aur bina password ke turant login karein
+              <p className="text-xs text-slate-500 mt-1">
+                {recoveryStep === 1 ? 'Apna account search karein' : 'Sahi answer se instant login'}
               </p>
+            </div>
 
-              {/* Viewfinder box */}
-              <div className="relative w-full max-w-[270px] aspect-square rounded-2xl overflow-hidden bg-black border-2 border-emerald-500/40 shadow-xl flex items-center justify-center my-1.5">
-                <div id="auth-qr-reader" className="w-full h-full object-cover" />
+            {recoveryStep === 1 && (
+              <form onSubmit={handleFindRecoveryAccount} className="space-y-3.5">
+                <div className="relative flex items-center rounded-xl">
+                  <UserIcon size={17} className="absolute left-3.5 text-slate-400" />
+                  <input
+                    name="id"
+                    type="text"
+                    required
+                    placeholder="Mobile / Email / Student ID"
+                    value={formData.id}
+                    onChange={handleChange}
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-300/80 dark:border-slate-800 rounded-xl pl-10 pr-3.5 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 outline-none transition font-medium"
+                  />
+                </div>
 
-                {/* Laser line animation */}
-                <div className="absolute inset-x-2 top-0 h-[2px] bg-gradient-to-r from-transparent via-emerald-400 to-transparent shadow-[0_0_12px_#10b981] animate-bounce pointer-events-none" />
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full py-3.5 rounded-xl text-sm font-black tracking-wider text-white bg-slate-900 hover:bg-black dark:bg-indigo-600 dark:hover:bg-indigo-500 shadow-md transition flex items-center justify-center gap-2 uppercase cursor-pointer"
+                >
+                  {loading ? <Loader2 size={16} className="animate-spin text-white" /> : <span>FIND ACCOUNT</span>}
+                  <ArrowRight size={16} />
+                </button>
+              </form>
+            )}
 
-                {/* Corner frames */}
-                <div className="absolute top-2 left-2 w-5 h-5 border-t-2 border-l-2 border-emerald-400 rounded-tl-md pointer-events-none" />
-                <div className="absolute top-2 right-2 w-5 h-5 border-t-2 border-r-2 border-emerald-400 rounded-tr-md pointer-events-none" />
-                <div className="absolute bottom-2 left-2 w-5 h-5 border-b-2 border-l-2 border-emerald-400 rounded-bl-md pointer-events-none" />
-                <div className="absolute bottom-2 right-2 w-5 h-5 border-b-2 border-r-2 border-emerald-400 rounded-br-md pointer-events-none" />
+            {recoveryStep === 2 && (
+              <div className="space-y-3.5">
+                <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 text-left">
+                  <span className="text-[10px] font-bold text-amber-700 dark:text-amber-400 uppercase tracking-wider block">SECURITY QUESTION:</span>
+                  <p className="text-sm font-bold text-slate-800 dark:text-slate-200 mt-1">
+                    {recoveryUserObj?.securityQuestion || "Aapka favorite subject kaunsa hai?"}
+                  </p>
+                </div>
 
-                {!cameraActive && (
-                  <div className="absolute inset-0 bg-slate-950/85 flex flex-col items-center justify-center p-4 text-center z-10">
-                    <Camera className="w-8 h-8 text-emerald-400 mb-2 animate-pulse" />
-                    <p className="text-xs text-white font-bold">Camera Active Ho Raha Hai...</p>
-                    <p className="text-[10px] text-slate-400 mt-0.5">Camera allow karein</p>
+                <form onSubmit={handleVerifyAnswerSubmit} className="space-y-3.5">
+                  <div className="relative flex items-center rounded-xl">
+                    <ShieldQuestion size={17} className="absolute left-3.5 text-slate-400" />
+                    <input
+                      type="text"
+                      required
+                      placeholder="Enter Security Answer"
+                      value={userEnteredAnswer}
+                      onChange={(e) => { setUserEnteredAnswer(e.target.value); setError(null); }}
+                      className="w-full bg-white dark:bg-slate-900 border border-slate-300/80 dark:border-slate-800 rounded-xl pl-10 pr-3.5 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 outline-none transition font-medium"
+                    />
                   </div>
-                )}
 
-                {loading && (
-                  <div className="absolute inset-0 bg-slate-950/90 flex flex-col items-center justify-center p-4 text-center z-20">
-                    <Loader2 className="w-8 h-8 animate-spin text-emerald-400 mb-2" />
-                    <p className="text-xs text-emerald-400 font-bold">Verifying &amp; Logging in...</p>
-                  </div>
-                )}
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full py-3.5 rounded-xl text-sm font-black tracking-wider text-white bg-slate-900 hover:bg-black dark:bg-emerald-600 dark:hover:bg-emerald-500 shadow-md transition flex items-center justify-center gap-2 uppercase cursor-pointer"
+                  >
+                    {loading ? <Loader2 size={16} className="animate-spin text-white" /> : <span>VERIFY &amp; LOGIN</span>}
+                    <CheckCircle2 size={16} />
+                  </button>
+                </form>
+              </div>
+            )}
+
+            <p className="text-xs text-slate-500 text-center pt-2">
+              Wapas login par jaane ke liye:{' '}
+              <button
+                type="button"
+                onClick={() => { setView('LOGIN'); setError(null); }}
+                className="font-black text-slate-900 dark:text-white hover:underline cursor-pointer"
+              >
+                Login karein
+              </button>
+            </p>
+          </div>
+        )}
+
+        {/* ── SUB-VIEW: LOGIN FULL PAGE ── */}
+        {view === 'LOGIN' && (
+          <div className="w-full space-y-4 animate-in fade-in duration-200">
+            <div>
+              <h2 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white tracking-tight leading-tight">
+                Welcome Back
+              </h2>
+              <p className="text-xs sm:text-sm text-slate-500 mt-1">
+                Sign in to access your classes &amp; school portal
+              </p>
+            </div>
+
+            <form onSubmit={handleLoginSubmit} className="w-full space-y-3.5">
+              <div className="space-y-1">
+                <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400">
+                  Mobile / Email / Student ID
+                </label>
+                <div className="relative flex items-center rounded-xl">
+                  <UserIcon size={17} className="absolute left-3.5 text-slate-400" />
+                  <input
+                    name="id"
+                    type="text"
+                    required
+                    placeholder="Mobile, Email ya Student ID"
+                    value={formData.id}
+                    onChange={handleChange}
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-300/80 dark:border-slate-800 focus:border-slate-900 dark:focus:border-indigo-500 rounded-xl pl-10 pr-3.5 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 font-medium outline-none transition shadow-2xs"
+                    autoCapitalize="none"
+                  />
+                </div>
               </div>
 
-              {/* Camera Action Buttons */}
-              <div className="flex items-center gap-2 mt-2.5 w-full justify-center">
-                <button
-                  type="button"
-                  onClick={switchCamera}
-                  className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-bold flex items-center gap-1.5 border border-slate-200 dark:border-slate-700 transition"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Switch Camera</span>
-                </button>
+              <div className="space-y-1">
+                <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400">
+                  Password
+                </label>
+                <div className="relative flex items-center rounded-xl">
+                  <Lock size={17} className="absolute left-3.5 text-slate-400" />
+                  <input
+                    name="password"
+                    type={showPassword ? "text" : "password"}
+                    required
+                    placeholder="Enter password"
+                    value={formData.password}
+                    onChange={handleChange}
+                    onFocus={() => setIsPasswordFocused(true)}
+                    onBlur={() => setIsPasswordFocused(false)}
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-300/80 dark:border-slate-800 focus:border-slate-900 dark:focus:border-indigo-500 rounded-xl pl-10 pr-10 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 font-medium outline-none transition shadow-2xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                  >
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </div>
 
+              <div className="flex items-center justify-between text-xs pt-0.5">
+                <label className="flex items-center gap-1.5 text-slate-500 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(e) => setRememberMe(e.target.checked)}
+                    className="rounded border-slate-300 text-slate-900 focus:ring-slate-900"
+                  />
+                  <span>Remember me</span>
+                </label>
                 <button
                   type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-emerald-600 dark:text-emerald-400 text-xs font-bold flex items-center gap-1.5 border border-slate-200 dark:border-slate-700 transition"
+                  onClick={() => { setView('RECOVERY'); setError(null); }}
+                  className="font-bold text-slate-700 dark:text-indigo-400 hover:underline cursor-pointer"
                 >
-                  <Upload className="w-3.5 h-3.5" />
-                  <span>Upload QR Photo</span>
+                  Forgot Password?
                 </button>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-3.5 rounded-xl text-sm font-black tracking-wider text-white bg-slate-900 hover:bg-black dark:bg-indigo-600 dark:hover:bg-indigo-500 shadow-md transition-all flex items-center justify-center gap-2 uppercase cursor-pointer active:scale-[0.99]"
+              >
+                {loading ? <Loader2 size={16} className="animate-spin text-white" /> : <span>LOGIN</span>}
+                <ArrowRight size={16} />
+              </button>
+
+              <div className="relative my-3 flex items-center justify-center">
+                <div className="border-t border-slate-200 dark:border-slate-800 w-full" />
+                <span className="bg-slate-50 dark:bg-slate-950 px-3 text-[11px] font-bold text-slate-400 uppercase tracking-wider absolute">OR</span>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleGoogleSignIn}
+                disabled={loading}
+                className="w-full py-3 rounded-xl bg-white hover:bg-slate-100 dark:bg-slate-900 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-sm font-bold flex items-center justify-center gap-2 border border-slate-300/80 dark:border-slate-800 transition cursor-pointer shadow-2xs active:scale-[0.99]"
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+                </svg>
+                <span>Google Sign In</span>
+              </button>
+            </form>
+
+            <div className="pt-2 text-center">
+              <p className="text-xs text-slate-500">
+                Naya student account banana hai?{' '}
+                <button
+                  type="button"
+                  onClick={() => { setView('SIGNUP'); setError(null); }}
+                  className="font-black text-slate-900 dark:text-indigo-400 hover:underline cursor-pointer"
+                >
+                  Create Account
+                </button>
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* ── SUB-VIEW: CREATE ACCOUNT FULL PAGE ── */}
+        {view === 'SIGNUP' && (
+          <div className="w-full space-y-3.5 animate-in fade-in duration-200">
+            <div>
+              <h2 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white tracking-tight leading-tight">
+                Create Account
+              </h2>
+              <p className="text-xs sm:text-sm text-slate-500 mt-1">
+                New student permanent ID generate karein
+              </p>
+            </div>
+
+            <form onSubmit={handleSignupSubmit} className="w-full space-y-3">
+              <div className="space-y-1">
+                <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400">Full Name</label>
+                <div className="relative flex items-center rounded-xl">
+                  <UserIcon size={17} className="absolute left-3.5 text-slate-400" />
+                  <input
+                    name="name"
+                    type="text"
+                    required
+                    placeholder="Poora Naam (Full Name)"
+                    value={formData.name}
+                    onChange={handleChange}
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-300/80 dark:border-slate-800 rounded-xl pl-10 pr-3.5 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 font-medium outline-none transition"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400">Mobile Number</label>
+                <div className="relative flex items-center rounded-xl">
+                  <Phone size={17} className="absolute left-3.5 text-slate-400" />
+                  <input
+                    name="mobile"
+                    type="tel"
+                    required
+                    placeholder="10-digit Mobile Number"
+                    value={formData.mobile}
+                    onChange={handleChange}
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-300/80 dark:border-slate-800 rounded-xl pl-10 pr-3.5 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 font-medium outline-none transition"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400">Email Address (Optional)</label>
+                <div className="relative flex items-center rounded-xl">
+                  <Mail size={17} className="absolute left-3.5 text-slate-400" />
+                  <input
+                    name="email"
+                    type="email"
+                    placeholder="Email ID (e.g. name@gmail.com)"
+                    value={formData.email}
+                    onChange={handleChange}
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-300/80 dark:border-slate-800 rounded-xl pl-10 pr-3.5 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 font-medium outline-none transition"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400">Create Password</label>
+                <div className="relative flex items-center rounded-xl">
+                  <Lock size={17} className="absolute left-3.5 text-slate-400" />
+                  <input
+                    name="password"
+                    type={showPassword ? "text" : "password"}
+                    required
+                    placeholder="Password banayein"
+                    value={formData.password}
+                    onChange={handleChange}
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-300/80 dark:border-slate-800 rounded-xl pl-10 pr-10 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 font-medium outline-none transition"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                  >
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-1.5 pt-1">
+                <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400 block">Security Question (ID recovery ke liye)</label>
+                <select
+                  name="securityQuestion"
+                  value={formData.securityQuestion}
+                  onChange={handleChange}
+                  className="w-full px-3 py-2.5 bg-white dark:bg-slate-900 border border-slate-300/80 dark:border-slate-800 rounded-xl text-xs sm:text-sm text-slate-700 dark:text-slate-300 outline-none"
+                >
+                  {DEFAULT_QUESTIONS.map(q => (
+                    <option key={q} value={q}>{q}</option>
+                  ))}
+                </select>
                 <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  onChange={handleFileUpload}
-                  className="hidden"
+                  name="securityAnswer"
+                  type="text"
+                  required
+                  placeholder="Aapka answer yahan likhein"
+                  value={formData.securityAnswer}
+                  onChange={handleChange}
+                  className="w-full px-3.5 py-2.5 bg-white dark:bg-slate-900 border border-slate-300/80 dark:border-slate-800 rounded-xl text-xs sm:text-sm text-slate-900 dark:text-white outline-none"
                 />
               </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-3.5 rounded-xl text-sm font-black tracking-wider text-white bg-emerald-600 hover:bg-emerald-500 shadow-md transition-all flex items-center justify-center gap-2 uppercase cursor-pointer active:scale-[0.99] mt-2"
+              >
+                {loading ? <Loader2 size={16} className="animate-spin text-white" /> : <span>CREATE ACCOUNT</span>}
+                <CheckCircle2 size={16} />
+              </button>
+
+              <button
+                type="button"
+                onClick={handleGoogleSignIn}
+                disabled={loading}
+                className="w-full py-3 rounded-xl bg-white hover:bg-slate-100 dark:bg-slate-900 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-sm font-bold flex items-center justify-center gap-2 border border-slate-300/80 dark:border-slate-800 transition cursor-pointer shadow-2xs active:scale-[0.99]"
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+                </svg>
+                <span>Google se Sign Up karein</span>
+              </button>
+            </form>
+
+            <div className="pt-2 text-center">
+              <p className="text-xs text-slate-500">
+                Pehle se account hai?{' '}
+                <button
+                  type="button"
+                  onClick={() => { setView('LOGIN'); setError(null); }}
+                  className="font-black text-slate-900 dark:text-indigo-400 hover:underline cursor-pointer"
+                >
+                  Login karein
+                </button>
+              </p>
             </div>
-          )}
+          </div>
+        )}
 
-          {/* ═══════════════════════════════════════════════════════════════════ */}
-          {/* 2. THE MANUAL AUTH PORTAL (SECRETLY ACCESSIBLE BY TAPPING LOGO/NAME) */}
-          {/* ═══════════════════════════════════════════════════════════════════ */}
-          {showManualAuth && (
-            <div className="w-full flex flex-col items-center">
-
-              {/* SUB-VIEW: RECOVERY */}
-              {view === 'RECOVERY' && (
-                <div className="w-full rounded-3xl bg-white/95 dark:bg-slate-900/95 backdrop-blur-2xl shadow-[0_20px_50px_-12px_rgba(15,23,42,0.12),0_1px_3px_rgba(0,0,0,0.04)] border border-slate-200/90 dark:border-slate-800 p-5 sm:p-6 flex flex-col items-center relative overflow-hidden animate-in fade-in duration-200">
-                  <div className="absolute top-0 left-8 right-8 h-[2.5px] bg-gradient-to-r from-transparent via-rose-500 to-transparent opacity-85" />
-                  <div className="w-11 h-11 rounded-2xl bg-rose-50 dark:bg-rose-950/40 text-rose-600 flex items-center justify-center mb-1.5 shadow-sm border border-rose-100 dark:border-rose-900/50">
-                    <KeyRound size={22} />
-                  </div>
-                  <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight mb-0.5 text-center">
-                    Instant Recovery
-                  </h2>
-                  <p className="text-[11px] sm:text-xs font-medium text-slate-500 mb-3.5 text-center">
-                    {recoveryStep === 1 ? 'Apna account search karein' : 'Sahi answer se instant login'}
-                  </p>
-
-                  {recoveryStep === 1 && (
-                    <form onSubmit={handleFindRecoveryAccount} className="w-full space-y-3">
-                      <div className="relative flex items-center rounded-xl">
-                        <UserIcon size={16} className="absolute left-3.5 text-slate-400" />
-                        <input
-                          name="id"
-                          type="text"
-                          required
-                          placeholder="Mobile / Email / Student ID"
-                          value={formData.id}
-                          onChange={handleChange}
-                          className="w-full bg-white dark:bg-slate-950 border border-slate-200/90 dark:border-slate-800 rounded-xl pl-10 pr-3.5 py-2.5 sm:py-3 text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-400 outline-none transition font-medium"
-                        />
-                      </div>
-
-                      <button
-                        type="submit"
-                        disabled={loading}
-                        className="w-full py-2.5 sm:py-3 rounded-xl text-xs sm:text-sm font-black tracking-wider text-white bg-slate-900 hover:bg-black dark:bg-indigo-600 dark:hover:bg-indigo-500 shadow-md transition flex items-center justify-center gap-2 uppercase cursor-pointer"
-                      >
-                        {loading ? <Loader2 size={16} className="animate-spin text-white" /> : <span>FIND ACCOUNT</span>}
-                        <ArrowRight size={16} />
-                      </button>
-                    </form>
-                  )}
-
-                  {recoveryStep === 2 && (
-                    <div className="w-full space-y-3.5">
-                      <div className="p-3 rounded-2xl bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-900 text-left">
-                        <span className="text-[10px] font-bold text-amber-700 dark:text-amber-400 uppercase tracking-wider block">SECURITY QUESTION:</span>
-                        <p className="text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-200 mt-0.5">
-                          {recoveryUserObj?.securityQuestion || "Aapka favorite subject kaunsa hai?"}
-                        </p>
-                      </div>
-
-                      <form onSubmit={handleVerifyAnswerSubmit} className="space-y-3">
-                        <div className="relative flex items-center rounded-xl">
-                          <ShieldQuestion size={16} className="absolute left-3.5 text-slate-400" />
-                          <input
-                            type="text"
-                            required
-                            placeholder="Enter Security Answer"
-                            value={userEnteredAnswer}
-                            onChange={(e) => { setUserEnteredAnswer(e.target.value); setError(null); }}
-                            className="w-full bg-white dark:bg-slate-950 border border-slate-200/90 dark:border-slate-800 rounded-xl pl-10 pr-3.5 py-2.5 sm:py-3 text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-400 outline-none transition font-medium"
-                          />
-                        </div>
-
-                        <button
-                          type="submit"
-                          disabled={loading}
-                          className="w-full py-2.5 sm:py-3 rounded-xl text-xs sm:text-sm font-black tracking-wider text-white bg-slate-900 hover:bg-black dark:bg-emerald-600 dark:hover:bg-emerald-500 shadow-md transition flex items-center justify-center gap-2 uppercase cursor-pointer"
-                        >
-                          {loading ? <Loader2 size={16} className="animate-spin text-white" /> : <span>VERIFY &amp; LOGIN</span>}
-                          <CheckCircle2 size={16} />
-                        </button>
-                      </form>
-                    </div>
-                  )}
-
-                  <p className="text-xs text-slate-500 mt-4 text-center">
-                    Wapas login par jaane ke liye:{' '}
-                    <button
-                      type="button"
-                      onClick={() => { setView('LOGIN'); setError(null); }}
-                      className="font-black text-slate-900 dark:text-white hover:underline cursor-pointer"
-                    >
-                      Login karein
-                    </button>
-                  </p>
-                </div>
-              )}
-
-              {/* ── SUB-VIEW: LOGIN CARD ── */}
-              {view === 'LOGIN' && (
-                <div className="w-full rounded-3xl bg-white/95 dark:bg-slate-900/95 backdrop-blur-2xl shadow-[0_20px_50px_-12px_rgba(15,23,42,0.12),0_1px_3px_rgba(0,0,0,0.05)] border border-slate-200/90 dark:border-slate-800 p-5 sm:p-6 flex flex-col items-center relative overflow-hidden animate-in fade-in duration-200">
-                  <div className="absolute top-0 left-8 right-8 h-[2px] bg-gradient-to-r from-transparent via-slate-800/40 dark:via-indigo-500 to-transparent" />
-
-                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-[10px] font-black uppercase tracking-wider mb-2 shadow-xs border border-slate-800">
-                    <Sparkles size={11} className="text-amber-400" />
-                    <span>Student &amp; Staff Login</span>
-                  </div>
-
-                  <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight leading-none mb-1 text-center">Login</h2>
-                  <p className="text-[11px] sm:text-xs font-medium text-slate-500 mb-3.5 text-center">Sign in to access your classes &amp; school portal</p>
-
-                  <form onSubmit={handleLoginSubmit} className="w-full space-y-2.5 sm:space-y-3">
-                    <div className="relative flex items-center rounded-xl">
-                      <UserIcon size={16} className="absolute left-3.5 text-slate-400" />
-                      <input
-                        name="id"
-                        type="text"
-                        required
-                        placeholder="Mobile, Email ya Student ID"
-                        value={formData.id}
-                        onChange={handleChange}
-                        className="w-full bg-white dark:bg-slate-950 hover:bg-slate-50/70 dark:hover:bg-slate-900 focus:bg-white dark:focus:bg-slate-950 border border-slate-200/90 dark:border-slate-800 focus:border-slate-900 dark:focus:border-indigo-500 rounded-xl pl-10 pr-3.5 py-2.5 sm:py-3 text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-400 font-medium outline-none transition shadow-2xs"
-                        autoCapitalize="none"
-                      />
-                    </div>
-
-                    {/* Password input with show/hide */}
-                    <div className="relative flex items-center rounded-xl">
-                      <Lock size={16} className="absolute left-3.5 text-slate-400" />
-                      <input
-                        name="password"
-                        type={showPassword ? "text" : "password"}
-                        required
-                        placeholder="Password"
-                        value={formData.password}
-                        onChange={handleChange}
-                        onFocus={() => setIsPasswordFocused(true)}
-                        onBlur={() => setIsPasswordFocused(false)}
-                        className="w-full bg-white dark:bg-slate-950 hover:bg-slate-50/70 dark:hover:bg-slate-900 focus:bg-white dark:focus:bg-slate-950 border border-slate-200/90 dark:border-slate-800 focus:border-slate-900 dark:focus:border-indigo-500 rounded-xl pl-10 pr-10 py-2.5 sm:py-3 text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-400 font-medium outline-none transition shadow-2xs"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-3.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
-                      >
-                        {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                      </button>
-                    </div>
-
-                    <div className="flex items-center justify-between text-xs pt-0.5">
-                      <label className="flex items-center gap-1.5 text-slate-500 cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={rememberMe}
-                          onChange={(e) => setRememberMe(e.target.checked)}
-                          className="rounded border-slate-300 text-slate-900 focus:ring-slate-900"
-                        />
-                        <span>Remember me</span>
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => { setView('RECOVERY'); setError(null); }}
-                        className="font-bold text-slate-700 dark:text-indigo-400 hover:underline cursor-pointer"
-                      >
-                        Forgot Password?
-                      </button>
-                    </div>
-
-                    <button
-                      type="submit"
-                      disabled={loading}
-                      className="w-full py-2.5 sm:py-3 rounded-xl text-xs sm:text-sm font-black tracking-wider text-white bg-slate-900 hover:bg-black dark:bg-indigo-600 dark:hover:bg-indigo-500 shadow-md transition-all flex items-center justify-center gap-2 uppercase cursor-pointer"
-                    >
-                      {loading ? <Loader2 size={16} className="animate-spin text-white" /> : <span>LOGIN</span>}
-                      <ArrowRight size={16} />
-                    </button>
-
-                    {/* Google Sign In */}
-                    <button
-                      type="button"
-                      onClick={handleGoogleSignIn}
-                      disabled={loading}
-                      className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold flex items-center justify-center gap-2 border border-slate-200 dark:border-slate-700 transition cursor-pointer"
-                    >
-                      <svg className="w-4 h-4" viewBox="0 0 24 24">
-                        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
-                        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
-                      </svg>
-                      <span>Google Sign In</span>
-                    </button>
-                  </form>
-
-                  {/* Switch to Signup */}
-                  <div className="mt-3.5 pt-3 border-t border-slate-100 dark:border-slate-800 w-full text-center">
-                    <p className="text-xs text-slate-500">
-                      Naya student account banana hai?{' '}
-                      <button
-                        type="button"
-                        onClick={() => { setView('SIGNUP'); setError(null); }}
-                        className="font-black text-slate-900 dark:text-indigo-400 hover:underline cursor-pointer"
-                      >
-                        Create Account
-                      </button>
-                    </p>
-                  </div>
-
-                  {/* Return to QR Scanner button */}
-                  <button
-                    type="button"
-                    onClick={() => setShowManualAuth(false)}
-                    className="mt-2 text-xs font-bold text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1 cursor-pointer"
-                  >
-                    <QrCode className="w-3.5 h-3.5" />
-                    <span>Wapas QR Scanner par jayein</span>
-                  </button>
-                </div>
-              )}
-
-              {/* ── SUB-VIEW: CREATE ACCOUNT (SIGNUP) CARD ── */}
-              {view === 'SIGNUP' && (
-                <div className="w-full rounded-3xl bg-white/95 dark:bg-slate-900/95 backdrop-blur-2xl shadow-[0_20px_50px_-12px_rgba(15,23,42,0.12),0_1px_3px_rgba(0,0,0,0.05)] border border-slate-200/90 dark:border-slate-800 p-5 sm:p-6 flex flex-col items-center relative overflow-hidden animate-in fade-in duration-200">
-                  <div className="absolute top-0 left-8 right-8 h-[2px] bg-gradient-to-r from-transparent via-emerald-500 to-transparent" />
-
-                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 text-[10px] font-black uppercase tracking-wider mb-2 border border-emerald-200 dark:border-emerald-800">
-                    <Sparkles size={11} className="text-emerald-500" />
-                    <span>Registration</span>
-                  </div>
-
-                  <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight leading-none mb-1 text-center">Create Account</h2>
-                  <p className="text-[11px] sm:text-xs font-medium text-slate-500 mb-3.5 text-center">New student permanent ID generate karein</p>
-
-                  <form onSubmit={handleSignupSubmit} className="w-full space-y-2.5 sm:space-y-3">
-                    <div className="relative flex items-center rounded-xl">
-                      <UserIcon size={16} className="absolute left-3.5 text-slate-400" />
-                      <input
-                        name="name"
-                        type="text"
-                        required
-                        placeholder="Poora Naam (Full Name)"
-                        value={formData.name}
-                        onChange={handleChange}
-                        className="w-full bg-white dark:bg-slate-950 border border-slate-200/90 dark:border-slate-800 rounded-xl pl-10 pr-3.5 py-2.5 text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-400 font-medium outline-none transition"
-                      />
-                    </div>
-
-                    <div className="relative flex items-center rounded-xl">
-                      <Phone size={16} className="absolute left-3.5 text-slate-400" />
-                      <input
-                        name="mobile"
-                        type="tel"
-                        required
-                        placeholder="10-digit Mobile Number"
-                        value={formData.mobile}
-                        onChange={handleChange}
-                        className="w-full bg-white dark:bg-slate-950 border border-slate-200/90 dark:border-slate-800 rounded-xl pl-10 pr-3.5 py-2.5 text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-400 font-medium outline-none transition"
-                      />
-                    </div>
-
-                    <div className="relative flex items-center rounded-xl">
-                      <Lock size={16} className="absolute left-3.5 text-slate-400" />
-                      <input
-                        name="password"
-                        type={showPassword ? "text" : "password"}
-                        required
-                        placeholder="Password banayein"
-                        value={formData.password}
-                        onChange={handleChange}
-                        className="w-full bg-white dark:bg-slate-950 border border-slate-200/90 dark:border-slate-800 rounded-xl pl-10 pr-10 py-2.5 text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-400 font-medium outline-none transition"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-3.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
-                      >
-                        {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                      </button>
-                    </div>
-
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-500 block mb-1">Security Question (ID recovery ke liye)</label>
-                      <select
-                        name="securityQuestion"
-                        value={formData.securityQuestion}
-                        onChange={handleChange}
-                        className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-700 dark:text-slate-300"
-                      >
-                        {DEFAULT_QUESTIONS.map(q => (
-                          <option key={q} value={q}>{q}</option>
-                        ))}
-                      </select>
-                      <input
-                        name="securityAnswer"
-                        type="text"
-                        required
-                        placeholder="Aapka answer yahan likhein"
-                        value={formData.securityAnswer}
-                        onChange={handleChange}
-                        className="w-full px-3.5 py-2 mt-1 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-900 dark:text-white"
-                      />
-                    </div>
-
-                    <button
-                      type="submit"
-                      disabled={loading}
-                      className="w-full py-2.5 sm:py-3 rounded-xl text-xs sm:text-sm font-black tracking-wider text-white bg-emerald-600 hover:bg-emerald-500 shadow-md transition-all flex items-center justify-center gap-2 uppercase cursor-pointer"
-                    >
-                      {loading ? <Loader2 size={16} className="animate-spin text-white" /> : <span>CREATE ACCOUNT</span>}
-                      <CheckCircle2 size={16} />
-                    </button>
-                  </form>
-
-                  <div className="mt-3.5 pt-3 border-t border-slate-100 dark:border-slate-800 w-full text-center">
-                    <p className="text-xs text-slate-500">
-                      Pehle se account hai?{' '}
-                      <button
-                        type="button"
-                        onClick={() => { setView('LOGIN'); setError(null); }}
-                        className="font-black text-slate-900 dark:text-indigo-400 hover:underline cursor-pointer"
-                      >
-                        Login karein
-                      </button>
-                    </p>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => setShowManualAuth(false)}
-                    className="mt-2 text-xs font-bold text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1 cursor-pointer"
-                  >
-                    <QrCode className="w-3.5 h-3.5" />
-                    <span>Wapas QR Scanner par jayein</span>
-                  </button>
-                </div>
-              )}
-
-              {/* ── SUB-VIEW: SUCCESS ID ── */}
-              {view === 'SUCCESS_ID' && (
-                <div className="w-full rounded-3xl bg-white/95 dark:bg-slate-900/95 backdrop-blur-2xl shadow-xl border border-slate-200 dark:border-slate-800 p-6 text-center space-y-4 animate-in fade-in duration-200">
-                  <div className="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-500 flex items-center justify-center mx-auto border border-emerald-500/30">
-                    <CheckCircle2 size={24} />
-                  </div>
-                  <div>
-                    <h3 className="text-lg font-black text-slate-900 dark:text-white">Account Ban Gaya!</h3>
-                    <p className="text-xs text-slate-500 mt-1">Yeh aapki permanent NSTA Student ID hai:</p>
-                  </div>
-
-                  <div className="p-3 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl flex items-center justify-between">
-                    <span className="font-mono text-base font-black text-amber-500">{generatedId}</span>
-                    <button
-                      type="button"
-                      onClick={handleCopyId}
-                      className="px-2.5 py-1 rounded-lg bg-slate-200 dark:bg-slate-800 text-xs font-bold flex items-center gap-1"
-                    >
-                      {copied ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
-                      <span>{copied ? 'Copied!' : 'Copy'}</span>
-                    </button>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (pendingLoginUser) onLogin(pendingLoginUser);
-                    }}
-                    className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs uppercase tracking-wider shadow-lg transition"
-                  >
-                    Start Learning Now
-                  </button>
-                </div>
-              )}
+        {/* ── SUB-VIEW: SUCCESS ID ── */}
+        {view === 'SUCCESS_ID' && (
+          <div className="w-full text-center space-y-4 animate-in fade-in duration-200">
+            <div className="w-14 h-14 rounded-full bg-emerald-500/20 text-emerald-500 flex items-center justify-center mx-auto border border-emerald-500/30">
+              <CheckCircle2 size={28} />
             </div>
-          )}
+            <div>
+              <h3 className="text-xl font-black text-slate-900 dark:text-white">Account Ban Gaya!</h3>
+              <p className="text-xs text-slate-500 mt-1">Yeh aapki permanent NSTA Student ID hai:</p>
+            </div>
 
-        </div>
-      </div>
+            <div className="p-4 bg-white dark:bg-slate-900 border border-slate-300/80 dark:border-slate-800 rounded-2xl flex items-center justify-between shadow-xs">
+              <span className="font-mono text-lg font-black text-amber-500">{generatedId}</span>
+              <button
+                type="button"
+                onClick={handleCopyId}
+                className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+              >
+                {copied ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
+                <span>{copied ? 'Copied!' : 'Copy'}</span>
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (pendingLoginUser) onLogin(pendingLoginUser);
+              }}
+              className="w-full py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs uppercase tracking-wider shadow-lg transition cursor-pointer active:scale-[0.99]"
+            >
+              Start Learning Now
+            </button>
+          </div>
+        )}
+      </main>
 
       {/* FOOTER */}
-      <footer className="w-full max-w-md mx-auto text-center py-1 z-10 text-[11px] text-slate-400">
+      <footer className="w-full max-w-md mx-auto text-center py-3 z-10 text-[11px] text-slate-400 shrink-0">
         <p>DPS &amp; NSTA Secure Education Platform</p>
       </footer>
 

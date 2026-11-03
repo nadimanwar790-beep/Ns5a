@@ -3,9 +3,16 @@ import html2canvas from "html2canvas";
 import type { MonthlyFee, SchoolStudent } from "../../school-types";
 import {
   generateDpsReceiptHtml,
+  generatePosSlipHtml,
   DPS_RECEIPT_CSS,
+  POS_SLIP_CSS,
   printDpsReceiptDirect,
+  printPosSlipDirect,
   getSavedSchoolLogo,
+  formatAcademicSession,
+  formatShortFeeMonth,
+  formatConciseArrearsMonths,
+  computeStudentFeeHistorySummary,
   type DpsReceiptData,
   type FeeReceiptItem,
 } from "./feeReceiptUtils";
@@ -15,15 +22,21 @@ interface FeeDocumentOptions {
   student?: Pick<SchoolStudent, "phone" | "fatherName" | "admissionNo" | "rollNo" | "name"> | null;
   schoolName?: string;
   className?: string;
+  feeHistory?: MonthlyFee[];
   schoolDetails?: {
+    schoolId?: string;
     schoolName?: string;
     address?: string;
     phone?: string;
     email?: string;
     affiliation?: string;
+    code?: string;
     logoUrl?: string;
+    upiId?: string;
     principalName?: string;
     principalSignatureUrl?: string;
+    directorName?: string;
+    directorSignatureUrl?: string;
   };
 }
 
@@ -35,23 +48,16 @@ export function buildDpsReceiptData({
   student,
   schoolName,
   className,
+  feeHistory,
   schoolDetails,
 }: FeeDocumentOptions): DpsReceiptData {
   const baseMonthlyAmount = Number(fee.monthlyAmount ?? fee.amount ?? 0) || 5000;
   const arrears = Number(fee.arrearsAmount || 0);
-  const totalPaid = Number(fee.amount ?? baseMonthlyAmount);
 
-  // Format month name / installment
-  let installment = "CURRENT INSTALLMENT";
-  if (fee.month) {
-    const d = new Date(`${fee.month}-01T00:00:00`);
-    const m = d.getMonth();
-    // Academic quarter or month name
-    if (m >= 3 && m <= 5) installment = "APR-JUN";
-    else if (m >= 6 && m <= 8) installment = "JULY-SEP";
-    else if (m >= 9 && m <= 11) installment = "OCT-DEC";
-    else installment = "JAN-MAR";
-  }
+  // Format month name cleanly (e.g. "NOV 2026")
+  const installment = fee.month
+    ? (formatShortFeeMonth(fee.month).toUpperCase() || "CURRENT MONTH")
+    : "CURRENT MONTH";
 
   // Format Receipt Date and Exact Payment Time
   let receiptDate = "";
@@ -85,13 +91,14 @@ export function buildDpsReceiptData({
       description: "Tuition Fee",
       due: baseMonthlyAmount,
       con: 0,
-      paid: fee.paid ? baseMonthlyAmount : (fee.paidAmount !== undefined ? Number(fee.paidAmount) : baseMonthlyAmount),
+      paid: fee.paid ? baseMonthlyAmount : Number(fee.paidAmount || 0),
     });
     if (arrears > 0) {
+      const conciseArrears = formatConciseArrearsMonths(fee.arrearsMonths);
       items.push({
         id: "2",
         slNo: 2,
-        description: "Back Due / Previous Arrears",
+        description: `Back Due / Previous Arrears${conciseArrears ? ` (${conciseArrears})` : ""}`,
         due: arrears,
         con: 0,
         paid: fee.paid ? arrears : 0,
@@ -100,50 +107,72 @@ export function buildDpsReceiptData({
   }
 
   const isDueDemandSlip = !fee.paid && (Number(fee.paidAmount || 0) === 0);
+  const resolvedSchoolId = schoolDetails?.schoolId || fee.schoolId || "";
+  const histSummary = computeStudentFeeHistorySummary({
+    studentId: fee.studentId,
+    schoolId: resolvedSchoolId,
+    currentMonth: fee.month,
+    currentFee: fee,
+    feeHistory,
+  });
 
   return {
-    schoolName: schoolDetails?.schoolName || schoolName || "Nstz",
+    schoolName: schoolDetails?.schoolName || schoolName || "School",
+    schoolId: resolvedSchoolId,
     schoolAddress: schoolDetails?.address || "Institutional Academic Campus, Educational Zone",
-    schoolLogoUrl: getSavedSchoolLogo(schoolDetails?.logoUrl),
+    schoolLogoUrl: getSavedSchoolLogo(schoolDetails?.logoUrl, resolvedSchoolId),
     schoolPhone: schoolDetails?.phone,
     schoolEmail: schoolDetails?.email,
     schoolAffiliation: schoolDetails?.affiliation,
+    upiId: schoolDetails?.upiId || "",
     receiptTitle: isDueDemandSlip
-      ? "FEE DUE DEMAND NOTE / बकाया शुल्क विवरण"
+      ? "FEE DEMAND SLIP • बकाया शुल्क तकादा पर्ची"
       : "OFFICIAL MONTHLY FEE RECEIPT / मासिक शुल्क रसीद",
 
     receiptNo: fee.receiptNo || String(Math.floor(10000 + Math.random() * 90000)),
     admissionNo: (student as any)?.admissionNo || fee.rollNo || String(Math.floor(100000 + Math.random() * 900000)),
     studentName: fee.studentName || student?.name || "STUDENT",
+    fatherName: student?.fatherName || "",
+    studentId: fee.studentId || "",
+    rollNo: student?.rollNo || fee.rollNo || "",
+    phone: student?.phone || (fee as any).phone || "",
     studentPhotoUrl: (student as any)?.photoUrl || (student as any)?.photo || "",
     installment,
-    receiptDate: receiptTime ? `${receiptDate} (${receiptTime})` : receiptDate,
-    session: (fee as any)?.sessionId || "2026-2027",
-    className: className || fee.classId || "Class 6-B",
-    counterNo: "FEE-RECEIPT",
+    receiptDate: isDueDemandSlip ? receiptDate : (receiptTime ? `${receiptDate} (${receiptTime})` : receiptDate),
+    session: formatAcademicSession((fee as any)?.sessionId || "2026-27"),
+    className: className || fee.classId || "Class",
+    counterNo: isDueDemandSlip ? "DUE-DEMAND" : "FEE-RECEIPT",
 
     items,
     balanceDue: fee.balanceDue,
+    lastPaidAmount: fee.lastPaidAmount !== undefined ? fee.lastPaidAmount : histSummary.lastPaidAmount,
+    lastPaidDate: fee.lastPaidDate || histSummary.lastPaidDate,
+    lastDueAmount: fee.lastDueAmount !== undefined ? fee.lastDueAmount : histSummary.lastDueAmount,
+    lastDueDate: fee.lastDueDate || histSummary.lastDueDate,
     fifoSummary: fee.note,
 
     payModeInfo: fee.payModeInfo || {
-      payMode: fee.paid ? "Cash" : "Demand Due",
+      payMode: fee.paid ? "Cash" : "Payment Pending / Due Slip",
       date: receiptDate,
-      bank: "School Counter",
+      bank: fee.paid ? "School Counter" : "PENDING",
       number: "-",
     },
 
-    note: fee.note || "356",
-    showDigitalSignature: Boolean(schoolDetails?.principalSignatureUrl),
+    note: fee.note || (isDueDemandSlip ? "Pay by 10th of month" : "Thank you"),
+    showDigitalSignature: Boolean(schoolDetails?.principalSignatureUrl || schoolDetails?.directorSignatureUrl),
     principalSignatureUrl: schoolDetails?.principalSignatureUrl,
     principalName: schoolDetails?.principalName || "Principal",
+    principalTitle: "Principal",
+    directorSignatureUrl: schoolDetails?.directorSignatureUrl,
+    directorName: schoolDetails?.directorName || "Director",
+    signatoryTitle: schoolDetails?.principalName || "Principal",
   };
 }
 
 /**
  * Downloads official DPS-Format Monthly Fee Receipt as high-resolution PDF
  */
-export async function downloadFeeDocument(options: FeeDocumentOptions & { mode?: "4in1" | "full" }): Promise<void> {
+export async function downloadFeeDocument(options: FeeDocumentOptions & { mode?: "4in1" | "full" | "pos" }): Promise<void> {
   const receiptData = buildDpsReceiptData(options);
   const safeName = (receiptData.studentName || "student").replace(/[^a-z0-9-_]+/gi, "_");
   const receiptNumber = receiptData.receiptNo;
@@ -154,13 +183,13 @@ export async function downloadFeeDocument(options: FeeDocumentOptions & { mode?:
   container.style.position = "fixed";
   container.style.left = "-9999px";
   container.style.top = "0";
-  container.style.width = mode === "4in1" ? "794px" : "720px";
+  container.style.width = mode === "4in1" ? "794px" : mode === "pos" ? "340px" : "720px";
   container.style.background = "#ffffff";
   container.style.padding = "0";
   container.style.zIndex = "-1";
 
   const styleEl = document.createElement("style");
-  styleEl.innerHTML = DPS_RECEIPT_CSS;
+  styleEl.innerHTML = mode === "pos" ? POS_SLIP_CSS : DPS_RECEIPT_CSS;
   container.appendChild(styleEl);
 
   const wrapper = document.createElement("div");
@@ -172,6 +201,8 @@ export async function downloadFeeDocument(options: FeeDocumentOptions & { mode?:
       { data: receiptData, copyTitle: "ACCOUNTS COPY" },
       { data: receiptData, copyTitle: "PARENT / GUARDIAN COPY" },
     ]);
+  } else if (mode === "pos") {
+    wrapper.innerHTML = generatePosSlipHtml(receiptData, { rollWidthMm: 80 });
   } else {
     wrapper.innerHTML = generateDpsReceiptHtml(receiptData, { layout: "full" });
   }
@@ -180,7 +211,7 @@ export async function downloadFeeDocument(options: FeeDocumentOptions & { mode?:
   document.body.appendChild(container);
 
   try {
-    const targetSelector = mode === "4in1" ? ".dps-4in1-page" : ".dps-receipt-card";
+    const targetSelector = mode === "4in1" ? ".dps-4in1-page" : mode === "pos" ? ".pos-slip-ticket" : ".dps-receipt-card";
     const cardEl = (container.querySelector(targetSelector) as HTMLElement) || wrapper;
     if (mode === "4in1") {
       cardEl.style.width = "210mm";
@@ -210,6 +241,11 @@ export async function downloadFeeDocument(options: FeeDocumentOptions & { mode?:
 
     if (mode === "4in1") {
       pdf.addImage(imgData, "JPEG", 0, 0, pdfWidth, pdfHeight);
+    } else if (mode === "pos") {
+      const printWidth = 84;
+      const printHeight = Math.min(pdfHeight - 20, (canvas.height * printWidth) / canvas.width);
+      const marginX = (pdfWidth - printWidth) / 2;
+      pdf.addImage(imgData, "JPEG", marginX, 12, printWidth, printHeight);
     } else {
       const marginX = 14;
       const printWidth = pdfWidth - marginX * 2;
@@ -220,7 +256,11 @@ export async function downloadFeeDocument(options: FeeDocumentOptions & { mode?:
     pdf.save(`Fee_Receipt_${safeName}_${receiptNumber}.pdf`);
   } catch (err) {
     console.warn("Direct PDF generation fallback to print dialog:", err);
-    printDpsReceiptDirect(receiptData, mode);
+    if (mode === "pos") {
+      printPosSlipDirect(receiptData, 80);
+    } else {
+      printDpsReceiptDirect(receiptData, mode);
+    }
   } finally {
     if (container.parentNode) {
       container.parentNode.removeChild(container);
@@ -348,20 +388,25 @@ export async function shareFeeReceiptOnWhatsApp(
   // Build high-clarity WhatsApp formatted text
   let message = "";
   if (isDue) {
+    const lastPaidAmt = Number(receiptData.lastPaidAmount || 0);
+    const lastPaidDt = receiptData.lastPaidDate || "";
+    const lastDueAmt = Number(receiptData.lastDueAmount || 0);
+    const lastDueDt = receiptData.lastDueDate || "";
+    const netPayableTotal = Math.max(balanceDue, totalBill);
     message = `🏫 *${schoolName.toUpperCase()}*\n` +
-      `⚠️ *FEE DUE DEMAND NOTE / बकाया फीस सूचना*\n` +
+      `⚠️ *FEE DEMAND SLIP / बकाया शुल्क तकादा पर्ची*\n` +
       `----------------------------------------\n` +
       `👤 *Student Name:* ${receiptData.studentName}\n` +
-      `🆔 *Adm No / Roll:* ${receiptData.admissionNo || "—"}\n` +
+      (receiptData.fatherName ? `👨 *Father Name:* ${receiptData.fatherName}\n` : "") +
+      `🆔 *Adm No / Roll:* ${receiptData.admissionNo || "—"}${receiptData.rollNo ? ` (Roll: ${receiptData.rollNo})` : ""}\n` +
       `📚 *Class:* ${receiptData.className}\n` +
-      `🧾 *Slip No:* ${receiptData.receiptNo}\n` +
-      `📅 *Date & Time:* ${receiptData.receiptDate}\n` +
+      `🧾 *Slip No:* ${receiptData.receiptNo} • *Date:* ${receiptData.receiptDate}\n` +
       `----------------------------------------\n` +
-      `💰 *Total Outstanding Due (कुल बकाया):* ₹${balanceDue.toLocaleString("en-IN")}\n` +
-      (options.fee.arrearsMonths?.length ? `⚠️ *Overdue Months:* ${options.fee.arrearsMonths.join(", ")}\n` : "") +
+      `✅ *Last Paid (पिछला जमा):* ₹${lastPaidAmt.toLocaleString("en-IN")}${lastPaidAmt > 0 && lastPaidDt ? ` (${lastPaidDt})` : " (कोई पिछला जमा नहीं)"}\n` +
+      `📌 *Last Due (पिछला बकाया):* ₹${lastDueAmt.toLocaleString("en-IN")}${lastDueAmt > 0 && lastDueDt ? ` (${lastDueDt})` : " (Clear)"}\n` +
+      `💰 *Total Net Payable Due (कुल देय राशि):* ₹${netPayableTotal.toLocaleString("en-IN")}\n` +
       `----------------------------------------\n` +
-      `📌 *कृपया समय पर फीस स्कूल काउंटर या ऑनलाइन जमा करें।*\n` +
-      `📄 *Official DPS Due Slip (PDF) has been generated.*`;
+      `🙏 *कृपया निर्धारित तिथि तक शुल्क स्कूल काउंटर या UPI QR द्वारा जमा करें।*`;
   } else {
     message = `🏫 *${schoolName.toUpperCase()}*\n` +
       `🧾 *OFFICIAL FEE PAYMENT RECEIPT / फीस रसीद*\n` +

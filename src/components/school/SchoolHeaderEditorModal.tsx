@@ -5,6 +5,8 @@ import { DirectUploadButton } from "../DirectUploadButton";
 import { updateSchool } from "../../school-firebase";
 import { DigitalSignatureModal } from "./DigitalSignatureModal";
 import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo } from "./feeReceiptUtils";
+import { setSchoolLogoSync } from "../../utils/schoolIndexedDb";
+import { uploadImageToImgBB } from "../../services/imgbbService";
 import {
   DEFAULT_SCHOOL_DOCUMENT_PRINT_FIELDS,
   type School,
@@ -30,6 +32,7 @@ export interface SchoolHeaderDetails {
   directorPhone?: string;
   principalSignatureUrl?: string;
   directorSignatureUrl?: string;
+  upiId?: string;
   customFields?: SchoolProfileCustomField[];
   documentPrintFields?: SchoolDocumentPrintFields;
 }
@@ -59,9 +62,10 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
   title = "School Details & Template Customizer",
   subtitle = "Apne school ka naam, logo, address aur principal details yahan se likhein aur customize karein"
 }) => {
+  const resolvedSchoolId = schoolId || school?.id || "dps_gurgaon_sector45";
   const createDefaultData = (): SchoolHeaderDetails => {
     const rawLogo = currentDetails?.logoUrl || initialDetails?.logoUrl || school?.logoUrl;
-    const resolvedLogo = getSavedSchoolLogo(rawLogo);
+    const resolvedLogo = getSavedSchoolLogo(rawLogo, resolvedSchoolId);
     return {
       schoolName: currentDetails?.schoolName || initialDetails?.schoolName || school?.name || "",
       tagline: currentDetails?.tagline || initialDetails?.tagline || school?.tagline || "",
@@ -71,13 +75,14 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
       email: currentDetails?.email || initialDetails?.email || school?.email || "",
       logoUrl: resolvedLogo,
       principalName: currentDetails?.principalName || initialDetails?.principalName || school?.principalName || "",
-      principalTitle: currentDetails?.principalTitle || initialDetails?.principalTitle || "Principal / Authorized Signatory",
+      principalTitle: currentDetails?.principalTitle || initialDetails?.principalTitle || "Principal",
       code: currentDetails?.code || initialDetails?.code || school?.code || "",
       principalPhone: currentDetails?.principalPhone || initialDetails?.principalPhone || school?.principalPhone || "",
       directorName: currentDetails?.directorName || initialDetails?.directorName || school?.directorName || "",
       directorPhone: currentDetails?.directorPhone || initialDetails?.directorPhone || school?.directorPhone || "",
       principalSignatureUrl: currentDetails?.principalSignatureUrl || initialDetails?.principalSignatureUrl || school?.principalSignatureUrl || "",
       directorSignatureUrl: currentDetails?.directorSignatureUrl || initialDetails?.directorSignatureUrl || school?.directorSignatureUrl || "",
+      upiId: currentDetails?.upiId || initialDetails?.upiId || school?.upiId || "",
       customFields: currentDetails?.customFields || initialDetails?.customFields || school?.customFields || [],
       documentPrintFields: currentDetails?.documentPrintFields || initialDetails?.documentPrintFields || school?.documentPrintFields || {},
     };
@@ -86,6 +91,7 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
   const [details, setDetails] = useState<SchoolHeaderDetails>(createDefaultData);
   const [savingDefault, setSavingDefault] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [showDigitalSignatureModal, setShowDigitalSignatureModal] = useState(false);
 
   // CRITICAL FIX: Only populate details when the modal transitions from closed to open.
@@ -101,18 +107,22 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
 
   if (isOpen === false) return null;
 
-  const targetSchoolId = schoolId || school?.id || "dps_gurgaon_sector45";
+  const targetSchoolId = resolvedSchoolId;
 
   const saveToFirebase = async (dataToSave: SchoolHeaderDetails) => {
-    const cleanedLogo = cleanLogoUrl(dataToSave.logoUrl);
-    if (typeof localStorage !== "undefined") {
-      if (cleanedLogo && !isAppLogo(cleanedLogo)) {
-        localStorage.setItem("nst_active_school_logo", cleanedLogo);
-        localStorage.setItem("nst_school_logo", cleanedLogo);
-      } else if (!cleanedLogo) {
-        localStorage.removeItem("nst_active_school_logo");
-        localStorage.removeItem("nst_school_logo");
+    let cleanedLogo = cleanLogoUrl(dataToSave.logoUrl);
+    if (cleanedLogo && cleanedLogo.startsWith("data:image/")) {
+      try {
+        cleanedLogo = await uploadImageToImgBB(cleanedLogo, `logo_${targetSchoolId}_${Date.now()}.png`);
+      } catch (e) {
+        console.warn("[SchoolHeaderEditorModal] Logo CDN upload fallback:", e);
       }
+    }
+
+    if (cleanedLogo && !isAppLogo(cleanedLogo)) {
+      setSchoolLogoSync(targetSchoolId, cleanedLogo);
+    } else if (!cleanedLogo) {
+      setSchoolLogoSync(targetSchoolId, "");
     }
 
     await updateSchool(targetSchoolId, {
@@ -131,6 +141,7 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
       directorPhone: dataToSave.directorPhone || "",
       principalSignatureUrl: dataToSave.principalSignatureUrl || "",
       directorSignatureUrl: dataToSave.directorSignatureUrl || "",
+      upiId: (dataToSave.upiId || "").trim(),
       customFields: dataToSave.customFields || [],
       documentPrintFields: dataToSave.documentPrintFields || {},
       code: dataToSave.code || school?.code,
@@ -139,6 +150,7 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
 
   const handleApply = async () => {
     setSavingDefault(true);
+    setSaveError(null);
     try {
       if (targetSchoolId) {
         await saveToFirebase(details);
@@ -155,6 +167,7 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
 
   const handleSaveAsSchoolDefault = async () => {
     setSavingDefault(true);
+    setSaveError(null);
     try {
       if (targetSchoolId) {
         await saveToFirebase(details);
@@ -165,7 +178,7 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
       if (onSave) onSave(details);
     } catch (err) {
       console.error("Failed to update school profile:", err);
-      alert("Failed to save school profile. Please retry.");
+      setSaveError("School profile save karne mein dikkat aayi. Kripya dobara try karein.");
     } finally {
       setSavingDefault(false);
     }
@@ -248,6 +261,11 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
 
         {/* Modal Body */}
         <div className="p-5 overflow-y-auto space-y-4 flex-1">
+          {saveError && (
+            <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-400/40 text-rose-700 dark:text-rose-300 text-xs font-bold">
+              {saveError}
+            </div>
+          )}
           {savedSuccess && (
             <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-500/30 rounded-2xl flex items-center gap-2 text-emerald-800 dark:text-emerald-200 text-xs font-bold">
               <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
@@ -325,11 +343,11 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
             />
           </div>
 
-          {/* Contact Details (Phone & Email) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* Contact Details (Phone, Email & UPI ID for Fee Due Slip QR) */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                Helpline / Phone Number
+                Office Helpline / Phone
               </label>
               <input
                 type="text"
@@ -349,6 +367,18 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
                 onChange={e => setDetails(p => ({ ...p, email: e.target.value }))}
                 placeholder="info@school.org / www.school.org"
                 className="w-full px-3 py-2 text-xs font-medium rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-hidden"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-bold text-emerald-700 dark:text-emerald-400 block mb-1">
+                School Payment UPI ID (Due QR)
+              </label>
+              <input
+                type="text"
+                value={details.upiId || ""}
+                onChange={e => setDetails(p => ({ ...p, upiId: e.target.value }))}
+                placeholder="e.g. schoolfee@sbi / 9876543210@ybl"
+                className="w-full px-3 py-2 text-xs font-mono font-bold rounded-xl border border-emerald-300 dark:border-emerald-700 bg-emerald-50/50 dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500 outline-hidden"
               />
             </div>
           </div>

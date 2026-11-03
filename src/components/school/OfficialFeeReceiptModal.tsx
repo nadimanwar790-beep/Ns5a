@@ -1,26 +1,25 @@
 // @ts-nocheck
 import React, { useState, useMemo, useEffect } from "react";
 import {
-  X, Printer, Download, MessageCircle, Edit3, Plus, Trash2,
-  CheckCircle2, Building2, Sparkles, Shield, RotateCcw, Copy
+  X, Printer, Download, MessageCircle, CheckCircle2, Loader2, Send
 } from "lucide-react";
 import type { School, MonthlyFee, SchoolStudent } from "../../school-types";
-import { DirectUploadButton } from "../DirectUploadButton";
-import { updateSchool } from "../../school-firebase";
 import {
-  generateDpsReceiptHtml,
+  generatePosSlipHtml,
   generate4in1A4PageHtml,
-  printDpsReceipts4in1,
+  printPosSlipDirect,
   printDpsReceiptDirect,
+  POS_SLIP_CSS,
   DPS_RECEIPT_CSS,
-  numberToIndianWords,
-  cleanLogoUrl,
-  isAppLogo,
   getSavedSchoolLogo,
+  formatAcademicSession,
+  formatShortFeeMonth,
+  formatConciseArrearsMonths,
+  computeStudentFeeHistorySummary,
   type FeeReceiptItem,
   type DpsReceiptData,
-  type PayModeInfo
 } from "./feeReceiptUtils";
+import { getStudentFees } from "../../school-firebase";
 import { downloadFeeDocument, shareFeeReceiptOnWhatsApp } from "./feeDocument";
 
 interface Props {
@@ -31,6 +30,7 @@ interface Props {
   student?: SchoolStudent | null;
   className?: string;
   sessionName?: string;
+  feeHistory?: MonthlyFee[];
 }
 
 export const OfficialFeeReceiptModal: React.FC<Props> = ({
@@ -40,113 +40,70 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
   fee,
   student,
   className = "Class 6-B",
-  sessionName = "2026-2027",
+  sessionName = "2026-27",
+  feeHistory,
 }) => {
-  // Format month name for installment
+  const [fetchedHistory, setFetchedHistory] = useState<MonthlyFee[]>([]);
+
+  useEffect(() => {
+    const sid = school?.id || fee?.schoolId;
+    const stId = student?.id || fee?.studentId;
+    if (!isOpen || !sid || !stId || (feeHistory && feeHistory.length > 0)) return;
+    let active = true;
+    getStudentFees(sid, stId)
+      .then((list) => {
+        if (active && Array.isArray(list)) setFetchedHistory(list);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [isOpen, school?.id, fee?.schoolId, student?.id, fee?.studentId, feeHistory]);
+
+  // Format month name cleanly (e.g. "NOV 2026")
   const initialInstallment = useMemo(() => {
-    if (!fee.month) return "CURRENT INSTALLMENT";
-    const d = new Date(`${fee.month}-01T00:00:00`);
-    const monthIndex = d.getMonth();
-    // Check quarter like DPS: APR-JUN, JULY-SEP, OCT-DEC, JAN-MAR
-    if (monthIndex >= 3 && monthIndex <= 5) return "APR-JUN";
-    if (monthIndex >= 6 && monthIndex <= 8) return "JULY-SEP";
-    if (monthIndex >= 9 && monthIndex <= 11) return "OCT-DEC";
-    return "JAN-MAR";
+    if (!fee.month) return "CURRENT MONTH";
+    return formatShortFeeMonth(fee.month).toUpperCase() || "CURRENT MONTH";
   }, [fee.month]);
 
   // Form states
-  const [receiptNo, setReceiptNo] = useState(
-    () => fee.receiptNo || String(Math.floor(10000 + Math.random() * 90000))
-  );
-  const [admissionNo, setAdmissionNo] = useState(
-    () => student?.admissionNo || fee.rollNo || String(Math.floor(100000 + Math.random() * 900000))
-  );
-  const [studentName, setStudentName] = useState(
-    () => fee.studentName || student?.name || "SAMARTH SHARMA"
-  );
-  const [studentPhotoUrl, setStudentPhotoUrl] = useState(
-    () => student?.photoUrl || (student as any)?.photo || ""
-  );
-  const [installment, setInstallment] = useState(initialInstallment);
-  const [receiptDate, setReceiptDate] = useState(() => {
+  const receiptNo = fee.receiptNo || String(Math.floor(10000 + Math.random() * 90000));
+  const admissionNo = student?.admissionNo || fee.rollNo || "140516";
+  const studentName = fee.studentName || student?.name || "STUDENT";
+  const studentPhotoUrl = student?.photoUrl || (student as any)?.photo || "";
+  const installment = initialInstallment;
+
+  const receiptDate = useMemo(() => {
     if (fee.paidDate) {
       const d = new Date(fee.paidDate);
       return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
     }
     const d = new Date();
     return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
-  });
-  const [session, setSession] = useState(sessionName);
-  const [resolvedClass, setResolvedClass] = useState(className);
-  const [counterNo, setCounterNo] = useState("FEE-RECEIPT");
-  const [note, setNote] = useState(() => fee.note || String(Math.floor(100 + Math.random() * 900)));
-  const [showDigitalSign, setShowDigitalSign] = useState(Boolean(school?.principalSignatureUrl));
+  }, [fee.paidDate]);
 
-  // School identity & logo state: explicitly passed -> locally cached active logo
-  const [schoolLogoUrl, setSchoolLogoUrl] = useState(() => {
-    return getSavedSchoolLogo(school?.logoUrl);
-  });
-  const [schoolNameState, setSchoolNameState] = useState(() => school?.name || "School");
-  const [schoolAddressState, setSchoolAddressState] = useState(() => school?.address || "");
-  const [savingLogo, setSavingLogo] = useState(false);
-  const [logoSaveNotice, setLogoSaveNotice] = useState<string | null>(null);
+  const session = formatAcademicSession(sessionName);
+  const resolvedClass = className;
+  const counterNo = !fee.paid && Number(fee.paidAmount || 0) === 0 ? "DUE-DEMAND" : "FEE-RECEIPT";
+  const note = fee.note || String(Math.floor(100 + Math.random() * 900));
+  const [previewFormat, setPreviewFormat] = useState<"4in1" | "pos">("4in1");
 
-  // Sync state if school prop updates asynchronously
-  useEffect(() => {
-    if (school) {
-      const bestLogo = getSavedSchoolLogo(school.logoUrl);
-      if (bestLogo) {
-        setSchoolLogoUrl(bestLogo);
-      }
-      if (school.name) setSchoolNameState(school.name);
-      if (school.address) setSchoolAddressState(school.address);
-    }
-  }, [school]);
-
-  const handleLogoUploaded = async (url: string) => {
-    const cleaned = cleanLogoUrl(url);
-    const finalLogo = (cleaned && !isAppLogo(cleaned)) ? cleaned : "";
-    setSchoolLogoUrl(finalLogo);
-    try {
-      if (finalLogo) {
-        localStorage.setItem("nst_active_school_logo", finalLogo);
-        localStorage.setItem("nst_school_logo", finalLogo);
-      } else {
-        localStorage.removeItem("nst_active_school_logo");
-        localStorage.removeItem("nst_school_logo");
-      }
-    } catch {}
-    const targetId = school?.id || "dps_gurgaon_sector45";
-    setSavingLogo(true);
-    try {
-      await updateSchool(targetId, { logoUrl: finalLogo });
-      setLogoSaveNotice("✓ School Logo update ho gaya!");
-      setTimeout(() => setLogoSaveNotice(null), 3500);
-    } catch (err) {
-      console.error("Error updating school logo:", err);
-    } finally {
-      setSavingLogo(false);
-    }
-  };
-
-  const [layoutMode, setLayoutMode] = useState<"4in1" | "full">("4in1");
+  // School identity & logo state
+  const schoolLogoUrl = getSavedSchoolLogo(school?.logoUrl, school?.id);
+  const schoolNameState = school?.name || "School";
+  const schoolAddressState = school?.address || "";
 
   // Pay Mode Information
-  const [payMode, setPayMode] = useState<string>(() => fee.payModeInfo?.payMode || "Cheque");
-  const [bank, setBank] = useState<string>(() => fee.payModeInfo?.bank || "HDFC BANK");
-  const [chequeNumber, setChequeNumber] = useState<string>(() => fee.payModeInfo?.number || "689870,06,07");
-  const [payDate, setPayDate] = useState<string>(() => fee.payModeInfo?.date || receiptDate);
+  const payMode = fee.payModeInfo?.payMode || "Cash";
+  const bank = fee.payModeInfo?.bank || "SCHOOL COUNTER";
+  const chequeNumber = fee.payModeInfo?.number || "—";
+  const payDate = fee.payModeInfo?.date || receiptDate;
 
   // Fee items breakdown (All fee heads matching school receipt structure)
-  const [items, setItems] = useState<FeeReceiptItem[]>(() => {
+  const items: FeeReceiptItem[] = useMemo(() => {
     const arrears = Number(fee.arrearsAmount || 0);
-    const formattedMonths = fee.arrearsMonths && fee.arrearsMonths.length > 0
-      ? ` (${fee.arrearsMonths.map(m => {
-          const [y, mo] = m.split("-").map(Number);
-          const d = new Date(y, (mo || 1) - 1, 1);
-          return isNaN(d.getTime()) ? m : d.toLocaleDateString("en-IN", { month: "short", year: "numeric" });
-        }).join(", ")})`
-      : "";
+    const conciseArrears = formatConciseArrearsMonths(fee.arrearsMonths);
+    const formattedMonths = conciseArrears ? ` (${conciseArrears})` : "";
 
     if (fee.items && fee.items.length > 0) {
       const hasArrearsItem = fee.items.some(it => it.id === "arrears" || it.description.toLowerCase().includes("arrears") || it.description.toLowerCase().includes("back due"));
@@ -210,15 +167,15 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
         paid: fee.paid ? 23320 : 0
       });
     }
-    if (fee.includeBusFee || student?.usesBus) {
-      const busAmount = Number(fee.busFeeAmount !== undefined ? fee.busFeeAmount : (student?.busFee !== undefined ? student.busFee : 1000));
+    if (fee.includeBusFee) {
+      const bus = Number(fee.busFeeAmount !== undefined ? fee.busFeeAmount : 1000);
       initialList.push({
         id: "bus",
         slNo: sl++,
-        description: student?.busRoute ? `Bus Fee (${student.busRoute})` : "Bus Fee / Transport",
-        due: busAmount,
+        description: "Bus Transport Fee",
+        due: bus,
         con: 0,
-        paid: fee.paid ? busAmount : 0
+        paid: fee.paid ? bus : 0
       });
     }
     if (arrears > 0) {
@@ -233,155 +190,46 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
     }
 
     return initialList;
-  });
+  }, [fee]);
 
-  const [receiptCategory, setReceiptCategory] = useState<"monthly" | "admission">(() => {
-    if (fee.receiptCategory) return fee.receiptCategory;
-    if (fee.feeType === "admission" || fee.includeAdmissionFee) return "admission";
-    return "monthly";
-  });
+  // Derived totals
+  const totalDue = items.reduce((sum, it) => sum + (Number(it.due) || 0), 0);
+  const totalConcession = items.reduce((sum, it) => sum + (Number(it.con) || 0), 0);
+  const totalPaid = items.reduce((sum, it) => sum + (Number(it.paid) || 0), 0);
+  const grandTotal = Math.max(0, totalDue - totalConcession);
 
-  // Calculate totals
-  const totalPaid = useMemo(() => {
-    return items.reduce((sum, item) => sum + (Number(item.paid) || 0), 0);
-  }, [items]);
+  // Complete data object for receipt generator
+  const historySummary = useMemo(() => {
+    return computeStudentFeeHistorySummary({
+      studentId: student?.id || fee.studentId,
+      schoolId: school?.id || fee.schoolId,
+      currentMonth: fee.month,
+      currentFee: fee,
+      feeHistory: feeHistory && feeHistory.length > 0 ? feeHistory : fetchedHistory,
+    });
+  }, [student?.id, fee, school?.id, feeHistory, fetchedHistory]);
 
-  const totalDue = useMemo(() => {
-    return items.reduce((sum, item) => sum + (Number(item.due) || 0), 0);
-  }, [items]);
-
-  const totalCon = useMemo(() => {
-    return items.reduce((sum, item) => sum + (Number(item.con) || 0), 0);
-  }, [items]);
-
-  const grandTotal = totalPaid > 0 ? totalPaid : totalDue;
-  const wordsAmount = numberToIndianWords(grandTotal);
-
-  // Template switchers
-  const loadMonthlyFeeFormat = () => {
-    setReceiptCategory("monthly");
-    setInstallment(initialInstallment || "MONTHLY INSTALLMENT");
-    const baseFee = Number(fee.monthlyAmount ?? fee.amount ?? student?.monthlyFee ?? 0) || 1500;
-    const arrears = Number(fee.arrearsAmount || 0);
-    const newItems: FeeReceiptItem[] = [
-      {
-        id: "tuition",
-        slNo: 1,
-        description: "Monthly Tuition Fee (मासिक शिक्षण शुल्क)",
-        due: baseFee,
-        con: Number(fee.concession || 0),
-        paid: fee.paid ? baseFee : (fee.paidAmount !== undefined ? Number(fee.paidAmount) : baseFee)
-      }
-    ];
-
-    if (arrears > 0) {
-      newItems.push({
-        id: "arrears",
-        slNo: 2,
-        description: "Back Due / Previous Arrears (पिछला बकाया)",
-        due: arrears,
-        con: 0,
-        paid: fee.paid ? arrears : 0
-      });
-    }
-
-    if (fee.includeBusFee) {
-      newItems.push({
-        id: "bus",
-        slNo: newItems.length + 1,
-        description: "Conveyance / Transport Fee (वाहन शुल्क)",
-        due: 800,
-        con: 0,
-        paid: 800
-      });
-    }
-
-    setItems(newItems);
-  };
-
-  const loadAdmissionFeeFormat = () => {
-    setReceiptCategory("admission");
-    setInstallment("NEW ADMISSION & ENROLLMENT (नवीन प्रवेश)");
-    setItems([
-      { id: "adm_1", slNo: 1, description: "Admission Fee (नामांकन / प्रवेश शुल्क)", due: 2500, con: 0, paid: 2500 },
-      { id: "adm_2", slNo: 2, description: "Registration & Prospectus Form (पंजीकरण फॉर्म)", due: 350, con: 0, paid: 350 },
-      { id: "adm_3", slNo: 3, description: "Annual Development & Building Fund (विकास कोष)", due: 1200, con: 0, paid: 1200 },
-      { id: "adm_4", slNo: 4, description: "Student Kit, ID Card & Diary (आईडी कार्ड, डायरी व किट)", due: 450, con: 0, paid: 450 },
-      { id: "adm_5", slNo: 5, description: "Annual Exam & Activity Charges (वार्षिक परीक्षा कोष)", due: 800, con: 0, paid: 800 },
-    ]);
-  };
-
-  // Quick preset helper
-  const loadDpsScreenshotSample = () => {
-    setReceiptCategory("monthly");
-    setReceiptNo("43358");
-    setAdmissionNo("140516");
-    setStudentName("SAMARTH SHARMA BHARDWAJ");
-    setInstallment("JULY-SEP");
-    setReceiptDate("14/07/2016");
-    setSession("2016-2017");
-    setResolvedClass("6 - B");
-    setCounterNo("FEE-RECEIPT");
-    setPayMode("Cheque");
-    setBank("HDFC BANK");
-    setChequeNumber("689870,06,07");
-    setPayDate("15/07/2016");
-    setNote("356");
-    setItems([
-      { id: "1", slNo: 1, description: "Admission Fee", due: 65000, con: 0, paid: 65000 },
-      { id: "2", slNo: 2, description: "Tuition Fee", due: 19140, con: 0, paid: 19140 },
-      { id: "3", slNo: 3, description: "Caution Money", due: 60000, con: 0, paid: 60000 },
-      { id: "4", slNo: 4, description: "Annual Charges", due: 23320, con: 0, paid: 23320 },
-      { id: "5", slNo: 5, description: "Bus Fee", due: 10360, con: 0, paid: 10360 },
-    ]);
-  };
-
-  // Add Item
-  const handleAddItem = () => {
-    const nextSl = items.length + 1;
-    setItems(prev => [
-      ...prev,
-      {
-        id: `item-${Date.now()}`,
-        slNo: nextSl,
-        description: "Annual / Activity Charges",
-        due: 1500,
-        con: 0,
-        paid: 1500,
-      },
-    ]);
-  };
-
-  // Remove Item
-  const handleRemoveItem = (id: string) => {
-    if (items.length <= 1) return;
-    setItems(prev =>
-      prev
-        .filter(it => it.id !== id)
-        .map((it, idx) => ({ ...it, slNo: idx + 1 }))
-    );
-  };
-
-  // Build current receipt data object
-  const receiptData: DpsReceiptData = {
+  const receiptData: DpsReceiptData = useMemo(() => ({
     schoolName: schoolNameState || school?.name || "School",
     schoolId: school?.id || "school_campus",
     schoolAddress: schoolAddressState || school?.address || "Institutional Academic Campus, Educational Zone",
-    schoolLogoUrl: getSavedSchoolLogo(schoolLogoUrl || school?.logoUrl),
+    schoolLogoUrl: getSavedSchoolLogo(schoolLogoUrl || school?.logoUrl, school?.id),
     schoolPhone: school?.mobile || school?.phone,
     schoolEmail: school?.email,
     schoolAffiliation: school?.affiliation,
+    upiId: school?.upiId || "",
     receiptTitle: !fee.paid && totalPaid === 0
-      ? "FEE DUE SLIP / DEMAND NOTE (बकाया शुल्क विवरण)"
-      : (receiptCategory === "admission"
+      ? "FEE DEMAND SLIP • बकाया शुल्क तकादा पर्ची"
+      : (fee.receiptCategory === "admission"
         ? "OFFICIAL ADMISSION FEE RECEIPT / प्रवेश शुल्क रसीद"
         : "OFFICIAL MONTHLY FEE RECEIPT / मासिक शुल्क रसीद"),
     receiptNo,
     admissionNo,
     studentName,
+    fatherName: student?.fatherName || "",
     studentId: student?.id || fee.studentId || "",
     rollNo: student?.rollNo || fee.rollNo || "",
-    phone: student?.phone || fee.phone || "",
+    phone: student?.phone || student?.whatsappNo || (fee as any).phone || "",
     studentPhotoUrl,
     installment,
     receiptDate,
@@ -389,39 +237,67 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
     className: resolvedClass,
     counterNo,
     items,
-    balanceDue: fee.balanceDue !== undefined ? Number(fee.balanceDue) : Math.max(0, totalDue - totalPaid),
+    balanceDue: Math.max(
+      Number(fee.balanceDue || 0) + (fee.paid ? 0 : Number(fee.arrearsAmount || 0)),
+      Math.max(0, grandTotal - totalPaid)
+    ),
+    lastPaidAmount: fee.lastPaidAmount !== undefined ? fee.lastPaidAmount : historySummary.lastPaidAmount,
+    lastPaidDate: fee.lastPaidDate || historySummary.lastPaidDate,
+    lastDueAmount: fee.lastDueAmount !== undefined ? fee.lastDueAmount : historySummary.lastDueAmount,
+    lastDueDate: fee.lastDueDate || historySummary.lastDueDate,
     fifoSummary: fee.note || undefined,
     payModeInfo: {
-      payMode,
+      payMode: !fee.paid && totalPaid === 0 ? "Payment Pending / Due Slip" : payMode,
       date: payDate,
-      bank,
+      bank: !fee.paid && totalPaid === 0 ? "PENDING" : bank,
       number: chequeNumber,
     },
     note,
-    showDigitalSignature: showDigitalSign,
+    showDigitalSignature: Boolean(school?.principalSignatureUrl || school?.directorSignatureUrl),
     principalSignatureUrl: school?.principalSignatureUrl,
     principalName: school?.principalName || "Principal",
-    principalTitle: "Principal / Authorized Signatory",
-  };
+    principalTitle: "Principal",
+    directorSignatureUrl: school?.directorSignatureUrl,
+    directorName: school?.directorName || "Director",
+    signatoryTitle: school?.principalName || "Principal",
+  }), [
+    schoolNameState, school, schoolAddressState, schoolLogoUrl, fee, totalPaid, totalDue, grandTotal,
+    receiptNo, admissionNo, studentName, student, studentPhotoUrl, installment, receiptDate,
+    session, resolvedClass, counterNo, items, payMode, payDate, bank, chequeNumber, note, historySummary
+  ]);
 
-  // Direct Print action (defaults to 4-in-1 A4 sheet)
-  const handlePrint = (mode: "4in1" | "full" = layoutMode) => {
-    if (mode === "4in1") {
-      printDpsReceipts4in1([receiptData], {
-        customTitle: `Fee Receipt (4-in-1 A4) - ${studentName} - ${receiptNo}`
-      });
-      return;
+  // Extract parent / student mobile number (prefill from student phone or fatherPhone)
+  const initialParentPhone = useMemo(() => {
+    const raw = student?.phone || (student as any)?.parentPhone || (student as any)?.fatherPhone || (student as any)?.motherPhone || fee.phone || "";
+    return raw ? String(raw).replace(/\D/g, "").slice(-10) : "";
+  }, [student, fee]);
+
+  const [parentMobile, setParentMobile] = useState<string>(initialParentPhone);
+
+  useEffect(() => {
+    if (initialParentPhone) {
+      setParentMobile(initialParentPhone);
     }
-    printDpsReceiptDirect(receiptData, "full");
+  }, [initialParentPhone]);
+
+  // Direct Print action (respects selected 4-in-1 A4 Sheet or Mini POS Slip)
+  const handlePrint = () => {
+    if (previewFormat === "4in1") {
+      printDpsReceiptDirect(receiptData, "4in1");
+    } else {
+      printPosSlipDirect(receiptData, 80);
+    }
   };
 
   const [isSharingWhatsApp, setIsSharingWhatsApp] = useState(false);
 
-  // WhatsApp share with authentic printable PDF document
-  const handleWhatsApp = async () => {
+  // WhatsApp share directly with parent mobile number
+  const handleWhatsApp = async (overridePhone?: string) => {
     setIsSharingWhatsApp(true);
     try {
+      const targetPhone = overridePhone !== undefined ? overridePhone : parentMobile;
       await shareFeeReceiptOnWhatsApp({
+        targetPhone,
         fee: {
           ...fee,
           receiptNo,
@@ -437,12 +313,14 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
         schoolName: receiptData.schoolName,
         className: resolvedClass,
         schoolDetails: {
+          schoolId: school?.id,
           schoolName: receiptData.schoolName,
           address: receiptData.schoolAddress,
           phone: receiptData.schoolPhone,
           email: receiptData.schoolEmail,
           affiliation: receiptData.schoolAffiliation,
           logoUrl: receiptData.schoolLogoUrl,
+          upiId: school?.upiId,
           principalSignatureUrl: receiptData.principalSignatureUrl,
           directorSignatureUrl: receiptData.directorSignatureUrl,
           principalName: receiptData.signatoryTitle,
@@ -474,16 +352,18 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
         schoolName: receiptData.schoolName,
         className: resolvedClass,
         schoolDetails: {
+          schoolId: school?.id,
           schoolName: receiptData.schoolName,
           address: receiptData.schoolAddress,
           logoUrl: receiptData.schoolLogoUrl,
+          upiId: school?.upiId,
           phone: receiptData.schoolPhone,
           email: receiptData.schoolEmail,
           affiliation: receiptData.schoolAffiliation,
           principalName: receiptData.principalName,
           principalSignatureUrl: receiptData.principalSignatureUrl,
         },
-        mode: layoutMode,
+        mode: previewFormat,
       });
     } catch (err) {
       console.error("PDF download error:", err);
@@ -493,57 +373,76 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
     }
   };
 
-  // Active view on mobile: "edit" or "preview"
-  const [mobileTab, setMobileTab] = useState<"preview" | "edit">("preview");
-
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-2 sm:p-4 bg-slate-950/80 backdrop-blur-xs animate-in fade-in duration-150">
-      <div className="w-full max-w-6xl bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[96vh]">
+      <div className="w-full max-w-5xl bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[96vh]">
         {/* Top Navbar */}
-        <div className="px-5 py-3.5 bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950 text-white flex items-center justify-between shrink-0 border-b border-white/10">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-white/10 border border-white/15 flex items-center justify-center text-amber-300 font-bold text-lg shadow-inner">
-              🏛️
+        <div className="px-4 sm:px-5 py-3.5 bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950 text-white flex items-center justify-between shrink-0 border-b border-white/10">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-xl bg-white/10 border border-white/15 flex items-center justify-center text-amber-300 font-bold text-lg shadow-inner shrink-0">
+              🧾
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base font-black text-white leading-tight">
-                  Official School Fee Receipt
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-base font-black text-white leading-tight truncate">
+                  {!fee.paid && totalPaid === 0 ? "Official Fee Due Demand Slip" : "Official School Fee Receipt"}
                 </h2>
-                <span className="text-[10px] bg-amber-400 text-slate-950 font-black px-2 py-0.5 rounded-full">
-                  Official 4-in-1 Layout
+                {totalPaid >= grandTotal && grandTotal > 0 ? (
+                  <span className="text-[10px] bg-emerald-500 text-white font-black px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm">
+                    <CheckCircle2 className="w-3 h-3" /> FULL PAID (पूर्ण भुगतान)
+                  </span>
+                ) : totalPaid > 0 ? (
+                  <span className="text-[10px] bg-amber-400 text-slate-950 font-black px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm">
+                    ⚠️ PARTIAL (जमा: ₹{totalPaid.toLocaleString("en-IN")})
+                  </span>
+                ) : (
+                  <span className="text-[10px] bg-rose-500 text-white font-black px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm">
+                    DEMAND SLIP (बकाया)
+                  </span>
+                )}
+                <span className="text-[10px] bg-amber-400/20 text-amber-300 border border-amber-400/30 font-black px-2 py-0.5 rounded-full">
+                  {previewFormat === "4in1" ? "4-in-1 A4 Sheet" : "Mini Thermal POS Slip"}
                 </span>
               </div>
-              <p className="text-xs text-slate-300">
-                {studentName} • Receipt #{receiptNo} • ₹{grandTotal.toLocaleString("en-IN")}
+              <p className="text-xs text-slate-300 truncate">
+                {studentName} • Receipt #{receiptNo} • <span className="text-amber-300 font-mono font-bold">{receiptDate}</span> • ₹{grandTotal.toLocaleString("en-IN")}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => handleWhatsApp()}
+              disabled={isSharingWhatsApp}
+              className="inline-flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-md shadow-emerald-900/30 active:scale-95 transition cursor-pointer disabled:opacity-50"
+              title="Direct WhatsApp share to parent mobile"
+            >
+              {isSharingWhatsApp ? <Loader2 className="w-4 h-4 animate-spin text-white" /> : <MessageCircle className="w-4 h-4" />}
+              <span className="hidden sm:inline">{isSharingWhatsApp ? "भेज रहे..." : "WhatsApp"}</span>
+            </button>
             <button
               onClick={handleDownloadPdf}
               disabled={isDownloadingPdf}
               className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl border border-white/20 active:scale-95 transition cursor-pointer disabled:opacity-50"
+              title="Download Receipt PDF"
             >
               <Download className="w-4 h-4 text-emerald-400" />
-              <span className="hidden sm:inline">{isDownloadingPdf ? "Saving PDF..." : "Download PDF"}</span>
-              <span className="sm:hidden">PDF</span>
+              <span className="hidden sm:inline">{isDownloadingPdf ? "Saving..." : "Download PDF"}</span>
             </button>
             <button
-              onClick={() => handlePrint("4in1")}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-blue-900/40 active:scale-95 transition cursor-pointer"
-              title="Ek A4 sheet me 4 receipts print karein"
+              onClick={handlePrint}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white text-xs font-black rounded-xl shadow-md shadow-orange-900/30 active:scale-95 transition cursor-pointer"
+              title="Mini Bluetooth / USB Thermal Printer (80mm/58mm Roll) par print karein"
             >
-              <Printer className="w-4 h-4 text-amber-300" />
-              <span className="hidden sm:inline">Print 4-in-1 A4</span>
-              <span className="sm:hidden">4-in-1</span>
+              <Printer className="w-4 h-4 text-amber-200" />
+              <span className="hidden sm:inline">Mini POS Print</span>
+              <span className="sm:hidden">POS</span>
             </button>
             <button
               onClick={onClose}
-              className="p-2 rounded-full hover:bg-white/10 text-slate-400 hover:text-white transition"
+              className="p-2 rounded-full hover:bg-white/10 text-slate-400 hover:text-white transition cursor-pointer"
               title="Close modal"
             >
               <X className="w-5 h-5" />
@@ -551,547 +450,121 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Mobile View Switcher */}
-        <div className="flex sm:hidden border-b border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800/60 p-1">
-          <button
-            onClick={() => setMobileTab("preview")}
-            className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition ${
-              mobileTab === "preview"
-                ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs"
-                : "text-slate-600 dark:text-slate-400"
-            }`}
-          >
-            👁️ Receipt Preview
-          </button>
-          <button
-            onClick={() => setMobileTab("edit")}
-            className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition ${
-              mobileTab === "edit"
-                ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs"
-                : "text-slate-600 dark:text-slate-400"
-            }`}
-          >
-            ✏️ Customize Fields
-          </button>
-        </div>
-
-        {/* Modal Body: Split 2 columns on desktop */}
-        <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
-          {/* Left Column: Customizer & Settings */}
-          <div
-            className={`w-full md:w-[420px] lg:w-[460px] border-r border-slate-200 dark:border-slate-800 overflow-y-auto p-4 space-y-4 bg-slate-50 dark:bg-slate-900/50 shrink-0 ${
-              mobileTab === "edit" ? "block" : "hidden md:block"
-            }`}
-          >
-            {/* Receipt Type Switcher Card */}
-            <div className="p-3 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xs space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-black uppercase tracking-wider text-slate-700 dark:text-slate-300">
-                  रसीद प्रकार (Receipt Type):
-                </span>
-                <button
-                  type="button"
-                  onClick={loadDpsScreenshotSample}
-                  className="px-2 py-0.5 text-[10px] font-bold bg-amber-500/15 text-amber-800 dark:text-amber-300 hover:bg-amber-500/25 border border-amber-400/30 rounded-lg transition flex items-center gap-1"
-                >
-                  <Sparkles className="w-3 h-3 text-amber-500" />
-                  <span>Sample Format</span>
-                </button>
-              </div>
-
-              <div className="grid grid-cols-2 gap-1.5">
-                <button
-                  type="button"
-                  onClick={loadMonthlyFeeFormat}
-                  className={`px-3 py-2 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-all ${
-                    receiptCategory === "monthly"
-                      ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
-                      : "bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-200"
-                  }`}
-                >
-                  <span>📄 मासिक रसीद</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={loadAdmissionFeeFormat}
-                  className={`px-3 py-2 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-all ${
-                    receiptCategory === "admission"
-                      ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/30"
-                      : "bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-200"
-                  }`}
-                >
-                  <span>🎓 प्रवेश रसीद</span>
-                </button>
-              </div>
-              <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                {receiptCategory === "monthly"
-                  ? "✓ मासिक रसीद: सिर्फ Monthly Fee + पिछला बकाया (Back Due) रहेगा।"
-                  : "✓ प्रवेश रसीद: नामांकन, रजिस्ट्रेशन, विकास कोष व किट शुल्क रहेंगे।"}
-              </p>
-            </div>
-
-            {/* ── SCHOOL BRANDING & LOGO SECTION ── */}
-            <div className="p-3.5 bg-indigo-50/70 dark:bg-indigo-950/30 rounded-2xl border border-indigo-200 dark:border-indigo-800 space-y-2.5 shadow-xs">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xs font-black text-indigo-950 dark:text-indigo-200 uppercase tracking-wider flex items-center gap-1.5">
-                  <Building2 className="w-4 h-4 text-indigo-600" />
-                  <span>School Logo &amp; Identity</span>
-                </h3>
-                {schoolLogoUrl && (
-                  <button
-                    type="button"
-                    onClick={() => handleLogoUploaded("")}
-                    className="text-[10px] text-red-500 font-bold hover:underline"
-                  >
-                    Clear Logo
-                  </button>
-                )}
-              </div>
-
-              <div className="flex items-center gap-3">
-                <div className="w-14 h-14 rounded-xl border-2 border-indigo-200 dark:border-indigo-700 bg-white dark:bg-slate-800 flex items-center justify-center p-1 shrink-0 overflow-hidden shadow-xs">
-                  {schoolLogoUrl && !isAppLogo(schoolLogoUrl) ? (
-                    <img src={schoolLogoUrl} alt="School Logo" className="w-full h-full object-contain" />
-                  ) : (
-                    <span className="text-xs font-black text-indigo-400 text-center">
-                      {(schoolNameState || "SC").slice(0, 3).toUpperCase()}
+        {/* Modal Body: Clean Direct Preview with Direct Parent WhatsApp Share Card */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-slate-100 dark:bg-slate-950/60 flex flex-col items-center">
+          {/* ── Direct WhatsApp Share to Parent Mobile Number Card ── */}
+          <div className="w-full max-w-[540px] bg-gradient-to-r from-emerald-50 via-teal-50 to-green-50 dark:from-emerald-950/40 dark:via-teal-950/40 dark:to-slate-900 border border-emerald-300 dark:border-emerald-700/60 rounded-2xl p-4 mb-4 shadow-sm">
+            <div className="flex items-center justify-between mb-2.5">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-black shadow-md shadow-emerald-700/25 shrink-0">
+                  <MessageCircle className="w-5 h-5 text-amber-300" />
+                </div>
+                <div>
+                  <h4 className="text-xs sm:text-sm font-black text-emerald-950 dark:text-emerald-100 flex items-center gap-1.5">
+                    अभिभावक के WhatsApp पर रसीद भेजें
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-200 text-emerald-900 dark:bg-emerald-900 dark:text-emerald-200">
+                      Direct WhatsApp
                     </span>
-                  )}
-                </div>
-
-                <div className="flex-1 space-y-1.5 min-w-0">
-                  <DirectUploadButton
-                    kind="image"
-                    compact
-                    currentUrl={schoolLogoUrl}
-                    onUploaded={handleLogoUploaded}
-                    onClear={() => handleLogoUploaded("")}
-                    label={schoolLogoUrl ? "Change School Logo" : "Upload School Logo"}
-                  />
-                  <input
-                    type="text"
-                    value={schoolLogoUrl}
-                    onChange={e => handleLogoUploaded(e.target.value)}
-                    placeholder="Paste Logo URL or Google Drive Link"
-                    className="w-full px-2 py-1 text-[11px] rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-white font-mono"
-                  />
-                </div>
-              </div>
-
-              {logoSaveNotice && (
-                <p className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
-                  {logoSaveNotice}
-                </p>
-              )}
-            </div>
-
-            {/* Basic Metadata */}
-            <div className="p-3.5 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-2.5 shadow-xs">
-              <h3 className="text-xs font-black text-slate-800 dark:text-white uppercase tracking-wider flex items-center gap-1.5">
-                <Edit3 className="w-3.5 h-3.5 text-indigo-500" />
-                <span>Student &amp; Receipt Info</span>
-              </h3>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-[10px] font-bold text-slate-500 block mb-0.5">Receipt No</label>
-                  <input
-                    type="text"
-                    value={receiptNo}
-                    onChange={e => setReceiptNo(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-500 block mb-0.5">Admission No</label>
-                  <input
-                    type="text"
-                    value={admissionNo}
-                    onChange={e => setAdmissionNo(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[10px] font-bold text-slate-500 block mb-0.5">Student Full Name</label>
-                <input
-                  type="text"
-                  value={studentName}
-                  onChange={e => setStudentName(e.target.value)}
-                  className="w-full px-2.5 py-1.5 text-xs font-bold uppercase rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white"
-                />
-              </div>
-
-              {/* Student Picture (Photo) */}
-              <div className="pt-1 border-t border-slate-200 dark:border-slate-700">
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-[10px] font-bold text-slate-500 flex items-center gap-1">
-                    <span>📸 Student Photo (Picture)</span>
-                  </label>
-                  {studentPhotoUrl && (
-                    <button
-                      type="button"
-                      onClick={() => setStudentPhotoUrl("")}
-                      className="text-[10px] text-red-500 hover:underline font-bold"
-                    >
-                      Clear
-                    </button>
-                  )}
-                </div>
-                <div className="flex items-center gap-2.5">
-                  <div className="w-12 h-14 rounded border border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-900 overflow-hidden flex items-center justify-center shrink-0">
-                    {studentPhotoUrl ? (
-                      <img src={studentPhotoUrl} alt="Photo" className="w-full h-full object-cover" />
-                    ) : (
-                      <span className="text-[9px] text-slate-400 font-bold">No Pic</span>
-                    )}
-                  </div>
-                  <div className="flex-1 space-y-1">
-                    <input
-                      type="text"
-                      value={studentPhotoUrl}
-                      onChange={e => setStudentPhotoUrl(e.target.value)}
-                      placeholder="Paste Photo URL"
-                      className="w-full px-2 py-1 text-[11px] rounded border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white font-mono"
-                    />
-                    <label className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-300 rounded border border-indigo-200 dark:border-indigo-800 cursor-pointer hover:bg-indigo-100 transition">
-                      <span>📁 Upload from device</span>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="sr-only"
-                        onChange={e => {
-                          const file = e.target.files?.[0];
-                          if (!file) return;
-                          const reader = new FileReader();
-                          reader.onload = ev => {
-                            if (typeof ev.target?.result === "string") {
-                              setStudentPhotoUrl(ev.target.result);
-                            }
-                          };
-                          reader.readAsDataURL(file);
-                        }}
-                      />
-                    </label>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-[10px] font-bold text-slate-500 block mb-0.5">Installment / Period</label>
-                  <input
-                    type="text"
-                    value={installment}
-                    onChange={e => setInstallment(e.target.value)}
-                    placeholder="e.g. JULY-SEP"
-                    className="w-full px-2.5 py-1.5 text-xs font-bold uppercase rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-500 block mb-0.5">Receipt Date</label>
-                  <input
-                    type="text"
-                    value={receiptDate}
-                    onChange={e => setReceiptDate(e.target.value)}
-                    placeholder="DD/MM/YYYY"
-                    className="w-full px-2.5 py-1.5 text-xs font-bold rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-2">
-                <div>
-                  <label className="text-[10px] font-bold text-slate-500 block mb-0.5">Class</label>
-                  <input
-                    type="text"
-                    value={resolvedClass}
-                    onChange={e => setResolvedClass(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs font-bold rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-500 block mb-0.5">Session</label>
-                  <input
-                    type="text"
-                    value={session}
-                    onChange={e => setSession(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs font-bold rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-500 block mb-0.5">Counter No</label>
-                  <input
-                    type="text"
-                    value={counterNo}
-                    onChange={e => setCounterNo(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs font-bold rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white"
-                  />
+                  </h4>
+                  <p className="text-[11px] text-emerald-700 dark:text-emerald-300">
+                    छात्र: <strong className="text-slate-900 dark:text-white">{studentName}</strong> • {resolvedClass} {student?.fatherName ? `• C/O ${student.fatherName}` : ""}
+                  </p>
                 </div>
               </div>
             </div>
 
-            {/* Fee Items Table Customizer */}
-            <div className="p-3.5 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-2.5 shadow-xs">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xs font-black text-slate-800 dark:text-white uppercase tracking-wider">
-                  Itemized Fee Breakdown
-                </h3>
-                <button
-                  type="button"
-                  onClick={handleAddItem}
-                  className="px-2 py-1 text-[11px] font-bold bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 rounded-lg flex items-center gap-1 transition"
-                >
-                  <Plus className="w-3 h-3" />
-                  <span>Add Head</span>
-                </button>
-              </div>
-
-              <div className="space-y-2">
-                {items.map((item, index) => (
-                  <div
-                    key={item.id}
-                    className="p-2.5 bg-slate-50 dark:bg-slate-900/60 rounded-xl border border-slate-200 dark:border-slate-700 space-y-1.5"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[10px] font-bold text-slate-400">#{item.slNo}</span>
-                      <input
-                        type="text"
-                        value={item.description}
-                        onChange={e => {
-                          const val = e.target.value;
-                          setItems(prev =>
-                            prev.map(it => (it.id === item.id ? { ...it, description: val } : it))
-                          );
-                        }}
-                        placeholder="Description (e.g. Tuition Fee)"
-                        className="flex-1 px-2 py-1 text-xs font-semibold rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
-                      />
-                      {items.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveItem(item.id)}
-                          className="p-1 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded transition"
-                          title="Remove item"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                    <div className="grid grid-cols-3 gap-1.5">
-                      <div>
-                        <label className="text-[9px] font-bold text-slate-500 block">Due (₹)</label>
-                        <input
-                          type="number"
-                          value={item.due}
-                          onChange={e => {
-                            const val = Number(e.target.value) || 0;
-                            setItems(prev =>
-                              prev.map(it => (it.id === item.id ? { ...it, due: val } : it))
-                            );
-                          }}
-                          className="w-full px-2 py-1 text-xs font-bold rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[9px] font-bold text-slate-500 block">Con (₹)</label>
-                        <input
-                          type="number"
-                          value={item.con}
-                          onChange={e => {
-                            const val = Number(e.target.value) || 0;
-                            setItems(prev =>
-                              prev.map(it => (it.id === item.id ? { ...it, con: val } : it))
-                            );
-                          }}
-                          className="w-full px-2 py-1 text-xs font-bold rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[9px] font-bold text-slate-500 block">Paid (₹)</label>
-                        <input
-                          type="number"
-                          value={item.paid}
-                          onChange={e => {
-                            const val = Number(e.target.value) || 0;
-                            setItems(prev =>
-                              prev.map(it => (it.id === item.id ? { ...it, paid: val } : it))
-                            );
-                          }}
-                          className="w-full px-2 py-1 text-xs font-bold text-emerald-700 dark:text-emerald-400 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Total calculations */}
-              <div className="pt-2 border-t border-slate-200 dark:border-slate-700 flex justify-between items-center text-xs font-bold">
-                <span className="text-slate-500">Calculated Grand Total:</span>
-                <span className="text-sm font-black text-indigo-600 dark:text-indigo-400">
-                  ₹{grandTotal.toLocaleString("en-IN")}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+              <div className="relative flex-1">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-black text-slate-500 select-none flex items-center gap-1">
+                  <span>🇮🇳</span>
+                  <span>+91</span>
                 </span>
-              </div>
-            </div>
-
-            {/* Pay Mode Information */}
-            <div className="p-3.5 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-2.5 shadow-xs">
-              <h3 className="text-xs font-black text-slate-800 dark:text-white uppercase tracking-wider">
-                Pay Mode Information
-              </h3>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-[10px] font-bold text-slate-500 block mb-0.5">Pay Mode</label>
-                  <select
-                    value={payMode}
-                    onChange={e => setPayMode(e.target.value)}
-                    className="w-full px-2 py-1.5 text-xs font-bold rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white"
-                  >
-                    <option value="Cheque">Cheque</option>
-                    <option value="Cash">Cash</option>
-                    <option value="Online / UPI">Online / UPI</option>
-                    <option value="Bank Transfer">Bank Transfer / NEFT</option>
-                    <option value="Demand Draft">Demand Draft</option>
-                    <option value="Card">Debit / Credit Card</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-500 block mb-0.5">Payment Date</label>
-                  <input
-                    type="text"
-                    value={payDate}
-                    onChange={e => setPayDate(e.target.value)}
-                    placeholder="DD/MM/YYYY"
-                    className="w-full px-2 py-1.5 text-xs font-bold rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-[10px] font-bold text-slate-500 block mb-0.5">Bank / Channel</label>
-                  <input
-                    type="text"
-                    value={bank}
-                    onChange={e => setBank(e.target.value)}
-                    placeholder="e.g. HDFC BANK / CASH"
-                    className="w-full px-2 py-1.5 text-xs font-bold uppercase rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-500 block mb-0.5">Cheque / Ref No</label>
-                  <input
-                    type="text"
-                    value={chequeNumber}
-                    onChange={e => setChequeNumber(e.target.value)}
-                    placeholder="e.g. 689870,06,07"
-                    className="w-full px-2 py-1.5 text-xs font-mono font-bold rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[10px] font-bold text-slate-500 block mb-0.5">Receipt Note / Memo</label>
                 <input
-                  type="text"
-                  value={note}
-                  onChange={e => setNote(e.target.value)}
-                  placeholder="e.g. 356"
-                  className="w-full px-2 py-1.5 text-xs font-bold rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white"
+                  type="tel"
+                  maxLength={10}
+                  value={parentMobile}
+                  onChange={(e) => setParentMobile(e.target.value.replace(/\D/g, "").slice(0, 10))}
+                  placeholder="Parent WhatsApp No (10 अंक)"
+                  className="w-full pl-15 pr-3 py-2.5 text-xs font-mono font-bold rounded-xl border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 shadow-inner"
                 />
               </div>
+              <button
+                type="button"
+                onClick={() => handleWhatsApp(parentMobile)}
+                disabled={isSharingWhatsApp}
+                className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-black rounded-xl shadow-md shadow-emerald-800/30 active:scale-95 transition flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer whitespace-nowrap"
+              >
+                {isSharingWhatsApp ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-white" />
+                ) : (
+                  <Send className="w-4 h-4 text-amber-300" />
+                )}
+                <span>{isSharingWhatsApp ? "भेज रहे हैं..." : "WhatsApp पर भेजें"}</span>
+              </button>
+            </div>
+            <p className="text-[10px] text-emerald-800/80 dark:text-emerald-400/80 mt-1.5 flex items-center gap-1">
+              <span>💡</span>
+              <span>अभिभावक का मोबाइल नंबर यहां बदलें या सीधे हरे बटन पर क्लिक करें। रसीद विवरण सीधे इसी नंबर पर जाएगा।</span>
+            </p>
+          </div>
 
-              <div className="pt-2 flex items-center justify-between">
-                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 cursor-pointer flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={showDigitalSign}
-                    onChange={e => setShowDigitalSign(e.target.checked)}
-                    className="rounded text-indigo-600 w-4 h-4"
-                  />
-                  <span>Attach Principal Digital Signature</span>
-                </label>
-              </div>
+          {/* Format Switcher: 4-in-1 A4 Sheet vs Mini Thermal POS */}
+          <div className="w-full max-w-[540px] flex items-center justify-between gap-2 mb-3 bg-white dark:bg-slate-900 p-1.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-2xs">
+            <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300 px-2">
+              Receipt Print Format:
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setPreviewFormat("4in1")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
+                  previewFormat === "4in1"
+                    ? "bg-indigo-600 text-white shadow-xs"
+                    : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                }`}
+              >
+                📄 4-in-1 A4 Sheet
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreviewFormat("pos")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
+                  previewFormat === "pos"
+                    ? "bg-amber-600 text-white shadow-xs"
+                    : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                }`}
+              >
+                🧾 Mini POS Slip
+              </button>
             </div>
           </div>
 
-          {/* Right Column: Live Real-Time Document Preview */}
-          <div
-            className={`flex-1 overflow-y-auto p-4 sm:p-6 bg-slate-200/80 dark:bg-slate-950/60 flex flex-col items-center ${
-              mobileTab === "preview" ? "flex" : "hidden md:flex"
-            }`}
-          >
-            {/* Format Toggle Bar */}
-            <div className="w-full max-w-[760px] mb-3 bg-white dark:bg-slate-900 p-2 rounded-2xl border border-slate-300 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 shadow-xs">
-              <div className="flex items-center gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
-                <button
-                  type="button"
-                  onClick={() => setLayoutMode("4in1")}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1.5 cursor-pointer ${
-                    layoutMode === "4in1"
-                      ? "bg-blue-600 text-white shadow-xs"
-                      : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
-                  }`}
-                >
-                  <span>📑 4 Receipts per A4 (4-in-1)</span>
-                  <span className="text-[10px] bg-amber-400 text-slate-950 font-black px-1.5 py-0.2 rounded-full">
-                    Recommended
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setLayoutMode("full")}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                    layoutMode === "full"
-                      ? "bg-blue-600 text-white shadow-xs"
-                      : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
-                  }`}
-                >
-                  <span>📄 1 Receipt per A4 (Full)</span>
-                </button>
-              </div>
+          {/* Inject Receipt & Thermal POS CSS */}
+          <style>{DPS_RECEIPT_CSS}</style>
+          <style>{POS_SLIP_CSS}</style>
 
-              <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400 flex items-center gap-1.5 px-2">
-                {layoutMode === "4in1" ? (
-                  <>
-                    <span className="text-amber-500">✂️</span>
-                    <span>1 A4 Sheet = 4 Copies (Student, Office, Accounts, Parent)</span>
-                  </>
-                ) : (
-                  <span>Standard 1-Page Official Receipt</span>
-                )}
-              </div>
-            </div>
-
-            <div className="w-full max-w-[760px] flex justify-center">
-              {/* Inject CSS styling for DPS layout */}
-              <style>{DPS_RECEIPT_CSS}</style>
-
-              {/* RENDER LIVE EXACT DPS CARD (4-in-1 or Full) */}
-              {layoutMode === "4in1" ? (
-                <div
-                  className="w-full"
-                  dangerouslySetInnerHTML={{
-                    __html: generate4in1A4PageHtml([
-                      { data: receiptData, copyTitle: "STUDENT COPY" },
-                      { data: receiptData, copyTitle: "SCHOOL / OFFICE COPY" },
-                      { data: receiptData, copyTitle: "ACCOUNTS COPY" },
-                      { data: receiptData, copyTitle: "PARENT / GUARDIAN COPY" },
-                    ]),
-                  }}
-                />
-              ) : (
-                <div
-                  className="w-full max-w-[650px]"
-                  dangerouslySetInnerHTML={{
-                    __html: generateDpsReceiptHtml(receiptData, { layout: "full" }),
-                  }}
-                />
-              )}
-            </div>
+          {/* RENDER LIVE 4-IN-1 SHEET OR MINI POS THERMAL SLIP */}
+          <div className="w-full flex justify-center py-1 overflow-x-auto">
+            {previewFormat === "4in1" ? (
+              <div
+                className="w-full flex justify-center"
+                dangerouslySetInnerHTML={{
+                  __html: generate4in1A4PageHtml([
+                    { data: receiptData, copyTitle: "STUDENT COPY" },
+                    { data: receiptData, copyTitle: "SCHOOL / OFFICE COPY" },
+                    { data: receiptData, copyTitle: "ACCOUNTS COPY" },
+                    { data: receiptData, copyTitle: "PARENT / GUARDIAN COPY" },
+                  ]),
+                }}
+              />
+            ) : (
+              <div
+                className="w-full flex justify-center"
+                dangerouslySetInnerHTML={{
+                  __html: generatePosSlipHtml(receiptData, { rollWidthMm: 80 }),
+                }}
+              />
+            )}
           </div>
         </div>
 
@@ -1100,12 +573,13 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
           <div className="flex items-center gap-2 flex-wrap">
             <button
               type="button"
-              onClick={handleWhatsApp}
-              className="px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition flex items-center gap-1.5 shadow-sm cursor-pointer"
-              title="Share receipt directly on parent WhatsApp"
+              onClick={() => handleWhatsApp(parentMobile)}
+              disabled={isSharingWhatsApp}
+              className="px-4 py-2 rounded-xl text-xs font-black bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white transition flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer disabled:opacity-50"
+              title="Share receipt directly on parent WhatsApp number"
             >
-              <MessageCircle className="w-4 h-4" />
-              <span>Share on WhatsApp</span>
+              {isSharingWhatsApp ? <Loader2 className="w-4 h-4 animate-spin" /> : <MessageCircle className="w-4 h-4 text-amber-300" />}
+              <span>WhatsApp पर भेजें</span>
             </button>
             <button
               type="button"
@@ -1118,20 +592,21 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
             </button>
             <button
               type="button"
-              onClick={() => handlePrint("4in1")}
-              className="px-4 py-2 rounded-xl text-xs font-black bg-blue-600 hover:bg-blue-700 text-white transition flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
-              title="Print 4 receipts on one A4 paper"
+              onClick={() => printDpsReceiptDirect(receiptData, "4in1")}
+              className="px-3.5 py-2 rounded-xl text-xs font-black bg-indigo-600 hover:bg-indigo-500 text-white transition flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
+              title="A4 4-in-1 Sheet print karein"
             >
-              <Printer className="w-4 h-4 text-amber-300" />
-              <span>Print 4-in-1 A4 Sheet</span>
+              <Printer className="w-4 h-4 text-indigo-200" />
+              <span>📄 Print 4-in-1 Sheet</span>
             </button>
             <button
               type="button"
-              onClick={() => handlePrint("full")}
-              className="px-3 py-2 rounded-xl text-xs font-bold bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-100 transition flex items-center gap-1 cursor-pointer"
-              title="Print 1 full page receipt"
+              onClick={() => printPosSlipDirect(receiptData, 80)}
+              className="px-3.5 py-2 rounded-xl text-xs font-black bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white transition flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
+              title="Mini Thermal POS Printer (80mm/58mm Roll) par turant print karein"
             >
-              <span>Full A4</span>
+              <Printer className="w-4 h-4 text-amber-200" />
+              <span>🧾 Print Mini POS</span>
             </button>
           </div>
 
