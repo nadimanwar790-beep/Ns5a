@@ -5,6 +5,16 @@ const RTDB_BASE_URL =
   process.env.FIREBASE_DATABASE_URL ||
   "https://nst2512-6a2e4-default-rtdb.asia-southeast1.firebasedatabase.app";
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "nst2512-6a2e4";
+const TG_BOT_TOKEN = (
+  process.env.TELEGRAM_BOT_TOKEN ||
+  process.env.VITE_TELEGRAM_BOT_TOKEN ||
+  "8932524192:AAGVxYSuKPZX6sOQFkXz0U7ESVQ2NcHmJZw"
+).trim();
+const TG_CHAT_CHANNEL_ID = (
+  process.env.TELEGRAM_CHAT_CHANNEL_ID ||
+  process.env.VITE_TELEGRAM_CHAT_CHANNEL_ID ||
+  "-1004290996442"
+).trim();
 
 interface LinkedStudentPushMeta {
   id: string;
@@ -169,8 +179,8 @@ async function dispatchWebPush(
 }
 
 async function getFcmAccessToken(): Promise<string | null> {
-  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-  const rawPrivateKey = process.env.FIREBASE_PRIVATE_KEY;
+  const clientEmail = (process.env.FIREBASE_CLIENT_EMAIL || "").trim().replace(/^["']+|["',\s]+$/g, "");
+  const rawPrivateKey = (process.env.FIREBASE_PRIVATE_KEY || "").trim().replace(/^["']+|["',\s]+$/g, "");
   if (!clientEmail || !rawPrivateKey) return null;
 
   if (cachedFcmAccessToken && Date.now() < cachedFcmAccessToken.expiresAt - 60_000) {
@@ -596,6 +606,35 @@ export default async function handler(req: any, res: any) {
         );
       }
       return res.status(200).json({ ok: true, delivered });
+    }
+
+    if (method === "GET" && rawPath === "telegram/health") {
+      const r = await fetch(`https://api.telegram.org/bot${TG_BOT_TOKEN}/getMe`);
+      const data = await r.json().catch(() => ({ ok: false }));
+      return res.status(r.ok ? 200 : 502).json({ ok: Boolean(data?.ok), bot: data?.result, error: data?.description });
+    }
+
+    if (method === "POST" && rawPath === "telegram/sendMessage") {
+      const { text, chat_id, reply_to_message_id, parse_mode = "HTML" } = req.body || {};
+      const r = await fetch(`https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chat_id || TG_CHAT_CHANNEL_ID,
+          text,
+          reply_to_message_id,
+          parse_mode,
+        }),
+      });
+      const data = await r.json().catch(() => ({ ok: false }));
+      return res.status(r.ok ? 200 : 502).json(data);
+    }
+
+    if (method === "GET" && rawPath === "telegram/file") {
+      const filePath = String(req.query?.path || "");
+      const token = String(req.query?.token || TG_BOT_TOKEN);
+      if (!filePath) return res.status(400).json({ error: "Missing path" });
+      return res.redirect(302, `https://api.telegram.org/file/bot${token}/${filePath}`);
     }
 
     return res.status(404).json({ error: `Unknown push endpoint: ${rawPath}` });

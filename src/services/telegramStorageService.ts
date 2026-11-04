@@ -16,13 +16,18 @@
  * - Files are served via /api/telegram/file with full CORS, Range requests & caching
  */
 
-export const DEFAULT_STORAGE_CHAT_ID = '7849468653'; // Verified Telegram chat ID
-export const DEFAULT_BOT_TOKEN = '8932524192:AAGVxYSuKPZX6sOQFkXz0U7ESVQ2NcHmJZw'; // @PothiaAppBot
-export const DEFAULT_STORAGE_BOT_TOKEN = '8932524192:AAGVxYSuKPZX6sOQFkXz0U7ESVQ2NcHmJZw';
+const _env = (typeof import.meta !== 'undefined' && (import.meta as any).env) || {};
+
+export const DEFAULT_STORAGE_CHAT_ID =
+  (_env.VITE_TELEGRAM_STORAGE_CHAT_ID || '7849468653').trim(); // Verified Telegram chat ID
+export const DEFAULT_BOT_TOKEN =
+  (_env.VITE_TELEGRAM_BOT_TOKEN || '8932524192:AAGVxYSuKPZX6sOQFkXz0U7ESVQ2NcHmJZw').trim(); // @PothiaAppBot
+export const DEFAULT_STORAGE_BOT_TOKEN = DEFAULT_BOT_TOKEN;
 
 // Chat Bot & Channel (Nsta Messenger & Community)
-export const DEFAULT_CHAT_CHANNEL_ID = '-1004290996442'; // Nsta messanger channel
-export const DEFAULT_CHAT_BOT_TOKEN = '8932524192:AAGVxYSuKPZX6sOQFkXz0U7ESVQ2NcHmJZw'; // @PothiaAppBot
+export const DEFAULT_CHAT_CHANNEL_ID =
+  (_env.VITE_TELEGRAM_CHAT_CHANNEL_ID || '-1004290996442').trim(); // Nsta messanger channel
+export const DEFAULT_CHAT_BOT_TOKEN = DEFAULT_BOT_TOKEN;
 export const TELEGRAM_CHAT_INVITE_LINK = 'https://t.me/+p0aIY7YWgGxhYzk1';
 const STORAGE_CHAT_KEY = 'nst_telegram_storage_chat_id';
 

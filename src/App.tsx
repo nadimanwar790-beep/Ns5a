@@ -99,13 +99,22 @@ const Auth = lazyWithRetry(
 
 export type AppViewMode = 'STUDENT' | 'ADMIN' | 'SCHOOL_ERP';
 
-const isSchoolAdminEmail = (emailStr?: string | null): boolean => {
+export const isSuperAdminEmail = (emailStr?: string | null): boolean => {
   if (!emailStr) return false;
   const clean = emailStr.trim().toLowerCase();
   return (
-    clean === 'n44438403@gmail.com' ||
     clean === 'nadimanwar794@gmail.com' ||
+    clean === 'nsdimanwar794@gmail.com' ||
     clean === 'nadiman0636indo@gmail.com' ||
+    clean === 'n44438403@gmail.com'
+  );
+};
+
+export const isSchoolAdminEmail = (emailStr?: string | null): boolean => {
+  if (!emailStr) return false;
+  const clean = emailStr.trim().toLowerCase();
+  if (isSuperAdminEmail(clean)) return false;
+  return (
     clean === 'admin@dps.edu.in' ||
     clean === 'dpsgurgaon45@dps.edu.in' ||
     clean.startsWith('admin@') ||
@@ -123,7 +132,9 @@ const getInitialUser = () => {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && (parsed.id || parsed.uid)) {
-        if (isSchoolAdminEmail(parsed.email) && parsed.role !== 'SUPERADMIN') {
+        if (isSuperAdminEmail(parsed.email)) {
+          parsed.role = 'SUPERADMIN';
+        } else if (isSchoolAdminEmail(parsed.email) && parsed.role !== 'SUPERADMIN') {
           parsed.role = 'SCHOOL_ADMIN';
         }
         return parsed;
@@ -213,6 +224,9 @@ export function App() {
   };
 
   const handleLogin = (newUser: any) => {
+    if (newUser && isSuperAdminEmail(newUser.email)) {
+      newUser.role = 'SUPERADMIN';
+    }
     try {
       localStorage.removeItem('nst_logged_out');
       localStorage.setItem('nst_current_user', JSON.stringify(newUser));
@@ -493,7 +507,7 @@ export function App() {
               uid={user.uid || user.id || 'admin_uid'}
               email={user.email || ''}
               displayName={user.name || (user.role === 'TEACHER' ? 'Teacher' : isSchoolAdminEmail(user.email) || user.role === 'SCHOOL_ADMIN' ? 'Dr. Arvind Swaminathan (School Admin)' : 'Student')}
-              isSuperAdmin={user.role === 'SUPERADMIN'}
+              isSuperAdmin={user.role === 'SUPERADMIN' || user.role === 'ADMIN'}
               userRole={user.role || (isSchoolAdminEmail(user.email) ? 'SCHOOL_ADMIN' : 'STUDENT')}
               user={user}
               defaultSchoolId={user.schoolId || 'dps_gurgaon_sector45'}

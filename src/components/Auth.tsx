@@ -1340,32 +1340,37 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
       const result = await signInWithPopup(auth, provider);
       const fbUser = result.user;
 
-      const isAdm =
-        (fbUser.email && (
-          fbUser.email.toLowerCase() === 'n44438403@gmail.com' ||
-          fbUser.email.toLowerCase() === 'nadimanwar794@gmail.com' ||
-          fbUser.email.toLowerCase() === 'nadiman0636indo@gmail.com' ||
-          fbUser.email.toLowerCase() === 'admin@dps.edu.in' ||
-          fbUser.email.toLowerCase().startsWith('admin@') ||
-          fbUser.email.toLowerCase().includes('principal') ||
-          fbUser.email.toLowerCase().includes('schooladmin')
-        ));
+      const cleanEmail = (fbUser.email || '').toLowerCase().trim();
+      const isSuperAdm =
+        cleanEmail === 'nadimanwar794@gmail.com' ||
+        cleanEmail === 'nsdimanwar794@gmail.com' ||
+        cleanEmail === 'nadiman0636indo@gmail.com' ||
+        cleanEmail === 'n44438403@gmail.com';
+
+      const isSchoolAdm =
+        !isSuperAdm &&
+        (cleanEmail === 'admin@dps.edu.in' ||
+         cleanEmail === 'dpsgurgaon45@dps.edu.in' ||
+         cleanEmail.startsWith('admin@') ||
+         cleanEmail.includes('principal') ||
+         cleanEmail.includes('schooladmin'));
 
       const loggedUser: User = {
         id: fbUser.uid,
         uid: fbUser.uid,
-        displayId: isAdm ? 'ADMIN-DPS' : `NSTA-${fbUser.uid.slice(0, 6).toUpperCase()}`,
-        name: fbUser.displayName || (isAdm ? 'Dr. Arvind Swaminathan (School Admin & Principal)' : 'Student'),
+        displayId: isSuperAdm ? 'SUPERADMIN' : isSchoolAdm ? 'ADMIN-DPS' : `NSTA-${fbUser.uid.slice(0, 6).toUpperCase()}`,
+        name: fbUser.displayName || (isSuperAdm ? 'Nadim Anwar (Super Admin)' : isSchoolAdm ? 'Dr. Arvind Swaminathan (School Admin)' : 'Student'),
         email: fbUser.email || '',
         photoURL: fbUser.photoURL || '',
-        role: isAdm ? 'SCHOOL_ADMIN' : 'STUDENT',
-        schoolId: 'dps_gurgaon_sector45',
+        role: isSuperAdm ? 'SUPERADMIN' : isSchoolAdm ? 'SCHOOL_ADMIN' : 'STUDENT',
+        // No hardcoded school for SuperAdmin or general Google users; they link dynamically
+        schoolId: isSchoolAdm ? 'dps_gurgaon_sector45' : '',
         classLevel: '10',
-        credits: isAdm ? 10000 : 50,
+        credits: isSuperAdm ? 99999 : isSchoolAdm ? 10000 : 50,
         streak: 1,
         totalScore: 0,
         profileCompleted: true,
-        provider: isAdm ? 'admin_login' : 'google'
+        provider: isSuperAdm ? 'superadmin_login' : isSchoolAdm ? 'admin_login' : 'google'
       };
 
       triggerLoginSuccess(loggedUser);

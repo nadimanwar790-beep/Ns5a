@@ -15,8 +15,8 @@ const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "nst2512-6a2e4";
 let cachedFcmAccessToken: { token: string; expiresAt: number } | null = null;
 
 async function getFcmAccessToken(): Promise<string | null> {
-  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-  const rawPrivateKey = process.env.FIREBASE_PRIVATE_KEY;
+  const clientEmail = (process.env.FIREBASE_CLIENT_EMAIL || "").trim().replace(/^["']+|["',\s]+$/g, "");
+  const rawPrivateKey = (process.env.FIREBASE_PRIVATE_KEY || "").trim().replace(/^["']+|["',\s]+$/g, "");
   if (!clientEmail || !rawPrivateKey) return null;
 
   if (cachedFcmAccessToken && Date.now() < cachedFcmAccessToken.expiresAt - 60_000) {
@@ -737,6 +737,28 @@ async function startServer() {
       delivered += fcmDelivered;
     }
     res.json({ ok: true, delivered });
+  });
+
+  // Digital Asset Links for Android App / Trusted Web Activity (TWA) verification
+  app.get("/.well-known/assetlinks.json", (_req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    const assetlinksPath = path.join(ROOT_DIR, "public", ".well-known", "assetlinks.json");
+    if (fs.existsSync(assetlinksPath)) {
+      res.sendFile(assetlinksPath);
+    } else {
+      res.json([
+        {
+          relation: ["delegate_permission/common.handle_all_urls"],
+          target: {
+            namespace: "android_app",
+            package_name: "app.vercel.sms2027.twa",
+            sha256_cert_fingerprints: [
+              "6A:E1:82:0D:45:BB:8F:02:B9:D6:E4:6A:70:8E:20:83:2F:9D:7A:0C:88:2E:36:77:96:80:97:D7:35:84:2A:1D"
+            ]
+          }
+        }
+      ]);
+    }
   });
 
   // Periodic background scheduler (checks every 15 minutes for new month's pending fee alerts)

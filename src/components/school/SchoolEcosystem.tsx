@@ -175,13 +175,22 @@ interface Props {
   onLogout?: () => void;
 }
 
-const isSchoolAdminEmail = (emailStr?: string | null): boolean => {
+const isSuperAdminEmail = (emailStr?: string | null): boolean => {
   if (!emailStr) return false;
   const clean = emailStr.trim().toLowerCase();
   return (
-    clean === "n44438403@gmail.com" ||
     clean === "nadimanwar794@gmail.com" ||
+    clean === "nsdimanwar794@gmail.com" ||
     clean === "nadiman0636indo@gmail.com" ||
+    clean === "n44438403@gmail.com"
+  );
+};
+
+const isSchoolAdminEmail = (emailStr?: string | null): boolean => {
+  if (!emailStr) return false;
+  const clean = emailStr.trim().toLowerCase();
+  if (isSuperAdminEmail(clean)) return false;
+  return (
     clean === "admin@dps.edu.in" ||
     clean === "dpsgurgaon45@dps.edu.in" ||
     clean.startsWith("admin@") ||
@@ -807,7 +816,8 @@ export const SchoolEcosystem: React.FC<Props> = ({
   }
 
   // 1. SUPER ADMIN ACCESS ONLY (or when Platform Owner opens Multi-School Hub)
-  if (isSuperAdmin || rawRole === "SUPERADMIN" || (canManageMultiSchools && showSuperAdminHub)) {
+  const isSuperAdminUser = isSuperAdmin || rawRole === "SUPERADMIN" || isSuperAdminEmail(effectiveEmail);
+  if (isSuperAdminUser || (canManageMultiSchools && showSuperAdminHub)) {
     return (
       <PanelErrorBoundary fallbackTitle="Super Admin Panel">
         <Suspense fallback={<PanelLoadingFallback title="Super Admin Panel" />}>
