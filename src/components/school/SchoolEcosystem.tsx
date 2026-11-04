@@ -173,6 +173,7 @@ interface Props {
   onBack?: () => void;
   onOpenPlatformContent?: () => void;
   onLogout?: () => void;
+  onOpenAdminDashboard?: () => void;
 }
 
 const isSuperAdminEmail = (emailStr?: string | null): boolean => {
@@ -220,7 +221,8 @@ export const SchoolEcosystem: React.FC<Props> = ({
   user,
   onBack,
   onOpenPlatformContent,
-  onLogout
+  onLogout,
+  onOpenAdminDashboard
 }) => {
   const [profile, setProfile] = useState<SchoolUserProfile | null | undefined>(undefined);
   const [loading, setLoading] = useState(true);
@@ -823,7 +825,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
         <Suspense fallback={<PanelLoadingFallback title="Super Admin Panel" />}>
           <SuperAdminPanel
             adminUid={uid}
-            onBack={showSuperAdminHub ? () => setShowSuperAdminHub(false) : onBack}
+            onBack={showSuperAdminHub ? () => setShowSuperAdminHub(false) : (onOpenAdminDashboard || onBack)}
           />
         </Suspense>
       </PanelErrorBoundary>
@@ -976,6 +978,17 @@ export const SchoolEcosystem: React.FC<Props> = ({
             >
               Student View
             </button>
+            {onOpenAdminDashboard && (
+              <button
+                type="button"
+                onClick={onOpenAdminDashboard}
+                className="px-3 py-1 bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white rounded-lg font-bold text-[11px] transition-all shadow-md shadow-indigo-900/40 flex items-center gap-1.5 cursor-pointer border border-indigo-400/40 hover:scale-105 active:scale-95 ml-1"
+                title="NSTA Main App Admin Dashboard (Notes, MCQs, Books, Users, System Settings) par jayein"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
+                <span>NSTA App Admin</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -985,7 +998,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
               key={effectiveSchoolId}
               schoolId={effectiveSchoolId}
               adminUid={uid}
-              onBack={onBack}
+              onBack={onOpenAdminDashboard || onBack}
               onOpenPlatformContent={onOpenPlatformContent}
               onLogout={onLogout}
             />

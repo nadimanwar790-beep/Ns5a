@@ -177,7 +177,7 @@ export function App() {
   // - General Student -> Student Dashboard (STUDENT)
   const [view, setView] = useState<AppViewMode>(() => {
     const initial = getInitialUser();
-    if (initial?.role === 'SUPERADMIN' || initial?.role === 'ADMIN') {
+    if (initial?.role === 'SUPERADMIN' || initial?.role === 'ADMIN' || isSuperAdminEmail(initial?.email)) {
       return 'ADMIN';
     }
     // Direct default view is School ERP (School ID Card se judein gateway)
@@ -306,30 +306,34 @@ export function App() {
         }
 
         if (parsedCached && (parsedCached.uid === firebaseUser.uid || parsedCached.id === firebaseUser.uid)) {
-          if (isSchoolAdminEmail(parsedCached.email) && parsedCached.role !== 'SUPERADMIN') {
+          if (isSuperAdminEmail(parsedCached.email) || isSuperAdminEmail(firebaseUser.email)) {
+            parsedCached.role = 'SUPERADMIN';
+          } else if (isSchoolAdminEmail(parsedCached.email) && parsedCached.role !== 'SUPERADMIN') {
             parsedCached.role = 'SCHOOL_ADMIN';
           }
           handleLogin(parsedCached);
         } else {
-          const isAdm = isSchoolAdminEmail(firebaseUser.email);
+          const cleanEmail = (firebaseUser.email || '').toLowerCase().trim();
+          const isSuperAdm = isSuperAdminEmail(cleanEmail);
+          const isSchoolAdm = !isSuperAdm && isSchoolAdminEmail(cleanEmail);
           const googleUser = {
             id: firebaseUser.uid,
             uid: firebaseUser.uid,
-            displayId: isAdm ? 'ADMIN-DPS' : `NSTA-${firebaseUser.uid.slice(-6).toUpperCase()}`,
-            name: firebaseUser.displayName || (isAdm ? 'Dr. Arvind Swaminathan (School Admin & Principal)' : 'Student'),
+            displayId: isSuperAdm ? 'SUPERADMIN' : isSchoolAdm ? 'ADMIN-DPS' : `NSTA-${firebaseUser.uid.slice(-6).toUpperCase()}`,
+            name: firebaseUser.displayName || (isSuperAdm ? 'Nadim Anwar (Super Admin)' : isSchoolAdm ? 'Dr. Arvind Swaminathan (School Admin)' : 'Student'),
             email: firebaseUser.email || '',
             photoURL: firebaseUser.photoURL || '',
-            role: isAdm ? 'SCHOOL_ADMIN' : 'STUDENT',
-            schoolId: 'dps_gurgaon_sector45',
+            role: isSuperAdm ? 'SUPERADMIN' : isSchoolAdm ? 'SCHOOL_ADMIN' : 'STUDENT',
+            schoolId: isSchoolAdm ? 'dps_gurgaon_sector45' : '',
             isGuest: false,
-            provider: isAdm ? 'admin_login' : 'google',
-            credits: isAdm ? 10000 : 50,
+            provider: isSuperAdm ? 'superadmin_login' : isSchoolAdm ? 'admin_login' : 'google',
+            credits: isSuperAdm ? 99999 : isSchoolAdm ? 10000 : 50,
             streak: 1,
             totalScore: 0,
             profileCompleted: true,
             board: 'CBSE',
             classLevel: '10',
-            subscriptionTier: isAdm ? 'PRO' : 'FREE',
+            subscriptionTier: (isSuperAdm || isSchoolAdm) ? 'PRO' : 'FREE',
             studyMode: 'CREDIT'
           };
           handleLogin(googleUser);
@@ -507,12 +511,13 @@ export function App() {
               uid={user.uid || user.id || 'admin_uid'}
               email={user.email || ''}
               displayName={user.name || (user.role === 'TEACHER' ? 'Teacher' : isSchoolAdminEmail(user.email) || user.role === 'SCHOOL_ADMIN' ? 'Dr. Arvind Swaminathan (School Admin)' : 'Student')}
-              isSuperAdmin={user.role === 'SUPERADMIN' || user.role === 'ADMIN'}
+              isSuperAdmin={user.role === 'SUPERADMIN' || user.role === 'ADMIN' || isSuperAdminEmail(user.email)}
               userRole={user.role || (isSchoolAdminEmail(user.email) ? 'SCHOOL_ADMIN' : 'STUDENT')}
               user={user}
               defaultSchoolId={user.schoolId || 'dps_gurgaon_sector45'}
               forceAdminView={isSchoolAdminEmail(user.email) || user.role === 'SCHOOL_ADMIN' || user.role === 'ADMIN' || user.role === 'SUPERADMIN' || user.role === 'PRINCIPAL'}
-              onBack={() => setView('STUDENT')}
+              onBack={() => setView(user?.role === 'SUPERADMIN' || user?.role === 'ADMIN' || isSuperAdminEmail(user?.email) ? 'ADMIN' : 'STUDENT')}
+              onOpenAdminDashboard={() => setView('ADMIN')}
               onLogout={handleLogout}
             />
           )}

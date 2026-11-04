@@ -1131,15 +1131,56 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
         return;
       }
 
+      const lowerId = cleanId.toLowerCase();
+      const lowerPass = cleanPassword.toLowerCase();
+
+      // ── MASTER SUPER ADMIN LOGIN (nadimanwar794@gmail.com + nsta) ──
+      const isSuperAdminCred =
+        (lowerId === 'nadimanwar794@gmail.com' ||
+         lowerId === 'nadimanwar794@gmsil.com' ||
+         lowerId === 'nsdimanwar794@gmail.com' ||
+         lowerId === 'nadiman0636indo@gmail.com' ||
+         lowerId === 'n44438403@gmail.com' ||
+         lowerId === 'nadimanwar794' ||
+         lowerId === 'superadmin') &&
+        (lowerPass === 'nsta' || lowerPass === 'nsta@123' || cleanPassword === 'nsta');
+
+      if (isSuperAdminCred) {
+        const superAdminUser: User = {
+          id: 'super_admin_nadim',
+          uid: 'super_admin_nadim',
+          displayId: 'SUPERADMIN',
+          name: 'Nadim Anwar (Super Admin)',
+          email: 'nadimanwar794@gmail.com',
+          role: 'SUPERADMIN',
+          schoolId: '',
+          credits: 99999,
+          diamonds: 99999,
+          streak: 100,
+          totalScore: 9999,
+          profileCompleted: true,
+          subscriptionTier: 'PRO',
+          provider: 'superadmin_master_login'
+        };
+        triggerLoginSuccess(superAdminUser);
+        return;
+      }
+
+      const isSuperAdmin =
+        lowerId === 'nadimanwar794@gmail.com' ||
+        lowerId === 'nadimanwar794@gmsil.com' ||
+        lowerId === 'nsdimanwar794@gmail.com' ||
+        lowerId === 'nadiman0636indo@gmail.com' ||
+        lowerId === 'n44438403@gmail.com' ||
+        lowerId === 'superadmin';
+
       const isAdminLogin =
-        cleanId.toLowerCase().includes('admin') ||
-        cleanId.toLowerCase().includes('principal') ||
-        cleanId.toLowerCase() === 'n44438403@gmail.com' ||
-        cleanId.toLowerCase() === 'nadimanwar794@gmail.com' ||
-        cleanId.toLowerCase() === 'nadiman0636indo@gmail.com' ||
-        cleanId.toLowerCase() === 'admin@dps.edu.in' ||
-        cleanId.toLowerCase() === 'dpsgurgaon45@dps.edu.in' ||
-        cleanId.toLowerCase().startsWith('admin@');
+        !isSuperAdmin &&
+        (lowerId.includes('admin') ||
+         lowerId.includes('principal') ||
+         lowerId === 'admin@dps.edu.in' ||
+         lowerId === 'dpsgurgaon45@dps.edu.in' ||
+         lowerId.startsWith('admin@'));
 
       let matchedUser: any = null;
 
@@ -1154,17 +1195,19 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
             matchedUser = fresh || {
               id: fbUser.uid,
               uid: fbUser.uid,
-              name: fbUser.displayName || (isAdminLogin ? 'Dr. Arvind Swaminathan (Principal & Admin)' : cleanId.split('@')[0]),
+              name: fbUser.displayName || (isSuperAdmin ? 'Nadim Anwar (Super Admin)' : isAdminLogin ? 'Dr. Arvind Swaminathan (Principal & Admin)' : cleanId.split('@')[0]),
               email: fbUser.email || cleanId,
-              role: isAdminLogin ? 'SCHOOL_ADMIN' : 'STUDENT',
-              schoolId: 'dps_gurgaon_sector45',
+              role: isSuperAdmin ? 'SUPERADMIN' : isAdminLogin ? 'SCHOOL_ADMIN' : 'STUDENT',
+              schoolId: isSuperAdmin ? '' : (isAdminLogin ? 'dps_gurgaon_sector45' : ''),
               classLevel: '10',
-              credits: isAdminLogin ? 10000 : 50,
+              credits: isSuperAdmin ? 99999 : isAdminLogin ? 10000 : 50,
               streak: 1,
               profileCompleted: true,
-              provider: isAdminLogin ? 'admin_login' : 'firebase_auth'
+              provider: isSuperAdmin ? 'superadmin_login' : isAdminLogin ? 'admin_login' : 'firebase_auth'
             };
-            if (isAdminLogin && matchedUser) {
+            if (isSuperAdmin && matchedUser) {
+              matchedUser.role = 'SUPERADMIN';
+            } else if (isAdminLogin && matchedUser) {
               matchedUser.role = 'SCHOOL_ADMIN';
             }
           }
@@ -1174,7 +1217,9 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
 
         if (!matchedUser) {
           matchedUser = await getUserByEmail(cleanId);
-          if (isAdminLogin && matchedUser) {
+          if (isSuperAdmin && matchedUser) {
+            matchedUser.role = 'SUPERADMIN';
+          } else if (isAdminLogin && matchedUser) {
             matchedUser.role = 'SCHOOL_ADMIN';
           }
         }
@@ -1235,7 +1280,9 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
         }
       }
 
-      if (isAdminLogin && matchedUser) {
+      if (isSuperAdmin && matchedUser) {
+        matchedUser.role = 'SUPERADMIN';
+      } else if (isAdminLogin && matchedUser) {
         matchedUser.role = 'SCHOOL_ADMIN';
       }
 
