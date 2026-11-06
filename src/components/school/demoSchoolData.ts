@@ -112,6 +112,54 @@ export const DEMO_CLASSES_CONFIG = [
     name: "Class 10",
     subjects: ["English First Flight & Footprints", "Hindi Kshitij & Kritika", "Mathematics NCERT Standard", "Science (Physics, Chem, Bio)", "Social Science Board", "Information Technology 402"],
     feeStructure: { admissionFee: 75000, tuitionFee: 24000, cautionMoney: 65000, annualCharges: 28000, busFee: 11500 }
+  },
+  {
+    key: "11_sci",
+    name: "Class 11",
+    section: "Science",
+    stream: "Science",
+    subjects: ["Physics", "Chemistry", "Mathematics", "Biology", "English Core", "Computer Science"],
+    feeStructure: { admissionFee: 80000, tuitionFee: 26000, cautionMoney: 70000, annualCharges: 30000, busFee: 12000 }
+  },
+  {
+    key: "11_com",
+    name: "Class 11",
+    section: "Commerce",
+    stream: "Commerce",
+    subjects: ["Accountancy", "Business Studies", "Economics", "English Core", "Applied Mathematics"],
+    feeStructure: { admissionFee: 78000, tuitionFee: 25000, cautionMoney: 70000, annualCharges: 29000, busFee: 12000 }
+  },
+  {
+    key: "11_arts",
+    name: "Class 11",
+    section: "Arts",
+    stream: "Arts",
+    subjects: ["History", "Political Science", "Geography", "Economics", "English Core"],
+    feeStructure: { admissionFee: 76000, tuitionFee: 24000, cautionMoney: 70000, annualCharges: 28000, busFee: 12000 }
+  },
+  {
+    key: "12_sci",
+    name: "Class 12",
+    section: "Science",
+    stream: "Science",
+    subjects: ["Physics", "Chemistry", "Mathematics", "Biology", "English Core", "Computer Science"],
+    feeStructure: { admissionFee: 85000, tuitionFee: 28000, cautionMoney: 75000, annualCharges: 32000, busFee: 12500 }
+  },
+  {
+    key: "12_com",
+    name: "Class 12",
+    section: "Commerce",
+    stream: "Commerce",
+    subjects: ["Accountancy", "Business Studies", "Economics", "English Core", "Applied Mathematics"],
+    feeStructure: { admissionFee: 82000, tuitionFee: 27000, cautionMoney: 75000, annualCharges: 31000, busFee: 12500 }
+  },
+  {
+    key: "12_arts",
+    name: "Class 12",
+    section: "Arts",
+    stream: "Arts",
+    subjects: ["History", "Political Science", "Geography", "Economics", "English Core"],
+    feeStructure: { admissionFee: 80000, tuitionFee: 26000, cautionMoney: 75000, annualCharges: 30000, busFee: 12500 }
   }
 ];
 
@@ -288,7 +336,8 @@ export async function seedDemoSchoolData(schoolId: string, adminUid: string) {
       schoolId,
       sessionId: session.id,
       name: className,
-      section: "A & B", // All 70 students in sections A & B
+      section: (classCfg as any).section || "A & B",
+      stream: (classCfg as any).stream,
       classTeacherId: leadTeacher.id,
       defaultFee: classCfg.feeStructure.tuitionFee,
       feeStructure: classCfg.feeStructure,
@@ -303,6 +352,7 @@ export async function seedDemoSchoolData(schoolId: string, adminUid: string) {
       sessionId: session.id,
       classId,
       name: subName,
+      stream: (classCfg as any).stream,
       teacherId: subIdx % 2 === 0 ? leadTeacher.id : coTeacher.id,
       createdAt: session.createdAt,
     }));
@@ -316,7 +366,7 @@ export async function seedDemoSchoolData(schoolId: string, adminUid: string) {
       const studentSuffix = String(sNo).padStart(2, "0");
       const firstName = FIRST_NAMES[(classIdx * 7 + sNo * 3) % FIRST_NAMES.length];
       const lastName = LAST_NAMES[(classIdx * 5 + sNo * 2) % LAST_NAMES.length];
-      const sectionName = sNo <= 35 ? "A" : "B";
+      const sectionName = (classCfg as any).section ? (classCfg as any).section : (sNo <= 35 ? "A" : "B");
       const rollNo = `${classCfg.name.replace(/[^0-9A-Za-z]/g, "")}-${sectionName}-${studentSuffix}`;
       const admissionNo = `DPS-ADM-${140000 + classIdx * 100 + sNo}`;
 
@@ -328,6 +378,7 @@ export async function seedDemoSchoolData(schoolId: string, adminUid: string) {
         name: `${firstName} ${lastName}`,
         rollNo,
         admissionNo,
+        stream: (classCfg as any).stream,
         fatherName: `Mr. Rajesh ${lastName}`,
         motherName: `Mrs. Sunita ${lastName}`,
         phone: `98${String(10000000 + classIdx * 500000 + sNo * 12345).slice(0, 8)}`,

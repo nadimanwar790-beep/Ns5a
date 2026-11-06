@@ -31,8 +31,10 @@ const sanitizeForFirestore = (obj: any): any => {
 import type {
   School, SchoolSession, SchoolClass, SchoolSubject, SchoolLesson,
   SchoolTeacher, SchoolStudent, AttendanceRecord, ExamEntry, MonthlyFee,
-  SchoolHomework, SchoolMCQResult, SchoolUserProfile
+  SchoolHomework, SchoolMCQResult, SchoolUserProfile, DailyClassLecture,
+  NstaMessage, NstaThreadType, NstaFeeSlipData
 } from "./school-types";
+import { sortSchoolClasses } from "./school-types";
 import { getDemoSchoolDataset, isDemoDataEnabled, setDemoDataEnabled } from "./components/school/demoDataStore";
 export { isDemoDataEnabled, setDemoDataEnabled };
 import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo } from "./components/school/feeReceiptUtils";
@@ -89,6 +91,8 @@ const NESTED_SCHOOL_RTDB_KEYS = new Set([
   "inquiries",
   "gallery",
   "events",
+  "referral_payouts",
+  "referral_settings",
 ]);
 
 const stripNestedSchoolCollections = (raw: any): School => {
@@ -803,7 +807,8 @@ export const getLocalClasses = (schoolId: string): SchoolClass[] => {
   try {
     const list = getSchoolCacheSync<SchoolClass[]>(`${LOCAL_CLASSES_PREFIX}${schoolId}`, []);
     const arr = Array.isArray(list) ? list : [];
-    return !shouldUseDemoForSchool(schoolId) ? arr.filter(c => !isDemoRecord(c)) : arr;
+    const filtered = !shouldUseDemoForSchool(schoolId) ? arr.filter(c => !isDemoRecord(c)) : arr;
+    return sortSchoolClasses(filtered);
   } catch {
     return [];
   }
@@ -811,7 +816,8 @@ export const getLocalClasses = (schoolId: string): SchoolClass[] => {
 
 export const setLocalClasses = (schoolId: string, classes: SchoolClass[]) => {
   try {
-    setSchoolCacheSync(`${LOCAL_CLASSES_PREFIX}${schoolId}`, Array.isArray(classes) ? classes : []);
+    const arr = Array.isArray(classes) ? classes : [];
+    setSchoolCacheSync(`${LOCAL_CLASSES_PREFIX}${schoolId}`, sortSchoolClasses(arr));
   } catch {}
 };
 
@@ -838,7 +844,7 @@ export const getClasses = async (schoolId: string, sessionId?: string): Promise<
 
   if (local.length > 0) {
     const filteredLocal = sessionId ? local.filter(c => c.sessionId === sessionId) : local;
-    if (filteredLocal.length > 0) return filteredLocal;
+    if (filteredLocal.length > 0) return sortSchoolClasses(filteredLocal);
   }
 
   if (rtdb) {
@@ -850,7 +856,7 @@ export const getClasses = async (schoolId: string, sessionId?: string): Promise<
         const all = !useDemo ? allRaw.filter(c => !isDemoRecord(c)) : allRaw;
         setLocalClasses(schoolId, all);
         const filtered = sessionId ? all.filter(c => c.sessionId === sessionId) : all;
-        if (filtered.length > 0 || !useDemo) return filtered;
+        if (filtered.length > 0 || !useDemo) return sortSchoolClasses(filtered);
       }
     } catch {}
   }
@@ -860,14 +866,15 @@ export const getClasses = async (schoolId: string, sessionId?: string): Promise<
     const all = !useDemo ? allRaw.filter((c: any) => !isDemoRecord(c)) : allRaw;
     if (all.length > 0) {
       setLocalClasses(schoolId, all);
-      return sessionId ? all.filter((c: any) => c.sessionId === sessionId) : all;
+      return sortSchoolClasses(sessionId ? all.filter((c: any) => c.sessionId === sessionId) : all);
     }
   } catch {}
 
   if (useDemo) {
     const demo = getDemoSchoolDataset();
     if (demo && demo.classes && demo.classes.length > 0) {
-      return sessionId ? demo.classes.filter(c => c.sessionId === sessionId || !c.sessionId) : demo.classes;
+      const filtered = sessionId ? demo.classes.filter(c => c.sessionId === sessionId || !c.sessionId) : demo.classes;
+      return sortSchoolClasses(filtered);
     }
   }
   return [];
@@ -879,13 +886,16 @@ export const subscribeToClasses = (schoolId: string, sessionId: string, cb: (cla
     const local = getLocalClasses(schoolId);
     if (!useDemo) {
       const realClasses = local.filter(c => !isDemoRecord(c));
-      cb(sessionId ? realClasses.filter(c => c.sessionId === sessionId) : realClasses);
+      const filtered = sessionId ? realClasses.filter(c => c.sessionId === sessionId) : realClasses;
+      cb(sortSchoolClasses(filtered));
     } else if (local && local.length > 0) {
-      cb(sessionId ? local.filter(c => c.sessionId === sessionId) : local);
+      const filtered = sessionId ? local.filter(c => c.sessionId === sessionId) : local;
+      cb(sortSchoolClasses(filtered));
     } else {
       const demo = getDemoSchoolDataset();
       if (demo && demo.classes && demo.classes.length > 0) {
-        cb(sessionId ? demo.classes.filter(c => c.sessionId === sessionId || !c.sessionId) : demo.classes);
+        const filtered = sessionId ? demo.classes.filter(c => c.sessionId === sessionId || !c.sessionId) : demo.classes;
+        cb(sortSchoolClasses(filtered));
       } else {
         cb([]);
       }
@@ -907,7 +917,7 @@ export const subscribeToClasses = (schoolId: string, sessionId: string, cb: (cla
           const cleanAll = !useDemo ? all.filter(c => !isDemoRecord(c)) : all;
           setLocalClasses(schoolId, cleanAll);
           const filtered = sessionId ? cleanAll.filter(c => c.sessionId === sessionId) : cleanAll;
-          cb(filtered);
+          cb(sortSchoolClasses(filtered));
         }
       });
     } catch {}
@@ -921,7 +931,9 @@ export const subscribeToClasses = (schoolId: string, sessionId: string, cb: (cla
           if (!snap.empty) {
             const list = snap.docs.map(docSnap => docSnap.data() as SchoolClass);
             const clean = !useDemo ? list.filter(c => !isDemoRecord(c)) : list;
-            cb(clean);
+            cb(sortSchoolClasses(clean));
+          } else if (!useDemo) {
+            cb([]);
           }
         },
         err => { console.warn(`[school-firebase] subscribeToClasses error:`, err?.code || err); }
@@ -974,6 +986,32 @@ export const saveSubject = async (subject: SchoolSubject) => {
   }
 };
 
+export const saveMultipleSubjects = async (subjects: SchoolSubject[]) => {
+  if (!Array.isArray(subjects) || subjects.length === 0) return;
+  const schoolId = subjects[0].schoolId;
+  const updates: Record<string, any> = {};
+  const batch = db ? writeBatch(db) : null;
+
+  subjects.forEach(sub => {
+    const sanitized = sanitizeForFirestore(sub);
+    updates[`schools/${schoolId}/subjects/${sub.id}`] = sanitized;
+    if (batch && db) {
+      batch.set(d(`schools/${schoolId}/subjects/${sub.id}`), sanitized);
+    }
+  });
+
+  if (rtdb) {
+    try {
+      await withTimeout(update(ref(rtdb), updates), 2500);
+    } catch {}
+  }
+  if (batch) {
+    try {
+      await withTimeout(batch.commit(), 3000);
+    } catch {}
+  }
+};
+
 export const getSubjects = async (schoolId: string, classId?: string): Promise<SchoolSubject[]> => {
   const useDemo = shouldUseDemoForSchool(schoolId);
   if (rtdb) {
@@ -982,15 +1020,17 @@ export const getSubjects = async (schoolId: string, classId?: string): Promise<S
       const val = (snap as any)?.val?.();
       if (val && typeof val === "object") {
         const all: SchoolSubject[] = Object.values(val);
-        return classId ? all.filter(s => s.classId === classId) : all;
+        const filtered = !useDemo ? all.filter(s => !isDemoRecord(s)) : all;
+        if (filtered.length > 0) return classId ? filtered.filter(s => s.classId === classId) : filtered;
       }
     } catch {}
   }
   try {
     const snap = await withTimeout(getDocs(col(`schools/${schoolId}/subjects`)), 2500);
     const all = (snap as any).docs.map((docSnap: any) => docSnap.data() as SchoolSubject);
-    if (all.length > 0) {
-      return classId ? all.filter((s: any) => s.classId === classId) : all;
+    const filtered = !useDemo ? all.filter((s: any) => !isDemoRecord(s)) : all;
+    if (filtered.length > 0) {
+      return classId ? filtered.filter((s: any) => s.classId === classId) : filtered;
     }
   } catch {}
 
@@ -1004,7 +1044,8 @@ export const getSubjects = async (schoolId: string, classId?: string): Promise<S
 };
 
 export const subscribeToSubjects = (schoolId: string, classId: string, cb: (subjects: SchoolSubject[]) => void) => {
-  if (shouldUseDemoForSchool(schoolId)) {
+  const useDemo = shouldUseDemoForSchool(schoolId);
+  if (useDemo) {
     const demo = getDemoSchoolDataset();
     if (demo && demo.subjects && demo.subjects.length > 0) {
       cb(classId ? demo.subjects.filter(s => s.classId === classId) : demo.subjects);
@@ -1015,6 +1056,23 @@ export const subscribeToSubjects = (schoolId: string, classId: string, cb: (subj
     cb([]);
   }
 
+  let rtdbUnsub: any = null;
+  if (rtdb) {
+    try {
+      rtdbUnsub = onValue(ref(rtdb, `schools/${schoolId}/subjects`), snap => {
+        const val = snap.val();
+        if (val && typeof val === "object") {
+          const list: SchoolSubject[] = Object.values(val);
+          const filtered = !useDemo ? list.filter(s => !isDemoRecord(s)) : list;
+          const matching = classId ? filtered.filter(s => s.classId === classId) : filtered;
+          if (matching.length > 0 || !useDemo) {
+            cb(matching);
+          }
+        }
+      });
+    } catch {}
+  }
+
   let fsUnsub: any = null;
   if (db) {
     try {
@@ -1022,7 +1080,11 @@ export const subscribeToSubjects = (schoolId: string, classId: string, cb: (subj
         query(col(`schools/${schoolId}/subjects`), where("classId", "==", classId)),
         snap => {
           if (!snap.empty) {
-            cb(snap.docs.map(docSnap => docSnap.data() as SchoolSubject));
+            const list = snap.docs.map(docSnap => docSnap.data() as SchoolSubject);
+            cb(!useDemo ? list.filter(s => !isDemoRecord(s)) : list);
+          } else if (!useDemo) {
+            // Real school with 0 subjects in this class
+            cb([]);
           }
         },
         err => { console.warn(`[school-firebase] subscribeToSubjects error:`, err?.code || err); }
@@ -1030,6 +1092,7 @@ export const subscribeToSubjects = (schoolId: string, classId: string, cb: (subj
     } catch {}
   }
   return () => {
+    if (typeof rtdbUnsub === "function") rtdbUnsub();
     if (typeof fsUnsub === "function") fsUnsub();
   };
 };
@@ -1362,6 +1425,7 @@ export const isStudentInClass = (
   targetClassId?: string,
   targetClassName?: string
 ): boolean => {
+  if (!student || typeof student !== "object") return false;
   if (!targetClassId && !targetClassName) return true;
 
   const sClassId = (student.classId || "").toLowerCase().trim();
@@ -2328,8 +2392,11 @@ export const markFeePaid = async (schoolId: string, studentId: string, month: st
     paidBy,
     receiptNo: `RCP-${Date.now()}`
   };
+  let paidAmount = 0;
   try {
     const cur = getLocalFees(schoolId);
+    const existing = cur.find(f => f.studentId === studentId && f.month === month);
+    paidAmount = existing?.amount || 0;
     setLocalFees(schoolId, cur.map(f => (f.studentId === studentId && f.month === month) ? { ...f, ...patch } : f));
   } catch {}
   if (rtdb) {
@@ -2340,6 +2407,23 @@ export const markFeePaid = async (schoolId: string, studentId: string, month: st
       await setDoc(d(`schools/${schoolId}/fees/${id}`), sanitizeForFirestore(patch), { merge: true });
     } catch {}
   }
+
+  // Auto route Official Fee Receipt to student's NSTA Messenger School Desk
+  try {
+    const student = getLocalStudents(schoolId).find(s => s.id === studentId);
+    autoSendFeeSlipToSchoolDesk({
+      schoolId,
+      studentId,
+      studentName: student?.name || "Student",
+      slipType: "FEE_RECEIPT",
+      month,
+      monthLabel: month,
+      amount: paidAmount,
+      balanceDue: 0,
+      receiptNo: patch.receiptNo,
+      dueDate: new Date().toISOString().split("T")[0],
+    }).catch(() => {});
+  } catch {}
 };
 
 export const updateStudentPhoto = async (schoolId: string, studentId: string, photoUrl: string) => {
@@ -3768,5 +3852,458 @@ export const getUserLinkedStudents = async (uid: string): Promise<UserLinkedStud
   return localBundle;
 };
 
+// ── TEACHER REFERRAL 10% COMMISSION PAYOUTS & SETTINGS ───────────────────────
 
+const LOCAL_REFERRAL_PAYOUTS_KEY = (schoolId: string) => `nst_school_ref_payouts_${schoolId}`;
+const LOCAL_REFERRAL_SETTINGS_KEY = (schoolId: string) => `nst_school_ref_settings_${schoolId}`;
 
+export const getDefaultReferralSettings = (schoolId: string): import('./school-types').SchoolReferralSettings => ({
+  schoolId,
+  defaultCommissionPct: 10,
+  commissionScope: "all_fees",
+  commissionDuration: "1_year",
+  defaultSiblingDiscountPct: 10,
+  updatedAt: new Date().toISOString(),
+});
+
+export const getSchoolReferralSettings = async (
+  schoolId: string
+): Promise<import('./school-types').SchoolReferralSettings> => {
+  const fallback = getSchoolCacheSync<import('./school-types').SchoolReferralSettings | null>(
+    LOCAL_REFERRAL_SETTINGS_KEY(schoolId),
+    null
+  );
+
+  if (rtdb) {
+    try {
+      const snap = await withTimeout(get(ref(rtdb, `schools/${schoolId}/referral_settings`)), 2000);
+      const val = snap?.val?.();
+      if (val && typeof val === "object" && typeof val.defaultCommissionPct === "number") {
+        const normalized = { commissionDuration: "1_year" as const, ...val };
+        setSchoolCacheSync(LOCAL_REFERRAL_SETTINGS_KEY(schoolId), normalized);
+        return normalized as import('./school-types').SchoolReferralSettings;
+      }
+    } catch {}
+  }
+
+  if (db) {
+    try {
+      const snap = await withTimeout(getDoc(d(`schools/${schoolId}/settings/referral_policy`)), 2500);
+      if (snap.exists()) {
+        const data = { commissionDuration: "1_year" as const, ...(snap.data() as import('./school-types').SchoolReferralSettings) };
+        setSchoolCacheSync(LOCAL_REFERRAL_SETTINGS_KEY(schoolId), data);
+        return data;
+      }
+    } catch {}
+  }
+
+  return fallback ? { commissionDuration: "1_year", ...fallback } : getDefaultReferralSettings(schoolId);
+};
+
+export const saveSchoolReferralSettings = async (
+  schoolId: string,
+  settings: Partial<import('./school-types').SchoolReferralSettings>
+): Promise<import('./school-types').SchoolReferralSettings> => {
+  const current = getSchoolCacheSync<import('./school-types').SchoolReferralSettings | null>(
+    LOCAL_REFERRAL_SETTINGS_KEY(schoolId),
+    null
+  ) || getDefaultReferralSettings(schoolId);
+
+  const merged: import('./school-types').SchoolReferralSettings = sanitizeForFirestore({
+    ...current,
+    ...settings,
+    schoolId,
+    defaultCommissionPct: Math.max(0, Math.min(100, Number(settings.defaultCommissionPct ?? current.defaultCommissionPct ?? 10))),
+    defaultSiblingDiscountPct: Math.max(0, Math.min(100, Number(settings.defaultSiblingDiscountPct ?? current.defaultSiblingDiscountPct ?? 10))),
+    commissionScope: settings.commissionScope || current.commissionScope || "all_fees",
+    commissionDuration: settings.commissionDuration || current.commissionDuration || "1_year",
+    updatedAt: new Date().toISOString(),
+  });
+
+  setSchoolCacheSync(LOCAL_REFERRAL_SETTINGS_KEY(schoolId), merged);
+
+  if (rtdb) {
+    try {
+      await withTimeout(set(ref(rtdb, `schools/${schoolId}/referral_settings`), merged), 2000);
+    } catch {}
+  }
+  if (db) {
+    try {
+      await withTimeout(setDoc(d(`schools/${schoolId}/settings/referral_policy`), merged), 2500);
+    } catch {}
+  }
+  return merged;
+};
+
+export const getReferralPayouts = async (
+  schoolId: string
+): Promise<import('./school-types').TeacherReferralPayout[]> => {
+  const local = getSchoolCacheSync<import('./school-types').TeacherReferralPayout[]>(
+    LOCAL_REFERRAL_PAYOUTS_KEY(schoolId),
+    []
+  );
+  const map = new Map<string, import('./school-types').TeacherReferralPayout>();
+  if (Array.isArray(local)) {
+    local.forEach((p) => {
+      if (p?.id) map.set(p.id, p);
+    });
+  }
+
+  if (rtdb) {
+    try {
+      const snap = await withTimeout(get(ref(rtdb, `schools/${schoolId}/referral_payouts`)), 2000);
+      const val = snap?.val?.();
+      if (val && typeof val === "object") {
+        Object.values(val).forEach((p: any) => {
+          if (p?.id) map.set(p.id, p as import('./school-types').TeacherReferralPayout);
+        });
+      }
+    } catch {}
+  }
+
+  if (db) {
+    try {
+      const snap = await withTimeout(getDocs(col(`schools/${schoolId}/referral_payouts`)), 2500);
+      snap.docs.forEach((docSnap) => {
+        const p = docSnap.data() as import('./school-types').TeacherReferralPayout;
+        if (p?.id) map.set(p.id, p);
+      });
+    } catch {}
+  }
+
+  const merged = Array.from(map.values()).sort((a, b) =>
+    (b.paidDate || b.createdAt || "").localeCompare(a.paidDate || a.createdAt || "")
+  );
+  setSchoolCacheSync(LOCAL_REFERRAL_PAYOUTS_KEY(schoolId), merged);
+  return merged;
+};
+
+export const saveReferralPayout = async (
+  payout: import('./school-types').TeacherReferralPayout
+): Promise<void> => {
+  const sanitized = sanitizeForFirestore(payout);
+  const cur = getSchoolCacheSync<import('./school-types').TeacherReferralPayout[]>(
+    LOCAL_REFERRAL_PAYOUTS_KEY(payout.schoolId),
+    []
+  );
+  const updated = [sanitized, ...(Array.isArray(cur) ? cur.filter((p) => p.id !== payout.id) : [])];
+  setSchoolCacheSync(LOCAL_REFERRAL_PAYOUTS_KEY(payout.schoolId), updated);
+
+  if (rtdb) {
+    try {
+      await withTimeout(set(ref(rtdb, `schools/${payout.schoolId}/referral_payouts/${payout.id}`), sanitized), 2000);
+    } catch {}
+  }
+  if (db) {
+    try {
+      await withTimeout(setDoc(d(`schools/${payout.schoolId}/referral_payouts/${payout.id}`), sanitized), 2500);
+    } catch {}
+  }
+};
+
+export const deleteReferralPayout = async (schoolId: string, payoutId: string): Promise<void> => {
+  const cur = getSchoolCacheSync<import('./school-types').TeacherReferralPayout[]>(
+    LOCAL_REFERRAL_PAYOUTS_KEY(schoolId),
+    []
+  );
+  if (Array.isArray(cur)) {
+    setSchoolCacheSync(
+      LOCAL_REFERRAL_PAYOUTS_KEY(schoolId),
+      cur.filter((p) => p.id !== payoutId)
+    );
+  }
+  if (rtdb) {
+    try {
+      await withTimeout(remove(ref(rtdb, `schools/${schoolId}/referral_payouts/${payoutId}`)), 2000);
+    } catch {}
+  }
+  if (db) {
+    try {
+      await withTimeout(deleteDoc(d(`schools/${schoolId}/referral_payouts/${payoutId}`)), 2500);
+    } catch {}
+  }
+};
+
+// ── DAILY CLASSROOM VIDEO LECTURES ──────────────────────────────────────────
+
+export const extractYouTubeVideoId = (url: string): string => {
+  if (!url) return "";
+  const clean = url.trim();
+  const match = clean.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([\w-]{11})/);
+  if (match && match[1]) return match[1];
+  if (/^[\w-]{11}$/.test(clean)) return clean;
+  return "";
+};
+
+export const saveClassLecture = async (lecture: DailyClassLecture): Promise<void> => {
+  const sanitized = sanitizeForFirestore(lecture);
+  try {
+    const key = `nst_school_lectures_${lecture.schoolId}`;
+    const cur = getSchoolCacheSync<DailyClassLecture[]>(key, []);
+    const next = [sanitized, ...(Array.isArray(cur) ? cur.filter(l => l.id !== lecture.id) : [])];
+    setSchoolCacheSync(key, next);
+  } catch {}
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("lectures-updated", { detail: { schoolId: lecture.schoolId, classId: lecture.classId, date: lecture.date } })
+    );
+  }
+
+  if (rtdb) {
+    try { await withTimeout(set(ref(rtdb, `schools/${lecture.schoolId}/lectures/${lecture.id}`), sanitized), 2000); } catch {}
+  }
+  if (db) {
+    try { await withTimeout(setDoc(d(`schools/${lecture.schoolId}/lectures/${lecture.id}`), sanitized), 2500); } catch {}
+  }
+};
+
+export const getClassLectures = async (schoolId: string, classId?: string, date?: string): Promise<DailyClassLecture[]> => {
+  let local = getSchoolCacheSync<DailyClassLecture[]>(`nst_school_lectures_${schoolId}`, []);
+  if (!Array.isArray(local)) local = [];
+
+  if (db) {
+    try {
+      const snap = await withTimeout(getDocs(col(`schools/${schoolId}/lectures`)), 2500);
+      const remote = snap.docs.map(docSnap => docSnap.data() as DailyClassLecture);
+      if (remote.length > 0) {
+        const merged = [...remote, ...local.filter(l => !remote.some(r => r.id === l.id))];
+        local = merged;
+        setSchoolCacheSync(`nst_school_lectures_${schoolId}`, merged);
+      }
+    } catch {}
+  }
+
+  let filtered = local;
+  if (classId) {
+    filtered = filtered.filter(l => l.classId === classId);
+  }
+  if (date) {
+    filtered = filtered.filter(l => l.date === date);
+  }
+  return filtered.sort((a, b) => (b.date || "").localeCompare(a.date || "") || (a.periodNumber - b.periodNumber));
+};
+
+export const deleteClassLecture = async (schoolId: string, lectureId: string): Promise<void> => {
+  try {
+    const key = `nst_school_lectures_${schoolId}`;
+    const cur = getSchoolCacheSync<DailyClassLecture[]>(key, []);
+    if (Array.isArray(cur)) {
+      setSchoolCacheSync(key, cur.filter(l => l.id !== lectureId));
+    }
+  } catch {}
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("lectures-updated", { detail: { schoolId, lectureId } }));
+  }
+
+  if (rtdb) {
+    try { await withTimeout(remove(ref(rtdb, `schools/${schoolId}/lectures/${lectureId}`)), 2000); } catch {}
+  }
+  if (db) {
+    try { await withTimeout(deleteDoc(d(`schools/${schoolId}/lectures/${lectureId}`)), 2500); } catch {}
+  }
+};
+
+// ── NSTA MESSENGER SUITE API ──
+export const getNstaThreadKey = (
+  threadType: NstaThreadType,
+  classId?: string,
+  studentId?: string,
+  teacherId?: string
+): string => {
+  if (threadType === "CLASS_GROUP") return `class_${classId || "general"}`;
+  if (threadType === "SCHOOL_DESK") return `school_${studentId || "all"}`;
+  if (threadType === "TEACHER_CHAT") return `teacher_${studentId || "std"}_${teacherId || "tch"}`;
+  return "general";
+};
+
+export const saveNstaMessage = async (msg: NstaMessage): Promise<void> => {
+  const sanitized = sanitizeForFirestore(msg);
+  const cacheKey = `nst_school_nsta_msgs_${msg.schoolId}`;
+
+  try {
+    const cur = getSchoolCacheSync<NstaMessage[]>(cacheKey, []);
+    const updated = [sanitized, ...(Array.isArray(cur) ? cur.filter(m => m.id !== msg.id) : [])];
+    setSchoolCacheSync(cacheKey, updated);
+  } catch {}
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("nsta-messages-updated", { detail: { schoolId: msg.schoolId, message: msg } }));
+  }
+
+  if (rtdb) {
+    try {
+      await withTimeout(set(ref(rtdb, `schools/${msg.schoolId}/nsta_messages/${msg.id}`), sanitized), 2000);
+    } catch {}
+  }
+  if (db) {
+    try {
+      await withTimeout(setDoc(d(`schools/${msg.schoolId}/nsta_messages/${msg.id}`), sanitized), 2500);
+    } catch {}
+  }
+};
+
+export const subscribeToNstaMessages = (
+  schoolId: string,
+  filter: { threadType: NstaThreadType; classId?: string; studentId?: string; teacherId?: string },
+  cb: (msgs: NstaMessage[]) => void
+): () => void => {
+  const cacheKey = `nst_school_nsta_msgs_${schoolId}`;
+
+  const loadFromCacheAndNotify = () => {
+    const all = getSchoolCacheSync<NstaMessage[]>(cacheKey, []);
+    if (Array.isArray(all)) {
+      const filtered = all.filter(m => {
+        if (!m || !m.threadType) return false;
+        // 1. Strict threadType match - class, school, or teacher
+        if (m.threadType !== filter.threadType) return false;
+
+        // 2. Class Group filtering
+        if (filter.threadType === "CLASS_GROUP") {
+          if (filter.classId && m.classId && m.classId !== filter.classId && m.classId !== "all" && m.classId !== "general") {
+            return false;
+          }
+        }
+
+        // 3. School Desk filtering
+        if (filter.threadType === "SCHOOL_DESK") {
+          if (filter.studentId && m.studentId && m.studentId !== filter.studentId && m.studentId !== "all" && m.studentId !== "general") {
+            return false;
+          }
+        }
+
+        // 4. Teacher Chat filtering
+        if (filter.threadType === "TEACHER_CHAT") {
+          if (filter.studentId && m.studentId && m.studentId !== filter.studentId) return false;
+          if (filter.teacherId && m.teacherId && m.teacherId !== filter.teacherId) return false;
+        }
+
+        return true;
+      });
+      cb(filtered.sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || "")));
+    }
+  };
+
+  loadFromCacheAndNotify();
+
+  const handleCustomEvent = (e: any) => {
+    if (e.detail?.schoolId === schoolId) {
+      loadFromCacheAndNotify();
+    }
+  };
+  if (typeof window !== "undefined") {
+    window.addEventListener("nsta-messages-updated", handleCustomEvent);
+  }
+
+  // Realtime Database listener
+  let unsubRtdb = () => {};
+  if (rtdb) {
+    try {
+      const rtdbPath = ref(rtdb, `schools/${schoolId}/nsta_messages`);
+      const onRtdbValue = (snap: any) => {
+        const val = snap?.val?.();
+        if (val && typeof val === "object") {
+          const remoteList: NstaMessage[] = Object.values(val);
+          if (remoteList.length > 0) {
+            const cur = getSchoolCacheSync<NstaMessage[]>(cacheKey, []);
+            const merged = [
+              ...remoteList,
+              ...(Array.isArray(cur) ? cur.filter(m => !remoteList.some(r => r.id === m.id)) : [])
+            ];
+            setSchoolCacheSync(cacheKey, merged);
+            loadFromCacheAndNotify();
+          }
+        }
+      };
+      const unsub = onValue(rtdbPath, onRtdbValue);
+      unsubRtdb = () => {
+        try { unsub(); } catch {}
+      };
+    } catch {}
+  }
+
+  // Firestore listener
+  let unsubFirestore = () => {};
+  if (db) {
+    try {
+      unsubFirestore = onSnapshot(col(`schools/${schoolId}/nsta_messages`), (snap) => {
+        const remote = snap.docs.map(docSnap => docSnap.data() as NstaMessage);
+        if (remote.length > 0) {
+          const cur = getSchoolCacheSync<NstaMessage[]>(cacheKey, []);
+          const merged = [...remote, ...(Array.isArray(cur) ? cur.filter(m => !remote.some(r => r.id === m.id)) : [])];
+          setSchoolCacheSync(cacheKey, merged);
+          loadFromCacheAndNotify();
+        }
+      });
+    } catch {}
+  }
+
+  return () => {
+    if (typeof window !== "undefined") {
+      window.removeEventListener("nsta-messages-updated", handleCustomEvent);
+    }
+    unsubRtdb();
+    unsubFirestore();
+  };
+};
+
+// Check student's daily teacher query count (max 5)
+export const getStudentDailyTeacherQueryCount = (schoolId: string, studentId: string, dateStr?: string): number => {
+  const targetDate = dateStr || new Date().toISOString().split("T")[0];
+  const cacheKey = `nst_school_nsta_msgs_${schoolId}`;
+  const all = getSchoolCacheSync<NstaMessage[]>(cacheKey, []);
+  if (!Array.isArray(all)) return 0;
+  return all.filter(m =>
+    m.threadType === "TEACHER_CHAT" &&
+    m.studentId === studentId &&
+    m.senderRole === "STUDENT" &&
+    (m.createdAt || "").startsWith(targetDate)
+  ).length;
+};
+
+// Auto route fee slip or receipt directly to student's School Desk in NSTA Messenger
+export const autoSendFeeSlipToSchoolDesk = async (payload: {
+  schoolId: string;
+  studentId: string;
+  studentName: string;
+  slipType: "A6_DEMAND_SLIP" | "FEE_RECEIPT";
+  month: string;
+  monthLabel: string;
+  amount: number;
+  balanceDue: number;
+  receiptNo?: string;
+  dueDate?: string;
+  payLink?: string;
+}): Promise<void> => {
+  const isReceipt = payload.slipType === "FEE_RECEIPT";
+  const text = isReceipt
+    ? `Aapka ${payload.monthLabel} ka fee payment (₹${payload.amount.toLocaleString("en-IN")}) safalta-purvak receive ho gaya hai. Official receipt no: ${payload.receiptNo || "N/A"}. Dhanyawad!`
+    : `Aapka ${payload.monthLabel} ka shulk baaki hai. Kul deya rashi: ₹${payload.balanceDue.toLocaleString("en-IN")}. Kripya antam tithi ${payload.dueDate || "jaldi"} se pehle jama karein.`;
+
+  const msg: NstaMessage = {
+    id: `slip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    schoolId: payload.schoolId,
+    threadType: "SCHOOL_DESK",
+    studentId: payload.studentId,
+    studentName: payload.studentName,
+    senderId: "school_admin",
+    senderName: "School Accounts & Administration",
+    senderRole: "ADMIN",
+    text,
+    feeSlip: {
+      type: payload.slipType,
+      month: payload.month,
+      monthLabel: payload.monthLabel,
+      amount: payload.amount,
+      balanceDue: payload.balanceDue,
+      receiptNo: payload.receiptNo,
+      dueDate: payload.dueDate,
+      payLink: payload.payLink,
+    },
+    createdAt: new Date().toISOString(),
+    status: "delivered",
+  };
+
+  await saveNstaMessage(msg);
+};

@@ -84,7 +84,7 @@ export interface TeacherLatePenaltyInfo {
   netPayableSalary: number;
 }
 
-// 13 Classes definition
+// Complete Classes definition from Nursery to Class 12 with Senior Streams
 export const DEMO_CLASS_DEFINITIONS = [
   { key: "nur", name: "Nursery", defaultFee: 650, group: "Pre-Primary" },
   { key: "kg1", name: "KG 1", defaultFee: 750, group: "Pre-Primary" },
@@ -99,9 +99,17 @@ export const DEMO_CLASS_DEFINITIONS = [
   { key: "c8", name: "Class 8", defaultFee: 1750, group: "Middle" },
   { key: "c9", name: "Class 9", defaultFee: 2100, group: "Secondary" },
   { key: "c10", name: "Class 10", defaultFee: 2400, group: "Secondary" },
+  // Senior Secondary: Class 11 Streams
+  { key: "c11_sci", name: "Class 11", stream: "Science", defaultFee: 2600, group: "Senior Secondary - Science" },
+  { key: "c11_com", name: "Class 11", stream: "Commerce", defaultFee: 2500, group: "Senior Secondary - Commerce" },
+  { key: "c11_arts", name: "Class 11", stream: "Arts", defaultFee: 2400, group: "Senior Secondary - Arts" },
+  // Senior Secondary: Class 12 Streams
+  { key: "c12_sci", name: "Class 12", stream: "Science", defaultFee: 2800, group: "Senior Secondary - Science" },
+  { key: "c12_com", name: "Class 12", stream: "Commerce", defaultFee: 2700, group: "Senior Secondary - Commerce" },
+  { key: "c12_arts", name: "Class 12", stream: "Arts", defaultFee: 2600, group: "Senior Secondary - Arts" },
 ];
 
-// Grade-Tailored Subjects / Books
+// Grade & Stream Tailored Subjects / Books
 export const GRADE_SUBJECTS_MAP: Record<string, string[]> = {
   "Pre-Primary": [
     "English Rhymes & Phonics",
@@ -135,6 +143,39 @@ export const GRADE_SUBJECTS_MAP: Record<string, string[]> = {
     "Science (Physics, Chemistry, Biology)",
     "Social Science (India & World)",
     "Information Technology (Code 402)",
+  ],
+  "Senior Secondary - Science": [
+    "Physics",
+    "Chemistry",
+    "Mathematics",
+    "Biology",
+    "English Core",
+    "Computer Science",
+    "Physical Education",
+  ],
+  "Senior Secondary - Commerce": [
+    "Accountancy",
+    "Business Studies",
+    "Economics",
+    "English Core",
+    "Applied Mathematics",
+    "Informatics Practices",
+  ],
+  "Senior Secondary - Arts": [
+    "History",
+    "Political Science",
+    "Geography",
+    "Economics",
+    "English Core",
+    "Hindi Elective",
+    "Sociology",
+  ],
+  "Senior Secondary": [
+    "Physics / Accountancy / History",
+    "Chemistry / Business Studies / Pol Sci",
+    "Mathematics / Economics / Geography",
+    "English Core",
+    "Computer Science / Informatics Practices",
   ],
 };
 
@@ -514,10 +555,13 @@ export function generateFull1YearDemoDataset(schoolId: string = "demo_school", a
     ["A", "B"].forEach((secLetter) => {
       const section = secLetter as "A" | "B";
       const classId = `demo_class_${classKey}_sec_${section.toLowerCase()}`;
-      const classNameFormatted = `${classDef.name} - Section ${section}`;
+      const streamName = (classDef as any).stream;
+      const classNameFormatted = streamName
+        ? `${classDef.name} (${streamName}) - Section ${section}`
+        : `${classDef.name} - Section ${section}`;
 
       // Assign teacher (1 teacher per 35 students)
-      const assignedTeacherProfile = DEMO_STAFF_MEMBERS[teacherIndexCounter] || {
+      const assignedTeacherProfile = DEMO_STAFF_MEMBERS[teacherIndexCounter % DEMO_STAFF_MEMBERS.length] || {
         name: `Teacher ${classDef.name} ${section}`,
         salary: 10000,
         designation: "Class Teacher",
@@ -535,6 +579,7 @@ export function generateFull1YearDemoDataset(schoolId: string = "demo_school", a
         sessionId: session.id,
         name: classNameFormatted,
         section,
+        stream: streamName,
         classTeacherId: teacherId,
         defaultFee: baseMonthlyFee,
         feeStructure: {

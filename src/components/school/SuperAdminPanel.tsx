@@ -48,183 +48,199 @@ const defaultSub: SchoolSubscription = {
   monthlyAmount: 2000, status: "active", tier: "full"
 };
 
-// ── REUSABLE SUBSCRIPTION EDITOR ─────────────────────────────────────────────
+// ── REUSABLE 3-TIER SUBSCRIPTION EDITOR ─────────────────────────────────────────────
 const SubEditor = ({
   value,
   onChange,
-  label = "Subscription Features",
+  label = "School Management Subscription Plan",
 }: {
   value: SchoolSubscription;
   onChange: (s: SchoolSubscription) => void;
   label?: string;
 }) => {
-  const tier = value.tier ?? "full";
-  const isLite = tier === "lite";
-  const combo = !isLite && isCombo(value);
-  const amount = isLite ? LITE_PRICE : calcAmount(value);
+  const currentTier = value.tier || (value.maxStudents === 200 ? "starter_200" : value.maxStudents === 500 ? "growth_500" : "enterprise_2000");
 
-  const applyCombo = () => onChange({ ...value, reading: true, writing: true, pdf: true, mcq: true, tier: "full" });
-  const toggle = (key: keyof typeof FEATURE_PRICES) =>
-    onChange({ ...value, [key]: !value[key], tier: "full" });
-  const switchToLite = () => onChange({
-    ...value, reading: false, writing: false, pdf: false, mcq: false,
-    monthlyAmount: LITE_PRICE, tier: "lite"
-  });
-  const switchToFull = () => onChange({ ...value, tier: "full" });
+  const selectTier = (tier: "starter_200" | "growth_500" | "enterprise_2000") => {
+    if (tier === "starter_200") {
+      onChange({
+        ...value,
+        tier: "starter_200",
+        maxStudents: 200,
+        maxTeachers: 10,
+        monthlyAmount: 999,
+        reading: true,
+        writing: true,
+        pdf: true,
+        mcq: true,
+        status: "active"
+      });
+    } else if (tier === "growth_500") {
+      onChange({
+        ...value,
+        tier: "growth_500",
+        maxStudents: 500,
+        maxTeachers: 25,
+        monthlyAmount: 1999,
+        reading: true,
+        writing: true,
+        pdf: true,
+        mcq: true,
+        status: "active"
+      });
+    } else {
+      onChange({
+        ...value,
+        tier: "enterprise_2000",
+        maxStudents: 2000,
+        maxTeachers: 9999,
+        monthlyAmount: 3999,
+        reading: true,
+        writing: true,
+        pdf: true,
+        mcq: true,
+        status: "active"
+      });
+    }
+  };
 
   return (
-    <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm space-y-3">
+    <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm space-y-3.5 border border-slate-200 dark:border-slate-700">
       <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-slate-700 dark:text-slate-200">{label}</h3>
-        {combo && !isLite && (
-          <span className="flex items-center gap-1 text-xs bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 px-2.5 py-1 rounded-full font-bold">
-            <Zap className="w-3 h-3" /> COMBO
+        <h3 className="font-bold text-slate-800 dark:text-slate-100 text-sm">{label}</h3>
+        <span className="text-[11px] font-black px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300">
+          ₹{(value.monthlyAmount || 999).toLocaleString()}/month
+        </span>
+      </div>
+
+      {/* 3 Tier Selector Tabs */}
+      <div className="grid grid-cols-3 gap-2 p-1 bg-slate-100 dark:bg-slate-700/60 rounded-xl">
+        <button
+          type="button"
+          onClick={() => selectTier("starter_200")}
+          className={`py-2 px-1 rounded-lg text-xs font-black transition cursor-pointer text-center ${
+            currentTier === "starter_200" || currentTier === "lite"
+              ? "bg-blue-600 text-white shadow-sm"
+              : "text-slate-600 dark:text-slate-300 hover:text-slate-900"
+          }`}
+        >
+          <p className="leading-tight">Tier 1: Starter</p>
+          <span className="text-[10px] opacity-90">200 Std • ₹999</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => selectTier("growth_500")}
+          className={`py-2 px-1 rounded-lg text-xs font-black transition cursor-pointer text-center ${
+            currentTier === "growth_500"
+              ? "bg-purple-600 text-white shadow-sm"
+              : "text-slate-600 dark:text-slate-300 hover:text-slate-900"
+          }`}
+        >
+          <p className="leading-tight">Tier 2: Growth</p>
+          <span className="text-[10px] opacity-90">500 Std • ₹1,999</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => selectTier("enterprise_2000")}
+          className={`py-2 px-1 rounded-lg text-xs font-black transition cursor-pointer text-center ${
+            currentTier === "enterprise_2000" || currentTier === "full"
+              ? "bg-amber-500 text-slate-950 shadow-sm"
+              : "text-slate-600 dark:text-slate-300 hover:text-slate-900"
+          }`}
+        >
+          <p className="leading-tight">Tier 3: Enterprise</p>
+          <span className="text-[10px] opacity-90">2000 Std • ₹3,999</span>
+        </button>
+      </div>
+
+      {/* Tier Details Card */}
+      <div className={`p-3.5 rounded-xl border text-xs ${
+        currentTier === "starter_200" || currentTier === "lite"
+          ? "bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800 text-blue-900 dark:text-blue-200"
+          : currentTier === "growth_500"
+          ? "bg-purple-50 dark:bg-purple-950/40 border-purple-200 dark:border-purple-800 text-purple-900 dark:text-purple-200"
+          : "bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800 text-amber-950 dark:text-amber-200"
+      }`}>
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="font-black text-sm">
+            {currentTier === "starter_200" || currentTier === "lite"
+              ? "📦 Tier 1: Starter Plan (Max 200 Students)"
+              : currentTier === "growth_500"
+              ? "🚀 Tier 2: Growth Plan (Max 500 Students)"
+              : "👑 Tier 3: Enterprise Plan (Max 2000 Students)"}
           </span>
-        )}
-      </div>
-
-      {/* Tier selector */}
-      <div className="flex gap-2 p-1 bg-slate-100 dark:bg-slate-700 rounded-xl">
-        <button
-          onClick={switchToLite}
-          className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${isLite ? "bg-blue-600 text-white shadow" : "text-slate-500 dark:text-slate-400 hover:text-slate-700"}`}
-        >
-          📦 Lite — ₹{LITE_PRICE.toLocaleString()}
-        </button>
-        <button
-          onClick={switchToFull}
-          className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${!isLite ? "bg-amber-500 text-white shadow" : "text-slate-500 dark:text-slate-400 hover:text-slate-700"}`}
-        >
-          ⭐ Pro — ₹{COMBO_PRICE.toLocaleString()}+
-        </button>
-      </div>
-
-      {isLite ? (
-        <div className="bg-blue-50 dark:bg-blue-900/20 rounded-xl px-4 py-3 text-sm text-blue-700 dark:text-blue-300">
-          <p className="font-bold">Lite Plan — ₹{LITE_PRICE.toLocaleString()}/month</p>
-          <p className="text-xs mt-1 text-blue-600 dark:text-blue-400">✅ Student data management only (No content editing)</p>
+          <span className="font-mono font-bold">
+            {currentTier === "starter_200" || currentTier === "lite" ? "₹999 / mo" : currentTier === "growth_500" ? "₹1,999 / mo" : "₹3,999 / mo"}
+          </span>
         </div>
-      ) : (
-        <>
-          {/* Combo CTA */}
-          {!combo && (
-            <button
-              onClick={applyCombo}
-              className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl border-2 border-dashed border-amber-400 bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-colors"
-            >
-              <div className="flex items-center gap-2">
-                <Zap className="w-4 h-4 text-amber-500" />
-                <div className="text-left">
-                  <p className="text-sm font-bold text-amber-700 dark:text-amber-300">Apply Combo Offer</p>
-                  <p className="text-xs text-amber-600 dark:text-amber-400">All 4 features — Save ₹{COMBO_SAVING}/month</p>
-                </div>
-              </div>
-              <div className="text-right flex-shrink-0">
-                <p className="text-lg font-black text-amber-700 dark:text-amber-300">₹{COMBO_PRICE}</p>
-                <p className="text-xs line-through text-amber-500">₹{COMBO_RETAIL}</p>
-              </div>
-            </button>
-          )}
-
-          {/* Combo active banner */}
-          {combo && (
-            <div className="flex items-center justify-between px-4 py-3 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700">
-              <div className="flex items-center gap-2">
-                <Zap className="w-4 h-4 text-amber-500" />
-                <div>
-                  <p className="text-sm font-bold text-amber-700 dark:text-amber-300">Combo Offer Active</p>
-                  <p className="text-xs text-amber-600 dark:text-amber-400">All features • Saving ₹{COMBO_SAVING}/month</p>
-                </div>
-              </div>
-              <div className="text-right">
-                <p className="text-xl font-black text-amber-700 dark:text-amber-300">₹{COMBO_PRICE}</p>
-                <p className="text-xs line-through text-slate-400">₹{COMBO_RETAIL}</p>
-              </div>
-            </div>
-          )}
-
-          {/* Individual toggles */}
-          <div className="space-y-1 pt-1">
-            {([ 
-              ["reading", "📖 Reading Mode"],
-              ["writing", "✏️ Writing Mode"],
-              ["pdf",     "📄 PDF System"],
-              ["mcq",     "❓ MCQ System"],
-            ] as const).map(([key, featureLabel]) => (
-              <label key={key} className="flex items-center justify-between gap-3 cursor-pointer py-2 border-b dark:border-slate-700 last:border-0">
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={value[key]}
-                    onChange={() => toggle(key)}
-                    className="w-4 h-4 accent-blue-600"
-                  />
-                  <span className="text-sm text-slate-700 dark:text-slate-200">{featureLabel}</span>
-                </div>
-                <span className="text-xs text-slate-400 font-medium">
-                  {combo ? (
-                    <span className="text-amber-500 font-bold">Combo</span>
-                  ) : (
-                    `₹${FEATURE_PRICES[key]}/mo`
-                  )}
-                </span>
-              </label>
-            ))}
-          </div>
-        </>
-      )}
-
-      {/* Total row */}
-      <div className="pt-2 border-t dark:border-slate-700 flex items-center justify-between">
-        <span className="font-semibold text-slate-700 dark:text-slate-200">Total Monthly</span>
-        <div className="text-right">
-          {combo && <p className="text-xs line-through text-slate-400">₹{COMBO_RETAIL}</p>}
-          <p className={`text-xl font-black ${isLite ? "text-blue-600" : combo ? "text-amber-600" : "text-blue-600"}`}>
-            ₹{amount.toLocaleString()}
-          </p>
-          {combo && (
-            <p className="text-xs text-green-600 font-medium">You save ₹{COMBO_SAVING}!</p>
-          )}
-        </div>
+        <ul className="space-y-1 text-[11px] list-disc list-inside opacity-90">
+          <li><strong>Student Capacity:</strong> {currentTier === "starter_200" || currentTier === "lite" ? "Max 200 Active Students" : currentTier === "growth_500" ? "Max 500 Active Students" : "Max 2000 Active Students"}</li>
+          <li><strong>Faculty / Teachers:</strong> {currentTier === "starter_200" || currentTier === "lite" ? "Max 10 Teachers" : currentTier === "growth_500" ? "Max 25 Teachers" : "Unlimited Staff & Teachers"}</li>
+          <li><strong>Included Powers:</strong> {currentTier === "starter_200" || currentTier === "lite" ? "Student Management, Fees & Due Slips, Daily Attendance" : currentTier === "growth_500" ? "Everything in Tier 1 + Sub-Admins, ID Cards & Admit Card Hub" : "Everything in Tier 2 + Staff HRM Payroll, Online Admissions & School Website"}</li>
+        </ul>
       </div>
     </div>
   );
 };
 
 // ── PLAN ASSIGNER COMPONENT ───────────────────────────────────────────────────
-type PlanTier = "lite" | "pro";
-type PlanDur  = "weekly" | "monthly" | "3months" | "yearly";
+type PlanTier = "starter_200" | "growth_500" | "enterprise_2000";
+type PlanDur  = "1_year" | "2_years" | "lifetime" | "monthly" | "weekly" | "3months" | "yearly";
 
 const PLAN_PRICES: Record<PlanTier, Record<PlanDur, number>> = {
-  lite: { weekly: 500,  monthly: 1500, "3months": 4000,  yearly: 14000 },
-  pro:  { weekly: 1200, monthly: 4500, "3months": 12000, yearly: 45000 },
+  starter_200:     { "1_year": 9999,  "2_years": 17999, lifetime: 34999,  monthly: 999,  weekly: 299, "3months": 2699,  yearly: 9999 },
+  growth_500:      { "1_year": 19999, "2_years": 35999, lifetime: 69999,  monthly: 1999, weekly: 599, "3months": 5399,  yearly: 19999 },
+  enterprise_2000: { "1_year": 39999, "2_years": 69999, lifetime: 129999, monthly: 3999, weekly: 999, "3months": 10799, yearly: 39999 },
 };
 const PLAN_SAVINGS: Record<PlanTier, Record<PlanDur, number>> = {
-  lite: { weekly: 0, monthly: 0, "3months": 500,  yearly: 4000 },
-  pro:  { weekly: 0, monthly: 0, "3months": 1500, yearly: 9000 },
+  starter_200:     { "1_year": 1989, "2_years": 5977,  lifetime: 24965, monthly: 0, weekly: 0, "3months": 298,  yearly: 1989 },
+  growth_500:      { "1_year": 3989, "2_years": 11977, lifetime: 49965, monthly: 0, weekly: 0, "3months": 598,  yearly: 3989 },
+  enterprise_2000: { "1_year": 7989, "2_years": 25977, lifetime: 99965, monthly: 0, weekly: 0, "3months": 1198, yearly: 7989 },
 };
 const DURATION_DAYS: Record<PlanDur, number> = {
-  weekly: 7, monthly: 30, "3months": 90, yearly: 365,
+  "1_year": 365,
+  "2_years": 730,
+  lifetime: 7300, // 20 years permanent
+  monthly: 30,
+  weekly: 7,
+  "3months": 90,
+  yearly: 365,
 };
 const DURATION_LABEL: Record<PlanDur, string> = {
-  weekly: "Weekly", monthly: "Monthly", "3months": "3 Months", yearly: "Yearly",
+  "1_year": "1st Year Session (1 साल)",
+  "2_years": "2 Years (2 साल)",
+  lifetime: "Lifetime (लाइफटाइम)",
+  monthly: "Monthly (1 माह)",
+  weekly: "Weekly",
+  "3months": "3 Months",
+  yearly: "Yearly",
 };
 
 const PlanAssigner: React.FC<{
   school: School;
   onAssigned: (updatedSub: SchoolSubscription) => void;
 }> = ({ school, onAssigned }) => {
-  const [tier, setTier]       = useState<PlanTier>("pro");
-  const [duration, setDur]    = useState<PlanDur>("monthly");
+  const [tier, setTier]       = useState<PlanTier>(() => {
+    const st = school?.subscription?.tier;
+    if (st === "starter_200" || st === "growth_500" || st === "enterprise_2000") return st;
+    return "enterprise_2000";
+  });
+  const [duration, setDur]    = useState<PlanDur>("1_year");
   const [saving, setSaving]   = useState(false);
   const [success, setSuccess] = useState(false);
 
-  const price   = PLAN_PRICES[tier][duration];
-  const saving_ = PLAN_SAVINGS[tier][duration];
+  const price   = PLAN_PRICES[tier][duration] || 0;
+  const saving_ = PLAN_SAVINGS[tier][duration] || 0;
 
   const computeExpiry = (dur: PlanDur): string => {
+    if (dur === "lifetime") {
+      const d = new Date();
+      d.setFullYear(d.getFullYear() + 25);
+      return d.toISOString().split("T")[0];
+    }
     const d = new Date();
-    d.setDate(d.getDate() + DURATION_DAYS[dur]);
+    d.setDate(d.getDate() + (DURATION_DAYS[dur] || 365));
     return d.toISOString().split("T")[0];
   };
 
@@ -232,16 +248,20 @@ const PlanAssigner: React.FC<{
     setSaving(true);
     setSuccess(false);
     const expiresAt = computeExpiry(duration);
+    const maxStudents = tier === "starter_200" ? 200 : tier === "growth_500" ? 500 : 2000;
+    const maxTeachers = tier === "starter_200" ? 10 : tier === "growth_500" ? 25 : 9999;
     const newSub: SchoolSubscription = {
       ...school.subscription,
-      tier:          tier === "pro" ? "full" : "lite",
+      tier,
+      maxStudents,
+      maxTeachers,
       status:        "active",
       expiresAt,
       paidUntil:     expiresAt,
-      reading:       tier === "pro",
-      writing:       tier === "pro",
-      pdf:           tier === "pro",
-      mcq:           tier === "pro",
+      reading:       true,
+      writing:       true,
+      pdf:           true,
+      mcq:           true,
       monthlyAmount: price,
       planDuration:  duration,
       assignedAt:    new Date().toISOString(),
@@ -259,7 +279,7 @@ const PlanAssigner: React.FC<{
     <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm space-y-4">
       <div className="flex items-center gap-2">
         <CreditCard className="w-4 h-4 text-indigo-500" />
-        <h3 className="font-semibold text-slate-700 dark:text-slate-200">Plan Assign Karo</h3>
+        <h3 className="font-semibold text-slate-700 dark:text-slate-200">Plan Assign Karo (Subscription Tier)</h3>
         {school.subscription.expiresAt && (
           <span className="ml-auto text-[10px] text-slate-400">
             Expires: {new Date(school.subscription.expiresAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
@@ -268,47 +288,58 @@ const PlanAssigner: React.FC<{
       </div>
 
       {/* Tier selector */}
-      <div className="flex gap-2 p-1 bg-slate-100 dark:bg-slate-700 rounded-xl">
-        {(["lite", "pro"] as PlanTier[]).map(t => (
+      <div className="grid grid-cols-3 gap-2 p-1 bg-slate-100 dark:bg-slate-700 rounded-xl">
+        {(["starter_200", "growth_500", "enterprise_2000"] as PlanTier[]).map(t => (
           <button
             key={t}
             onClick={() => setTier(t)}
-            className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${
+            className={`py-2 px-1 rounded-lg text-xs font-black transition-all cursor-pointer text-center ${
               tier === t
-                ? t === "lite"
+                ? t === "starter_200"
                   ? "bg-blue-600 text-white shadow"
-                  : "bg-amber-500 text-white shadow"
+                  : t === "growth_500"
+                  ? "bg-purple-600 text-white shadow"
+                  : "bg-amber-500 text-slate-950 shadow"
                 : "text-slate-500 dark:text-slate-400"
             }`}
           >
-            {t === "lite" ? "📦 Lite" : "⭐ Pro"}
+            {t === "starter_200" ? "📦 Basic (200)" : t === "growth_500" ? "🚀 Standard (500)" : "👑 Pro (2000)"}
           </button>
         ))}
       </div>
 
       {/* Plan description */}
-      <div className={`rounded-lg px-3 py-2 text-xs ${tier === "pro" ? "bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300" : "bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300"}`}>
-        {tier === "pro"
-          ? "✅ Sab features: Student data + Reading, Writing, PDF, MCQ"
-          : "✅ Student data only: Attendance, Fees, Marks, Teachers — No content"}
+      <div className={`rounded-lg px-3 py-2 text-xs ${
+        tier === "enterprise_2000"
+          ? "bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300"
+          : tier === "growth_500"
+          ? "bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-300"
+          : "bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300"
+      }`}>
+        {tier === "enterprise_2000"
+          ? "👑 Pro Plan (2000 Students): Unlimited Staff • Multi-Admins, Full Payroll HRM, Advance Accounts & Website"
+          : tier === "growth_500"
+          ? "🚀 Standard Plan (500 Students): 25 Teachers • Sub-Admins, QR ID Cards & Admit Cards"
+          : "📦 Basic Plan (200 Students): 10 Teachers • Core Management, Fees & Due Register"}
       </div>
 
       {/* Duration selector */}
-      <div className="grid grid-cols-4 gap-1.5">
-        {(["weekly", "monthly", "3months", "yearly"] as PlanDur[]).map(d => {
-          const p = PLAN_PRICES[tier][d];
-          const s = PLAN_SAVINGS[tier][d];
+      <div className="grid grid-cols-2 gap-2">
+        {(["1_year", "monthly"] as PlanDur[]).map(d => {
+          const p = PLAN_PRICES[tier][d] || 0;
+          const s = PLAN_SAVINGS[tier][d] || 0;
           return (
             <button
               key={d}
               onClick={() => setDur(d)}
-              className={`flex flex-col items-center gap-1 p-2 rounded-xl border-2 transition-all active:scale-95 ${
+              className={`flex flex-col items-center gap-1 p-2.5 rounded-xl border-2 transition-all active:scale-95 cursor-pointer text-center ${
                 duration === d
                   ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30"
                   : "border-slate-200 dark:border-slate-600 hover:border-slate-300"
               }`}
             >
-              <span className={`text-[10px] font-black uppercase ${duration === d ? "text-indigo-700 dark:text-indigo-300" : "text-slate-500 dark:text-slate-400"}`}>
+              <span className={`text-[11px] font-black uppercase ${duration === d ? "text-indigo-700 dark:text-indigo-300" : "text-slate-500 dark:text-slate-400"}`}>
+                {d === "1_year" ? "📅 " : "🗓️ "}
                 {DURATION_LABEL[d]}
               </span>
               <span className={`text-xs font-black ${duration === d ? "text-indigo-600 dark:text-indigo-400" : "text-slate-600 dark:text-slate-300"}`}>
@@ -329,7 +360,7 @@ const PlanAssigner: React.FC<{
         <div>
           <p className="text-xs text-slate-400">Plan</p>
           <p className="text-sm font-black text-slate-800 dark:text-white">
-            {tier === "pro" ? "Pro" : "Lite"} · {DURATION_LABEL[duration]}
+            {(tier === "starter_200" ? "Basic Plan (200 Std)" : tier === "growth_500" ? "Standard Plan (500 Std)" : "Pro Plan (2000 Std)")} · {DURATION_LABEL[duration]}
           </p>
           <p className="text-[10px] text-slate-400 mt-0.5">
             Valid till: {computeExpiry(duration)}
@@ -1113,10 +1144,10 @@ export const SuperAdminPanel: React.FC<Props> = ({ adminUid, onBack }) => {
         {onBack && (
           <button
             onClick={onBack}
-            className="flex items-center gap-1.5 text-blue-300 hover:text-white text-sm font-medium mb-3 transition-colors"
+            className="flex items-center gap-2 bg-gradient-to-r from-amber-400 to-amber-500 text-slate-950 px-3.5 py-2 rounded-xl text-xs font-black mb-3 shadow-lg shadow-amber-400/20 hover:brightness-110 active:scale-95 transition-all cursor-pointer ring-1 ring-amber-300"
           >
             <ArrowLeft className="w-4 h-4" />
-            Admin Dashboard
+            <span>← NSTA Master Admin Console Par Wapas Jayein</span>
           </button>
         )}
         <p className="text-blue-300 text-xs font-medium uppercase tracking-wider mb-1">Super Admin</p>

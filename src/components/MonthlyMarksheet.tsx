@@ -111,7 +111,19 @@ export const MonthlyMarksheet: React.FC<Props> = ({ user, settings, onClose }) =
       if (!element) return;
       try {
           // Temporarily hide pagination controls for the screenshot if needed
-          const canvas = await html2canvas(element, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
+          const canvas = await html2canvas(element, {
+            scale: 2,
+            backgroundColor: '#ffffff',
+            useCORS: true,
+            onclone: (clonedDocument) => {
+              const styles = Array.from(clonedDocument.querySelectorAll('style, link[rel="stylesheet"]'));
+              for (const s of styles) {
+                if (s.textContent && s.textContent.includes('oklch')) {
+                  s.textContent = s.textContent.replace(/oklch\([^)]+\)/gi, '#1e3a8a');
+                }
+              }
+            },
+          });
           const imgData = canvas.toDataURL('image/png');
 
           const pdf = new jsPDF('p', 'mm', 'a4');

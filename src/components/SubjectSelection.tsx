@@ -281,6 +281,64 @@ export const SubjectSelection: React.FC<Props> = ({
         </div>
       )}
 
+      {/* ── PRACTICE SETS CARD (COMPETITION MODE) ── */}
+      {isCompetition && (
+        <div
+          onClick={() => {
+            if (onOpenPracticeSets) {
+              onOpenPracticeSets();
+            } else {
+              window.dispatchEvent(new CustomEvent('nst-open-competition-sets'));
+            }
+          }}
+          className="mb-4 p-4 rounded-2xl cursor-pointer transition-all hover:scale-[1.01] active:scale-[0.99] border relative overflow-hidden shadow-lg group"
+          style={{
+            background: 'linear-gradient(135deg, #0f172a 0%, #1e1b4b 60%, #312e81 100%)',
+            borderColor: '#3730a3',
+          }}
+        >
+          {/* Top row */}
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1 shadow-xs">
+              🎯 MOCK SETS
+            </span>
+            <span className="text-xs font-black text-cyan-400 group-hover:text-cyan-300 flex items-center gap-1 transition-colors">
+              <span>प्रैक्टिस सेट</span>
+              <span className="group-hover:translate-x-0.5 transition-transform">→</span>
+            </span>
+          </div>
+
+          {/* Heading */}
+          <h3 className="text-base sm:text-lg font-black text-white mb-1 flex items-center gap-1.5">
+            <span>📝</span>
+            <span>प्रैक्टिस सेट (Practice Sets)</span>
+          </h3>
+
+          {/* Description */}
+          <p className="text-xs text-slate-300 mb-3 leading-relaxed">
+            बिहार पुलिस (100 Qs • 60 Min) एवं BSSC / SSC (150 Qs • 120 Min) के पूर्ण मॉडल टेस्ट।
+          </p>
+
+          {/* Bottom row pills */}
+          <div className="flex items-center justify-between pt-2 border-t border-slate-700/60 flex-wrap gap-2 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="px-2.5 py-1 rounded-xl bg-slate-800/80 text-slate-200 border border-slate-700 text-[11px] font-bold flex items-center gap-1.5 shadow-xs">
+                <span>👮</span>
+                <span>Basic Set</span>
+              </span>
+              <span className="px-2.5 py-1 rounded-xl bg-slate-800/80 text-slate-200 border border-slate-700 text-[11px] font-bold flex items-center gap-1.5 shadow-xs">
+                <span>🏛️</span>
+                <span>Ultra Set</span>
+              </span>
+            </div>
+
+            <span className="text-xs font-black text-amber-400 flex items-center gap-1">
+              VIP Unlocked
+            </span>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {subjects.map((subject) => {
           const stats = getSubjectStats(subject, classLevel, currentBoard, contentIndex, lucentNotes, settings);

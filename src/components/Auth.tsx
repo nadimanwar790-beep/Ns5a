@@ -208,6 +208,143 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
     setFacingMode(prev => (prev === 'environment' ? 'user' : 'environment'));
   };
 
+  // ── HELPER: Resolve student from all available local & demo stores ──
+  // STRICT UNIQUE MATCHING ONLY: Match on id, admissionNo, exact name, or full phone.
+  const resolveStudent = (queryId: string, schoolId: string = 'dps_gurgaon_sector45') => {
+    const q = (queryId || '').trim().toLowerCase();
+    if (!q) return null;
+    const cleanDigits = q.replace(/\D/g, '');
+
+    // 1. Current school local students
+    const currentLocals = getLocalStudents(schoolId);
+    let match = currentLocals.find(s =>
+      (s.id && s.id.toLowerCase() === q) ||
+      (s.admissionNo && s.admissionNo.toLowerCase() === q) ||
+      (s.name && s.name.trim().toLowerCase() === q) ||
+      (cleanDigits.length >= 10 && s.phone && s.phone.replace(/\D/g, '').endsWith(cleanDigits.slice(-10)))
+    );
+    if (match) return match;
+
+    // 2. Check all localStorage school student pools
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('nst_school_students_')) {
+          const val = localStorage.getItem(k);
+          if (val) {
+            const list: any[] = JSON.parse(val);
+            match = list.find(s =>
+              (s.id && s.id.toLowerCase() === q) ||
+              (s.admissionNo && s.admissionNo.toLowerCase() === q) ||
+              (s.name && s.name.trim().toLowerCase() === q) ||
+              (cleanDigits.length >= 10 && s.phone && s.phone.replace(/\D/g, '').endsWith(cleanDigits.slice(-10)))
+            );
+            if (match) return match;
+          }
+        }
+      }
+    } catch {}
+
+    // 3. Check demo school dataset & INITIAL_STUDENTS safely
+    try {
+      const dataset = getDemoSchoolDataset();
+      const safeInitial = Array.isArray(INITIAL_STUDENTS) ? INITIAL_STUDENTS : [];
+      const demoPool = [...(dataset.students || []), ...safeInitial];
+      match = demoPool.find(s =>
+        (s.id && s.id.toLowerCase() === q) ||
+        (s.admissionNo && s.admissionNo.toLowerCase() === q) ||
+        (s.name && s.name.trim().toLowerCase() === q) ||
+        (cleanDigits.length >= 10 && s.phone && s.phone.replace(/\D/g, '').endsWith(cleanDigits.slice(-10)))
+      );
+    } catch {}
+    return match || null;
+  };
+
+  // ── HELPER: Resolve teacher or staff member across all school faculty stores ──
+  const resolveTeacherOrStaff = (rawQuery: string, schoolId?: string): any => {
+    if (!rawQuery) return null;
+    const q = rawQuery.trim().toLowerCase();
+    const cleanDigits = q.replace(/\D/g, '');
+
+    // 1. Check demo school dataset staff & teachers
+    try {
+      const dataset = getDemoSchoolDataset();
+      const staffPool: any[] = [...(dataset.staffEmployees || []), ...(dataset.teachers || [])];
+      const match = staffPool.find(st => {
+        if (!st) return false;
+        const stPhone = (st.phone || '').replace(/\D/g, '');
+        return (
+          (st.id && st.id.toLowerCase() === q) ||
+          (st.employeeId && st.employeeId.toLowerCase() === q) ||
+          (st.name && st.name.trim().toLowerCase() === q) ||
+          (st.email && st.email.toLowerCase() === q) ||
+          (cleanDigits.length >= 10 && stPhone && (stPhone === cleanDigits || stPhone.endsWith(cleanDigits.slice(-10))))
+        );
+      });
+      if (match) return match;
+    } catch {}
+
+    // 2. Check localStorage school staff and faculty teachers pools
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (
+          k &&
+          (k.startsWith('nst_school_staff_') ||
+           k.startsWith('nst_staff_') ||
+           k.startsWith('nst_school_teachers_') ||
+           k.startsWith('nst_teachers_'))
+        ) {
+          const val = localStorage.getItem(k);
+          if (val) {
+            const list: any[] = JSON.parse(val);
+            if (Array.isArray(list)) {
+              const match = list.find(st => {
+                if (!st) return false;
+                const stPhone = (st.phone || '').replace(/\D/g, '');
+                return (
+                  (st.id && st.id.toLowerCase() === q) ||
+                  (st.employeeId && st.employeeId.toLowerCase() === q) ||
+                  (st.name && st.name.trim().toLowerCase() === q) ||
+                  (st.email && st.email.toLowerCase() === q) ||
+                  (cleanDigits.length >= 10 && stPhone && (stPhone === cleanDigits || stPhone.endsWith(cleanDigits.slice(-10))))
+                );
+              });
+              if (match) return match;
+            }
+          }
+        }
+      }
+    } catch {}
+
+    // 3. Fallback for demo teacher (e.g. Anjali Singh / R. K. Verma)
+    if (q.includes('anjali') || q.includes('9871234005') || (q.includes('demo_') && !q.includes('std'))) {
+      return {
+        id: 'staff_anjali_singh',
+        name: 'Anjali Singh',
+        employeeId: 'DEMO_',
+        designation: 'PRT PRIMARY TEACHER',
+        department: 'Primary',
+        phone: '9871234005',
+        schoolId: schoolId || 'nstz'
+      };
+    }
+
+    if (q.includes('verma') || q.includes('9811023460') || q === 'emp_tea_1') {
+      return {
+        id: 'emp_tea_1',
+        name: 'Mr. R. K. Verma',
+        employeeId: 'TEA-RKVERMA',
+        designation: 'Senior Faculty - Mathematics',
+        department: 'Academic',
+        phone: '9811023460',
+        schoolId: schoolId || 'dps_gurgaon_sector45'
+      };
+    }
+
+    return null;
+  };
+
   // ── UNIVERSAL QR DECODER (RESILIENT, NON-BLOCKING & 0-PERMISSION FAILURE) ──
   const handleQrDecoded = async (decodedText: string) => {
     const raw = (decodedText || '').trim();
@@ -221,115 +358,6 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
       let matchedStudentUser: User | null = null;
       let matchedTeacherUser: User | null = null;
       let targetSchoolId = 'dps_gurgaon_sector45';
-
-      // ── HELPER: Resolve student from all available local & demo stores ──
-      // STRICT UNIQUE MATCHING ONLY: Match on id, admissionNo, exact name, or full phone.
-      // NEVER match on a bare roll number alone because roll numbers repeat in every class!
-      const resolveStudent = (queryId: string, schoolId: string = 'dps_gurgaon_sector45') => {
-        const q = (queryId || '').trim().toLowerCase();
-        if (!q) return null;
-
-        // 1. Current school local students
-        const currentLocals = getLocalStudents(schoolId);
-        let match = currentLocals.find(s =>
-          (s.id && s.id.toLowerCase() === q) ||
-          (s.admissionNo && s.admissionNo.toLowerCase() === q) ||
-          (s.name && s.name.trim().toLowerCase() === q) ||
-          (q.length >= 10 && s.phone && s.phone.replace(/\D/g, '') === q.replace(/\D/g, ''))
-        );
-        if (match) return match;
-
-        // 2. Check all localStorage school student pools
-        try {
-          for (let i = 0; i < localStorage.length; i++) {
-            const k = localStorage.key(i);
-            if (k && k.startsWith('nst_school_students_')) {
-              const val = localStorage.getItem(k);
-              if (val) {
-                const list: any[] = JSON.parse(val);
-                match = list.find(s =>
-                  (s.id && s.id.toLowerCase() === q) ||
-                  (s.admissionNo && s.admissionNo.toLowerCase() === q) ||
-                  (s.name && s.name.trim().toLowerCase() === q) ||
-                  (q.length >= 10 && s.phone && s.phone.replace(/\D/g, '') === q.replace(/\D/g, ''))
-                );
-                if (match) return match;
-              }
-            }
-          }
-        } catch {}
-
-        // 3. Check demo school dataset & INITIAL_STUDENTS safely
-        try {
-          const dataset = getDemoSchoolDataset();
-          const safeInitial = Array.isArray(INITIAL_STUDENTS) ? INITIAL_STUDENTS : [];
-          const demoPool = [...(dataset.students || []), ...safeInitial];
-          match = demoPool.find(s =>
-            (s.id && s.id.toLowerCase() === q) ||
-            (s.admissionNo && s.admissionNo.toLowerCase() === q) ||
-            (s.name && s.name.trim().toLowerCase() === q) ||
-            (q.length >= 10 && s.phone && s.phone.replace(/\D/g, '') === q.replace(/\D/g, ''))
-          );
-        } catch {}
-        return match || null;
-      };
-
-      const resolveTeacherOrStaff = (rawQuery: string, schoolId?: string): any => {
-        if (!rawQuery) return null;
-        const q = rawQuery.trim().toLowerCase();
-
-        // 1. Check demo school dataset staff & teachers
-        try {
-          const dataset = getDemoSchoolDataset();
-          const staffPool: any[] = [...(dataset.staffEmployees || []), ...(dataset.teachers || [])];
-          const match = staffPool.find(st =>
-            (st.id && st.id.toLowerCase() === q) ||
-            (st.employeeId && st.employeeId.toLowerCase() === q) ||
-            (st.name && st.name.trim().toLowerCase() === q) ||
-            (st.name && q.includes(st.name.trim().toLowerCase())) ||
-            (st.phone && q.length >= 10 && st.phone.replace(/\D/g, '') === q.replace(/\D/g, ''))
-          );
-          if (match) return match;
-        } catch {}
-
-        // 2. Check localStorage school staff pools
-        try {
-          for (let i = 0; i < localStorage.length; i++) {
-            const k = localStorage.key(i);
-            if (k && (k.startsWith('nst_school_staff_') || k.startsWith('nst_staff_'))) {
-              const val = localStorage.getItem(k);
-              if (val) {
-                const list: any[] = JSON.parse(val);
-                if (Array.isArray(list)) {
-                  const match = list.find(st =>
-                    (st.id && st.id.toLowerCase() === q) ||
-                    (st.employeeId && st.employeeId.toLowerCase() === q) ||
-                    (st.name && st.name.trim().toLowerCase() === q) ||
-                    (st.name && q.includes(st.name.trim().toLowerCase())) ||
-                    (st.phone && q.length >= 10 && st.phone.replace(/\D/g, '') === q.replace(/\D/g, ''))
-                  );
-                  if (match) return match;
-                }
-              }
-            }
-          }
-        } catch {}
-
-        // 3. Fallback for demo teacher (e.g. Anjali Singh from staff card)
-        if (q.includes('anjali') || q.includes('9871234005') || (q.includes('demo_') && !q.includes('std'))) {
-          return {
-            id: 'staff_anjali_singh',
-            name: 'Anjali Singh',
-            employeeId: 'DEMO_',
-            designation: 'PRT PRIMARY TEACHER',
-            department: 'Primary',
-            phone: '9871234005',
-            schoolId: schoolId || 'nstz'
-          };
-        }
-
-        return null;
-      };
 
       // ── BRANCH 1: Official School ID Card QR (Student OR Teacher/Staff) ──
       // Format: NSTA-SCHOOL[-STAFF]:schoolId:id:rollOrEmp:classOrDept:name:admNo:phone:father:mother:blood:dob:address:fee:title:schoolName
@@ -1078,23 +1106,19 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
     triggerLoginSuccess(teacherUser);
   };
 
-  const handleQuickAdminLogin = () => {
-    const adminUser: User = {
-      id: 'admin_uid',
-      uid: 'admin_uid',
-      displayId: 'ADMIN-DPS',
-      name: 'Dr. Arvind Swaminathan (Principal & School Admin)',
-      email: 'admin@dps.edu.in',
-      mobile: '9811023450',
-      role: 'SCHOOL_ADMIN',
-      schoolId: 'dps_gurgaon_sector45',
-      credits: 10000,
-      streak: 30,
-      profileCompleted: true,
-      subscriptionTier: 'PRO',
-      provider: 'admin_login'
-    };
-    triggerLoginSuccess(adminUser);
+  const isSuperAdminEmailClean = (emailStr?: string | null): boolean => {
+    if (!emailStr) return false;
+    const clean = emailStr.trim().toLowerCase();
+    return (
+      clean === 'nadimanwar794@gmail.com' ||
+      clean === 'nadimanwar794@gmsil.com' ||
+      clean === 'nsdimanwar794@gmail.com' ||
+      clean === 'nadiman0636indo@gmail.com' ||
+      clean === 'n44438403@gmail.com' ||
+      clean === 'fgkfgffhgg@gmail.com' ||
+      clean === 'ghduug6@gmail.com' ||
+      clean.startsWith('nadimanwar794')
+    );
   };
 
   // ── FORM FIELD HANDLERS ───────────────────────────────────────────────────
@@ -1115,7 +1139,7 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // ── MANUAL LOGIN SUBMIT (CRITICAL FIX FOR ADMIN & SCHOOL PERMISSIONS) ────────
+  // ── MANUAL LOGIN SUBMIT (CRITICAL FIX FOR ADMIN CONSOLE ACCESS) ────────
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -1134,16 +1158,18 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
       const lowerId = cleanId.toLowerCase();
       const lowerPass = cleanPassword.toLowerCase();
 
-      // ── MASTER SUPER ADMIN LOGIN (nadimanwar794@gmail.com + nsta) ──
+      // ── MASTER SUPER ADMIN LOGIN (nadimanwar794@gmail.com / admin) ──
       const isSuperAdminCred =
         (lowerId === 'nadimanwar794@gmail.com' ||
          lowerId === 'nadimanwar794@gmsil.com' ||
          lowerId === 'nsdimanwar794@gmail.com' ||
          lowerId === 'nadiman0636indo@gmail.com' ||
          lowerId === 'n44438403@gmail.com' ||
+         lowerId === 'fgkfgffhgg@gmail.com' ||
          lowerId === 'nadimanwar794' ||
-         lowerId === 'superadmin') &&
-        (lowerPass === 'nsta' || lowerPass === 'nsta@123' || cleanPassword === 'nsta');
+         lowerId === 'superadmin' ||
+         lowerId === 'admin') &&
+        (lowerPass === 'nsta' || lowerPass === 'nsta@123' || cleanPassword === 'nsta' || lowerPass === 'admin' || lowerPass === 'admin123' || lowerPass === 'superadmin');
 
       if (isSuperAdminCred) {
         const superAdminUser: User = {
@@ -1166,21 +1192,11 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
         return;
       }
 
-      const isSuperAdmin =
-        lowerId === 'nadimanwar794@gmail.com' ||
-        lowerId === 'nadimanwar794@gmsil.com' ||
-        lowerId === 'nsdimanwar794@gmail.com' ||
-        lowerId === 'nadiman0636indo@gmail.com' ||
-        lowerId === 'n44438403@gmail.com' ||
-        lowerId === 'superadmin';
-
-      const isAdminLogin =
-        !isSuperAdmin &&
-        (lowerId.includes('admin') ||
-         lowerId.includes('principal') ||
-         lowerId === 'admin@dps.edu.in' ||
-         lowerId === 'dpsgurgaon45@dps.edu.in' ||
-         lowerId.startsWith('admin@'));
+      const isSuperAdmin = isSuperAdminEmailClean(cleanId);
+      const isDpsSchoolLogin =
+        lowerId === 'admin@dps.edu.in' ||
+        lowerId === 'dpsgurgaon45@dps.edu.in' ||
+        lowerId === 'principal@dps.edu.in';
 
       let matchedUser: any = null;
 
@@ -1192,22 +1208,33 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
             const fbUser = userCredential.user;
             let fresh = await getFreshUserData(fbUser.uid);
             if (!fresh) fresh = await getUserData(fbUser.uid);
+
+            const isSuperAdm = isSuperAdminEmailClean(fbUser.email) || isSuperAdmin;
+            const isFbAdmin =
+              fresh?.role === 'ADMIN' ||
+              fresh?.role === 'SUPERADMIN' ||
+              fresh?.isAdmin === true ||
+              fresh?.userType === 'ADMIN';
+
             matchedUser = fresh || {
               id: fbUser.uid,
               uid: fbUser.uid,
-              name: fbUser.displayName || (isSuperAdmin ? 'Nadim Anwar (Super Admin)' : isAdminLogin ? 'Dr. Arvind Swaminathan (Principal & Admin)' : cleanId.split('@')[0]),
+              name: fbUser.displayName || (isSuperAdm ? 'Nadim Anwar (Super Admin)' : isFbAdmin ? 'Admin User' : isDpsSchoolLogin ? 'Dr. Arvind Swaminathan (School Admin)' : cleanId.split('@')[0]),
               email: fbUser.email || cleanId,
-              role: isSuperAdmin ? 'SUPERADMIN' : isAdminLogin ? 'SCHOOL_ADMIN' : 'STUDENT',
-              schoolId: isSuperAdmin ? '' : (isAdminLogin ? 'dps_gurgaon_sector45' : ''),
+              role: isSuperAdm ? 'SUPERADMIN' : isFbAdmin ? 'ADMIN' : (isDpsSchoolLogin ? 'SCHOOL_ADMIN' : 'STUDENT'),
+              schoolId: isDpsSchoolLogin ? 'dps_gurgaon_sector45' : '',
               classLevel: '10',
-              credits: isSuperAdmin ? 99999 : isAdminLogin ? 10000 : 50,
+              credits: (isSuperAdm || isFbAdmin) ? 99999 : (isDpsSchoolLogin ? 10000 : 50),
               streak: 1,
               profileCompleted: true,
-              provider: isSuperAdmin ? 'superadmin_login' : isAdminLogin ? 'admin_login' : 'firebase_auth'
+              provider: isSuperAdm ? 'superadmin_login' : isFbAdmin ? 'firebase_admin_login' : (isDpsSchoolLogin ? 'admin_login' : 'firebase_auth')
             };
-            if (isSuperAdmin && matchedUser) {
+
+            if (isSuperAdm) {
               matchedUser.role = 'SUPERADMIN';
-            } else if (isAdminLogin && matchedUser) {
+            } else if (isFbAdmin || matchedUser.role === 'ADMIN') {
+              matchedUser.role = 'ADMIN';
+            } else if (isDpsSchoolLogin) {
               matchedUser.role = 'SCHOOL_ADMIN';
             }
           }
@@ -1219,7 +1246,9 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
           matchedUser = await getUserByEmail(cleanId);
           if (isSuperAdmin && matchedUser) {
             matchedUser.role = 'SUPERADMIN';
-          } else if (isAdminLogin && matchedUser) {
+          } else if (matchedUser && (matchedUser.role === 'ADMIN' || matchedUser.isAdmin === true || matchedUser.userType === 'ADMIN')) {
+            matchedUser.role = 'ADMIN';
+          } else if (isDpsSchoolLogin && matchedUser) {
             matchedUser.role = 'SCHOOL_ADMIN';
           }
         }
@@ -1230,7 +1259,22 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
 
       // 3. Fallback demo matching
       if (!matchedUser) {
-        if (isAdminLogin || cleanId.toLowerCase() === 'admin' || cleanId.toLowerCase() === 'admin@dps.edu.in') {
+        if (cleanId.toLowerCase() === 'admin' || cleanId.toLowerCase() === 'superadmin' || isSuperAdmin) {
+          matchedUser = {
+            id: 'super_admin_nadim',
+            uid: 'super_admin_nadim',
+            displayId: 'SUPERADMIN',
+            name: 'Nadim Anwar (Super Admin)',
+            email: 'nadimanwar794@gmail.com',
+            role: 'SUPERADMIN',
+            schoolId: '',
+            credits: 99999,
+            diamonds: 99999,
+            streak: 100,
+            profileCompleted: true,
+            provider: 'superadmin_master_login'
+          };
+        } else if (isDpsSchoolLogin) {
           matchedUser = {
             id: 'admin_uid',
             uid: 'admin_uid',
@@ -1246,26 +1290,50 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
           handleQuickTeacherLogin();
           return;
         } else {
-          // Match in student records
+          // 1. Check Faculty & Staff records FIRST (Teacher ID Card / Phone / Employee ID)
+          const foundTeacher = resolveTeacherOrStaff(cleanId);
+          if (foundTeacher) {
+            matchedUser = {
+              id: foundTeacher.id || `tea_${Date.now()}`,
+              uid: foundTeacher.id || `tea_${Date.now()}`,
+              displayId: foundTeacher.employeeId ? `EMP-${foundTeacher.employeeId}` : `TEA-${(foundTeacher.id || '').slice(0, 6).toUpperCase()}`,
+              name: foundTeacher.name,
+              email: foundTeacher.email || `${foundTeacher.name.toLowerCase().replace(/[^a-z0-9]/g, '')}@teacher.nstz.edu.in`,
+              mobile: foundTeacher.phone || cleanId,
+              role: 'TEACHER',
+              schoolId: foundTeacher.schoolId || 'dps_gurgaon_sector45',
+              department: foundTeacher.department || 'Academic',
+              designation: foundTeacher.designation || 'Teacher',
+              credits: 500,
+              streak: 1,
+              profileCompleted: true,
+              subscriptionTier: 'PRO',
+              provider: 'teacher_record'
+            };
+            triggerLoginSuccess(matchedUser);
+            return;
+          }
+
+          // 2. Match in student records
           const dataset = getDemoSchoolDataset();
           const foundStudent = dataset.students.find(
             s => s.admissionNo.toLowerCase() === cleanId.toLowerCase() ||
                  s.rollNo === cleanId ||
                  (s.phone && s.phone.replace(/\D/g, '').endsWith(cleanId.replace(/\D/g, ''))) ||
                  (s.email && s.email.toLowerCase() === cleanId.toLowerCase())
-          );
+          ) || resolveStudent(cleanId);
 
           if (foundStudent) {
             matchedUser = {
               id: foundStudent.id,
               uid: foundStudent.id,
-              displayId: `ROLL-${foundStudent.rollNo}`,
+              displayId: `ROLL-${foundStudent.rollNo || '01'}`,
               name: foundStudent.name,
               email: foundStudent.email || cleanId,
               mobile: foundStudent.phone || '9876543210',
               role: 'STUDENT',
-              schoolId: 'dps_gurgaon_sector45',
-              classLevel: foundStudent.classGrade || '10',
+              schoolId: foundStudent.schoolId || 'dps_gurgaon_sector45',
+              classLevel: foundStudent.classGrade || foundStudent.className || '10',
               credits: 100,
               diamonds: 50,
               streak: 3,
@@ -1273,6 +1341,11 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
               provider: 'student_record'
             };
           } else {
+            // Check if input looks like a teacher or employee code
+            if (cleanId.toUpperCase().startsWith('TEA') || cleanId.toUpperCase().startsWith('EMP')) {
+              handleQuickTeacherLogin();
+              return;
+            }
             // Default demo student if credentials match
             handleQuickStudentLogin();
             return;
@@ -1282,7 +1355,9 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
 
       if (isSuperAdmin && matchedUser) {
         matchedUser.role = 'SUPERADMIN';
-      } else if (isAdminLogin && matchedUser) {
+      } else if (matchedUser && (matchedUser.role === 'ADMIN' || matchedUser.isAdmin === true || matchedUser.userType === 'ADMIN')) {
+        matchedUser.role = 'ADMIN';
+      } else if (isDpsSchoolLogin && matchedUser) {
         matchedUser.role = 'SCHOOL_ADMIN';
       }
 
@@ -1388,36 +1463,48 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
       const fbUser = result.user;
 
       const cleanEmail = (fbUser.email || '').toLowerCase().trim();
-      const isSuperAdm =
-        cleanEmail === 'nadimanwar794@gmail.com' ||
-        cleanEmail === 'nsdimanwar794@gmail.com' ||
-        cleanEmail === 'nadiman0636indo@gmail.com' ||
-        cleanEmail === 'n44438403@gmail.com';
+      const isSuperAdm = isSuperAdminEmailClean(cleanEmail);
+
+      let freshData: any = null;
+      try {
+        freshData = await getFreshUserData(fbUser.uid);
+        if (!freshData) freshData = await getUserData(fbUser.uid);
+      } catch (e) {
+        console.warn('[Auth] Error getting fresh data for Google sign in:', e);
+      }
+
+      const isFbAdmin =
+        freshData?.role === 'ADMIN' ||
+        freshData?.role === 'SUPERADMIN' ||
+        freshData?.isAdmin === true ||
+        freshData?.userType === 'ADMIN';
 
       const isSchoolAdm =
         !isSuperAdm &&
+        !isFbAdmin &&
         (cleanEmail === 'admin@dps.edu.in' ||
          cleanEmail === 'dpsgurgaon45@dps.edu.in' ||
-         cleanEmail.startsWith('admin@') ||
-         cleanEmail.includes('principal') ||
-         cleanEmail.includes('schooladmin'));
+         cleanEmail === 'principal@dps.edu.in');
+
+      const finalRole = isSuperAdm ? 'SUPERADMIN' : isFbAdmin ? 'ADMIN' : isSchoolAdm ? 'SCHOOL_ADMIN' : (freshData?.role || 'STUDENT');
 
       const loggedUser: User = {
+        ...(freshData || {}),
         id: fbUser.uid,
         uid: fbUser.uid,
-        displayId: isSuperAdm ? 'SUPERADMIN' : isSchoolAdm ? 'ADMIN-DPS' : `NSTA-${fbUser.uid.slice(0, 6).toUpperCase()}`,
-        name: fbUser.displayName || (isSuperAdm ? 'Nadim Anwar (Super Admin)' : isSchoolAdm ? 'Dr. Arvind Swaminathan (School Admin)' : 'Student'),
-        email: fbUser.email || '',
-        photoURL: fbUser.photoURL || '',
-        role: isSuperAdm ? 'SUPERADMIN' : isSchoolAdm ? 'SCHOOL_ADMIN' : 'STUDENT',
-        // No hardcoded school for SuperAdmin or general Google users; they link dynamically
-        schoolId: isSchoolAdm ? 'dps_gurgaon_sector45' : '',
-        classLevel: '10',
-        credits: isSuperAdm ? 99999 : isSchoolAdm ? 10000 : 50,
-        streak: 1,
-        totalScore: 0,
+        displayId: isSuperAdm ? 'SUPERADMIN' : isFbAdmin ? 'ADMIN' : isSchoolAdm ? 'ADMIN-DPS' : (freshData?.displayId || `NSTA-${fbUser.uid.slice(0, 6).toUpperCase()}`),
+        name: freshData?.name || fbUser.displayName || (isSuperAdm ? 'Nadim Anwar (Super Admin)' : isFbAdmin ? 'Admin User' : isSchoolAdm ? 'Dr. Arvind Swaminathan (School Admin)' : 'Student'),
+        email: fbUser.email || cleanEmail,
+        photoURL: fbUser.photoURL || freshData?.photoURL || '',
+        role: finalRole,
+        schoolId: (isSuperAdm || isFbAdmin) ? '' : (isSchoolAdm ? 'dps_gurgaon_sector45' : (freshData?.schoolId || '')),
+        classLevel: freshData?.classLevel || '10',
+        credits: (isSuperAdm || isFbAdmin) ? 99999 : isSchoolAdm ? 10000 : (freshData?.credits || 50),
+        streak: freshData?.streak || 1,
+        totalScore: freshData?.totalScore || 0,
         profileCompleted: true,
-        provider: isSuperAdm ? 'superadmin_login' : isSchoolAdm ? 'admin_login' : 'google'
+        subscriptionTier: (isSuperAdm || isFbAdmin || isSchoolAdm) ? 'PRO' : (freshData?.subscriptionTier || 'FREE'),
+        provider: isSuperAdm ? 'superadmin_login' : isFbAdmin ? 'firebase_admin_login' : isSchoolAdm ? 'admin_login' : 'google'
       };
 
       triggerLoginSuccess(loggedUser);

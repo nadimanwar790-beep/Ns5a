@@ -211,6 +211,13 @@ export const downloadAsMHTML = async (
         clonedDocument.querySelectorAll('img').forEach((img) => {
           img.setAttribute('crossorigin', 'anonymous');
         });
+        // Sanitize any stylesheets that contain oklch() to prevent html2canvas crashing
+        const styles = Array.from(clonedDocument.querySelectorAll('style, link[rel="stylesheet"]'));
+        for (const s of styles) {
+          if (s.textContent && s.textContent.includes('oklch')) {
+            s.textContent = s.textContent.replace(/oklch\([^)]+\)/gi, '#1e3a8a');
+          }
+        }
       },
     });
 

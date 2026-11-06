@@ -955,10 +955,10 @@ export const LessonView: React.FC<Props> = ({
 
   // FLOATING IMMERSIVE BUTTON — always rendered via portal into document.body
   // so it escapes any fixed/overflow parent stacking context.
-  // Note: Disabled when viewing MCQ content as per user requirement.
-  const isMcqContent = (content.type === 'MCQ_ANALYSIS' || content.type === 'MCQ_SIMPLE' || content.type === 'MCQ_RESULT') || (Boolean(content.mcqData) && (content.mcqData?.length || 0) > 0 && content.type?.includes('MCQ'));
+  // FLOATING IMMERSIVE BUTTON — always rendered via portal into document.body
+  // so it escapes any fixed/overflow parent stacking context. Available in both Notes and MCQ modes.
   const fabBottom = isImmersive ? 16 : 80;
-  const floatingBtn = isMcqContent ? null : createPortal(
+  const floatingBtn = createPortal(
     <>
       {/* Backdrop — close menu on outside tap (not in schoolMode) */}
       {fabOpen && !schoolMode && (
@@ -2207,7 +2207,19 @@ export const LessonView: React.FC<Props> = ({
                 const element = document.getElementById('printable-analysis-report');
                 if (element) {
                     try {
-                        const canvas = await html2canvas(element, { scale: 1.5, backgroundColor: '#ffffff', useCORS: true });
+                        const canvas = await html2canvas(element, {
+                            scale: 1.5,
+                            backgroundColor: '#ffffff',
+                            useCORS: true,
+                            onclone: (clonedDocument) => {
+                                const styles = Array.from(clonedDocument.querySelectorAll('style, link[rel="stylesheet"]'));
+                                for (const s of styles) {
+                                    if (s.textContent && s.textContent.includes('oklch')) {
+                                        s.textContent = s.textContent.replace(/oklch\([^)]+\)/gi, '#1e3a8a');
+                                    }
+                                }
+                            },
+                        });
                         const imgData = canvas.toDataURL('image/png');
 
                         const pdf = new jsPDF('p', 'mm', 'a4');

@@ -23,30 +23,38 @@ export const ClassFeeStructureModal: React.FC<Props> = ({
   const currentClass = classes.find(c => c.id === selectedClassId) || classes[0];
 
   const getInitialStructure = (c?: SchoolClass): ClassFeeStructure => {
-    if (c?.feeStructure) {
-      return {
-        admissionFee: Number(c.feeStructure.admissionFee || 0),
-        tuitionFee: Number(c.feeStructure.tuitionFee || c.defaultFee || 0),
-        cautionMoney: Number(c.feeStructure.cautionMoney || 0),
-        annualCharges: Number(c.feeStructure.annualCharges || 0),
-        busFee: Number(c.feeStructure.busFee || 0),
-        customHeads: c.feeStructure.customHeads || [],
-      };
-    }
-    // Standard defaults matching school layout
+    const fs = c?.feeStructure;
+    const rawAdm = Number(fs?.admissionFee || 0);
+    const rawReg = Number(fs?.registrationFee || 0);
+    const rawTui = Number(fs?.tuitionFee || c?.defaultFee || 0);
+    const rawCau = Number(fs?.cautionMoney || 0);
+    const rawAnn = Number(fs?.annualCharges || 0);
+    const rawBus = Number(fs?.busFee || 0);
+    const saved = fs?.enabledHeads;
+
     return {
-      admissionFee: 65000,
-      tuitionFee: Number(c?.defaultFee || 2000),
-      cautionMoney: 60000,
-      annualCharges: 23320,
-      busFee: Number(c?.feeStructure?.busFee ?? 1000),
-      customHeads: [],
+      admissionFee: rawAdm,
+      registrationFee: rawReg,
+      tuitionFee: rawTui,
+      cautionMoney: rawCau,
+      annualCharges: rawAnn,
+      busFee: rawBus,
+      enabledHeads: {
+        admissionFee: typeof saved?.admissionFee === "boolean" ? saved.admissionFee : rawAdm > 0,
+        registrationFee: typeof saved?.registrationFee === "boolean" ? saved.registrationFee : rawReg > 0,
+        tuitionFee: typeof saved?.tuitionFee === "boolean" ? saved.tuitionFee : rawTui > 0,
+        cautionMoney: typeof saved?.cautionMoney === "boolean" ? saved.cautionMoney : rawCau > 0,
+        annualCharges: typeof saved?.annualCharges === "boolean" ? saved.annualCharges : rawAnn > 0,
+        busFee: typeof saved?.busFee === "boolean" ? saved.busFee : true,
+      },
+      customHeads: (fs?.customHeads || []).map(h => ({ ...h, enabled: h.enabled !== false })),
     };
   };
 
   const [structure, setStructure] = useState<ClassFeeStructure>(() => getInitialStructure(currentClass));
   const [saving, setSaving] = useState(false);
   const [successMsg, setSuccessMsg] = useState("");
+  const [errorMsg, setErrorMsg] = useState("");
   const [newHeadName, setNewHeadName] = useState("");
   const [newHeadAmount, setNewHeadAmount] = useState<number | "">("");
 
@@ -57,14 +65,26 @@ export const ClassFeeStructureModal: React.FC<Props> = ({
     const target = classes.find(c => c.id === newClassId);
     setStructure(getInitialStructure(target));
     setSuccessMsg("");
+    setErrorMsg("");
+  };
+
+  const toggleHeadEnabled = (key: "admissionFee" | "registrationFee" | "tuitionFee" | "cautionMoney" | "annualCharges" | "busFee") => {
+    setStructure(prev => ({
+      ...prev,
+      enabledHeads: {
+        ...(prev.enabledHeads || {}),
+        [key]: !prev.enabledHeads?.[key],
+      },
+    }));
   };
 
   const handleAddCustomHead = () => {
-    if (!newHeadName.trim() || !newHeadAmount) return;
+    if (!newHeadName.trim() || newHeadAmount === "") return;
     const newHead: ClassFeeHead = {
       id: String(Date.now()),
       name: newHeadName.trim(),
       amount: Number(newHeadAmount) || 0,
+      enabled: true,
     };
     setStructure(prev => ({
       ...prev,
@@ -82,40 +102,52 @@ export const ClassFeeStructureModal: React.FC<Props> = ({
   };
 
   const handleApplyStandardPreset = () => {
-    // Standard authentic values matching official receipt structure
     setStructure({
-      admissionFee: 65000,
-      tuitionFee: 19140,
-      cautionMoney: 60000,
-      annualCharges: 23320,
-      busFee: 1000,
+      admissionFee: 1500,
+      registrationFee: 300,
+      tuitionFee: Number(currentClass?.defaultFee || 800),
+      cautionMoney: 500,
+      annualCharges: 1200,
+      busFee: 600,
+      enabledHeads: {
+        admissionFee: true,
+        registrationFee: true,
+        tuitionFee: true,
+        cautionMoney: false,
+        annualCharges: true,
+        busFee: true,
+      },
       customHeads: [],
     });
-    setSuccessMsg("Standard receipt preset apply ho gaya!");
+    setSuccessMsg("Standard school preset load ho gaya! Save button dabayein.");
   };
 
   const handleSave = async () => {
     if (!currentClass) return;
     setSaving(true);
     setSuccessMsg("");
+    setErrorMsg("");
     try {
       await updateClassFeeStructure(schoolId, currentClass.id, structure);
-      setSuccessMsg(`✅ ${currentClass.name} ki fee structure save ho gayi!`);
+      setSuccessMsg(`${currentClass.name} ki fee aur active heads save ho gaye!`);
       if (onUpdated) onUpdated();
     } catch (e: any) {
-      alert("Fee save karne me error aaya: " + (e?.message || "Please retry"));
+      setErrorMsg("Fee save karne me error aaya: " + (e?.message || "Please retry"));
     } finally {
       setSaving(false);
     }
   };
 
+  const toggles = structure.enabledHeads || {};
   const totalFee =
-    Number(structure.admissionFee || 0) +
-    Number(structure.tuitionFee || 0) +
-    Number(structure.cautionMoney || 0) +
-    Number(structure.annualCharges || 0) +
-    Number(structure.busFee || 0) +
-    (structure.customHeads || []).reduce((sum, h) => sum + (Number(h.amount) || 0), 0);
+    (toggles.admissionFee ? Number(structure.admissionFee || 0) : 0) +
+    (toggles.registrationFee ? Number(structure.registrationFee || 0) : 0) +
+    (toggles.tuitionFee ? Number(structure.tuitionFee || 0) : 0) +
+    (toggles.cautionMoney ? Number(structure.cautionMoney || 0) : 0) +
+    (toggles.annualCharges ? Number(structure.annualCharges || 0) : 0) +
+    (structure.customHeads || [])
+      .filter(h => h.enabled !== false)
+      .reduce((sum, h) => sum + (Number(h.amount) || 0), 0);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs overflow-y-auto">
@@ -179,135 +211,65 @@ export const ClassFeeStructureModal: React.FC<Props> = ({
             </div>
           )}
 
-          {/* 5 Authentic Fee Heads from the Receipt Picture */}
+          {errorMsg && (
+            <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-xl text-rose-700 dark:text-rose-300 text-xs font-bold">
+              {errorMsg}
+            </div>
+          )}
+
+          {/* Per-Class Active Checkboxes + Amounts */}
           <div className="space-y-4">
             <div className="flex items-center justify-between border-b pb-2 dark:border-slate-700">
               <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
-                Official Fee Heads ({currentClass?.name || "Class"})
+                Official Fee Heads &amp; Active Selection ({currentClass?.name || "Class"})
               </h3>
-              <span className="text-xs font-bold text-slate-500">Amount (₹)</span>
+              <span className="text-xs font-bold text-slate-500">[✓] टिक करने पर ही ऑनलाइन दिखेगा व जुड़ेगा</span>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {/* 1. Admission Fee */}
-              <div className="bg-slate-50 dark:bg-slate-800/40 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
-                <div className="flex justify-between items-center mb-1.5">
-                  <span className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                    <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-300 text-[10px] font-black flex items-center justify-center">1</span>
-                    Admission Fee
-                  </span>
-                  <span className="text-[10px] bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded font-bold">One-time / Session</span>
-                </div>
-                <div className="relative">
-                  <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">₹</span>
-                  <input
-                    type="number"
-                    value={structure.admissionFee}
-                    onChange={e => setStructure({ ...structure, admissionFee: Number(e.target.value) || 0 })}
-                    className="w-full pl-7 pr-3 py-2 text-sm font-black bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white"
-                    placeholder="65000"
-                  />
-                </div>
-              </div>
-
-              {/* 2. Tuition Fee */}
-              <div className="bg-slate-50 dark:bg-slate-800/40 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
-                <div className="flex justify-between items-center mb-1.5">
-                  <span className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                    <span className="w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/60 dark:text-indigo-300 text-[10px] font-black flex items-center justify-center">2</span>
-                    Tuition Fee
-                  </span>
-                  <span className="text-[10px] bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 rounded font-bold">Monthly / Quarterly</span>
-                </div>
-                <div className="relative">
-                  <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">₹</span>
-                  <input
-                    type="number"
-                    value={structure.tuitionFee}
-                    onChange={e => setStructure({ ...structure, tuitionFee: Number(e.target.value) || 0 })}
-                    className="w-full pl-7 pr-3 py-2 text-sm font-black bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white"
-                    placeholder="19140"
-                  />
-                </div>
-              </div>
-
-              {/* 3. Caution Money */}
-              <div className="bg-slate-50 dark:bg-slate-800/40 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
-                <div className="flex justify-between items-center mb-1.5">
-                  <span className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                    <span className="w-5 h-5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-300 text-[10px] font-black flex items-center justify-center">3</span>
-                    Caution Money
-                  </span>
-                  <span className="text-[10px] bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300 px-1.5 py-0.5 rounded font-bold">Refundable Security</span>
-                </div>
-                <div className="relative">
-                  <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">₹</span>
-                  <input
-                    type="number"
-                    value={structure.cautionMoney}
-                    onChange={e => setStructure({ ...structure, cautionMoney: Number(e.target.value) || 0 })}
-                    className="w-full pl-7 pr-3 py-2 text-sm font-black bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white"
-                    placeholder="60000"
-                  />
-                </div>
-              </div>
-
-              {/* 4. Annual Charges */}
-              <div className="bg-slate-50 dark:bg-slate-800/40 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
-                <div className="flex justify-between items-center mb-1.5">
-                  <span className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                    <span className="w-5 h-5 rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900/60 dark:text-purple-300 text-[10px] font-black flex items-center justify-center">4</span>
-                    Annual Charges
-                  </span>
-                  <span className="text-[10px] bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 px-1.5 py-0.5 rounded font-bold">Yearly Maintenance</span>
-                </div>
-                <div className="relative">
-                  <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">₹</span>
-                  <input
-                    type="number"
-                    value={structure.annualCharges}
-                    onChange={e => setStructure({ ...structure, annualCharges: Number(e.target.value) || 0 })}
-                    className="w-full pl-7 pr-3 py-2 text-sm font-black bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white"
-                    placeholder="23320"
-                  />
-                </div>
-              </div>
-
-              {/* 5. Bus Fee */}
-              <div className="col-span-1 sm:col-span-2 bg-slate-50 dark:bg-slate-800/40 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
-                <div className="flex justify-between items-center mb-1.5 flex-wrap gap-1">
-                  <span className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                    <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-300 text-[10px] font-black flex items-center justify-center">5</span>
-                    Bus Fee (Transport)
-                  </span>
-                  <div className="flex items-center gap-1">
-                    {[0, 500, 800, 1000, 1200, 1500, 2000].map(amt => (
-                      <button
-                        key={amt}
-                        type="button"
-                        onClick={() => setStructure({ ...structure, busFee: amt })}
-                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold cursor-pointer transition ${
-                          structure.busFee === amt
-                            ? "bg-emerald-600 text-white"
-                            : "bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-300"
-                        }`}
-                      >
-                        ₹{amt}
-                      </button>
-                    ))}
+              {[
+                { key: "admissionFee" as const, label: "1. Admission Fee (प्रवेश शुल्क)", badge: "One-time" },
+                { key: "registrationFee" as const, label: "2. Registration Fee (पंजीकरण शुल्क)", badge: "Form/Reg" },
+                { key: "annualCharges" as const, label: "3. Annual Charges (वार्षिक शुल्क)", badge: "Yearly" },
+                { key: "tuitionFee" as const, label: "4. Tuition Fee (मासिक शिक्षण शुल्क)", badge: "Monthly" },
+                { key: "cautionMoney" as const, label: "5. Caution / Kit Fee (कॉशन व किट)", badge: "Optional" },
+                { key: "busFee" as const, label: "6. Bus Fee (वाहन — छात्र चुन सकेगा)", badge: "User Bus Toggle" },
+              ].map((item) => {
+                const active = Boolean(structure.enabledHeads?.[item.key]);
+                return (
+                  <div
+                    key={item.key}
+                    className={`p-3.5 rounded-xl border transition ${
+                      active
+                        ? "bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-300 dark:border-emerald-800"
+                        : "bg-slate-50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700 opacity-75"
+                    }`}
+                  >
+                    <div className="flex justify-between items-center mb-1.5 gap-2">
+                      <label className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={active}
+                          onChange={() => toggleHeadEnabled(item.key)}
+                          className="w-4 h-4 accent-emerald-600 cursor-pointer"
+                        />
+                        <span>{item.label}</span>
+                      </label>
+                      <span className="text-[10px] text-slate-500 font-semibold shrink-0">{item.badge}</span>
+                    </div>
+                    <div className="relative">
+                      <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">₹</span>
+                      <input
+                        type="number"
+                        min={0}
+                        value={Number((structure as any)[item.key] || 0)}
+                        onChange={e => setStructure({ ...structure, [item.key]: Math.max(0, Number(e.target.value) || 0) })}
+                        className="w-full pl-7 pr-3 py-2 text-sm font-black tabular-nums bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white"
+                      />
+                    </div>
                   </div>
-                </div>
-                <div className="relative">
-                  <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">₹</span>
-                  <input
-                    type="number"
-                    value={structure.busFee}
-                    onChange={e => setStructure({ ...structure, busFee: Number(e.target.value) || 0 })}
-                    className="w-full pl-7 pr-3 py-2 text-sm font-black bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white"
-                    placeholder="e.g. 800 ya 1200"
-                  />
-                </div>
-              </div>
+                );
+              })}
             </div>
 
             {/* Custom Heads */}
@@ -360,11 +322,13 @@ export const ClassFeeStructureModal: React.FC<Props> = ({
             {/* Total Fee Preview */}
             <div className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/40 dark:to-indigo-950/40 rounded-xl border border-blue-200 dark:border-blue-800 flex items-center justify-between">
               <div>
-                <span className="text-xs font-bold text-blue-800 dark:text-blue-300">Total Standard Class Fee:</span>
-                <p className="text-[11px] text-blue-600 dark:text-blue-400">Sabhi heads ka kul yog (Admission + Tuition + Caution + Annual + Bus)</p>
+                <span className="text-xs font-bold text-blue-800 dark:text-blue-300">Active Payable (Without Bus):</span>
+                <p className="text-[11px] text-blue-600 dark:text-blue-400">
+                  केवल टिक [✓] किए गए हेड्स का योग {toggles.busFee ? `(बस सहित: ₹${(totalFee + Number(structure.busFee || 0)).toLocaleString("en-IN")})` : ""}
+                </p>
               </div>
               <div className="text-right">
-                <span className="text-xl font-black text-blue-950 dark:text-blue-100">₹{totalFee.toLocaleString("en-IN")}</span>
+                <span className="text-xl font-black tabular-nums text-blue-950 dark:text-blue-100">₹{totalFee.toLocaleString("en-IN")}</span>
               </div>
             </div>
           </div>

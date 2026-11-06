@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect } from "react";
 import QRCode from "react-qr-code";
-import type { School, SchoolClass, SchoolStudent, StaffEmployee } from "../../school-types";
+import type { School, SchoolClass, SchoolStudent, StaffEmployee, SchoolTeacher } from "../../school-types";
 import { schoolPrintFieldEnabled } from "../../school-types";
 import {
   CreditCard, Printer, Download, Eye, ChevronLeft, User, Phone, MapPin,
@@ -20,6 +20,8 @@ interface Props {
   classes: SchoolClass[];
   students: SchoolStudent[];
   staff: StaffEmployee[];
+  teachers?: SchoolTeacher[];
+  initialTab?: "students" | "staff";
   onBack: () => void;
 }
 
@@ -30,17 +32,43 @@ export const IdCardManager: React.FC<Props> = ({
   classes = [],
   students: initialStudents = [],
   staff = [],
+  teachers = [],
+  initialTab = "students",
   onBack,
 }) => {
   const safeInitialStudents = Array.isArray(initialStudents)
     ? initialStudents.filter((student): student is SchoolStudent => Boolean(student && typeof student === "object"))
     : [];
   const [students, setStudents] = useState<SchoolStudent[]>(safeInitialStudents);
-  const [activeTab, setActiveTab] = useState<"students" | "staff">("students");
+
+  // Merge staff and teachers into unifiedStaff so all faculty have immediate ID cards
+  const unifiedStaff: StaffEmployee[] = React.useMemo(() => {
+    const existingIds = new Set((staff || []).map(s => s.id));
+    const teacherStaff: StaffEmployee[] = (teachers || [])
+      .filter(t => t && !existingIds.has(t.id))
+      .map(t => ({
+        id: t.id,
+        schoolId: t.schoolId || school?.id,
+        name: t.name || "Teacher",
+        email: t.email || "",
+        phone: t.phone || "",
+        designation: t.designation || (t.subjects?.length ? `${t.subjects.join(", ")} Teacher` : "Teacher"),
+        department: "Academic / Faculty",
+        joinDate: t.joinDate || new Date().toISOString().split("T")[0],
+        monthlySalary: 0,
+        active: t.active ?? true,
+        photoUrl: t.photoUrl,
+        employeeId: t.employeeId || `TEA-${(t.id || Date.now().toString()).slice(-4).toUpperCase()}`,
+        createdAt: t.createdAt || new Date().toISOString(),
+      }));
+    return [...(staff || []), ...teacherStaff];
+  }, [staff, teachers, school?.id]);
+
+  const [activeTab, setActiveTab] = useState<"students" | "staff">(initialTab);
   const [selectedClassId, setSelectedClassId] = useState<string>("all");
   const [search, setSearch] = useState("");
   const [selectedStudent, setSelectedStudent] = useState<SchoolStudent | null>(safeInitialStudents[0] || null);
-  const [selectedStaff, setSelectedStaff] = useState<StaffEmployee | null>(staff[0] || null);
+  const [selectedStaff, setSelectedStaff] = useState<StaffEmployee | null>(unifiedStaff[0] || null);
   const [theme, setTheme] = useState<CardTheme>("modern_indigo");
   const [bulkMode, setBulkMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -128,11 +156,20 @@ export const IdCardManager: React.FC<Props> = ({
     return classMatch && searchMatch;
   });
 
-  const filteredStaff = staff.filter(st => {
-    return !search.trim() ||
-      st.name.toLowerCase().includes(search.toLowerCase()) ||
-      st.designation.toLowerCase().includes(search.toLowerCase()) ||
-      st.phone.includes(search);
+  useEffect(() => {
+    if (!selectedStaff && unifiedStaff.length > 0) {
+      setSelectedStaff(unifiedStaff[0]);
+    }
+  }, [unifiedStaff, selectedStaff]);
+
+  const filteredStaff = unifiedStaff.filter(st => {
+    const q = search.trim().toLowerCase();
+    return !q ||
+      st.name.toLowerCase().includes(q) ||
+      (st.designation && st.designation.toLowerCase().includes(q)) ||
+      (st.department && st.department.toLowerCase().includes(q)) ||
+      (st.phone && st.phone.includes(q)) ||
+      (st.employeeId && st.employeeId.toLowerCase().includes(q));
   });
 
   const currentList = activeTab === "students" ? filteredStudents : filteredStaff;
@@ -1053,7 +1090,7 @@ export const IdCardManager: React.FC<Props> = ({
                   activeTab === "staff" ? "bg-indigo-600 text-white shadow" : "text-slate-600 dark:text-slate-300"
                 }`}
               >
-                👨‍🏫 Staff ({staff?.length || 0})
+                👨‍🏫 Staff & Teachers ({unifiedStaff.length})
               </button>
             </div>
           </div>

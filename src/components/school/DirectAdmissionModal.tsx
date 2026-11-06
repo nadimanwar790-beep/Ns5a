@@ -18,6 +18,7 @@ import {
 import { DirectUploadButton } from "../DirectUploadButton";
 import {
   saveStudent,
+  updateStudent,
   saveFee,
   generateId,
   generateNextAdmissionNo,
@@ -25,6 +26,10 @@ import {
   getLocalStudents,
   setLocalStudents,
   isStudentInClass,
+  getTeachers,
+  getStaffEmployees,
+  getSchoolReferralSettings,
+  saveSchoolReferralSettings,
 } from "../../school-firebase";
 import { saveUserToLive } from "../../firebase";
 import type {
@@ -33,11 +38,24 @@ import type {
   SchoolSession,
   SchoolStudent,
   MonthlyFee,
+  ReferralCommissionScope,
+  ReferralCommissionDuration,
+  SeniorStream,
 } from "../../school-types";
+import {
+  detectFamilySiblings,
+  mergeSchoolReferrerList,
+  type ReferrerOption,
+} from "../../utils/schoolReferralSiblingEngine";
+import { AdmissionReferralAndSiblingPanel } from "./AdmissionReferralAndSiblingPanel";
 import {
   BLOOD_GROUPS,
   ADMISSION_CATEGORIES,
   ADMISSION_DOCUMENT_OPTIONS,
+  SENIOR_STREAMS,
+  isSeniorClass,
+  sortSchoolClasses,
+  getDefaultSubjectsForClass,
 } from "../../school-types";
 
 interface FeeLineDraft {
@@ -69,8 +87,10 @@ export const DirectAdmissionModal: React.FC<Props> = ({
   adminUid = "admin",
   onSuccess,
 }) => {
+  const sortedClasses = useMemo(() => sortSchoolClasses(classes), [classes]);
   const [entryMode, setEntryMode] = useState<"quick" | "full">("full");
   const [classId, setClassId] = useState<string>(defaultClassId || classes[0]?.id || "");
+  const [stream, setStream] = useState<SeniorStream>("Science");
   const [admissionNo, setAdmissionNo] = useState<string>("");
   const [admissionDate, setAdmissionDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [rollNo, setRollNo] = useState<string>("");
@@ -111,10 +131,22 @@ export const DirectAdmissionModal: React.FC<Props> = ({
   const [previousMarks, setPreviousMarks] = useState<string>("");
 
   // Transport & Monthly Tuition
+  const [baseMonthlyFee, setBaseMonthlyFee] = useState<number>(0);
   const [monthlyFee, setMonthlyFee] = useState<number>(0);
   const [usesBus, setUsesBus] = useState<boolean>(false);
   const [busRoute, setBusRoute] = useState<string>("");
   const [busFee, setBusFee] = useState<number>(0);
+
+  // Sibling / Same Family Discount & Teacher 10% Referral
+  const [referrers, setReferrers] = useState<ReferrerOption[]>([]);
+  const [referredByTeacherId, setReferredByTeacherId] = useState<string>("");
+  const [customTeacherName, setCustomTeacherName] = useState<string>("");
+  const [commissionPct, setCommissionPct] = useState<number>(10);
+  const [commissionScope, setCommissionScope] = useState<ReferralCommissionScope>("all_fees");
+  const [commissionDuration, setCommissionDuration] = useState<ReferralCommissionDuration>("1_year");
+  const [manualSiblingMarked, setManualSiblingMarked] = useState<boolean>(false);
+  const [siblingDiscountPct, setSiblingDiscountPct] = useState<number>(0);
+  const [applyMonthlySiblingDiscount, setApplyMonthlySiblingDiscount] = useState<boolean>(false);
 
   // Documents Checklist
   const [submittedDocs, setSubmittedDocs] = useState<string[]>([
@@ -140,31 +172,48 @@ export const DirectAdmissionModal: React.FC<Props> = ({
     [classes, classId]
   );
 
-  // Build dynamic fee rows from selected class feeStructure
+  useEffect(() => {
+    if (selectedClass?.stream && (selectedClass.stream === "Science" || selectedClass.stream === "Commerce" || selectedClass.stream === "Arts")) {
+      setStream(selectedClass.stream as SeniorStream);
+    }
+  }, [selectedClass]);
+
+  // Build dynamic fee rows from selected class feeStructure & Admin enabledHeads
   const buildDefaultFeeLinesForClass = (cls: SchoolClass | null, includeBus: boolean, customBusAmt?: number): FeeLineDraft[] => {
     const fs = cls?.feeStructure;
     const lines: FeeLineDraft[] = [];
     if (fs) {
-      if (Number(fs.admissionFee) > 0) {
-        lines.push({ id: "fs_adm", description: "Admission Fee (प्रवेश शुल्क)", due: Number(fs.admissionFee) });
+      const toggles = fs.enabledHeads;
+      const admEnabled = typeof toggles?.admissionFee === "boolean" ? toggles.admissionFee : Number(fs.admissionFee) > 0;
+      const regEnabled = typeof toggles?.registrationFee === "boolean" ? toggles.registrationFee : Number(fs.registrationFee) > 0;
+      const tuiEnabled = typeof toggles?.tuitionFee === "boolean" ? toggles.tuitionFee : Number(fs.tuitionFee) > 0;
+      const annEnabled = typeof toggles?.annualCharges === "boolean" ? toggles.annualCharges : Number(fs.annualCharges) > 0;
+      const cauEnabled = typeof toggles?.cautionMoney === "boolean" ? toggles.cautionMoney : Number(fs.cautionMoney) > 0;
+      const busEnabled = typeof toggles?.busFee === "boolean" ? toggles.busFee : true;
+
+      if (admEnabled && Number(fs.admissionFee || 0) >= 0) {
+        lines.push({ id: "fs_adm", description: "Admission Fee (प्रवेश शुल्क)", due: Number(fs.admissionFee || 0) });
       }
-      if (Number(fs.tuitionFee) > 0) {
-        lines.push({ id: "fs_tui", description: "1st Month Tuition Fee (मासिक शिक्षण शुल्क)", due: Number(fs.tuitionFee) });
+      if (regEnabled && Number(fs.registrationFee || 0) >= 0) {
+        lines.push({ id: "fs_reg", description: "Registration Fee (पंजीकरण शुल्क)", due: Number(fs.registrationFee || 0) });
       }
-      if (Number(fs.annualCharges) > 0) {
-        lines.push({ id: "fs_ann", description: "Annual & Development Charges (वार्षिक शुल्क)", due: Number(fs.annualCharges) });
+      if (annEnabled && Number(fs.annualCharges || 0) >= 0) {
+        lines.push({ id: "fs_ann", description: "Annual & Development Charges (वार्षिक शुल्क)", due: Number(fs.annualCharges || 0) });
       }
-      if (Number(fs.cautionMoney) > 0) {
-        lines.push({ id: "fs_cau", description: "Caution Money / Registration", due: Number(fs.cautionMoney) });
+      if (tuiEnabled && Number(fs.tuitionFee || 0) >= 0) {
+        lines.push({ id: "fs_tui", description: "1st Month Tuition Fee (मासिक शिक्षण शुल्क)", due: Number(fs.tuitionFee || 0) });
+      }
+      if (cauEnabled && Number(fs.cautionMoney || 0) >= 0) {
+        lines.push({ id: "fs_cau", description: "Caution / Kit & ID Fee (कॉशन व किट शुल्क)", due: Number(fs.cautionMoney || 0) });
       }
       if (Array.isArray(fs.customHeads)) {
         fs.customHeads.forEach((h, idx) => {
-          if (Number(h.amount) > 0) {
-            lines.push({ id: `fs_cust_${idx}`, description: h.name, due: Number(h.amount) });
+          if (h.enabled !== false && Number(h.amount || 0) >= 0) {
+            lines.push({ id: `fs_cust_${idx}`, description: h.name, due: Number(h.amount || 0) });
           }
         });
       }
-      if (includeBus) {
+      if (busEnabled && includeBus) {
         const bAmt = customBusAmt !== undefined ? customBusAmt : Number(fs.busFee || 0);
         if (bAmt > 0) {
           lines.push({ id: "fs_bus", description: "Transport / Bus Fee (वाहन शुल्क)", due: bAmt });
@@ -172,7 +221,7 @@ export const DirectAdmissionModal: React.FC<Props> = ({
       }
     }
 
-    if (lines.length === 0) {
+    if (lines.length === 0 && !fs?.enabledHeads) {
       const defTuition = Number(cls?.defaultFee || 0);
       lines.push(
         { id: "def_1", description: "Admission Fee (प्रवेश शुल्क)", due: 1000 },
@@ -198,7 +247,26 @@ export const DirectAdmissionModal: React.FC<Props> = ({
     setAdmissionDate(new Date().toISOString().slice(0, 10));
     setError(null);
     setPaidManuallyEdited(false);
-  }, [isOpen]);
+    setReferredByTeacherId("");
+    setCustomTeacherName("");
+    setManualSiblingMarked(false);
+    setSiblingDiscountPct(0);
+    setApplyMonthlySiblingDiscount(false);
+    setConcession(0);
+
+    Promise.all([
+      getTeachers(school.id).catch(() => []),
+      getStaffEmployees(school.id).catch(() => []),
+      getSchoolReferralSettings(school.id).catch(() => null),
+    ]).then(([tList, sList, refSettings]) => {
+      setReferrers(mergeSchoolReferrerList(tList, sList));
+      if (refSettings) {
+        setCommissionPct(Number(refSettings.defaultCommissionPct ?? 10));
+        setCommissionScope(refSettings.commissionScope || "all_fees");
+        setCommissionDuration(refSettings.commissionDuration || "1_year");
+      }
+    });
+  }, [isOpen, school.id]);
 
   // Update class-linked defaults (next roll no, monthly tuition, bus fee, admission fee heads)
   useEffect(() => {
@@ -212,6 +280,7 @@ export const DirectAdmissionModal: React.FC<Props> = ({
     setRollNo(String(maxRoll + 1));
 
     const nextMonthly = Number(cls?.feeStructure?.tuitionFee ?? cls?.defaultFee ?? 0);
+    setBaseMonthlyFee(nextMonthly);
     setMonthlyFee(nextMonthly);
 
     const nextBus = Number(cls?.feeStructure?.busFee ?? 0);
@@ -232,11 +301,46 @@ export const DirectAdmissionModal: React.FC<Props> = ({
     });
   }, [usesBus, busFee, busRoute]);
 
+  const studentPoolForFamilyCheck = useMemo(() => {
+    const locals = getLocalStudents(school.id);
+    const map = new Map<string, SchoolStudent>();
+    existingStudents.forEach((s) => s?.id && map.set(s.id, s));
+    locals.forEach((s) => s?.id && map.set(s.id, s));
+    return Array.from(map.values());
+  }, [existingStudents, school.id, isOpen]);
+
+  const siblingDetection = useMemo(
+    () =>
+      detectFamilySiblings(
+        {
+          fatherName,
+          motherName,
+          whatsappNo: whatsappNo || phone,
+          phone,
+        },
+        studentPoolForFamilyCheck
+      ),
+    [fatherName, motherName, whatsappNo, phone, studentPoolForFamilyCheck]
+  );
+
   const grossTotal = useMemo(
     () => feeLines.reduce((sum, item) => sum + (Number(item.due) || 0), 0),
     [feeLines]
   );
+  const busLineTotal = useMemo(
+    () =>
+      feeLines.reduce(
+        (sum, item) =>
+          item.id === "fs_bus" || item.id === "def_bus" || /bus|transport|वाहन/i.test(item.description)
+            ? sum + (Number(item.due) || 0)
+            : sum,
+        0
+      ),
+    [feeLines]
+  );
+  const eligibleGrossExclBus = Math.max(0, grossTotal - busLineTotal);
   const netPayable = Math.max(0, grossTotal - (Number(concession) || 0));
+  const netPayableExclBus = Math.max(0, netPayable - busLineTotal);
 
   useEffect(() => {
     if (!paidManuallyEdited) {
@@ -246,6 +350,33 @@ export const DirectAdmissionModal: React.FC<Props> = ({
 
   const paidNow = Math.max(0, Number(paidAmountInput) || 0);
   const balanceDue = Math.max(0, netPayable - paidNow);
+
+  const eligiblePaidNowExclBus =
+    netPayable > 0 && netPayableExclBus > 0
+      ? Math.min(netPayableExclBus, Math.round(paidNow * (netPayableExclBus / netPayable)))
+      : 0;
+  const eligibleDueExclBus = Math.max(0, netPayableExclBus - eligiblePaidNowExclBus);
+
+  const handleApplySiblingPresetPct = (pct: number) => {
+    setSiblingDiscountPct(pct);
+    const admDisc = pct > 0 ? Math.round((eligibleGrossExclBus * pct) / 100) : 0;
+    setConcession(admDisc);
+    setPaidManuallyEdited(false);
+    if (applyMonthlySiblingDiscount) {
+      const mDisc = pct > 0 ? Math.round((baseMonthlyFee * pct) / 100) : 0;
+      setMonthlyFee(Math.max(0, baseMonthlyFee - mDisc));
+    }
+  };
+
+  const handleToggleMonthlySiblingDiscount = (enabled: boolean) => {
+    setApplyMonthlySiblingDiscount(enabled);
+    if (enabled && siblingDiscountPct > 0) {
+      const mDisc = Math.round((baseMonthlyFee * siblingDiscountPct) / 100);
+      setMonthlyFee(Math.max(0, baseMonthlyFee - mDisc));
+    } else {
+      setMonthlyFee(baseMonthlyFee);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -286,12 +417,45 @@ export const DirectAdmissionModal: React.FC<Props> = ({
       const finalRoll = rollNo.trim() || "1";
       const receiptNo = collectFeeNow && grossTotal > 0 ? `ADM-${Math.floor(10000 + Math.random() * 90000)}` : undefined;
 
+      const isFamilyMarked = siblingDetection.isExactFamily || manualSiblingMarked;
+      const linkedSiblings =
+        siblingDetection.exactMatches.length > 0
+          ? siblingDetection.exactMatches
+          : manualSiblingMarked
+          ? siblingDetection.partialMatches
+          : [];
+      const siblingIds = linkedSiblings.map((s) => s.id);
+      const resolvedFamilyGroupId = isFamilyMarked
+        ? siblingDetection.familyGroupId || `FAM_${studentId.slice(-6)}`
+        : undefined;
+
+      const selectedRefObj = referrers.find((r) => r.id === referredByTeacherId);
+      const resolvedRefId =
+        referredByTeacherId === "__custom__"
+          ? customTeacherName.trim()
+            ? `custom_tea_${customTeacherName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_")}`
+            : undefined
+          : referredByTeacherId || undefined;
+      const resolvedRefName =
+        referredByTeacherId === "__custom__"
+          ? customTeacherName.trim() || undefined
+          : selectedRefObj?.name || undefined;
+
+      const monthlySiblingConcession =
+        isFamilyMarked && applyMonthlySiblingDiscount
+          ? Math.max(0, baseMonthlyFee - (Number(monthlyFee) || 0))
+          : 0;
+
+      const isSenior = isSeniorClass(selectedClass?.name);
+      const chosenStream = isSenior ? (selectedClass?.stream || stream) : undefined;
+
       const newStudent: SchoolStudent = {
         id: studentId,
         schoolId: school.id,
         sessionId: activeSession?.id || "",
         classId,
         className: selectedClass ? `${selectedClass.name}${selectedClass.section ? ` (${selectedClass.section})` : ""}` : "",
+        stream: chosenStream,
         name: name.trim(),
         rollNo: finalRoll,
         admissionNo: finalAdmNo,
@@ -307,8 +471,8 @@ export const DirectAdmissionModal: React.FC<Props> = ({
         motherName: motherName.trim() || undefined,
         motherOccupation: motherOccupation.trim() || undefined,
         motherAadhaar: motherAadhaar.trim() || undefined,
-        phone: phone.trim() || undefined,
-        whatsappNo: whatsappNo.trim() || undefined,
+        phone: phone.trim() || whatsappNo.trim() || undefined,
+        whatsappNo: whatsappNo.trim() || phone.trim() || undefined,
         email: email.trim() || undefined,
         address: address.trim() || undefined,
         city: city.trim() || undefined,
@@ -331,12 +495,36 @@ export const DirectAdmissionModal: React.FC<Props> = ({
         submittedDocs,
         admissionReceiptNo: receiptNo,
         monthlyFee: Number(monthlyFee) || 0,
+        baseMonthlyFee: baseMonthlyFee || Number(monthlyFee) || 0,
+        referredByTeacherId: resolvedRefId,
+        referredByTeacherName: resolvedRefName,
+        referralCommissionPct: resolvedRefId ? Number(commissionPct) || 10 : undefined,
+        referralCommissionScope: resolvedRefId ? commissionScope : undefined,
+        referralCommissionDuration: resolvedRefId ? commissionDuration : undefined,
+        familyGroupId: resolvedFamilyGroupId,
+        isSiblingMarked: isFamilyMarked || undefined,
+        siblingStudentIds: siblingIds.length > 0 ? siblingIds : undefined,
+        siblingDiscountPct: isFamilyMarked && siblingDiscountPct > 0 ? siblingDiscountPct : undefined,
+        siblingDiscountAmount: monthlySiblingConcession > 0 ? monthlySiblingConcession : undefined,
+        admissionSiblingDiscount: isFamilyMarked && Number(concession) > 0 ? Number(concession) : undefined,
         joinDate: admissionDate || new Date().toISOString().slice(0, 10),
         active: true,
         createdAt: new Date().toISOString(),
       };
 
       const savedStudent = await saveStudent(newStudent);
+
+      // Link existing siblings in the same family group non-blockingly
+      if (isFamilyMarked && resolvedFamilyGroupId && linkedSiblings.length > 0) {
+        linkedSiblings.forEach((sib) => {
+          const mergedSibIds = Array.from(new Set([...(sib.siblingStudentIds || []), savedStudent.id]));
+          void updateStudent(school.id, sib.id, {
+            familyGroupId: sib.familyGroupId || resolvedFamilyGroupId,
+            isSiblingMarked: true,
+            siblingStudentIds: mergedSibIds,
+          });
+        });
+      }
 
       // Strictly school-isolated student login profile (no cross-school copying!)
       try {
@@ -370,7 +558,7 @@ export const DirectAdmissionModal: React.FC<Props> = ({
             role: "STUDENT",
             schoolId: school.id,
             classLevel: classId,
-            stream: "General",
+            stream: chosenStream || "General",
             credits: 100,
             diamonds: 50,
             streak: 1,
@@ -420,6 +608,10 @@ export const DirectAdmissionModal: React.FC<Props> = ({
           paidAmount: paidNow,
           balanceDue,
           concession: Number(concession) || 0,
+          siblingDiscountAmount: isFamilyMarked && Number(concession) > 0 ? Number(concession) : undefined,
+          referredByTeacherId: resolvedRefId,
+          referredByTeacherName: resolvedRefName,
+          note: isFamilyMarked && Number(concession) > 0 ? "Sibling / Same-Family Concession Applied" : undefined,
           feeType: "admission",
           receiptCategory: "admission",
           includeBusFee: usesBus,
@@ -564,7 +756,7 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                   required
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm font-bold text-slate-800 dark:text-white"
                 >
-                  {classes.map((cls) => (
+                  {sortedClasses.map((cls) => (
                     <option key={cls.id} value={cls.id}>
                       {cls.name} {cls.section ? `(${cls.section})` : ""}
                     </option>
@@ -599,6 +791,44 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                 />
               </div>
             </div>
+
+            {isSeniorClass(selectedClass?.name) && (
+              <div className="p-3.5 bg-gradient-to-r from-indigo-50/90 to-purple-50/90 dark:from-indigo-950/40 dark:to-purple-950/30 rounded-2xl border border-indigo-200 dark:border-indigo-800 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-black text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
+                    <span>🔬 Senior Secondary Stream (11वीं / 12वीं स्ट्रीम चयन) *</span>
+                  </label>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300">
+                    Mandatory for {selectedClass?.name}
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {SENIOR_STREAMS.map((st) => {
+                    const isSel = stream === st.id;
+                    return (
+                      <button
+                        type="button"
+                        key={st.id}
+                        onClick={() => setStream(st.id)}
+                        className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                          isSel
+                            ? "bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-400"
+                            : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700"
+                        }`}
+                      >
+                        {st.icon} {st.id}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="text-[11px] text-indigo-900 dark:text-indigo-200 bg-white/80 dark:bg-slate-900/80 p-2.5 rounded-xl border border-indigo-100 dark:border-indigo-900">
+                  <span className="font-bold">स्ट्रीम विषय (Pre-configured Subjects): </span>
+                  <span className="font-medium text-slate-600 dark:text-slate-300">
+                    {getDefaultSubjectsForClass(selectedClass?.name || "Class 11", stream).join(", ")}
+                  </span>
+                </div>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div className="sm:col-span-2">
@@ -664,19 +894,23 @@ export const DirectAdmissionModal: React.FC<Props> = ({
 
               <div>
                 <label className="text-[11px] font-bold text-slate-600 dark:text-slate-300 block mb-1">
-                  Mobile Number (मोबाइल)
+                  Calling Mobile (मोबाइल)
                 </label>
                 <input
                   type="tel"
                   value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setPhone(val);
+                    if (!whatsappNo) setWhatsappNo(val);
+                  }}
                   placeholder="10-digit Mobile"
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm font-bold text-slate-800 dark:text-white"
                 />
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
               <div>
                 <label className="text-[11px] font-bold text-slate-600 dark:text-slate-300 block mb-1">
                   Father's Name (पिता का नाम)
@@ -705,6 +939,19 @@ export const DirectAdmissionModal: React.FC<Props> = ({
 
               <div>
                 <label className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400 block mb-1">
+                  WhatsApp No. (Family Match)
+                </label>
+                <input
+                  type="tel"
+                  value={whatsappNo}
+                  onChange={(e) => setWhatsappNo(e.target.value)}
+                  placeholder="WhatsApp Mobile"
+                  className="w-full px-3 py-2 rounded-xl border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-900 text-sm font-bold text-slate-800 dark:text-white"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400 block mb-1">
                   Monthly Tuition Fee (₹/माह)
                 </label>
                 <input
@@ -716,6 +963,41 @@ export const DirectAdmissionModal: React.FC<Props> = ({
               </div>
             </div>
           </div>
+
+          {/* SAME-FAMILY SIBLING AUTO-DISCOUNT & TEACHER 10% REFERRAL COMMISSION */}
+          <AdmissionReferralAndSiblingPanel
+            siblingDetection={siblingDetection}
+            manualSiblingMarked={manualSiblingMarked}
+            onManualSiblingChange={setManualSiblingMarked}
+            siblingDiscountPct={siblingDiscountPct}
+            siblingAdmissionDiscountAmt={concession}
+            applyMonthlySiblingDiscount={applyMonthlySiblingDiscount}
+            baseMonthlyTuition={baseMonthlyFee}
+            eligibleAdmissionGrossExclBus={eligibleGrossExclBus}
+            onApplySiblingPresetPct={handleApplySiblingPresetPct}
+            onCustomAdmissionDiscountChange={(amt) => {
+              setSiblingDiscountPct(0);
+              setConcession(amt);
+              setPaidManuallyEdited(false);
+            }}
+            onToggleMonthlySiblingDiscount={handleToggleMonthlySiblingDiscount}
+            referrers={referrers}
+            referredByTeacherId={referredByTeacherId}
+            customTeacherName={customTeacherName}
+            commissionPct={commissionPct}
+            commissionScope={commissionScope}
+            commissionDuration={commissionDuration}
+            eligiblePaidNowExclBus={collectFeeNow ? eligiblePaidNowExclBus : 0}
+            eligibleDueExclBus={collectFeeNow ? eligibleDueExclBus : netPayableExclBus}
+            onSelectReferrer={setReferredByTeacherId}
+            onCustomTeacherNameChange={setCustomTeacherName}
+            onCommissionPctChange={setCommissionPct}
+            onCommissionScopeChange={setCommissionScope}
+            onCommissionDurationChange={(dur) => {
+              setCommissionDuration(dur);
+              void saveSchoolReferralSettings(school.id, { commissionDuration: dur });
+            }}
+          />
 
           {/* FULL ADMISSION EXTRA DETAILS */}
           {entryMode === "full" && (
@@ -751,7 +1033,7 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="text-[11px] font-bold text-slate-500 block mb-1">Category (वर्ग)</label>
                     <select
@@ -775,17 +1057,6 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                       value={aadhaarNo}
                       onChange={(e) => setAadhaarNo(e.target.value.replace(/[^\d\s]/g, ""))}
                       placeholder="XXXX XXXX XXXX"
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs font-mono text-slate-800 dark:text-white"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-500 block mb-1">APAAR ID / PEN No.</label>
-                    <input
-                      type="text"
-                      value={apaarId}
-                      onChange={(e) => setApaarId(e.target.value)}
-                      placeholder="UDISE+ PEN / APAAR"
                       className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs font-mono text-slate-800 dark:text-white"
                     />
                   </div>
@@ -836,40 +1107,30 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="text-[11px] font-bold text-slate-500 block mb-1">WhatsApp / Alt Phone</label>
+                    <label className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 block mb-1">💬 WhatsApp Number (व्हाट्सएप नंबर)</label>
                     <input
                       type="tel"
                       value={whatsappNo}
                       onChange={(e) => setWhatsappNo(e.target.value)}
-                      placeholder="WhatsApp Number"
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-slate-800 dark:text-white"
+                      placeholder="WhatsApp Mobile Number"
+                      className="w-full px-3 py-2 rounded-xl border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-800 dark:text-white"
                     />
                   </div>
                   <div>
-                    <label className="text-[11px] font-bold text-slate-500 block mb-1">Previous School</label>
+                    <label className="text-[11px] font-bold text-blue-600 dark:text-blue-400 block mb-1">📞 Calling Mobile (प्राथमिक मोबाइल)</label>
                     <input
-                      type="text"
-                      value={previousSchool}
-                      onChange={(e) => setPreviousSchool(e.target.value)}
-                      placeholder="Last attended school"
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-slate-800 dark:text-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-500 block mb-1">Previous Class / Marks %</label>
-                    <input
-                      type="text"
-                      value={previousMarks}
-                      onChange={(e) => setPreviousMarks(e.target.value)}
-                      placeholder="e.g. Class 5 — 84%"
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-slate-800 dark:text-white"
+                      type="tel"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      placeholder="10-digit Calling Mobile"
+                      className="w-full px-3 py-2 rounded-xl border border-blue-300 dark:border-blue-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-800 dark:text-white"
                     />
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label className="text-[11px] font-bold text-slate-500 block mb-1">Religion (धर्म)</label>
                     <input
@@ -891,22 +1152,12 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                     />
                   </div>
                   <div>
-                    <label className="text-[11px] font-bold text-slate-500 block mb-1">Annual Income (₹/yr)</label>
+                    <label className="text-[11px] font-bold text-slate-500 block mb-1">Annual Family Income (₹/yr)</label>
                     <input
                       type="text"
                       value={annualIncome}
                       onChange={(e) => setAnnualIncome(e.target.value)}
                       placeholder="e.g. 150000"
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-500 block mb-1">Identification Mark</label>
-                    <input
-                      type="text"
-                      value={identificationMark}
-                      onChange={(e) => setIdentificationMark(e.target.value)}
-                      placeholder="e.g. Mole on cheek"
                       className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
                     />
                   </div>

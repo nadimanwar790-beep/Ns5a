@@ -7,8 +7,12 @@ import type { School, MonthlyFee, SchoolStudent } from "../../school-types";
 import {
   generatePosSlipHtml,
   generate4in1A4PageHtml,
+  generateDpsReceiptHtml,
+  generateSingleA6SlipHtml,
+  printA6SlipDirect,
   printPosSlipDirect,
   printDpsReceiptDirect,
+  printDpsReceipts4in1,
   POS_SLIP_CSS,
   DPS_RECEIPT_CSS,
   getSavedSchoolLogo,
@@ -20,7 +24,13 @@ import {
   type DpsReceiptData,
 } from "./feeReceiptUtils";
 import { getStudentFees } from "../../school-firebase";
-import { downloadFeeDocument, shareFeeReceiptOnWhatsApp } from "./feeDocument";
+import {
+  downloadFeeDocument,
+  shareFeeReceiptOnWhatsApp,
+  generateFeeDocumentPdfBlob,
+  buildWhatsAppReceiptMessage,
+} from "./feeDocument";
+import { WhatsAppShareModal } from "./WhatsAppShareModal";
 
 interface Props {
   isOpen: boolean;
@@ -31,6 +41,8 @@ interface Props {
   className?: string;
   sessionName?: string;
   feeHistory?: MonthlyFee[];
+  initialFormat?: "4in1" | "pos" | "a6";
+  isStudentView?: boolean;
 }
 
 export const OfficialFeeReceiptModal: React.FC<Props> = ({
@@ -42,6 +54,8 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
   className = "Class 6-B",
   sessionName = "2026-27",
   feeHistory,
+  initialFormat = "pos",
+  isStudentView = false,
 }) => {
   const [fetchedHistory, setFetchedHistory] = useState<MonthlyFee[]>([]);
 
@@ -70,6 +84,8 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
   const receiptNo = fee.receiptNo || String(Math.floor(10000 + Math.random() * 90000));
   const admissionNo = student?.admissionNo || fee.rollNo || "140516";
   const studentName = fee.studentName || student?.name || "STUDENT";
+  const fatherName = student?.fatherName || "";
+  const rollNo = student?.rollNo || fee.rollNo || "";
   const studentPhotoUrl = student?.photoUrl || (student as any)?.photo || "";
   const installment = initialInstallment;
 
@@ -84,9 +100,11 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
 
   const session = formatAcademicSession(sessionName);
   const resolvedClass = className;
-  const counterNo = !fee.paid && Number(fee.paidAmount || 0) === 0 ? "DUE-DEMAND" : "FEE-RECEIPT";
-  const note = fee.note || String(Math.floor(100 + Math.random() * 900));
-  const [previewFormat, setPreviewFormat] = useState<"4in1" | "pos">("4in1");
+  const isDueDemand = !fee.paid && Number(fee.paidAmount || 0) === 0;
+  const isSlipView = initialFormat === "a6" || (initialFormat !== "pos" && isDueDemand);
+  const counterNo = isSlipView ? "DUE-DEMAND" : ((fee as any).counterNo || "DPS-RECEIPT");
+  const note = fee.note || (fee as any).remarks || "";
+  const [zoomLevel, setZoomLevel] = useState<number>(() => (isStudentView ? 0.8 : 1));
 
   // School identity & logo state
   const schoolLogoUrl = getSavedSchoolLogo(school?.logoUrl, school?.id);
@@ -197,6 +215,21 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
   const totalConcession = items.reduce((sum, it) => sum + (Number(it.con) || 0), 0);
   const totalPaid = items.reduce((sum, it) => sum + (Number(it.paid) || 0), 0);
   const grandTotal = Math.max(0, totalDue - totalConcession);
+  const isFeePaid = Boolean(fee.paid || (totalPaid >= grandTotal && grandTotal > 0));
+  const balanceDue = Math.max(
+    Number(fee.balanceDue || 0) + (fee.paid ? 0 : Number(fee.arrearsAmount || 0)),
+    Math.max(0, grandTotal - totalPaid)
+  );
+
+  useEffect(() => {
+    if (isStudentView) {
+      if (isFeePaid) {
+        setZoomLevel(1);
+      } else {
+        setZoomLevel(0.85);
+      }
+    }
+  }, [isStudentView, isFeePaid]);
 
   // Complete data object for receipt generator
   const historySummary = useMemo(() => {
@@ -226,9 +259,9 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
     receiptNo,
     admissionNo,
     studentName,
-    fatherName: student?.fatherName || "",
+    fatherName,
     studentId: student?.id || fee.studentId || "",
-    rollNo: student?.rollNo || fee.rollNo || "",
+    rollNo,
     phone: student?.phone || student?.whatsappNo || (fee as any).phone || "",
     studentPhotoUrl,
     installment,
@@ -237,10 +270,7 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
     className: resolvedClass,
     counterNo,
     items,
-    balanceDue: Math.max(
-      Number(fee.balanceDue || 0) + (fee.paid ? 0 : Number(fee.arrearsAmount || 0)),
-      Math.max(0, grandTotal - totalPaid)
-    ),
+    balanceDue,
     lastPaidAmount: fee.lastPaidAmount !== undefined ? fee.lastPaidAmount : historySummary.lastPaidAmount,
     lastPaidDate: fee.lastPaidDate || historySummary.lastPaidDate,
     lastDueAmount: fee.lastDueAmount !== undefined ? fee.lastDueAmount : historySummary.lastDueAmount,
@@ -256,82 +286,99 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
     showDigitalSignature: Boolean(school?.principalSignatureUrl || school?.directorSignatureUrl),
     principalSignatureUrl: school?.principalSignatureUrl,
     principalName: school?.principalName || "Principal",
-    principalTitle: "Principal",
+    principalTitle: "Principal (Sign & Seal)",
     directorSignatureUrl: school?.directorSignatureUrl,
-    directorName: school?.directorName || "Director",
+    directorName: school?.directorName || "Cashier / Clerk",
     signatoryTitle: school?.principalName || "Principal",
+    signatoryMode: (fee.receiptCategory === "admission" || fee.feeType === "admission") ? "both" : "principal_only",
+    cashierTitle: "Cashier / Clerk",
   }), [
     schoolNameState, school, schoolAddressState, schoolLogoUrl, fee, totalPaid, totalDue, grandTotal,
     receiptNo, admissionNo, studentName, student, studentPhotoUrl, installment, receiptDate,
-    session, resolvedClass, counterNo, items, payMode, payDate, bank, chequeNumber, note, historySummary
+    session, resolvedClass, counterNo, items, payMode, payDate, bank, chequeNumber, note, historySummary, balanceDue, fatherName, rollNo
   ]);
 
   // Extract parent / student mobile number (prefill from student phone or fatherPhone)
   const initialParentPhone = useMemo(() => {
-    const raw = student?.phone || (student as any)?.parentPhone || (student as any)?.fatherPhone || (student as any)?.motherPhone || fee.phone || "";
+    const raw =
+      student?.phone ||
+      (student as any)?.whatsappNo ||
+      (student as any)?.parentPhone ||
+      (student as any)?.fatherPhone ||
+      (student as any)?.motherPhone ||
+      (student as any)?.mobile ||
+      (fee as any)?.phone ||
+      (fee as any)?.parentPhone ||
+      "";
     return raw ? String(raw).replace(/\D/g, "").slice(-10) : "";
   }, [student, fee]);
 
   const [parentMobile, setParentMobile] = useState<string>(initialParentPhone);
+  const [showPhonePrompt, setShowPhonePrompt] = useState<boolean>(false);
+  const [manualPhone, setManualPhone] = useState<string>("");
 
   useEffect(() => {
     if (initialParentPhone) {
       setParentMobile(initialParentPhone);
+      setManualPhone(initialParentPhone);
     }
   }, [initialParentPhone]);
 
-  // Direct Print action (respects selected 4-in-1 A4 Sheet or Mini POS Slip)
+  // Direct Print: A6 Demand Slip or Receipt
   const handlePrint = () => {
-    if (previewFormat === "4in1") {
-      printDpsReceiptDirect(receiptData, "4in1");
+    if (isSlipView) {
+      printA6SlipDirect(receiptData);
+    } else if (initialFormat === "4in1") {
+      printDpsReceipts4in1([receiptData]);
     } else {
       printPosSlipDirect(receiptData, 80);
     }
   };
 
-  const [isSharingWhatsApp, setIsSharingWhatsApp] = useState(false);
+  const [showWhatsAppPortalModal, setShowWhatsAppPortalModal] = useState(false);
 
-  // WhatsApp share directly with parent mobile number
-  const handleWhatsApp = async (overridePhone?: string) => {
-    setIsSharingWhatsApp(true);
-    try {
-      const targetPhone = overridePhone !== undefined ? overridePhone : parentMobile;
-      await shareFeeReceiptOnWhatsApp({
-        targetPhone,
-        fee: {
-          ...fee,
-          receiptNo,
-          amount: grandTotal,
-          monthlyAmount: grandTotal,
-          studentName,
-          note,
-          paidDate: fee.paidDate || new Date().toISOString(),
-          paidAmount: totalPaid > 0 ? totalPaid : (fee.paid ? grandTotal : 0),
-          arrearsAmount: fee.arrearsAmount,
-        },
-        student,
-        schoolName: receiptData.schoolName,
-        className: resolvedClass,
-        schoolDetails: {
-          schoolId: school?.id,
-          schoolName: receiptData.schoolName,
-          address: receiptData.schoolAddress,
-          phone: receiptData.schoolPhone,
-          email: receiptData.schoolEmail,
-          affiliation: receiptData.schoolAffiliation,
-          logoUrl: receiptData.schoolLogoUrl,
-          upiId: school?.upiId,
-          principalSignatureUrl: receiptData.principalSignatureUrl,
-          directorSignatureUrl: receiptData.directorSignatureUrl,
-          principalName: receiptData.signatoryTitle,
-        },
-        isDueDemand: !fee.paid && totalPaid === 0,
-      });
-    } catch (err) {
-      console.error("WhatsApp share error:", err);
-    } finally {
-      setIsSharingWhatsApp(false);
-    }
+  // Prepared fee options for WhatsApp message and PDF Blob
+  const feeDocumentOptions = useMemo(() => ({
+    mode: (isSlipView ? "a6" : initialFormat === "4in1" ? "4in1" : "pos") as any,
+    fee: {
+      ...fee,
+      receiptNo,
+      amount: grandTotal,
+      monthlyAmount: grandTotal,
+      studentName,
+      note,
+      paidDate: fee.paidDate || new Date().toISOString(),
+      paidAmount: totalPaid > 0 ? totalPaid : (fee.paid ? grandTotal : 0),
+      arrearsAmount: fee.arrearsAmount,
+    },
+    student,
+    schoolName: receiptData.schoolName,
+    className: resolvedClass,
+    schoolDetails: {
+      schoolId: school?.id,
+      schoolName: receiptData.schoolName,
+      address: receiptData.schoolAddress,
+      phone: receiptData.schoolPhone,
+      email: receiptData.schoolEmail,
+      affiliation: receiptData.schoolAffiliation,
+      logoUrl: receiptData.schoolLogoUrl,
+      upiId: school?.upiId,
+      principalSignatureUrl: receiptData.principalSignatureUrl,
+      directorSignatureUrl: receiptData.directorSignatureUrl,
+      principalName: receiptData.signatoryTitle,
+    },
+    isDueDemand,
+  }), [fee, receiptNo, grandTotal, studentName, note, totalPaid, student, receiptData, resolvedClass, school, isDueDemand, initialFormat]);
+
+  const whatsAppMeta = useMemo(() => {
+    return buildWhatsAppReceiptMessage({
+      ...feeDocumentOptions,
+      targetPhone: parentMobile || initialParentPhone || "",
+    });
+  }, [feeDocumentOptions, parentMobile, initialParentPhone]);
+
+  const handleWhatsAppClick = () => {
+    setShowWhatsAppPortalModal(true);
   };
 
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
@@ -340,30 +387,8 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
     setIsDownloadingPdf(true);
     try {
       await downloadFeeDocument({
-        fee: {
-          ...fee,
-          receiptNo,
-          amount: grandTotal,
-          monthlyAmount: grandTotal,
-          studentName,
-          note,
-        },
-        student,
-        schoolName: receiptData.schoolName,
-        className: resolvedClass,
-        schoolDetails: {
-          schoolId: school?.id,
-          schoolName: receiptData.schoolName,
-          address: receiptData.schoolAddress,
-          logoUrl: receiptData.schoolLogoUrl,
-          upiId: school?.upiId,
-          phone: receiptData.schoolPhone,
-          email: receiptData.schoolEmail,
-          affiliation: receiptData.schoolAffiliation,
-          principalName: receiptData.principalName,
-          principalSignatureUrl: receiptData.principalSignatureUrl,
-        },
-        mode: previewFormat,
+        ...feeDocumentOptions,
+        mode: isDueDemand ? "a6" : initialFormat === "4in1" ? "4in1" : "pos",
       });
     } catch (err) {
       console.error("PDF download error:", err);
@@ -377,248 +402,133 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
 
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-2 sm:p-4 bg-slate-950/80 backdrop-blur-xs animate-in fade-in duration-150">
-      <div className="w-full max-w-5xl bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[96vh]">
-        {/* Top Navbar */}
-        <div className="px-4 sm:px-5 py-3.5 bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950 text-white flex items-center justify-between shrink-0 border-b border-white/10">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-xl bg-white/10 border border-white/15 flex items-center justify-center text-amber-300 font-bold text-lg shadow-inner shrink-0">
-              🧾
-            </div>
+      <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[96vh]">
+        {/* Top Navbar with EXACTLY 3 Action Buttons: WhatsApp, Print, Download + Close */}
+        <div className="px-3 sm:px-4 py-2.5 bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950 text-white flex items-center justify-between shrink-0 border-b border-white/10 gap-2">
+          {/* Left: Student & Document Info */}
+          <div className="min-w-0 flex items-center gap-2">
+            <span className="text-lg shrink-0">{isDueDemand ? "📄" : "🧾"}</span>
             <div className="min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-base font-black text-white leading-tight truncate">
-                  {!fee.paid && totalPaid === 0 ? "Official Fee Due Demand Slip" : "Official School Fee Receipt"}
+              <div className="flex items-center gap-1.5 flex-nowrap overflow-hidden">
+                <h2 className="text-xs sm:text-sm font-black text-white leading-tight truncate">
+                  {studentName}
                 </h2>
+                <span className="text-[10px] bg-slate-800 text-slate-300 font-mono px-1.5 py-0.2 rounded shrink-0">
+                  {resolvedClass}
+                </span>
                 {totalPaid >= grandTotal && grandTotal > 0 ? (
-                  <span className="text-[10px] bg-emerald-500 text-white font-black px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm">
-                    <CheckCircle2 className="w-3 h-3" /> FULL PAID (पूर्ण भुगतान)
+                  <span className="text-[10px] bg-emerald-500 text-white font-bold px-1.5 py-0.2 rounded-md shrink-0 flex items-center gap-0.5">
+                    <CheckCircle2 className="w-2.5 h-2.5" /> Paid
                   </span>
                 ) : totalPaid > 0 ? (
-                  <span className="text-[10px] bg-amber-400 text-slate-950 font-black px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm">
-                    ⚠️ PARTIAL (जमा: ₹{totalPaid.toLocaleString("en-IN")})
+                  <span className="text-[10px] bg-amber-400 text-slate-950 font-bold px-1.5 py-0.2 rounded-md shrink-0">
+                    Partial: ₹{totalPaid.toLocaleString("en-IN")}
                   </span>
                 ) : (
-                  <span className="text-[10px] bg-rose-500 text-white font-black px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm">
-                    DEMAND SLIP (बकाया)
+                  <span className="text-[10px] bg-rose-500 text-white font-bold px-1.5 py-0.2 rounded-md shrink-0">
+                    Due: ₹{grandTotal.toLocaleString("en-IN")}
                   </span>
                 )}
-                <span className="text-[10px] bg-amber-400/20 text-amber-300 border border-amber-400/30 font-black px-2 py-0.5 rounded-full">
-                  {previewFormat === "4in1" ? "4-in-1 A4 Sheet" : "Mini Thermal POS Slip"}
-                </span>
               </div>
-              <p className="text-xs text-slate-300 truncate">
-                {studentName} • Receipt #{receiptNo} • <span className="text-amber-300 font-mono font-bold">{receiptDate}</span> • ₹{grandTotal.toLocaleString("en-IN")}
+              <p className="text-[10px] text-slate-400 truncate">
+                #{receiptNo} • {receiptDate} • {isSlipView ? "Fee Demand Slip (मांग पर्ची - A6)" : "Official Fee Receipt (शुल्क रसीद - POS 3\")"}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          {/* Right: 3 Prominent Action Buttons + Close */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            {/* 1. WhatsApp: Direct dispatch with copy number, direct document share & WhatsApp */}
             <button
-              onClick={() => handleWhatsApp()}
-              disabled={isSharingWhatsApp}
-              className="inline-flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-md shadow-emerald-900/30 active:scale-95 transition cursor-pointer disabled:opacity-50"
-              title="Direct WhatsApp share to parent mobile"
+              type="button"
+              onClick={handleWhatsAppClick}
+              className="inline-flex items-center gap-1 px-2.5 sm:px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-xs font-black rounded-xl shadow-xs transition cursor-pointer"
+              title={isSlipView ? "अभिभावक के WhatsApp पर मांग पर्ची शेयर करें" : "अभिभावक के WhatsApp पर रसीद शेयर करें"}
             >
-              {isSharingWhatsApp ? <Loader2 className="w-4 h-4 animate-spin text-white" /> : <MessageCircle className="w-4 h-4" />}
-              <span className="hidden sm:inline">{isSharingWhatsApp ? "भेज रहे..." : "WhatsApp"}</span>
+              <MessageCircle className="w-3.5 h-3.5 text-white" />
+              <span>WhatsApp</span>
             </button>
+
+            {/* 2. Print: Direct A6 demand slip or receipt print */}
             <button
+              type="button"
+              onClick={handlePrint}
+              className="inline-flex items-center gap-1 px-2.5 sm:px-3 py-1.5 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 active:scale-95 text-white text-xs font-black rounded-xl shadow-xs transition cursor-pointer"
+              title={isSlipView ? "मांग पर्ची प्रिंट करें (Print Demand Slip A6)" : "शुल्क रसीद प्रिंट करें (Print Receipt POS)"}
+            >
+              <Printer className="w-3.5 h-3.5 text-amber-200" />
+              <span>Print</span>
+            </button>
+
+            {/* 3. Download: Download PDF */}
+            <button
+              type="button"
               onClick={handleDownloadPdf}
               disabled={isDownloadingPdf}
-              className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl border border-white/20 active:scale-95 transition cursor-pointer disabled:opacity-50"
-              title="Download Receipt PDF"
+              className="inline-flex items-center gap-1 px-2.5 sm:px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-black rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
+              title={isSlipView ? "Download Demand Slip PDF" : "Download Fee Receipt PDF"}
             >
-              <Download className="w-4 h-4 text-emerald-400" />
-              <span className="hidden sm:inline">{isDownloadingPdf ? "Saving..." : "Download PDF"}</span>
+              {isDownloadingPdf ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Download className="w-3.5 h-3.5 text-white" />
+              )}
+              <span>Download</span>
             </button>
+
+            {/* Close */}
             <button
-              onClick={handlePrint}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white text-xs font-black rounded-xl shadow-md shadow-orange-900/30 active:scale-95 transition cursor-pointer"
-              title="Mini Bluetooth / USB Thermal Printer (80mm/58mm Roll) par print karein"
-            >
-              <Printer className="w-4 h-4 text-amber-200" />
-              <span className="hidden sm:inline">Mini POS Print</span>
-              <span className="sm:hidden">POS</span>
-            </button>
-            <button
+              type="button"
               onClick={onClose}
-              className="p-2 rounded-full hover:bg-white/10 text-slate-400 hover:text-white transition cursor-pointer"
+              className="w-7 h-7 rounded-xl bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white flex items-center justify-center transition cursor-pointer ml-0.5"
               title="Close modal"
             >
-              <X className="w-5 h-5" />
+              <X className="w-4 h-4" />
             </button>
           </div>
         </div>
 
-        {/* Modal Body: Clean Direct Preview with Direct Parent WhatsApp Share Card */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-slate-100 dark:bg-slate-950/60 flex flex-col items-center">
-          {/* ── Direct WhatsApp Share to Parent Mobile Number Card ── */}
-          <div className="w-full max-w-[540px] bg-gradient-to-r from-emerald-50 via-teal-50 to-green-50 dark:from-emerald-950/40 dark:via-teal-950/40 dark:to-slate-900 border border-emerald-300 dark:border-emerald-700/60 rounded-2xl p-4 mb-4 shadow-sm">
-            <div className="flex items-center justify-between mb-2.5">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-black shadow-md shadow-emerald-700/25 shrink-0">
-                  <MessageCircle className="w-5 h-5 text-amber-300" />
-                </div>
-                <div>
-                  <h4 className="text-xs sm:text-sm font-black text-emerald-950 dark:text-emerald-100 flex items-center gap-1.5">
-                    अभिभावक के WhatsApp पर रसीद भेजें
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-200 text-emerald-900 dark:bg-emerald-900 dark:text-emerald-200">
-                      Direct WhatsApp
-                    </span>
-                  </h4>
-                  <p className="text-[11px] text-emerald-700 dark:text-emerald-300">
-                    छात्र: <strong className="text-slate-900 dark:text-white">{studentName}</strong> • {resolvedClass} {student?.fatherName ? `• C/O ${student.fatherName}` : ""}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-              <div className="relative flex-1">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-black text-slate-500 select-none flex items-center gap-1">
-                  <span>🇮🇳</span>
-                  <span>+91</span>
-                </span>
-                <input
-                  type="tel"
-                  maxLength={10}
-                  value={parentMobile}
-                  onChange={(e) => setParentMobile(e.target.value.replace(/\D/g, "").slice(0, 10))}
-                  placeholder="Parent WhatsApp No (10 अंक)"
-                  className="w-full pl-15 pr-3 py-2.5 text-xs font-mono font-bold rounded-xl border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 shadow-inner"
-                />
-              </div>
-              <button
-                type="button"
-                onClick={() => handleWhatsApp(parentMobile)}
-                disabled={isSharingWhatsApp}
-                className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-black rounded-xl shadow-md shadow-emerald-800/30 active:scale-95 transition flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer whitespace-nowrap"
-              >
-                {isSharingWhatsApp ? (
-                  <Loader2 className="w-4 h-4 animate-spin text-white" />
-                ) : (
-                  <Send className="w-4 h-4 text-amber-300" />
-                )}
-                <span>{isSharingWhatsApp ? "भेज रहे हैं..." : "WhatsApp पर भेजें"}</span>
-              </button>
-            </div>
-            <p className="text-[10px] text-emerald-800/80 dark:text-emerald-400/80 mt-1.5 flex items-center gap-1">
-              <span>💡</span>
-              <span>अभिभावक का मोबाइल नंबर यहां बदलें या सीधे हरे बटन पर क्लिक करें। रसीद विवरण सीधे इसी नंबर पर जाएगा।</span>
-            </p>
-          </div>
-
-          {/* Format Switcher: 4-in-1 A4 Sheet vs Mini Thermal POS */}
-          <div className="w-full max-w-[540px] flex items-center justify-between gap-2 mb-3 bg-white dark:bg-slate-900 p-1.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-2xs">
-            <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300 px-2">
-              Receipt Print Format:
-            </span>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => setPreviewFormat("4in1")}
-                className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
-                  previewFormat === "4in1"
-                    ? "bg-indigo-600 text-white shadow-xs"
-                    : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
-                }`}
-              >
-                📄 4-in-1 A4 Sheet
-              </button>
-              <button
-                type="button"
-                onClick={() => setPreviewFormat("pos")}
-                className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
-                  previewFormat === "pos"
-                    ? "bg-amber-600 text-white shadow-xs"
-                    : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
-                }`}
-              >
-                🧾 Mini POS Slip
-              </button>
-            </div>
-          </div>
-
+        {/* Modal Body: Direct Single A6 Demand Slip or Receipt Preview */}
+        <div className="flex-1 overflow-y-auto p-2 sm:p-5 bg-slate-100 dark:bg-slate-950/70 flex flex-col items-center">
           {/* Inject Receipt & Thermal POS CSS */}
           <style>{DPS_RECEIPT_CSS}</style>
           <style>{POS_SLIP_CSS}</style>
 
-          {/* RENDER LIVE 4-IN-1 SHEET OR MINI POS THERMAL SLIP */}
-          <div className="w-full flex justify-center py-1 overflow-x-auto">
-            {previewFormat === "4in1" ? (
-              <div
-                className="w-full flex justify-center"
-                dangerouslySetInnerHTML={{
-                  __html: generate4in1A4PageHtml([
-                    { data: receiptData, copyTitle: "STUDENT COPY" },
-                    { data: receiptData, copyTitle: "SCHOOL / OFFICE COPY" },
-                    { data: receiptData, copyTitle: "ACCOUNTS COPY" },
-                    { data: receiptData, copyTitle: "PARENT / GUARDIAN COPY" },
-                  ]),
-                }}
-              />
-            ) : (
-              <div
-                className="w-full flex justify-center"
-                dangerouslySetInnerHTML={{
-                  __html: generatePosSlipHtml(receiptData, { rollWidthMm: 80 }),
-                }}
-              />
-            )}
+          <div className="w-full flex justify-center py-1">
+            <div
+              className="w-full flex justify-center"
+              dangerouslySetInnerHTML={{
+                __html:
+                  isSlipView
+                    ? generateSingleA6SlipHtml(receiptData)
+                    : initialFormat === "4in1"
+                    ? generate4in1A4PageHtml([{ data: receiptData }])
+                    : generatePosSlipHtml(receiptData, { rollWidthMm: 80 }),
+              }}
+            />
           </div>
-        </div>
-
-        {/* Modal Footer Controls */}
-        <div className="p-3.5 bg-slate-50 dark:bg-slate-800/80 border-t border-slate-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-2 shrink-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              type="button"
-              onClick={() => handleWhatsApp(parentMobile)}
-              disabled={isSharingWhatsApp}
-              className="px-4 py-2 rounded-xl text-xs font-black bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white transition flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer disabled:opacity-50"
-              title="Share receipt directly on parent WhatsApp number"
-            >
-              {isSharingWhatsApp ? <Loader2 className="w-4 h-4 animate-spin" /> : <MessageCircle className="w-4 h-4 text-amber-300" />}
-              <span>WhatsApp पर भेजें</span>
-            </button>
-            <button
-              type="button"
-              onClick={handleDownloadPdf}
-              disabled={isDownloadingPdf}
-              className="px-3.5 py-2 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-900 text-white transition flex items-center gap-1.5 shadow-sm disabled:opacity-50 cursor-pointer"
-            >
-              <Download className="w-4 h-4 text-emerald-400" />
-              <span>{isDownloadingPdf ? "Saving PDF..." : "Download PDF"}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => printDpsReceiptDirect(receiptData, "4in1")}
-              className="px-3.5 py-2 rounded-xl text-xs font-black bg-indigo-600 hover:bg-indigo-500 text-white transition flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
-              title="A4 4-in-1 Sheet print karein"
-            >
-              <Printer className="w-4 h-4 text-indigo-200" />
-              <span>📄 Print 4-in-1 Sheet</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => printPosSlipDirect(receiptData, 80)}
-              className="px-3.5 py-2 rounded-xl text-xs font-black bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white transition flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
-              title="Mini Thermal POS Printer (80mm/58mm Roll) par turant print karein"
-            >
-              <Printer className="w-4 h-4 text-amber-200" />
-              <span>🧾 Print Mini POS</span>
-            </button>
-          </div>
-
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-2 rounded-xl text-xs font-bold bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-800 dark:text-white transition cursor-pointer"
-          >
-            Close
-          </button>
         </div>
       </div>
+
+      {/* Dedicated WhatsApp Share & Send Modal with Number Copy & Direct Document Share */}
+      <WhatsAppShareModal
+        isOpen={showWhatsAppPortalModal}
+        onClose={() => setShowWhatsAppPortalModal(false)}
+        studentName={studentName}
+        parentPhone={parentMobile || initialParentPhone || ""}
+        className={resolvedClass}
+        rollNo={rollNo}
+        admissionNo={admissionNo}
+        fatherName={fatherName}
+        receiptNo={receiptNo}
+        title={isDueDemand ? "Fee Demand Slip (मांग पर्ची)" : "Official Fee Receipt (रसीद)"}
+        formattedMessage={whatsAppMeta.message}
+        isDueDemand={isDueDemand}
+        totalAmount={grandTotal}
+        paidAmount={totalPaid > 0 ? totalPaid : (fee.paid ? grandTotal : 0)}
+        balanceDue={balanceDue}
+        generatePdfBlob={() => generateFeeDocumentPdfBlob(feeDocumentOptions)}
+      />
     </div>
   );
 };

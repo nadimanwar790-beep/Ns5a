@@ -335,8 +335,8 @@ export const FloatingActionMenu: React.FC<Props> = ({ settings, user, isFlashSal
                                 )}
                             </div>
 
-                            {/* NSTA CONTROL FEATURES */}
-                            {user.role === 'ADMIN' && (
+                            {/* NSTA CONTROL FEATURES (Super Admin Only - School Admins Strictly Excluded) */}
+                            {user.role !== 'SCHOOL_ADMIN' && user.role !== 'PRINCIPAL' && !user.email?.toLowerCase()?.endsWith('.edu.in') && (user.role === 'ADMIN' || user.role === 'SUPERADMIN' || (user as any).isAdmin || (user.email && (user.email.toLowerCase().includes('nadimanwar794') || user.email.toLowerCase() === 'fgkfgffhgg@gmail.com' || user.email.toLowerCase() === 'ghduug6@gmail.com'))) && (
                                 <div className="grid grid-cols-2 gap-2 mb-6 shrink-0">
                                     <button
                                         onClick={() => { setIsOpen(false); if (onNavigate) onNavigate('ADMIN_DASHBOARD'); }}

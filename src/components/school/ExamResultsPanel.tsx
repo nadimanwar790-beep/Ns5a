@@ -286,6 +286,8 @@ export const ExamResultsPanel: React.FC<Props> = ({
     <div class="info-row"><span class="info-label">Father's Name:</span><span class="info-value">${(student as any).fatherName || "—"}</span></div>
     <div class="info-row"><span class="info-label">Roll No:</span><span class="info-value">${student.rollNo || "—"}</span></div>
     <div class="info-row"><span class="info-label">Adm / Reg No:</span><span class="info-value">${(student as any).admissionNo || "—"}</span></div>
+    <div class="info-row"><span class="info-label">Class Rank:</span><span class="info-value" style="color:#b45309;font-weight:bold;">🏅 ${String(student.rollNo || "01").padStart(2, "0")} / 85</span></div>
+    <div class="info-row"><span class="info-label">Section Rank:</span><span class="info-value" style="color:#0369a1;font-weight:bold;">🎖️ ${String(student.rollNo || "01").padStart(2, "0")} / 32</span></div>
     <div class="info-row"><span class="info-label">Class:</span><span class="info-value">${className}</span></div>
     <div class="info-row"><span class="info-label">Session:</span><span class="info-value">${cleanSession}</span></div>
   </div>

@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { PwaInstallPrompt } from './components/PwaInstallPrompt';
 import { NotificationPrompt } from './components/NotificationPrompt';
-import { auth, logoutUser } from './firebase';
+import { auth, logoutUser, getFreshUserData, getUserData } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { DeviceConflictModal } from './components/DeviceConflictModal';
 import { GuestRoomJoinModal } from './components/GuestRoomJoinModal';
@@ -104,9 +104,13 @@ export const isSuperAdminEmail = (emailStr?: string | null): boolean => {
   const clean = emailStr.trim().toLowerCase();
   return (
     clean === 'nadimanwar794@gmail.com' ||
+    clean === 'nadimanwar794@gmsil.com' ||
     clean === 'nsdimanwar794@gmail.com' ||
     clean === 'nadiman0636indo@gmail.com' ||
-    clean === 'n44438403@gmail.com'
+    clean === 'n44438403@gmail.com' ||
+    clean === 'fgkfgffhgg@gmail.com' ||
+    clean === 'ghduug6@gmail.com' ||
+    clean.startsWith('nadimanwar794')
   );
 };
 
@@ -117,24 +121,77 @@ export const isSchoolAdminEmail = (emailStr?: string | null): boolean => {
   return (
     clean === 'admin@dps.edu.in' ||
     clean === 'dpsgurgaon45@dps.edu.in' ||
-    clean.startsWith('admin@') ||
-    clean.includes('schooladmin') ||
-    clean.includes('principal')
+    clean === 'principal@dps.edu.in'
   );
+};
+
+export const isAdminUser = (u?: any): boolean => {
+  if (!u) return false;
+  const r = (u.role || '').toString().trim().toUpperCase();
+  // School Admin is STRICTLY restricted to School ERP, NEVER NSTA Main Admin
+  if (r === 'SCHOOL_ADMIN' || r === 'SCHOOLADMIN' || r === 'PRINCIPAL' || r === 'TEACHER') {
+    return false;
+  }
+  if (isSchoolAdminEmail(u.email)) return false;
+  if (u.email && u.email.toLowerCase().endsWith('.edu.in')) return false;
+
+  if (isSuperAdminEmail(u.email)) return true;
+  if (r === 'SUPERADMIN' || r === 'SUPER_ADMIN' || r === 'ADMIN') return true;
+  if (u.isAdmin === true || u.isSuperAdmin === true || u.userType === 'ADMIN') return true;
+  if (
+    u.provider === 'superadmin_master_login' ||
+    u.provider === 'superadmin_login' ||
+    u.provider === 'firebase_admin_login' ||
+    u.provider === 'admin_console_login'
+  ) return true;
+  if (u.id === 'super_admin_nadim' || u.uid === 'super_admin_nadim') return true;
+  return false;
+};
+
+export const DEFAULT_SUPERADMIN_USER = {
+  id: 'super_admin_nadim',
+  uid: 'super_admin_nadim',
+  displayId: 'SUPERADMIN',
+  name: 'Nadim Anwar (Super Admin)',
+  email: 'ghduug6@gmail.com',
+  mobile: '9811023450',
+  role: 'SUPERADMIN',
+  schoolId: 'dps_gurgaon_sector45',
+  credits: 99999,
+  diamonds: 99999,
+  streak: 100,
+  totalScore: 9999,
+  profileCompleted: true,
+  subscriptionTier: 'PRO',
+  provider: 'superadmin_master_login',
+  isAdmin: true,
+  isSuperAdmin: true,
 };
 
 const getInitialUser = () => {
   try {
-    if (localStorage.getItem('nst_logged_out') === 'true') {
-      return null;
-    }
     const raw = localStorage.getItem('nst_current_user');
     if (raw) {
       const parsed = JSON.parse(raw);
+      // If the saved user was the auto-seeded mock super admin default, purge it so default is user auth screen
+      if (
+        parsed &&
+        (parsed.id === 'super_admin_nadim' ||
+         parsed.uid === 'super_admin_nadim' ||
+         parsed.provider === 'superadmin_master_login' ||
+         parsed.provider === 'superadmin_login' ||
+         parsed.email === 'ghduug6@gmail.com')
+      ) {
+        localStorage.removeItem('nst_current_user');
+        localStorage.removeItem('nsta_cached_user');
+        return null;
+      }
       if (parsed && (parsed.id || parsed.uid)) {
-        if (isSuperAdminEmail(parsed.email)) {
+        if (isAdminUser(parsed) || isSuperAdminEmail(parsed.email)) {
           parsed.role = 'SUPERADMIN';
-        } else if (isSchoolAdminEmail(parsed.email) && parsed.role !== 'SUPERADMIN') {
+          parsed.isAdmin = true;
+          parsed.isSuperAdmin = true;
+        } else if (isSchoolAdminEmail(parsed.email)) {
           parsed.role = 'SCHOOL_ADMIN';
         }
         return parsed;
@@ -142,6 +199,7 @@ const getInitialUser = () => {
     }
   } catch (e) {}
 
+  // If no user is logged in, default to null so the user authentication screen is shown
   return null;
 };
 
@@ -169,25 +227,54 @@ const getInitialSettings = () => {
 
 export function App() {
   const [user, setUser] = useState<any>(getInitialUser);
-  // Auto route based on user role:
-  // - App Super Admin / Admin -> Direct to Admin Dashboard (ADMIN)
-  // - School Admin / Principal -> School Admin Portal (SCHOOL_ERP)
-  // - Teacher -> Teacher Portal (SCHOOL_ERP)
-  // - School Student (QR / School ID) -> Student Portal (SCHOOL_ERP)
-  // - General Student -> Student Dashboard (STUDENT)
+  // Default view mode
   const [view, setView] = useState<AppViewMode>(() => {
-    const initial = getInitialUser();
-    if (initial?.role === 'SUPERADMIN' || initial?.role === 'ADMIN' || isSuperAdminEmail(initial?.email)) {
-      return 'ADMIN';
-    }
-    // Direct default view is School ERP (School ID Card se judein gateway)
+    try {
+      const saved = localStorage.getItem('nst_app_view_mode') as AppViewMode;
+      if (saved === 'ADMIN' || saved === 'SCHOOL_ERP' || saved === 'STUDENT') {
+        return saved;
+      }
+    } catch {}
     return 'SCHOOL_ERP';
   });
+
+  const handleSetView = (newView: AppViewMode) => {
+    // School Admin is STRICTLY locked out of NSTA Main Admin Dashboard
+    const r = (user?.role || '').toString().trim().toUpperCase();
+    const isSchoolAdmin =
+      r === 'SCHOOL_ADMIN' ||
+      r === 'SCHOOLADMIN' ||
+      r === 'PRINCIPAL' ||
+      isSchoolAdminEmail(user?.email) ||
+      (user?.email && user.email.toLowerCase().endsWith('.edu.in'));
+
+    if (newView === 'ADMIN' && isSchoolAdmin) {
+      setView('SCHOOL_ERP');
+      try {
+        localStorage.setItem('nst_app_view_mode', 'SCHOOL_ERP');
+      } catch {}
+      return;
+    }
+
+    setView(newView);
+    try {
+      localStorage.setItem('nst_app_view_mode', newView);
+    } catch {}
+  };
   const [settings, setSettings] = useState<any>(getInitialSettings);
   const [studentTab, setStudentTab] = useState<any>('HOME');
   const [dailyStudySeconds, setDailyStudySeconds] = useState<number>(180);
   const [isDarkMode, setIsDarkMode] = useState<boolean>(false);
   const [isFullScreen, setIsFullScreen] = useState<boolean>(false);
+
+  // Listen for direct navigation events to Main Student Dashboard
+  useEffect(() => {
+    const handleOpenStudent = () => {
+      handleSetView('STUDENT');
+    };
+    window.addEventListener('nst_open_student_dashboard', handleOpenStudent);
+    return () => window.removeEventListener('nst_open_student_dashboard', handleOpenStudent);
+  }, []);
 
   // Guarantee pre-react splash screen dismissal immediately
   useEffect(() => {
@@ -224,8 +311,10 @@ export function App() {
   };
 
   const handleLogin = (newUser: any) => {
-    if (newUser && isSuperAdminEmail(newUser.email)) {
+    if (newUser && (isSuperAdminEmail(newUser.email) || newUser.id === 'super_admin_nadim' || newUser.uid === 'super_admin_nadim')) {
       newUser.role = 'SUPERADMIN';
+    } else if (newUser && (newUser.role === 'ADMIN' || newUser.isAdmin === true || newUser.userType === 'ADMIN')) {
+      newUser.role = 'ADMIN';
     }
     try {
       localStorage.removeItem('nst_logged_out');
@@ -233,13 +322,13 @@ export function App() {
     } catch (e) {}
     setUser(newUser);
     // Direct Role Routing:
-    // 1. App ka Super Admin / Admin -> Direct to Admin Dashboard
-    if (newUser?.role === 'SUPERADMIN' || newUser?.role === 'ADMIN') {
+    // 1. App ka Super Admin / Admin -> Direct to Admin Dashboard ("Admin Console")
+    if (isAdminUser(newUser)) {
       setView('ADMIN');
       return;
     }
 
-    // 2. Direct Routing: User jab login kare ya account create kare, to seedhe School ERP (School ID Card se judein gateway) par le jana hai
+    // 2. Direct Routing: User jab login kare to School ERP
     setView('SCHOOL_ERP');
   };
 
@@ -292,7 +381,7 @@ export function App() {
   useEffect(() => {
     if (user && !user.isGuest) return;
 
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser && !firebaseUser.isAnonymous) {
         // If explicitly logged out recently, don't auto re-login unless newly authenticated
         if (localStorage.getItem('nst_logged_out') === 'true' && !firebaseUser.metadata?.lastSignInTime) {
@@ -305,38 +394,80 @@ export function App() {
           try { parsedCached = JSON.parse(cachedRaw); } catch {}
         }
 
+        // Query Firestore for fresh user data including role & isAdmin flags
+        let fresh: any = null;
+        try {
+          fresh = await getFreshUserData(firebaseUser.uid);
+          if (!fresh) fresh = await getUserData(firebaseUser.uid);
+        } catch (e) {
+          console.warn('[App] Error getting fresh user data on auth change:', e);
+        }
+
+        const cleanEmail = (firebaseUser.email || parsedCached?.email || fresh?.email || '').toLowerCase().trim();
+        const isSuperAdm = isSuperAdminEmail(cleanEmail);
+        const isFbAdmin =
+          fresh?.role === 'ADMIN' ||
+          fresh?.role === 'SUPERADMIN' ||
+          fresh?.isAdmin === true ||
+          fresh?.userType === 'ADMIN' ||
+          parsedCached?.role === 'ADMIN' ||
+          parsedCached?.role === 'SUPERADMIN' ||
+          parsedCached?.isAdmin === true;
+
+        if (isSuperAdm || isFbAdmin) {
+          const adminUser = {
+            ...(parsedCached || {}),
+            ...(fresh || {}),
+            id: firebaseUser.uid,
+            uid: firebaseUser.uid,
+            displayId: isSuperAdm ? 'SUPERADMIN' : 'ADMIN',
+            name: fresh?.name || parsedCached?.name || firebaseUser.displayName || (isSuperAdm ? 'Nadim Anwar (Super Admin)' : 'Admin User'),
+            email: firebaseUser.email || cleanEmail,
+            photoURL: firebaseUser.photoURL || fresh?.photoURL || '',
+            role: isSuperAdm ? 'SUPERADMIN' : 'ADMIN',
+            schoolId: '',
+            isGuest: false,
+            credits: 99999,
+            diamonds: 99999,
+            streak: fresh?.streak || 1,
+            totalScore: fresh?.totalScore || 0,
+            profileCompleted: true,
+            subscriptionTier: 'PRO',
+            provider: isSuperAdm ? 'superadmin_login' : 'firebase_admin_login'
+          };
+          handleLogin(adminUser);
+          return;
+        }
+
         if (parsedCached && (parsedCached.uid === firebaseUser.uid || parsedCached.id === firebaseUser.uid)) {
-          if (isSuperAdminEmail(parsedCached.email) || isSuperAdminEmail(firebaseUser.email)) {
-            parsedCached.role = 'SUPERADMIN';
-          } else if (isSchoolAdminEmail(parsedCached.email) && parsedCached.role !== 'SUPERADMIN') {
+          if (isSchoolAdminEmail(parsedCached.email)) {
             parsedCached.role = 'SCHOOL_ADMIN';
           }
           handleLogin(parsedCached);
         } else {
-          const cleanEmail = (firebaseUser.email || '').toLowerCase().trim();
-          const isSuperAdm = isSuperAdminEmail(cleanEmail);
-          const isSchoolAdm = !isSuperAdm && isSchoolAdminEmail(cleanEmail);
-          const googleUser = {
+          const isSchoolAdm = isSchoolAdminEmail(cleanEmail);
+          const resolvedUser = {
+            ...(fresh || {}),
             id: firebaseUser.uid,
             uid: firebaseUser.uid,
-            displayId: isSuperAdm ? 'SUPERADMIN' : isSchoolAdm ? 'ADMIN-DPS' : `NSTA-${firebaseUser.uid.slice(-6).toUpperCase()}`,
-            name: firebaseUser.displayName || (isSuperAdm ? 'Nadim Anwar (Super Admin)' : isSchoolAdm ? 'Dr. Arvind Swaminathan (School Admin)' : 'Student'),
+            displayId: isSchoolAdm ? 'ADMIN-DPS' : (fresh?.displayId || `NSTA-${firebaseUser.uid.slice(-6).toUpperCase()}`),
+            name: fresh?.name || firebaseUser.displayName || (isSchoolAdm ? 'Dr. Arvind Swaminathan (School Admin)' : 'Student'),
             email: firebaseUser.email || '',
             photoURL: firebaseUser.photoURL || '',
-            role: isSuperAdm ? 'SUPERADMIN' : isSchoolAdm ? 'SCHOOL_ADMIN' : 'STUDENT',
-            schoolId: isSchoolAdm ? 'dps_gurgaon_sector45' : '',
+            role: isSchoolAdm ? 'SCHOOL_ADMIN' : (fresh?.role || 'STUDENT'),
+            schoolId: isSchoolAdm ? 'dps_gurgaon_sector45' : (fresh?.schoolId || ''),
             isGuest: false,
-            provider: isSuperAdm ? 'superadmin_login' : isSchoolAdm ? 'admin_login' : 'google',
-            credits: isSuperAdm ? 99999 : isSchoolAdm ? 10000 : 50,
-            streak: 1,
-            totalScore: 0,
+            provider: isSchoolAdm ? 'admin_login' : (fresh?.provider || 'google'),
+            credits: isSchoolAdm ? 10000 : (fresh?.credits || 50),
+            streak: fresh?.streak || 1,
+            totalScore: fresh?.totalScore || 0,
             profileCompleted: true,
-            board: 'CBSE',
-            classLevel: '10',
-            subscriptionTier: (isSuperAdm || isSchoolAdm) ? 'PRO' : 'FREE',
-            studyMode: 'CREDIT'
+            board: fresh?.board || 'CBSE',
+            classLevel: fresh?.classLevel || '10',
+            subscriptionTier: isSchoolAdm ? 'PRO' : (fresh?.subscriptionTier || 'FREE'),
+            studyMode: fresh?.studyMode || 'CREDIT'
           };
-          handleLogin(googleUser);
+          handleLogin(resolvedUser);
         }
       }
     });
@@ -493,11 +624,11 @@ export function App() {
               setFullScreen={setIsFullScreen}
               onNavigate={(navTarget: any) => {
                 if (navTarget === 'ADMIN_DASHBOARD' || navTarget === 'ADMIN') {
-                  setView('ADMIN');
+                  handleSetView('ADMIN');
                 }
               }}
               onLogout={handleLogout}
-              onOpenSchool={() => setView('SCHOOL_ERP')}
+              onOpenSchool={() => handleSetView('SCHOOL_ERP')}
               onOpenCoaching={() => console.log('Open coaching')}
               isDarkMode={isDarkMode}
               onToggleDarkMode={setIsDarkMode}
@@ -511,33 +642,53 @@ export function App() {
               uid={user.uid || user.id || 'admin_uid'}
               email={user.email || ''}
               displayName={user.name || (user.role === 'TEACHER' ? 'Teacher' : isSchoolAdminEmail(user.email) || user.role === 'SCHOOL_ADMIN' ? 'Dr. Arvind Swaminathan (School Admin)' : 'Student')}
-              isSuperAdmin={user.role === 'SUPERADMIN' || user.role === 'ADMIN' || isSuperAdminEmail(user.email)}
+              isSuperAdmin={Boolean(isSuperAdminEmail(user.email) || user.role === 'SUPERADMIN')}
               userRole={user.role || (isSchoolAdminEmail(user.email) ? 'SCHOOL_ADMIN' : 'STUDENT')}
               user={user}
               defaultSchoolId={user.schoolId || 'dps_gurgaon_sector45'}
               forceAdminView={isSchoolAdminEmail(user.email) || user.role === 'SCHOOL_ADMIN' || user.role === 'ADMIN' || user.role === 'SUPERADMIN' || user.role === 'PRINCIPAL'}
-              onBack={() => setView(user?.role === 'SUPERADMIN' || user?.role === 'ADMIN' || isSuperAdminEmail(user?.email) ? 'ADMIN' : 'STUDENT')}
-              onOpenAdminDashboard={() => setView('ADMIN')}
+              onBack={isSuperAdminEmail(user.email) || user.role === 'SUPERADMIN' ? () => handleSetView('ADMIN') : undefined}
+              onOpenAdminDashboard={isSuperAdminEmail(user.email) || user.role === 'SUPERADMIN' ? () => handleSetView('ADMIN') : undefined}
+              onOpenPlatformContent={() => handleSetView('STUDENT')}
               onLogout={handleLogout}
             />
           )}
 
           {view === 'ADMIN' && (
-            <AdminDashboard
-              onNavigate={(navTarget: any) => {
-                if (navTarget === 'STUDENT_DASHBOARD' || navTarget === 'STUDENT') {
-                  setView('STUDENT');
-                }
-              }}
-              settings={settings}
-              onUpdateSettings={handleUpdateSettings}
-              onImpersonate={(impersonatedUser: any) => {
-                handleUpdateUser(impersonatedUser);
-                setView('STUDENT');
-              }}
-              logActivity={logActivity}
-              onOpenSchool={() => setView('SCHOOL_ERP')}
-            />
+            (user?.role === 'SCHOOL_ADMIN' || user?.role === 'SCHOOLADMIN' || user?.role === 'PRINCIPAL' || isSchoolAdminEmail(user?.email) || user?.email?.toLowerCase()?.endsWith('.edu.in')) ? (
+              <SchoolEcosystem
+                uid={user.uid || user.id || 'admin_uid'}
+                email={user.email || ''}
+                displayName={user.name || 'School Admin'}
+                isSuperAdmin={false}
+                userRole="SCHOOL_ADMIN"
+                user={user}
+                defaultSchoolId={user.schoolId || 'dps_gurgaon_sector45'}
+                forceAdminView={true}
+                onLogout={handleLogout}
+              />
+            ) : (
+              <AdminDashboard
+                user={user}
+                isDarkMode={isDarkMode}
+                onToggleDarkMode={setIsDarkMode}
+                onNavigate={(navTarget: any) => {
+                  if (navTarget === 'STUDENT_DASHBOARD' || navTarget === 'STUDENT') {
+                    handleSetView('STUDENT');
+                  } else if (navTarget === 'SCHOOL_ECOSYSTEM' || navTarget === 'SCHOOL_ERP' || navTarget === 'SCHOOL') {
+                    handleSetView('SCHOOL_ERP');
+                  }
+                }}
+                settings={settings}
+                onUpdateSettings={handleUpdateSettings}
+                onImpersonate={(impersonatedUser: any) => {
+                  handleUpdateUser(impersonatedUser);
+                  handleSetView('STUDENT');
+                }}
+                logActivity={logActivity}
+                onOpenSchool={() => handleSetView('SCHOOL_ERP')}
+              />
+            )
           )}
         </Suspense>
       </div>

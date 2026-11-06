@@ -34,10 +34,22 @@ import {
   getFirestore,
 } from 'firebase/firestore';
 import { storage } from './storage';
+import { db as defaultDb, app } from '../firebase';
 
-// Circular-dependency-free: getFirestore() returns the already-initialized
-// Firestore instance (initialized in firebase.ts before any component loads).
-const db = getFirestore();
+// Circular-dependency-free: returns the already-initialized
+// Firestore instance or safely initializes with app.
+const getSafeDb = () => {
+  if (defaultDb) return defaultDb;
+  try {
+    return getFirestore(app);
+  } catch {
+    try {
+      return getFirestore();
+    } catch {
+      return null;
+    }
+  }
+};
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -219,6 +231,11 @@ export const saveLessonMode = async (
   content: any,
   historyMeta: LessonHistoryMeta = {},
 ): Promise<void> => {
+  const db = getSafeDb();
+  if (!db) {
+    console.warn('[LessonStorage] Firestore not initialized for saveLessonMode');
+    return;
+  }
   const colName  = LESSON_COLLECTION[mode];
   const docRef   = doc(db, colName, key);
   const now      = new Date().toISOString();
@@ -281,6 +298,8 @@ export const saveLessonMode = async (
 // ── Save lesson_meta ──────────────────────────────────────────────────────────
 
 export const saveLessonMeta = async (key: string, data: any): Promise<void> => {
+  const db = getSafeDb();
+  if (!db) return;
   try {
     const now   = new Date().toISOString();
     const parts = key.replace('nst_content_', '').split('_');
@@ -322,6 +341,8 @@ export const getLessonMode = async (
   } catch {}
 
   // 2. Firestore
+  const db = getSafeDb();
+  if (!db) return null;
   try {
     const snap = await getDoc(doc(db, LESSON_COLLECTION[mode], key));
     if (snap.exists()) {
@@ -391,6 +412,8 @@ export const getChapterDataV2 = async (key: string): Promise<any | null> => {
   if (newData) return newData;
 
   // 2. Fallback to old content_data (for unmigrated chapters)
+  const db = getSafeDb();
+  if (!db) return null;
   try {
     const snap = await getDoc(doc(db, 'content_data', key));
     if (snap.exists()) return snap.data();
@@ -403,6 +426,8 @@ export const getChapterDataV2 = async (key: string): Promise<any | null> => {
 // ❌ Purana content_data document KABHI delete nahi hoga — sirf copy hoga.
 
 export const migrateChapterToV2 = async (key: string): Promise<boolean> => {
+  const db = getSafeDb();
+  if (!db) return false;
   try {
     // Already migrated check
     const meta = await getDoc(doc(db, 'lesson_meta', key)).catch(() => null);
@@ -430,6 +455,8 @@ export const migrateChapterToV2 = async (key: string): Promise<boolean> => {
 // Main lesson documents pe KABHI deleteDoc nahi chalega.
 
 export const runHistoryCleanup = async (): Promise<void> => {
+  const db = getSafeDb();
+  if (!db) return;
   const modes = Object.keys(LESSON_COLLECTION) as LessonMode[];
   const now   = new Date().toISOString();
   let   total = 0;
@@ -484,6 +511,8 @@ export const getLessonModeHistory = async (
   key: string,
   mode: LessonMode,
 ): Promise<LessonHistoryEntry[]> => {
+  const db = getSafeDb();
+  if (!db) return [];
   try {
     const snap = await getDocs(
       collection(db, LESSON_COLLECTION[mode], key, '_history')

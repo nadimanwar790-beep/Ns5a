@@ -50,30 +50,36 @@ export const ClassFeeStructureSection: React.FC<Props> = ({
     return unsub;
   }, [schoolId]);
 
-  // Initialize fee forms for each class
+  // Initialize fee forms for each class preserving registrationFee & enabledHeads
   useEffect(() => {
     const initialForms: Record<string, ClassFeeStructure> = {};
     classesList.forEach(cls => {
-      if (cls.feeStructure) {
-        initialForms[cls.id] = {
-          admissionFee: Number(cls.feeStructure.admissionFee || 0),
-          tuitionFee: Number(cls.feeStructure.tuitionFee || cls.defaultFee || 0),
-          cautionMoney: Number(cls.feeStructure.cautionMoney || 0),
-          annualCharges: Number(cls.feeStructure.annualCharges || 0),
-          busFee: Number(cls.feeStructure.busFee || 0),
-          customHeads: cls.feeStructure.customHeads || [],
-        };
-      } else {
-        // Fallback default
-        initialForms[cls.id] = {
-          admissionFee: 35000,
-          tuitionFee: Number(cls.defaultFee || 2500),
-          cautionMoney: 20000,
-          annualCharges: 12000,
-          busFee: 2000,
-          customHeads: [],
-        };
-      }
+      const fs = cls.feeStructure;
+      const rawAdm = Number(fs?.admissionFee || 0);
+      const rawReg = Number(fs?.registrationFee || 0);
+      const rawTui = Number(fs?.tuitionFee ?? cls.defaultFee ?? 0);
+      const rawCau = Number(fs?.cautionMoney || 0);
+      const rawAnn = Number(fs?.annualCharges || 0);
+      const rawBus = Number(fs?.busFee || 0);
+      const saved = fs?.enabledHeads;
+
+      initialForms[cls.id] = {
+        admissionFee: rawAdm,
+        registrationFee: rawReg,
+        tuitionFee: rawTui,
+        cautionMoney: rawCau,
+        annualCharges: rawAnn,
+        busFee: rawBus,
+        enabledHeads: {
+          admissionFee: typeof saved?.admissionFee === "boolean" ? saved.admissionFee : rawAdm > 0,
+          registrationFee: typeof saved?.registrationFee === "boolean" ? saved.registrationFee : rawReg > 0,
+          tuitionFee: typeof saved?.tuitionFee === "boolean" ? saved.tuitionFee : rawTui > 0,
+          cautionMoney: typeof saved?.cautionMoney === "boolean" ? saved.cautionMoney : rawCau > 0,
+          annualCharges: typeof saved?.annualCharges === "boolean" ? saved.annualCharges : rawAnn > 0,
+          busFee: typeof saved?.busFee === "boolean" ? saved.busFee : true,
+        },
+        customHeads: fs?.customHeads || [],
+      };
     });
     setFeeForms(initialForms);
   }, [classesList]);
@@ -85,46 +91,88 @@ export const ClassFeeStructureSection: React.FC<Props> = ({
 
   const handleFieldChange = (
     classId: string,
-    field: keyof Omit<ClassFeeStructure, "customHeads">,
+    field: "admissionFee" | "registrationFee" | "tuitionFee" | "cautionMoney" | "annualCharges" | "busFee",
     value: string
   ) => {
     const num = Math.max(0, parseInt(value, 10) || 0);
     setFeeForms(prev => ({
       ...prev,
       [classId]: {
-        ...(prev[classId] || { admissionFee: 0, tuitionFee: 0, cautionMoney: 0, annualCharges: 0, busFee: 0 }),
+        ...(prev[classId] || { admissionFee: 0, registrationFee: 0, tuitionFee: 0, cautionMoney: 0, annualCharges: 0, busFee: 0 }),
         [field]: num,
       },
     }));
   };
 
+  const handleToggleHead = (
+    classId: string,
+    field: "admissionFee" | "registrationFee" | "tuitionFee" | "cautionMoney" | "annualCharges" | "busFee"
+  ) => {
+    setFeeForms(prev => {
+      const cur = prev[classId] || { admissionFee: 0, registrationFee: 0, tuitionFee: 0, cautionMoney: 0, annualCharges: 0, busFee: 0 };
+      const curToggles = cur.enabledHeads || {};
+      return {
+        ...prev,
+        [classId]: {
+          ...cur,
+          enabledHeads: {
+            ...curToggles,
+            [field]: !curToggles[field],
+          },
+        },
+      };
+    });
+  };
+
   const calculateTotal = (structure?: ClassFeeStructure): number => {
     if (!structure) return 0;
+    const t = structure.enabledHeads || {};
     return (
-      Number(structure.admissionFee || 0) +
-      Number(structure.tuitionFee || 0) +
-      Number(structure.cautionMoney || 0) +
-      Number(structure.annualCharges || 0) +
-      Number(structure.busFee || 0)
+      (t.admissionFee !== false && Number(structure.admissionFee || 0) > 0 ? Number(structure.admissionFee || 0) : t.admissionFee === true ? Number(structure.admissionFee || 0) : 0) +
+      (t.registrationFee !== false && Number(structure.registrationFee || 0) > 0 ? Number(structure.registrationFee || 0) : t.registrationFee === true ? Number(structure.registrationFee || 0) : 0) +
+      (t.tuitionFee !== false && Number(structure.tuitionFee || 0) > 0 ? Number(structure.tuitionFee || 0) : t.tuitionFee === true ? Number(structure.tuitionFee || 0) : 0) +
+      (t.cautionMoney !== false && Number(structure.cautionMoney || 0) > 0 ? Number(structure.cautionMoney || 0) : t.cautionMoney === true ? Number(structure.cautionMoney || 0) : 0) +
+      (t.annualCharges !== false && Number(structure.annualCharges || 0) > 0 ? Number(structure.annualCharges || 0) : t.annualCharges === true ? Number(structure.annualCharges || 0) : 0)
     );
   };
 
   const handleApplyPresetToClass = (classId: string) => {
     setFeeForms(prev => ({
       ...prev,
-      [classId]: { ...DPS_OFFICIAL_FEE_PRESET },
+      [classId]: {
+        ...DPS_OFFICIAL_FEE_PRESET,
+        registrationFee: Number(prev[classId]?.registrationFee || 0),
+        enabledHeads: {
+          admissionFee: true,
+          registrationFee: Boolean(prev[classId]?.enabledHeads?.registrationFee),
+          tuitionFee: true,
+          cautionMoney: true,
+          annualCharges: true,
+          busFee: true,
+        },
+      },
     }));
-    showNotification("DPS Receipt Preset (₹1,77,820) loaded for this class. Click Save to apply.");
+    showNotification("Standard Preset loaded for this class. Click Save Class Fee to persist.");
   };
 
   const handleApplyPresetToAll = () => {
-    if (!window.confirm("Kya aap sabhi classes me DPS Official Receipt Fee Heads (Total ₹1,77,820) apply karna chahte hain?")) return;
     const updated: Record<string, ClassFeeStructure> = {};
     classesList.forEach(c => {
-      updated[c.id] = { ...DPS_OFFICIAL_FEE_PRESET };
+      updated[c.id] = {
+        ...DPS_OFFICIAL_FEE_PRESET,
+        registrationFee: Number(feeForms[c.id]?.registrationFee || 0),
+        enabledHeads: {
+          admissionFee: true,
+          registrationFee: Boolean(feeForms[c.id]?.enabledHeads?.registrationFee),
+          tuitionFee: true,
+          cautionMoney: true,
+          annualCharges: true,
+          busFee: true,
+        },
+      };
     });
     setFeeForms(updated);
-    showNotification("DPS Preset applied to all classes. Click 'Save All Classes' to persist.");
+    showNotification("Preset loaded in draft for all classes. Click 'Save All Classes' to save.");
   };
 
   const handleSaveClass = async (cls: SchoolClass) => {
@@ -133,7 +181,6 @@ export const ClassFeeStructureSection: React.FC<Props> = ({
     setSavingClassId(cls.id);
     try {
       await updateClassFeeStructure(schoolId, cls.id, current);
-      // Sync students monthlyFee if tuitionFee changed
       const classStudents = allStudents.filter(s => isStudentInClass(s, cls.id, cls.name));
       if (current.tuitionFee && classStudents.length > 0) {
         for (const st of classStudents) {
@@ -142,10 +189,10 @@ export const ClassFeeStructureSection: React.FC<Props> = ({
           }
         }
       }
-      showNotification(`✅ ${cls.name} ki fee structure save ho gayi! Total: ₹${calculateTotal(current).toLocaleString("en-IN")}`);
+      showNotification(`${cls.name} ki fee structure aur active heads save ho gaye!`);
       if (onClassesUpdated) onClassesUpdated();
     } catch (e: any) {
-      alert("Error saving fee structure: " + (e?.message || "Retry"));
+      showNotification("Error saving fee structure: " + (e?.message || "Retry"));
     } finally {
       setSavingClassId(null);
     }
@@ -166,10 +213,10 @@ export const ClassFeeStructureSection: React.FC<Props> = ({
           }
         }
       }
-      showNotification(`✅ Sabhi ${classesList.length} classes ki fee structure successfully save ho gayi!`);
+      showNotification(`Sabhi ${classesList.length} classes ki fee structure save ho gayi!`);
       if (onClassesUpdated) onClassesUpdated();
     } catch (e: any) {
-      alert("Error saving all classes: " + (e?.message || "Retry"));
+      showNotification("Error saving all classes: " + (e?.message || "Retry"));
     } finally {
       setSavingAll(false);
     }
@@ -352,104 +399,53 @@ export const ClassFeeStructureSection: React.FC<Props> = ({
                     </div>
                   </div>
 
-                  {/* 5 Primary Fee Heads Inputs */}
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 pt-4">
-                    {/* 1. Admission Fee */}
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider block">
-                        1. Admission Fee
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">₹</span>
-                        <input
-                          type="number"
-                          min="0"
-                          value={currentStructure.admissionFee || ""}
-                          onChange={e => handleFieldChange(cls.id, "admissionFee", e.target.value)}
-                          placeholder="65000"
-                          className="w-full pl-6 pr-2 py-2 text-xs sm:text-sm font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                        />
-                      </div>
-                    </div>
-
-                    {/* 2. Tuition Fee */}
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider block">
-                        2. Tuition Fee
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">₹</span>
-                        <input
-                          type="number"
-                          min="0"
-                          value={currentStructure.tuitionFee || ""}
-                          onChange={e => handleFieldChange(cls.id, "tuitionFee", e.target.value)}
-                          placeholder="19140"
-                          className="w-full pl-6 pr-2 py-2 text-xs sm:text-sm font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                        />
-                      </div>
-                    </div>
-
-                    {/* 3. Caution Money */}
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider block">
-                        3. Caution Money
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">₹</span>
-                        <input
-                          type="number"
-                          min="0"
-                          value={currentStructure.cautionMoney || ""}
-                          onChange={e => handleFieldChange(cls.id, "cautionMoney", e.target.value)}
-                          placeholder="60000"
-                          className="w-full pl-6 pr-2 py-2 text-xs sm:text-sm font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                        />
-                      </div>
-                    </div>
-
-                    {/* 4. Annual Charges */}
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider block">
-                        4. Annual Charges
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">₹</span>
-                        <input
-                          type="number"
-                          min="0"
-                          value={currentStructure.annualCharges || ""}
-                          onChange={e => handleFieldChange(cls.id, "annualCharges", e.target.value)}
-                          placeholder="23320"
-                          className="w-full pl-6 pr-2 py-2 text-xs sm:text-sm font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                        />
-                      </div>
-                    </div>
-
-                    {/* 5. Bus Fee */}
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider block">
-                        5. Bus Fee
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">₹</span>
-                        <input
-                          type="number"
-                          min="0"
-                          value={currentStructure.busFee || ""}
-                          onChange={e => handleFieldChange(cls.id, "busFee", e.target.value)}
-                          placeholder="10360"
-                          className="w-full pl-6 pr-2 py-2 text-xs sm:text-sm font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                        />
-                      </div>
-                    </div>
+                  {/* 6 Primary Fee Heads with Active Checkboxes */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3 pt-4">
+                    {[
+                      { field: "admissionFee" as const, label: "1. Admission" },
+                      { field: "registrationFee" as const, label: "2. Registration" },
+                      { field: "annualCharges" as const, label: "3. Annual" },
+                      { field: "tuitionFee" as const, label: "4. Tuition" },
+                      { field: "cautionMoney" as const, label: "5. Caution/Kit" },
+                      { field: "busFee" as const, label: "6. Bus (User Opt)" },
+                    ].map((hd) => {
+                      const active = Boolean(currentStructure.enabledHeads?.[hd.field]);
+                      return (
+                        <div key={hd.field} className="space-y-1">
+                          <label className="text-[11px] font-black text-slate-600 dark:text-slate-300 flex items-center gap-1.5 cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={active}
+                              onChange={() => handleToggleHead(cls.id, hd.field)}
+                              className="w-3.5 h-3.5 accent-emerald-600 cursor-pointer"
+                            />
+                            <span className="truncate">{hd.label}</span>
+                          </label>
+                          <div className="relative">
+                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">₹</span>
+                            <input
+                              type="number"
+                              min="0"
+                              value={(currentStructure as any)[hd.field] || ""}
+                              onChange={e => handleFieldChange(cls.id, hd.field, e.target.value)}
+                              placeholder="0"
+                              className={`w-full pl-6 pr-2 py-2 text-xs sm:text-sm font-bold tabular-nums rounded-xl border ${
+                                active
+                                  ? "border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-900"
+                                  : "border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/60 opacity-75"
+                              } text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500`}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
 
                     {/* Total Sum Column */}
                     <div className="space-y-1 bg-emerald-50/70 dark:bg-emerald-950/40 p-2 rounded-xl border border-emerald-500/20">
-                      <label className="text-[11px] font-black text-emerald-800 dark:text-emerald-300 uppercase tracking-wider block">
-                        Total Print Rate
+                      <label className="text-[10px] font-black text-emerald-800 dark:text-emerald-300 uppercase tracking-wider block">
+                        Active (No Bus)
                       </label>
-                      <div className="text-sm sm:text-base font-black text-emerald-700 dark:text-emerald-300 pt-1">
+                      <div className="text-sm sm:text-base font-black tabular-nums text-emerald-700 dark:text-emerald-300 pt-1">
                         ₹{totalAmount.toLocaleString("en-IN")}
                       </div>
                     </div>

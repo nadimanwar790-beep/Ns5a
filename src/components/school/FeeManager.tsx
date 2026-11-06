@@ -5,8 +5,10 @@ import {
 } from "../../school-firebase";
 import type { SchoolStudent, SchoolClass, MonthlyFee, School, SchoolDocumentPrintFields } from "../../school-types";
 import { schoolPrintFieldEnabled } from "../../school-types";
-import { CheckCircle, Clock, Download, ChevronLeft, ChevronRight, IndianRupee, Users, TrendingUp, AlertCircle, Printer, MessageCircle, ReceiptText, Building2, Sparkles, X, Check, RotateCcw, CheckCircle2, ShieldCheck, ToggleLeft, ToggleRight, Bus, QrCode, Search, Filter, Loader2, Bell } from "lucide-react";
-import { downloadFeeDocument, shareFeeReceiptOnWhatsApp } from "./feeDocument";
+import { CheckCircle, Clock, Download, ChevronLeft, ChevronRight, IndianRupee, Users, TrendingUp, AlertCircle, Printer, MessageCircle, ReceiptText, Building2, Sparkles, X, Check, RotateCcw, CheckCircle2, ShieldCheck, ToggleLeft, ToggleRight, Bus, QrCode, Search, Filter, Loader2, Bell, FileSpreadsheet, FileText, Plus, Trash2 } from "lucide-react";
+import { downloadFeeDocument, shareFeeReceiptOnWhatsApp, generateFeeDocumentPdfBlob, buildWhatsAppReceiptMessage } from "./feeDocument";
+import { WhatsAppShareModal } from "./WhatsAppShareModal";
+
 import { sendSchoolPushNotification, triggerMonthlySchoolFeePush } from "../../utils/schoolPushClient";
 import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeaderEditorModal";
 import { StudentQuickActionModal } from "./StudentQuickActionModal";
@@ -15,9 +17,12 @@ import { ClassFeeStructureModal } from "./ClassFeeStructureModal";
 import { QrFeeScannerModal } from "./QrFeeScannerModal";
 import { BusTransportModal } from "./BusTransportModal";
 import { AdmissionFormPrintModal, type AdmissionPrintMode } from "./AdmissionFormPrintModal";
+import { ClassFeeAlertBroadcastModal } from "./ClassFeeAlertBroadcastModal";
 import {
   generateDpsReceiptHtml,
+  generateSingleA6SlipHtml,
   generate4in1A4PageHtml,
+  printA6SlipDirect,
   printDpsReceipts4in1,
   printDpsReceiptDirect,
   printPosSlipDirect,
@@ -70,13 +75,21 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
   const [searchQuery, setSearchQuery] = useState("");
   const [duesFilter, setDuesFilter] = useState<string>("all");
   const [dpsReceiptFee, setDpsReceiptFee] = useState<MonthlyFee | null>(null);
+  const [dpsModalFormat, setDpsModalFormat] = useState<"a6" | "pos">("pos");
   const [selectedStudentForModal, setSelectedStudentForModal] = useState<SchoolStudent | null>(null);
   const [modalInitialTab, setModalInitialTab] = useState<"id_card" | "fees" | "attendance">("id_card");
   const [expandedStudentFeeIds, setExpandedStudentFeeIds] = useState<string[]>([]);
   const [showDuesBreakdownTable, setShowDuesBreakdownTable] = useState<boolean>(false);
   const [showAllFeesOverview, setShowAllFeesOverview] = useState<boolean>(true);
   const [sendingWhatsAppId, setSendingWhatsAppId] = useState<string | null>(null);
+  const [whatsappModalTarget, setWhatsappModalTarget] = useState<{
+    fee: MonthlyFee;
+    student?: SchoolStudent;
+    isDueDemand: boolean;
+  } | null>(null);
   const [sendingMonthlyPush, setSendingMonthlyPush] = useState<boolean>(false);
+  const [showClassFeeAlertModal, setShowClassFeeAlertModal] = useState<boolean>(false);
+
   const [pushBannerMsg, setPushBannerMsg] = useState<string | null>(null);
 
   // Custom payment collection modal state (optional custom paid amount / default print rate / fee heads)
@@ -454,6 +467,10 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       receiptNo,
       paidDate,
       paidBy,
+      lastReceiptPaidAmount: paid ? total : undefined,
+      payModeInfo: paid ? fee.payModeInfo : undefined,
+      note: paid ? "Full Paid" : "Unpaid Due",
+      items: paid ? fee.items : [],
     };
 
     setFees(prev =>
@@ -521,7 +538,11 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
         : (struct?.busFee !== undefined ? struct.busFee : 1000));
     setCustomBusFeeAmount(String(initialBusFee));
     setCustomMonthlyAmount(String(fee.monthlyAmount ?? struct?.tuitionFee ?? 2000));
-    setCustomPaidAmount(fee.paidAmount !== undefined && fee.paidAmount > 0 ? String(fee.paidAmount) : (fee.paid ? String(fee.amount) : ""));
+    // Default to empty ("") for new collections so it starts as Unpaid (₹0), never auto full paid
+    const initialPaid = fee.paid && Number(fee.paidAmount || 0) > 0
+      ? String(fee.paidAmount)
+      : "";
+    setCustomPaidAmount(initialPaid);
     setCustomConcession(fee.concession ? String(fee.concession) : "");
     setCustomPayMode(fee.payModeInfo?.payMode || "Cash");
     setCustomBankName(fee.payModeInfo?.bank || "");
@@ -694,19 +715,48 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     const currentMonthHeadDue = Math.max(0, monthlyAmount + admAmount + cauAmount + annAmount + busAmount - concession);
     const totalBill = currentMonthHeadDue + arrearsAmount;
 
-    let effectivePaid: number;
-    let isPaid: boolean;
-
-    if (markUnpaidDirectly) {
-      effectivePaid = 0;
-      isPaid = false;
-    } else if (customPaidAmount.trim() === "") {
-      effectivePaid = totalBill;
-      isPaid = totalBill > 0;
-    } else {
-      effectivePaid = Math.max(0, Number(customPaidAmount));
-      isPaid = effectivePaid >= totalBill && totalBill > 0;
+    if (markUnpaidDirectly || customPaidAmount.trim() === "0") {
+      // Clean reset to Unpaid: 0 paid, full balance due, remove receiptNo and payment flags
+      const resetFee: MonthlyFee = {
+        ...fee,
+        month: fee.month,
+        monthlyAmount,
+        includeAdmissionFee: customIncludeAdmissionFee,
+        includeCautionMoney: customIncludeCautionMoney,
+        includeAnnualCharges: customIncludeAnnualCharges,
+        includeBusFee: customIncludeBusFee,
+        busFeeAmount: busAmount,
+        busRoute: student?.busRoute || fee.busRoute || "Route 1",
+        amount: currentMonthHeadDue + arrearsAmount,
+        paid: false,
+        paidAmount: 0,
+        balanceDue: currentMonthHeadDue,
+        arrearsAmount,
+        arrearsMonths: fee.arrearsMonths || [],
+        concession,
+        paidDate: undefined,
+        paidBy: undefined,
+        receiptNo: undefined,
+        payModeInfo: undefined,
+        lastReceiptPaidAmount: undefined,
+        items: [],
+        note: "Unpaid Due",
+      };
+      await saveFee(resetFee);
+      setCollectingFee(null);
+      await loadData(true);
+      setSaving(null);
+      return;
     }
+
+    if (customPaidAmount.trim() === "") {
+      setFeeError("कृपया जमा की गई राशि (₹) दर्ज करें! यदि छात्र ने कोई राशि नहीं दी है, तो 'Unpaid (₹0)' चुनें।");
+      setSaving(null);
+      return;
+    }
+
+    const effectivePaid = Math.max(0, Number(customPaidAmount));
+    const isPaid = effectivePaid >= totalBill && totalBill > 0;
 
     const receiptNo = fee.receiptNo || `DPS-RCP-${Math.floor(10000 + Math.random() * 90000)}`;
     const now = new Date();
@@ -1292,9 +1342,14 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     printPosSlipDirect(dpsData, 80);
   };
 
-  const printDpsReceipts = (receiptFees: MonthlyFee[], layoutMode: "4in1" | "full" = "4in1") => {
+  const printDpsReceipts = (receiptFees: MonthlyFee[], layoutMode: "4in1" | "a6" | "full" = "4in1") => {
     if (!receiptFees.length) return;
     const dpsList = receiptFees.map(f => getDpsDataForFee(f));
+
+    if (layoutMode === "a6" || (receiptFees.length === 1 && !receiptFees[0].paid && layoutMode !== "full")) {
+      printA6SlipDirect(dpsList[0]);
+      return;
+    }
 
     if (layoutMode === "4in1") {
       printDpsReceipts4in1(dpsList);
@@ -1330,51 +1385,142 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     printReceiptHtmlInIframe(markup);
   };
 
-  const sendReceiptOnWhatsApp = async (fee: MonthlyFee) => {
-    const student = students.find(item => item.id === fee.studentId);
+  const whatsappTargetOptions = React.useMemo(() => {
+    if (!whatsappModalTarget) return null;
+    const { fee, student, isDueDemand } = whatsappModalTarget;
     const resolvedClassName = className && className !== "All Classes" ? className : classNames[fee.classId] || fee.classId;
-    setSendingWhatsAppId(fee.studentId);
-    try {
-      await shareFeeReceiptOnWhatsApp({
-        fee,
-        student,
-        schoolName: schoolName || schoolDetails.schoolName,
-        className: resolvedClassName,
-        feeHistory,
-        schoolDetails,
-        isDueDemand: false,
-      });
-    } catch (err) {
-      console.error("Error sharing receipt on WhatsApp:", err);
-    } finally {
-      setSendingWhatsAppId(null);
-    }
+    return {
+      fee,
+      student,
+      schoolName: schoolName || schoolDetails.schoolName,
+      className: resolvedClassName,
+      feeHistory,
+      schoolDetails,
+      isDueDemand,
+      mode: "pos" as const,
+    };
+  }, [whatsappModalTarget, className, classNames, schoolName, schoolDetails, feeHistory]);
+
+  const whatsappTargetMeta = React.useMemo(() => {
+    if (!whatsappTargetOptions) return null;
+    return buildWhatsAppReceiptMessage(whatsappTargetOptions);
+  }, [whatsappTargetOptions]);
+
+  const sendReceiptOnWhatsApp = (fee: MonthlyFee) => {
+    const student = students.find(item => item.id === fee.studentId);
+    setWhatsappModalTarget({ fee, student, isDueDemand: false });
   };
 
-  const sendDueSlipOnWhatsApp = async (fee: MonthlyFee) => {
+  const sendDueSlipOnWhatsApp = (fee: MonthlyFee) => {
     const student = students.find(item => item.id === fee.studentId);
-    const resolvedClassName = className && className !== "All Classes" ? className : classNames[fee.classId] || fee.classId;
-    setSendingWhatsAppId(fee.studentId);
-    try {
-      await shareFeeReceiptOnWhatsApp({
-        fee,
-        student,
-        schoolName: schoolName || schoolDetails.schoolName,
-        className: resolvedClassName,
-        feeHistory,
-        schoolDetails,
-        isDueDemand: true,
-      });
-    } catch (err) {
-      console.error("Error sharing due slip on WhatsApp:", err);
-    } finally {
-      setSendingWhatsAppId(null);
-    }
+    setWhatsappModalTarget({ fee, student, isDueDemand: true });
   };
 
   const downloadFeeFile = (fee: MonthlyFee) => {
     const student = students.find(item => item.id === fee.studentId);
     downloadFeeDocument({ fee, student, schoolName, className, feeHistory, schoolDetails });
+  };
+
+  // Direct Excel (.csv with UTF-8 BOM) export for due & fee register
+  const exportFeeRegisterToExcel = () => {
+    const classLabel = (className && className !== "All Classes") ? className : "All_Classes";
+    const resolvedSchoolName = schoolName || schoolDetails.schoolName || school?.name || "School";
+    
+    // Headers
+    const headers = [
+      "Sr No",
+      "Roll No",
+      "Admission No",
+      "Student Name",
+      "Class",
+      "Father Name",
+      "WhatsApp / Mobile",
+      "Expected Monthly Fee (₹)",
+      "Arrears / Old Due (₹)",
+      "Total Bill (₹)",
+      "Paid Amount (₹)",
+      "Balance Due (₹)",
+      "Payment Status",
+      "Payment Date",
+      "Receipt No",
+      "Payment Mode",
+      "Session",
+      "Fee Month",
+    ];
+
+    const escapeCsv = (val: any) => {
+      if (val === null || val === undefined) return '""';
+      const str = String(val).replace(/"/g, '""');
+      return `"${str}"`;
+    };
+
+    const rows = fees.map((f, index) => {
+      const student = students.find(s => s.id === f.studentId);
+      const studentClass = classNames[f.classId] || f.classId || className || "—";
+      const totalBill = Number(f.amount || f.monthlyAmount || 0);
+      const paidAmt = Number(f.paidAmount !== undefined ? f.paidAmount : (f.paid ? totalBill : 0));
+      const balDue = Number(f.balanceDue !== undefined ? f.balanceDue : (f.paid ? 0 : totalBill - paidAmt));
+      const statusStr = f.paid ? "PAID (जमा)" : (balDue > 0 ? "DUE (बकाया)" : "UNPAID");
+      const paidDt = f.paidDate ? new Date(f.paidDate).toLocaleDateString("en-IN") : "—";
+      const receiptNum = f.receiptNo || "—";
+      const payMode = f.paymentMode || (f.paid ? "Cash" : "—");
+
+      return [
+        index + 1,
+        f.rollNo || student?.rollNo || "—",
+        student?.admissionNo || "—",
+        f.studentName || student?.name || "—",
+        studentClass,
+        student?.fatherName || "—",
+        student?.phone || (f as any).phone || "—",
+        Number(f.monthlyAmount || f.amount || 0),
+        Number(f.arrearsAmount || 0),
+        totalBill,
+        paidAmt,
+        balDue,
+        statusStr,
+        paidDt,
+        receiptNum,
+        payMode,
+        sessionId || "2026-2027",
+        f.month || month,
+      ].map(escapeCsv).join(",");
+    });
+
+    // Summary calculation
+    const totalExpected = fees.reduce((acc, f) => acc + Number(f.amount || f.monthlyAmount || 0), 0);
+    const totalCollected = fees.reduce((acc, f) => {
+      const bill = Number(f.amount || f.monthlyAmount || 0);
+      return acc + Number(f.paidAmount !== undefined ? f.paidAmount : (f.paid ? bill : 0));
+    }, 0);
+    const totalPending = fees.reduce((acc, f) => {
+      const bill = Number(f.amount || f.monthlyAmount || 0);
+      const paid = Number(f.paidAmount !== undefined ? f.paidAmount : (f.paid ? bill : 0));
+      return acc + Math.max(0, bill - paid);
+    }, 0);
+
+    const summaryRows = [
+      "",
+      `"SUMMARY / कुल सारांश",,,,,,,,,,,,,,,,,`,
+      `"Total Students",${fees.length},,,,,,,,,,,,,,,,,`,
+      `"Total Expected Bill (₹)",${totalExpected},,,,,,,,,,,,,,,,,`,
+      `"Total Collected (₹)",${totalCollected},,,,,,,,,,,,,,,,,`,
+      `"Total Pending Due (₹)",${totalPending},,,,,,,,,,,,,,,,,`,
+      `"Exported On","${new Date().toLocaleString("en-IN")}",,,,,,,,,,,,,,,,,`,
+      `"School","${resolvedSchoolName}",,,,,,,,,,,,,,,,,`,
+    ];
+
+    // Prepend UTF-8 BOM (\uFEFF) so Excel opens seamlessly with special characters
+    const csvContent = "\uFEFF" + [headers.map(escapeCsv).join(","), ...rows, ...summaryRows].join("\r\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const safeDate = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `${resolvedSchoolName.replace(/[^a-z0-9-_]+/gi, "_")}_Fee_Due_Register_${classLabel.replace(/[^a-z0-9-_]+/gi, "_")}_${month}_${safeDate}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const downloadFeeReport = () => {
@@ -1420,6 +1566,7 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
     URL.revokeObjectURL(url);
   };
 
+
   const modalStudent = collectingFee ? students.find(s => s.id === collectingFee.studentId) : null;
   const modalTargetClass = collectingFee ? rawClasses.find(c => c.id === collectingFee.classId) : null;
   const modalStruct = modalTargetClass?.feeStructure;
@@ -1434,7 +1581,8 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
 
   const modalCurrentMonthBill = Math.max(0, modalMonthly + modalAdm + modalCau + modalAnn + modalBus - modalConcession);
   const modalTotalBill = modalCurrentMonthBill + modalArrears;
-  const enteredPaid = customPaidAmount.trim() !== "" ? Number(customPaidAmount) : modalTotalBill;
+  // Default to 0 (Unpaid) when nothing is typed; only allocates what user explicitly writes or clicks
+  const enteredPaid = customPaidAmount.trim() !== "" ? Math.max(0, Number(customPaidAmount)) : 0;
   const remainingBalance = Math.max(0, modalTotalBill - enteredPaid);
 
   // Assemble all chronological unpaid/arrears months for this student
@@ -1517,6 +1665,14 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
           >
             <Bell className="h-4 w-4 text-amber-300" />
             <span>{sendingMonthlyPush ? "Sending Push..." : "🔔 Push Monthly Alert"}</span>
+          </button>
+          <button
+            onClick={() => setShowClassFeeAlertModal(true)}
+            className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-indigo-700 via-purple-700 to-pink-700 hover:from-indigo-600 hover:to-purple-600 active:scale-95 text-white px-3 py-2 text-xs font-black shadow-md shadow-purple-700/25 transition cursor-pointer"
+            title="NSTA Messenger: Class-wise Fee Due Alert & A6 Demand Slips bhejey"
+          >
+            <Bell className="h-4 w-4 text-amber-300 animate-pulse" />
+            <span>📢 Class Fee Alert (NSTA Messenger)</span>
           </button>
           <button
             onClick={() => setShowQrScannerModal(true)}
@@ -1835,9 +1991,40 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                                 <div className="inline-flex items-center gap-1">
                                   <button
                                     type="button"
-                                    onClick={() => printReceipts([fee], "4in1")}
+                                    onClick={() => {
+                                      setDpsModalFormat("a6");
+                                      setDpsReceiptFee(fee);
+                                    }}
+                                    className="px-1.5 py-1 rounded bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-950/60 dark:text-indigo-300 flex items-center gap-1 text-[10px] font-bold cursor-pointer"
+                                    title="Demand Slip Dekhein (मांग पर्ची A6)"
+                                  >
+                                    <FileText className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                                    <span>Slip</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setDpsModalFormat("pos");
+                                      setDpsReceiptFee(fee);
+                                    }}
+                                    className={`px-1.5 py-1 rounded flex items-center gap-1 text-[10px] font-bold transition cursor-pointer ${
+                                      fee.paid
+                                        ? "bg-emerald-100 text-emerald-800 hover:bg-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300"
+                                        : "bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400"
+                                    }`}
+                                    title={fee.paid ? "Official Fee Receipt Dekhein (शुल्क रसीद 3\" POS)" : "Fee jama hone par raseed banegi (Click karke preview karein)"}
+                                  >
+                                    <ReceiptText className={`w-3.5 h-3.5 ${fee.paid ? "text-emerald-600 dark:text-emerald-400" : "text-slate-400"}`} />
+                                    <span>Receipt</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const dpsData = getDpsDataForFee(fee);
+                                      printA6SlipDirect(dpsData);
+                                    }}
                                     className="p-1 rounded bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-950/60 dark:text-orange-300"
-                                    title="Print DPS Due Slip"
+                                    title="Print Demand Slip (मांग पर्ची प्रिंट करें)"
                                   >
                                     <Printer className="w-3.5 h-3.5" />
                                   </button>
@@ -2053,338 +2240,272 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
               const isPartial = !isFullPaid && (paidAmt > 0 || Number(fee.paidAmount || 0) > 0);
 
               return (
-                <div key={fee.studentId ? `fee-${fee.studentId}` : `fee-${fee.rollNo || idx}-${idx}`} className={`flex items-start sm:items-center gap-3 px-4 py-3.5 border-b dark:border-slate-700 last:border-0 transition ${isFullPaid ? "bg-green-50/40 dark:bg-green-950/10" : ""}`}>
-                  <div className="pt-1 sm:pt-0 flex items-center gap-2">
-                    {fee.paid ? (
+                <div
+                  key={fee.studentId ? `fee-${fee.studentId}` : `fee-${fee.rollNo || idx}-${idx}`}
+                  className={`p-3 sm:px-4 sm:py-3 border-b dark:border-slate-700 last:border-0 transition ${
+                    isFullPaid ? "bg-emerald-50/30 dark:bg-emerald-950/10" : ""
+                  }`}
+                >
+                  {/* Top Row: Checkbox, Roll No, Student Name, and Status Badge */}
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-2 min-w-0">
                       <input
-                        aria-label={`Select ${fee.studentName} receipt`}
+                        aria-label={`Select ${fee.studentName} slip`}
                         type="checkbox"
-                        checked={selectedReceiptIds.includes(fee.studentId)}
-                        onChange={() => toggleReceiptSelection(fee.studentId)}
-                        className="h-4 w-4 accent-blue-600 rounded cursor-pointer"
+                        checked={fee.paid ? selectedReceiptIds.includes(fee.studentId) : selectedDueSlipIds.includes(fee.studentId)}
+                        onChange={() => {
+                          if (fee.paid) toggleReceiptSelection(fee.studentId);
+                          else {
+                            setSelectedDueSlipIds(current =>
+                              current.includes(fee.studentId)
+                                ? current.filter(id => id !== fee.studentId)
+                                : [...current, fee.studentId]
+                            );
+                          }
+                        }}
+                        className="h-4 w-4 accent-blue-600 rounded cursor-pointer shrink-0"
                       />
-                    ) : (
-                      <input
-                        aria-label={`Select ${fee.studentName} unpaid fee slip`}
-                        type="checkbox"
-                        checked={selectedDueSlipIds.includes(fee.studentId)}
-                        onChange={() => setSelectedDueSlipIds(current => current.includes(fee.studentId)
-                          ? current.filter(id => id !== fee.studentId)
-                          : [...current, fee.studentId])}
-                        className="h-4 w-4 accent-orange-600 rounded cursor-pointer"
-                      />
-                    )}
-                    <span className="text-xs font-mono font-bold text-slate-400 w-7">{fee.rollNo}</span>
-                  </div>
-
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-mono font-bold text-slate-400 shrink-0">#{fee.rollNo}</span>
                       <button
                         type="button"
                         onClick={() => {
-                          const fullStudent = student || {
+                          const fullStudent = student || ({
                             id: fee.studentId,
                             name: fee.studentName,
                             rollNo: fee.rollNo,
                             classId: fee.classId,
                             monthlyFee: fee.monthlyAmount || fee.amount || 0,
-                          } as any;
+                          } as any);
                           setSelectedStudentForModal(fullStudent);
                           setModalInitialTab("fees");
                         }}
-                        className="group text-left font-bold text-slate-800 dark:text-white text-sm hover:text-blue-600 dark:hover:text-blue-400 flex items-center gap-1.5 transition-colors cursor-pointer"
+                        className="text-left font-black text-slate-900 dark:text-white text-sm hover:text-blue-600 dark:hover:text-blue-400 truncate cursor-pointer"
                         title="Click student name to view ID Card, Fee Details & Attendance"
                       >
-                        <span className="underline decoration-dotted decoration-slate-300 group-hover:decoration-blue-500 font-black">{fee.studentName}</span>
-                        <span className="text-[10px] bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-300 px-1.5 py-0.2 rounded font-semibold opacity-70 group-hover:opacity-100">
-                          Options
-                        </span>
+                        {fee.studentName}
                       </button>
+                    </div>
 
-                      {/* Prominent Payment Status Badge */}
+                    {/* Payment Status Pill */}
+                    <div className="flex items-center gap-1.5 shrink-0">
                       {isFullPaid ? (
                         <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300 flex items-center gap-1">
                           <Check className="w-3 h-3 text-emerald-600" />
-                          <span>✓ FULL PAID (₹{paidAmt.toLocaleString("en-IN")})</span>
+                          <span>PAID (₹{paidAmt.toLocaleString("en-IN")})</span>
                         </span>
                       ) : isPartial ? (
                         <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 border border-amber-300 flex items-center gap-1">
                           <Clock className="w-3 h-3 text-amber-600" />
-                          <span>⚠️ PARTIAL (Paid: ₹{paidAmt.toLocaleString("en-IN")} | Due: ₹{dueAmt.toLocaleString("en-IN")})</span>
+                          <span>PARTIAL (₹{paidAmt.toLocaleString("en-IN")})</span>
                         </span>
                       ) : (
                         <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300 border border-rose-300 flex items-center gap-1">
                           <AlertCircle className="w-3 h-3 text-rose-600" />
-                          <span>✗ UNPAID DUE (₹{dueAmt.toLocaleString("en-IN")})</span>
-                        </span>
-                      )}
-
-                      {/* Arrears Badges */}
-                      {Number(fee.arrearsAmount || 0) > 0 && !isFullPaid && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-orange-100 text-orange-900 dark:bg-orange-950 dark:text-orange-200 border border-orange-300 flex items-center gap-1 shadow-xs">
-                          <span>⚠️ Pichhle Mahine Ka Baki: ₹{Number(fee.arrearsAmount).toLocaleString("en-IN")}</span>
-                          {fee.arrearsMonths?.length ? (
-                            <span className="text-[9px] bg-orange-200/80 dark:bg-orange-900 px-1 rounded font-bold">
-                              {fee.arrearsMonths.length} Mo: {fee.arrearsMonths.join(", ")}
-                            </span>
-                          ) : null}
+                          <span>UNPAID (₹{dueAmt.toLocaleString("en-IN")})</span>
                         </span>
                       )}
                     </div>
+                  </div>
 
-                    {/* Explicit Amounts Breakdown: Total, Kitna Paid Kiya, Kitna Baki Hai, Back Due */}
-                    <div className="flex items-center gap-2.5 flex-wrap text-xs text-slate-600 dark:text-slate-300 mt-1">
-                      <span>
-                        Total Bill: <strong className="text-slate-900 dark:text-white font-black">₹{totalFee.toLocaleString("en-IN")}</strong>
-                      </span>
-                      <span className="text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800/50">
-                        Paid (जमा): <strong>₹{paidAmt.toLocaleString("en-IN")}</strong>
-                      </span>
-                      <span className={`font-bold px-2 py-0.5 rounded-md border ${
+                  {/* Middle Row: Concise Financial Summary */}
+                  <div className="mt-1.5 flex items-center gap-2 flex-wrap text-xs text-slate-600 dark:text-slate-300">
+                    <span className="bg-slate-100 dark:bg-slate-700/60 px-2 py-0.5 rounded font-bold text-slate-700 dark:text-slate-200">
+                      Bill: <strong className="font-black text-slate-900 dark:text-white">₹{totalFee.toLocaleString("en-IN")}</strong>
+                    </span>
+                    <span className="bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded font-bold text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50">
+                      Paid: <strong>₹{paidAmt.toLocaleString("en-IN")}</strong>
+                    </span>
+                    <span
+                      className={`px-2 py-0.5 rounded font-bold border ${
                         dueAmt > 0
-                          ? "text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800/50"
-                          : "text-slate-400 bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800"
-                      }`}>
-                        Due (बाकी): <strong>₹{dueAmt.toLocaleString("en-IN")}</strong>
+                          ? "bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800/50"
+                          : "bg-slate-50 text-slate-400 border-slate-200"
+                      }`}
+                    >
+                      Due: <strong>₹{dueAmt.toLocaleString("en-IN")}</strong>
+                    </span>
+                    {Number(fee.arrearsAmount || 0) > 0 && (
+                      <span className="bg-orange-50 dark:bg-orange-950/40 px-2 py-0.5 rounded font-bold text-orange-800 dark:text-orange-200 border border-orange-200 dark:border-orange-800/50 flex items-center gap-1">
+                        <span>Back Due: +₹{Number(fee.arrearsAmount).toLocaleString("en-IN")}</span>
+                        {fee.arrearsMonths?.length ? (
+                          <span className="text-[10px] opacity-75">({fee.arrearsMonths.join(", ")})</span>
+                        ) : null}
                       </span>
-                      {Number(fee.arrearsAmount || 0) > 0 && (
-                        <span className="text-orange-700 dark:text-orange-300 font-bold bg-orange-50 dark:bg-orange-950/40 px-2 py-0.5 rounded-md border border-orange-200 dark:border-orange-800/50">
-                          Back Due: <strong>₹{Number(fee.arrearsAmount).toLocaleString("en-IN")}</strong>
-                        </span>
-                      )}
-                      {fee.paidDate && (
-                        <span className="text-[11px] text-slate-400">
-                          • {new Date(fee.paidDate).toLocaleDateString()}
-                        </span>
-                      )}
-                      {fee.receiptNo && (
-                        <span className="text-[10px] font-mono bg-slate-100 dark:bg-slate-700 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-300">
-                          {fee.receiptNo}
-                        </span>
-                      )}
-                    </div>
+                    )}
+                    {isBusActive && (
+                      <span className="bg-teal-50 dark:bg-teal-950/40 text-teal-700 dark:text-teal-300 px-1.5 py-0.5 rounded text-[10px] font-bold border border-teal-200 dark:border-teal-800/40">
+                        🚌 Bus Active
+                      </span>
+                    )}
+                    <span className="text-[10px] text-slate-400">
+                      Tuition: ₹{Number(fee.monthlyAmount ?? targetClass?.feeStructure?.tuitionFee ?? 2000).toLocaleString("en-IN")}
+                    </span>
+                    {fee.receiptNo && (
+                      <span className="text-[10px] font-mono text-slate-400">
+                        #{fee.receiptNo}
+                      </span>
+                    )}
+                  </div>
 
-                    {/* Bus Service Chip with 1-Click Toggle */}
-                    <div className="mt-1.5 flex items-center gap-1.5 flex-wrap text-[10px]">
+                  {/* Expandable Fee Heads Ledger Table for this student */}
+                  {expandedStudentFeeIds.includes(fee.studentId) && (
+                    <div className="mt-2 p-2 bg-slate-50 dark:bg-slate-900/80 rounded-xl border border-slate-200 dark:border-slate-700 space-y-1.5">
+                      <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                        <span>📜 Fee Items Breakdown ({fee.studentName}):</span>
+                        <span className={isFullPaid ? "text-emerald-600" : isPartial ? "text-amber-600" : "text-orange-600"}>
+                          Status: {isFullPaid ? "✓ PAID" : isPartial ? "⚠️ PARTIAL PAID" : "PENDING DUE"}
+                        </span>
+                      </div>
+                      <div className="overflow-x-auto rounded border border-slate-200 dark:border-slate-700">
+                        <table className="w-full text-left text-[11px] border-collapse bg-white dark:bg-slate-800">
+                          <thead className="bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-200 font-bold">
+                            <tr>
+                              <th className="p-1.5 border-r dark:border-slate-600">Sl.No</th>
+                              <th className="p-1.5 border-r dark:border-slate-600">Description</th>
+                              <th className="p-1.5 border-r dark:border-slate-600">Due (₹)</th>
+                              <th className="p-1.5 border-r dark:border-slate-600">Concession (₹)</th>
+                              <th className="p-1.5">Paid (₹)</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                            {getFeeItemsForStudent(fee).map((item, itemIdx) => (
+                              <tr key={item.id ? `item-${item.id}` : `item-${item.description}-${itemIdx}`}>
+                                <td className="p-1.5 border-r dark:border-slate-700 text-slate-400">{item.slNo}</td>
+                                <td className="p-1.5 border-r dark:border-slate-700 font-bold text-slate-800 dark:text-slate-200">{item.description}</td>
+                                <td className="p-1.5 border-r dark:border-slate-700">₹{Number(item.due).toLocaleString("en-IN")}</td>
+                                <td className="p-1.5 border-r dark:border-slate-700">₹{Number(item.con || 0).toLocaleString("en-IN")}</td>
+                                <td className="p-1.5 font-bold text-emerald-600 dark:text-emerald-400">₹{Number(item.paid).toLocaleString("en-IN")}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Bottom Compact Action Bar */}
+                  <div className="mt-2.5 pt-2 border-t border-slate-100 dark:border-slate-700/60 flex items-center justify-between gap-1.5 flex-wrap">
+                    {/* Left: Payment Actions */}
+                    <div className="flex items-center gap-1.5 flex-wrap">
                       <button
                         type="button"
-                        onClick={() => handleToggleStudentBus(fee.studentId)}
+                        onClick={() => handleOpenPaymentModal(fee)}
                         disabled={saving === fee.studentId}
-                        className={`px-2 py-0.5 rounded-lg text-[10px] font-black flex items-center gap-1 transition cursor-pointer border ${
-                          isBusActive
-                            ? "bg-teal-100 hover:bg-teal-200 text-teal-800 dark:bg-teal-950 dark:text-teal-200 border-teal-300 dark:border-teal-700"
-                            : "bg-slate-100 hover:bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-400 border-slate-200 dark:border-slate-700"
-                        }`}
-                        title={isBusActive ? "Bus Service Band Karein" : `Bus Service Shuru Karein (+₹${busRate})`}
+                        className="rounded-lg px-2.5 py-1 text-xs font-black transition-colors disabled:opacity-50 cursor-pointer bg-blue-600 hover:bg-blue-700 text-white shadow-xs flex items-center gap-1 active:scale-95"
                       >
-                        <Bus className={`w-3 h-3 ${isBusActive ? "text-teal-600" : "text-slate-400"}`} />
-                        <span>{isBusActive ? `🚌 Bus: Active (+₹${busRate.toLocaleString("en-IN")})` : "+ Add Bus Fee"}</span>
+                        <IndianRupee className="w-3.5 h-3.5" />
+                        <span>{isFullPaid ? "Edit Pay" : "Pay Fee"}</span>
                       </button>
 
-                      <span className="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 font-bold">
-                        Tuition: ₹{Number(fee.monthlyAmount ?? targetClass?.feeStructure?.tuitionFee ?? 2000).toLocaleString("en-IN")}
-                      </span>
+                      {!isFullPaid && (
+                        <button
+                          type="button"
+                          onClick={() => setFeeStatus(fee, true)}
+                          disabled={saving === fee.studentId}
+                          className="rounded-lg px-2 py-1 text-xs font-bold bg-emerald-100 hover:bg-emerald-200 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 transition-colors disabled:opacity-50 cursor-pointer flex items-center gap-1"
+                          title="Mark 100% full paid directly"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Full Paid</span>
+                        </button>
+                      )}
 
-                      {fee.includeAdmissionFee && (
-                        <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300 font-bold">
-                          Adm Fee: ON
-                        </span>
+                      {(isFullPaid || isPartial) && (
+                        <button
+                          type="button"
+                          onClick={() => setFeeStatus(fee, false)}
+                          disabled={saving === fee.studentId}
+                          className="rounded-lg px-2 py-1 text-xs font-bold bg-rose-50 hover:bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-200 dark:border-rose-800 transition-colors disabled:opacity-50 cursor-pointer flex items-center gap-1"
+                          title="पूरा भुगतान हटाकर ₹0 बकाया (Unpaid) करें"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5 text-rose-600" />
+                          <span>Mark Unpaid</span>
+                        </button>
                       )}
 
                       <button
                         type="button"
                         onClick={() => toggleStudentFeeExpand(fee.studentId)}
-                        className="px-2 py-0.5 rounded bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 font-bold cursor-pointer transition flex items-center gap-1"
+                        className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-700/60 text-slate-600 dark:text-slate-300 text-xs font-bold cursor-pointer transition flex items-center gap-1"
                       >
-                        <ReceiptText className="w-3 h-3 text-indigo-500" />
-                        <span>{expandedStudentFeeIds.includes(fee.studentId) ? "Hide List ▲" : "📋 सारे Fee का List ▼"}</span>
+                        <ReceiptText className="w-3.5 h-3.5 text-slate-400" />
+                        <span>{expandedStudentFeeIds.includes(fee.studentId) ? "Hide ▲" : "Heads ▼"}</span>
                       </button>
                     </div>
 
-                    {/* Expandable Fee Heads Ledger Table for this student */}
-                    {expandedStudentFeeIds.includes(fee.studentId) && (
-                      <div className="mt-2.5 p-2.5 bg-slate-50 dark:bg-slate-900/80 rounded-xl border border-slate-200 dark:border-slate-700 space-y-1.5">
-                        <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-slate-300">
-                          <span>📜 Fee Items Breakdown ({fee.studentName}):</span>
-                          <span className={isFullPaid ? "text-emerald-600" : isPartial ? "text-amber-600" : "text-orange-600"}>
-                            Status: {isFullPaid ? "✓ PAID" : isPartial ? "⚠️ PARTIAL PAID" : "PENDING DUE"}
-                          </span>
-                        </div>
-                        <div className="overflow-x-auto rounded border border-slate-200 dark:border-slate-700">
-                          <table className="w-full text-left text-[11px] border-collapse bg-white dark:bg-slate-800">
-                            <thead className="bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-200 font-bold">
-                              <tr>
-                                <th className="p-1.5 border-r dark:border-slate-600">Sl.No</th>
-                                <th className="p-1.5 border-r dark:border-slate-600">Description</th>
-                                <th className="p-1.5 border-r dark:border-slate-600">Due (₹)</th>
-                                <th className="p-1.5 border-r dark:border-slate-600">Concession (₹)</th>
-                                <th className="p-1.5">Paid (₹)</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                              {getFeeItemsForStudent(fee).map((item, itemIdx) => (
-                                <tr key={item.id ? `item-${item.id}` : `item-${item.description}-${itemIdx}`}>
-                                  <td className="p-1.5 border-r dark:border-slate-700 text-slate-400">{item.slNo}</td>
-                                  <td className="p-1.5 border-r dark:border-slate-700 font-bold text-slate-800 dark:text-slate-200">{item.description}</td>
-                                  <td className="p-1.5 border-r dark:border-slate-700">₹{Number(item.due).toLocaleString("en-IN")}</td>
-                                  <td className="p-1.5 border-r dark:border-slate-700">₹{Number(item.con || 0).toLocaleString("en-IN")}</td>
-                                  <td className="p-1.5 font-bold text-emerald-600 dark:text-emerald-400">₹{Number(item.paid).toLocaleString("en-IN")}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Row Fast Actions */}
-                    <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
+                    {/* Right: Print & Share Actions */}
+                    <div className="flex items-center gap-1 flex-wrap">
                       <button
                         type="button"
-                        onClick={() => handleOpenPaymentModal(fee)}
-                        disabled={saving === fee.studentId}
-                        className="rounded-lg px-2.5 py-1 text-xs font-black transition-colors disabled:opacity-50 cursor-pointer bg-blue-600 hover:bg-blue-700 text-white shadow-xs flex items-center gap-1"
+                        onClick={() => {
+                          setDpsModalFormat("a6");
+                          setDpsReceiptFee(fee);
+                        }}
+                        className="px-2.5 py-1 rounded-lg font-bold text-xs flex items-center gap-1 transition shadow-xs cursor-pointer bg-blue-50 hover:bg-blue-100 text-blue-800 dark:bg-blue-950/50 dark:text-blue-200 border border-blue-200 dark:border-blue-800"
+                        title="Preview Fee Demand Slip (मांग पर्ची A6)"
                       >
-                        <IndianRupee className="w-3.5 h-3.5" />
-                        <span>{isFullPaid ? "Edit Payment" : "💳 Pay / Collect Fee"}</span>
+                        <FileText className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                        <span>Slip</span>
                       </button>
 
-                      {!isFullPaid ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDpsModalFormat("pos");
+                          setDpsReceiptFee(fee);
+                        }}
+                        className={`px-2.5 py-1 rounded-lg font-bold text-xs flex items-center gap-1 transition shadow-xs cursor-pointer ${
+                          fee.paid
+                            ? "bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white"
+                            : "bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 border border-slate-200 dark:border-slate-700"
+                        }`}
+                        title={fee.paid ? "Open Official Fee Receipt (शुल्क रसीद 3\" POS)" : "Fee jama hone par raseed banegi (Click karke preview karein)"}
+                      >
+                        <ReceiptText className={`w-3.5 h-3.5 ${fee.paid ? "text-amber-300" : "text-slate-400"}`} />
+                        <span>Receipt</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => printPosSlip(fee)}
+                        className="px-2 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs flex items-center gap-1 shadow-xs transition cursor-pointer"
+                        title="1-Click Mini Thermal POS Print (80mm / 58mm Roll Slip)"
+                      >
+                        <Printer className="w-3.5 h-3.5" />
+                        <span>POS</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => (fee.paid ? sendReceiptOnWhatsApp(fee) : sendDueSlipOnWhatsApp(fee))}
+                        disabled={sendingWhatsAppId === fee.studentId}
+                        className="p-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 transition disabled:opacity-50 cursor-pointer"
+                        title="WhatsApp PDF to parent"
+                        aria-label={`Send ${fee.studentName} on WhatsApp`}
+                      >
+                        {sendingWhatsAppId === fee.studentId ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600" />
+                        ) : (
+                          <MessageCircle className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+
+                      {!fee.paid && (
                         <button
                           type="button"
-                          onClick={() => setFeeStatus(fee, true)}
-                          disabled={saving === fee.studentId}
-                          className="rounded-lg px-2.5 py-1 text-xs font-bold bg-emerald-100 hover:bg-emerald-200 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 transition-colors disabled:opacity-50 cursor-pointer flex items-center gap-1"
-                          title="Mark 100% full paid directly"
+                          onClick={() => downloadFeeFile(fee)}
+                          className="p-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300 transition cursor-pointer"
+                          title={`Download ${fee.studentName} fee due slip`}
+                          aria-label={`Download ${fee.studentName} unpaid fee slip`}
                         >
-                          <Check className="w-3.5 h-3.5" />
-                          <span>⚡ Quick Full Paid</span>
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setFeeStatus(fee, false)}
-                          disabled={saving === fee.studentId}
-                          className="rounded-lg px-2.5 py-1 text-xs font-bold bg-slate-100 hover:bg-orange-100 text-slate-700 hover:text-orange-800 dark:bg-slate-700 dark:text-slate-200 transition-colors disabled:opacity-50 cursor-pointer flex items-center gap-1"
-                          title="Mark unpaid"
-                        >
-                          <RotateCcw className="w-3.5 h-3.5" />
-                          <span>Mark Unpaid</span>
-                        </button>
-                      )}
-                      {student && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const existingAdmFee = feeHistory.find(
-                              (f) =>
-                                f.studentId === student.id &&
-                                (f.feeType === "admission" || f.receiptCategory === "admission")
-                            );
-                            if (existingAdmFee) {
-                              setAdmPrintStudio({
-                                open: true,
-                                student,
-                                fee: existingAdmFee,
-                                mode: "receipt_only",
-                              });
-                            } else {
-                              openAdmissionFeeModal(student);
-                            }
-                          }}
-                          className="rounded-lg px-2.5 py-1 text-xs font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 transition-colors cursor-pointer flex items-center gap-1"
-                          title="Collect or Print Official Admission Fee Receipt"
-                        >
-                          <ReceiptText className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-                          <span>🎓 Adm. Receipt</span>
+                          <Download className="w-3.5 h-3.5" />
                         </button>
                       )}
                     </div>
                   </div>
-                {fee.paid ? (
-                  <div className="flex items-center gap-1.5 flex-wrap justify-end">
-                    <button
-                      onClick={() => setDpsReceiptFee(fee)}
-                      className="px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center gap-1 shadow-xs transition active:scale-95 cursor-pointer"
-                      title="Open Official DPS-Format Fee Receipt"
-                    >
-                      <ReceiptText className="w-3.5 h-3.5 text-amber-300" />
-                      <span>DPS Receipt</span>
-                    </button>
-                    <button
-                      onClick={() => printPosSlip(fee)}
-                      className="px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white transition flex items-center gap-1 font-bold text-xs shadow-xs active:scale-95 cursor-pointer"
-                      title="1-Click Mini Thermal POS Print (80mm / 58mm Roll Slip)"
-                    >
-                      <Printer className="w-3.5 h-3.5" />
-                      <span>🧾 POS</span>
-                    </button>
-                    <button
-                      onClick={() => sendReceiptOnWhatsApp(fee)}
-                      disabled={sendingWhatsAppId === fee.studentId}
-                      className="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 transition disabled:opacity-50 cursor-pointer"
-                      title="WhatsApp PDF receipt to parent"
-                      aria-label={`Send ${fee.studentName} receipt on WhatsApp`}
-                    >
-                      {sendingWhatsAppId === fee.studentId ? (
-                        <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
-                      ) : (
-                        <MessageCircle className="w-4 h-4" />
-                      )}
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-1.5 flex-wrap justify-end">
-                    <button
-                      onClick={() => handleOpenPaymentModal(fee)}
-                      className="px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center gap-1 shadow-xs transition cursor-pointer"
-                      title="Pay & Collect Fee"
-                    >
-                      <IndianRupee className="w-3.5 h-3.5" />
-                      <span>Pay Fee</span>
-                    </button>
-                    <button
-                      onClick={() => setDpsReceiptFee(fee)}
-                      className="px-2 py-1.5 rounded-lg bg-orange-50 hover:bg-orange-100 text-orange-800 dark:bg-orange-950/50 dark:text-orange-200 border border-orange-200 dark:border-orange-800 font-bold text-[11px] flex items-center gap-1 shadow-xs transition cursor-pointer"
-                      title="Preview & Print 4-in-1 Fee Due Demand Slip"
-                    >
-                      <ReceiptText className="w-3.5 h-3.5 text-orange-600" />
-                      <span>Due Slip</span>
-                    </button>
-                    <button
-                      onClick={() => printPosSlip(fee)}
-                      className="px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white transition flex items-center gap-1 font-bold text-xs shadow-xs active:scale-95 cursor-pointer"
-                      title="Direct Print Mini Thermal POS Due Slip (80mm / 58mm)"
-                    >
-                      <Printer className="w-3.5 h-3.5" />
-                      <span>🧾 POS</span>
-                    </button>
-                    <button
-                      onClick={() => sendDueSlipOnWhatsApp(fee)}
-                      disabled={sendingWhatsAppId === fee.studentId}
-                      className="p-2 rounded-lg bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/40 dark:text-green-300 transition disabled:opacity-50 cursor-pointer"
-                      title="WhatsApp unpaid due slip & PDF to parent"
-                      aria-label={`Send ${fee.studentName} unpaid fee due slip on WhatsApp`}
-                    >
-                      {sendingWhatsAppId === fee.studentId ? (
-                        <Loader2 className="w-4 h-4 animate-spin text-green-600" />
-                      ) : (
-                        <MessageCircle className="w-4 h-4" />
-                      )}
-                    </button>
-                    <button
-                      onClick={() => downloadFeeFile(fee)}
-                      className="p-2 rounded-lg bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/40 dark:text-orange-300"
-                      title={`Download ${fee.studentName} fee due slip`}
-                      aria-label={`Download ${fee.studentName} unpaid fee slip`}
-                    >
-                      <Download className="w-4 h-4" />
-                    </button>
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                </div>
+              );
+            })}
             {fees.length === 0 && (
               <div className="text-center py-12 text-slate-400">
                 <Users className="w-10 h-10 mx-auto mb-2 opacity-30" />
@@ -2395,10 +2516,27 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
           </>
         )}
 
-        <button onClick={downloadFeeReport}
-          className="w-full py-3 bg-blue-600 text-white rounded-xl font-semibold flex items-center justify-center gap-2 shadow-md">
-          <Download className="w-5 h-5" /> Download Fee Report (MHTML)
-        </button>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+          <button
+            type="button"
+            onClick={exportFeeRegisterToExcel}
+            className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-md transition cursor-pointer"
+            title="Download full due & fee register as Microsoft Excel spreadsheet (.csv)"
+          >
+            <FileSpreadsheet className="w-5 h-5 text-emerald-100" />
+            <span>📊 Export to Excel (.csv)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={downloadFeeReport}
+            className="w-full py-3 bg-slate-700 hover:bg-slate-800 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-md transition cursor-pointer"
+          >
+            <Download className="w-5 h-5" />
+            <span>Download Fee Report (MHTML)</span>
+          </button>
+        </div>
+
       </div>
       <SchoolHeaderEditorModal
         isOpen={showSchoolHeaderModal}
@@ -2441,6 +2579,7 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
           className={className && className !== "All Classes" ? className : (classNames[dpsReceiptFee.classId] || "Class 6-B")}
           sessionName={formatAcademicSession(sessionId || "2026-27")}
           feeHistory={feeHistory}
+          initialFormat={dpsModalFormat}
         />
       )}
       <ClassFeeStructureModal
@@ -2715,7 +2854,7 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                     <IndianRupee className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                     <input
                       type="number"
-                      placeholder={`Full bill: ₹${modalTotalBill.toLocaleString("en-IN")}`}
+                      placeholder="राशि दर्ज करें (खाली = Unpaid ₹0, जितना मिला उतना लिखें)"
                       value={customPaidAmount}
                       onChange={e => setCustomPaidAmount(e.target.value)}
                       className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-sm font-black text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500"
@@ -2877,14 +3016,16 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                 >
                   Cancel
                 </button>
-                {collectingFee.paid && (
+                {(collectingFee.paid || Number(collectingFee.paidAmount || 0) > 0) && (
                   <button
                     type="button"
                     onClick={() => handleConfirmPayment(false, true)}
                     disabled={saving === collectingFee.studentId}
-                    className="w-full sm:w-auto px-3 py-2.5 rounded-xl bg-orange-100 hover:bg-orange-200 text-orange-800 text-xs font-bold transition cursor-pointer disabled:opacity-50"
+                    className="w-full sm:w-auto px-3.5 py-2.5 rounded-xl bg-rose-100 hover:bg-rose-200 text-rose-800 text-xs font-black transition cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
+                    title="पूरा भुगतान हटाकर ₹0 बकाया (Unpaid) करें"
                   >
-                    Mark Unpaid
+                    <RotateCcw className="w-3.5 h-3.5 text-rose-600" />
+                    <span>Mark Unpaid (₹0)</span>
                   </button>
                 )}
                 <div className="flex-1 w-full grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -3155,6 +3296,48 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
             initialMode={admPrintStudio.mode}
           />
         )}
+
+        {/* ── DEDICATED WHATSAPP SHARE & SEND MODAL (1-Click Number Copy + Direct Document Share) ── */}
+        {whatsappModalTarget && whatsappTargetOptions && whatsappTargetMeta && (
+          <WhatsAppShareModal
+
+            isOpen={Boolean(whatsappModalTarget)}
+            onClose={() => setWhatsappModalTarget(null)}
+            studentName={whatsappModalTarget.student?.name || whatsappModalTarget.fee.studentName || "Student"}
+            parentPhone={whatsappTargetMeta.rawPhone || whatsappModalTarget.student?.phone || ""}
+            className={whatsappTargetOptions.className}
+            rollNo={whatsappModalTarget.student?.rollNo || whatsappModalTarget.fee.rollNo}
+            admissionNo={whatsappModalTarget.student?.admissionNo}
+            fatherName={whatsappModalTarget.student?.fatherName}
+            receiptNo={whatsappModalTarget.fee.receiptNo || whatsappTargetMeta.receiptData.receiptNo}
+            title={whatsappModalTarget.isDueDemand ? "Fee Due Demand Slip (बकाया पर्ची)" : "Official Fee Payment Receipt (रसीद)"}
+            formattedMessage={whatsappTargetMeta.message}
+            isDueDemand={whatsappModalTarget.isDueDemand}
+            totalAmount={whatsappTargetMeta.totalBill}
+            paidAmount={whatsappTargetMeta.paidAmount}
+            balanceDue={whatsappTargetMeta.balanceDue}
+            generatePdfBlob={() => generateFeeDocumentPdfBlob(whatsappTargetOptions)}
+          />
+        )}
+
+        {/* ── CLASS FEE ALERT BROADCAST MODAL (NSTA Messenger + A6 Slips + Lock-Screen Push) ── */}
+        {showClassFeeAlertModal && (
+          <ClassFeeAlertBroadcastModal
+            isOpen={showClassFeeAlertModal}
+            onClose={() => setShowClassFeeAlertModal(false)}
+            school={school || { id: schoolId, name: schoolName || "School" }}
+            students={students}
+            fees={fees}
+            classes={rawClasses}
+            currentMonth={month}
+            onSuccess={(msg) => setPushBannerMsg(msg)}
+            onViewStudentFeeSlip={(f, st) => {
+              setDpsReceiptFee(f);
+              setSelectedStudentForModal(st);
+            }}
+          />
+        )}
       </div>
   );
 };
+

@@ -3998,5 +3998,61 @@ body.force-desktop-mode {
   display: none !important;
 }
 
+/* ══════════════════════════════════════════════════════════════
+   HIGH-CONTRAST FORM INPUT & EDITABLE TEXT VISIBILITY FIX
+   Ensures text is always 100% visible when editing in any theme
+   ══════════════════════════════════════════════════════════════ */
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+textarea,
+select {
+  color: #0f172a !important;
+  caret-color: #4f46e5 !important;
+}
 
+/* Dark mode inputs */
+.dark input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+.dark-mode input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+.dark textarea,
+.dark-mode textarea,
+.dark select,
+.dark-mode select {
+  color: #f8fafc !important;
+  caret-color: #818cf8 !important;
+}
 
+/* Inputs inside light containers, papers, white cards, modals */
+.bg-white input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+.bg-slate-50 input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+.bg-slate-100 input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+.marksheet-sheet-box input,
+.a4-sheet input,
+.adm-box input {
+  color: #0f172a !important;
+  caret-color: #0f172a !important;
+}
+
+/* Focus state - text remains clear and cursor is vibrant */
+input:focus,
+textarea:focus,
+select:focus {
+  outline: 2px solid #6366f1 !important;
+  outline-offset: 1px !important;
+}
+
+.dark input:focus,
+.dark-mode input:focus,
+.dark textarea:focus,
+.dark-mode textarea:focus {
+  color: #ffffff !important;
+}
+
+/* ContentEditable and inline editing */
+[contenteditable="true"] {
+  color: #0f172a !important;
+  caret-color: #4f46e5 !important;
+}
+.dark [contenteditable="true"],
+.dark-mode [contenteditable="true"] {
+  color: #ffffff !important;
+  caret-color: #818cf8 !important;
+}

@@ -1,5 +1,6 @@
 import { jsPDF } from "jspdf";
 import html2canvas from "html2canvas";
+import { renderHtmlToCanvasSafe } from "../../utils/safePdfCapture";
 import type { MonthlyFee, SchoolStudent } from "../../school-types";
 import {
   generateDpsReceiptHtml,
@@ -23,6 +24,8 @@ interface FeeDocumentOptions {
   schoolName?: string;
   className?: string;
   feeHistory?: MonthlyFee[];
+  isDueDemand?: boolean;
+  mode?: "4in1" | "full" | "pos" | "a6";
   schoolDetails?: {
     schoolId?: string;
     schoolName?: string;
@@ -175,76 +178,54 @@ export function buildDpsReceiptData({
 /**
  * Downloads official DPS-Format Monthly Fee Receipt as high-resolution PDF
  */
-export async function downloadFeeDocument(options: FeeDocumentOptions & { mode?: "4in1" | "full" | "pos" }): Promise<void> {
+export async function downloadFeeDocument(options: FeeDocumentOptions & { mode?: "4in1" | "full" | "pos" | "a6" }): Promise<void> {
   const receiptData = buildDpsReceiptData(options);
   const safeName = (receiptData.studentName || "student").replace(/[^a-z0-9-_]+/gi, "_");
   const receiptNumber = receiptData.receiptNo;
-  const mode = options.mode || "4in1";
+  const mode = options.mode || (options.isDueDemand ? "a6" : "pos");
+  const isA6 = mode === "a6" || Boolean(options.isDueDemand && mode !== "pos");
+  const isPos = mode === "pos";
 
-  // Create temporary container for high-fidelity rasterization
-  const container = document.createElement("div");
-  container.style.position = "fixed";
-  container.style.left = "-9999px";
-  container.style.top = "0";
-  container.style.width = mode === "4in1" ? "794px" : mode === "pos" ? "340px" : "720px";
-  container.style.background = "#ffffff";
-  container.style.padding = "0";
-  container.style.zIndex = "-1";
-
-  const styleEl = document.createElement("style");
-  styleEl.innerHTML = mode === "pos" ? POS_SLIP_CSS : DPS_RECEIPT_CSS;
-  container.appendChild(styleEl);
-
-  const wrapper = document.createElement("div");
-  if (mode === "4in1") {
+  let htmlContent = "";
+  const cssText = isPos ? POS_SLIP_CSS : DPS_RECEIPT_CSS;
+  if (isA6) {
+    const { generateSingleA6SlipHtml } = await import("./feeReceiptUtils");
+    htmlContent = generateSingleA6SlipHtml(receiptData);
+  } else if (mode === "4in1") {
     const { generate4in1A4PageHtml } = await import("./feeReceiptUtils");
-    wrapper.innerHTML = generate4in1A4PageHtml([
+    htmlContent = generate4in1A4PageHtml([
       { data: receiptData, copyTitle: "STUDENT COPY" },
       { data: receiptData, copyTitle: "SCHOOL / OFFICE COPY" },
       { data: receiptData, copyTitle: "ACCOUNTS COPY" },
       { data: receiptData, copyTitle: "PARENT / GUARDIAN COPY" },
     ]);
-  } else if (mode === "pos") {
-    wrapper.innerHTML = generatePosSlipHtml(receiptData, { rollWidthMm: 80 });
+  } else if (isPos) {
+    htmlContent = generatePosSlipHtml(receiptData, { rollWidthMm: 80 });
   } else {
-    wrapper.innerHTML = generateDpsReceiptHtml(receiptData, { layout: "full" });
+    htmlContent = generateDpsReceiptHtml(receiptData, { layout: "full" });
   }
-  container.appendChild(wrapper);
-
-  document.body.appendChild(container);
 
   try {
-    const targetSelector = mode === "4in1" ? ".dps-4in1-page" : mode === "pos" ? ".pos-slip-ticket" : ".dps-receipt-card";
-    const cardEl = (container.querySelector(targetSelector) as HTMLElement) || wrapper;
-    if (mode === "4in1") {
-      cardEl.style.width = "210mm";
-      cardEl.style.maxWidth = "none";
-      cardEl.style.height = "297mm";
-      cardEl.style.maxHeight = "297mm";
-      cardEl.style.border = "none";
-      cardEl.style.borderRadius = "0";
-      cardEl.style.boxShadow = "none";
-    }
-    const canvas = await html2canvas(cardEl, {
+    const widthPx = isA6 ? 397 : mode === "4in1" ? 794 : isPos ? 340 : 720;
+    const canvas = await renderHtmlToCanvasSafe(htmlContent, cssText, {
+      widthPx,
       scale: 2,
-      useCORS: true,
       backgroundColor: "#ffffff",
-      logging: false,
     });
 
     const imgData = canvas.toDataURL("image/jpeg", 0.95);
     const pdf = new jsPDF({
       orientation: "portrait",
       unit: "mm",
-      format: "a4",
+      format: isA6 ? "a6" : "a4",
     });
 
     const pdfWidth = pdf.internal.pageSize.getWidth();
     const pdfHeight = pdf.internal.pageSize.getHeight();
 
-    if (mode === "4in1") {
+    if (isA6 || mode === "4in1") {
       pdf.addImage(imgData, "JPEG", 0, 0, pdfWidth, pdfHeight);
-    } else if (mode === "pos") {
+    } else if (isPos) {
       const printWidth = 84;
       const printHeight = Math.min(pdfHeight - 20, (canvas.height * printWidth) / canvas.width);
       const marginX = (pdfWidth - printWidth) / 2;
@@ -256,17 +237,17 @@ export async function downloadFeeDocument(options: FeeDocumentOptions & { mode?:
       const marginY = Math.max(14, (pdfHeight - printHeight) / 2);
       pdf.addImage(imgData, "JPEG", marginX, marginY, printWidth, printHeight);
     }
-    pdf.save(`Fee_Receipt_${safeName}_${receiptNumber}.pdf`);
+    const docPrefix = isA6 ? "Fee_Demand_Slip" : isPos ? "Fee_POS_Receipt" : "Fee_Receipt";
+    pdf.save(`${docPrefix}_${safeName}_${receiptNumber}.pdf`);
   } catch (err) {
     console.warn("Direct PDF generation fallback to print dialog:", err);
-    if (mode === "pos") {
+    if (isA6) {
+      const { printA6SlipDirect } = await import("./feeReceiptUtils");
+      printA6SlipDirect(receiptData);
+    } else if (mode === "pos") {
       printPosSlipDirect(receiptData, 80);
     } else {
       printDpsReceiptDirect(receiptData, mode);
-    }
-  } finally {
-    if (container.parentNode) {
-      container.parentNode.removeChild(container);
     }
   }
 }
@@ -282,100 +263,118 @@ export function printFeeDocument(options: FeeDocumentOptions): void {
 /**
  * Generates an official PDF Blob from FeeDocumentOptions
  */
+/**
+ * Generates an official PDF Blob from FeeDocumentOptions
+ */
 export async function generateFeeDocumentPdfBlob(
-  options: FeeDocumentOptions & { mode?: "4in1" | "full" }
+  options: FeeDocumentOptions & { mode?: "4in1" | "full" | "pos" | "a6" }
 ): Promise<{ blob: Blob; filename: string; receiptData: DpsReceiptData }> {
   const receiptData = buildDpsReceiptData(options);
   const safeName = (receiptData.studentName || "student").replace(/[^a-z0-9-_]+/gi, "_");
   const receiptNumber = receiptData.receiptNo;
-  const mode = options.mode || "full";
-  const filename = `${receiptData.receiptTitle?.toLowerCase().includes("due") ? "Fee_Due_Demand_Slip" : "Official_Fee_Receipt"}_${safeName}_${receiptNumber}.pdf`;
+  const mode = options.mode || (options.isDueDemand ? "a6" : "pos");
+  const isA6 = mode === "a6" || Boolean(options.isDueDemand && mode !== "pos");
+  const isPos = mode === "pos";
+  const filename = isA6
+    ? `Fee_Demand_Slip_${safeName}_${receiptNumber}.pdf`
+    : isPos
+    ? `POS_Fee_Receipt_${safeName}_${receiptNumber}.pdf`
+    : `${receiptData.receiptTitle?.toLowerCase().includes("due") ? "Fee_Due_Demand_Slip" : "Official_Fee_Receipt"}_${safeName}_${receiptNumber}.pdf`;
 
-  const container = document.createElement("div");
-  container.style.position = "fixed";
-  container.style.left = "-9999px";
-  container.style.top = "0";
-  container.style.width = mode === "4in1" ? "794px" : "720px";
-  container.style.background = "#ffffff";
-  container.style.padding = "0";
-  container.style.zIndex = "-1";
-
-  const styleEl = document.createElement("style");
-  styleEl.innerHTML = DPS_RECEIPT_CSS;
-  container.appendChild(styleEl);
-
-  const wrapper = document.createElement("div");
-  if (mode === "4in1") {
+  let htmlContent = "";
+  const cssText = isPos ? POS_SLIP_CSS : DPS_RECEIPT_CSS;
+  if (isA6) {
+    const { generateSingleA6SlipHtml } = await import("./feeReceiptUtils");
+    htmlContent = generateSingleA6SlipHtml(receiptData);
+  } else if (mode === "4in1") {
     const { generate4in1A4PageHtml } = await import("./feeReceiptUtils");
-    wrapper.innerHTML = generate4in1A4PageHtml([
+    htmlContent = generate4in1A4PageHtml([
       { data: receiptData, copyTitle: "STUDENT COPY" },
       { data: receiptData, copyTitle: "SCHOOL / OFFICE COPY" },
       { data: receiptData, copyTitle: "ACCOUNTS COPY" },
       { data: receiptData, copyTitle: "PARENT / GUARDIAN COPY" },
     ]);
+  } else if (isPos) {
+    htmlContent = generatePosSlipHtml(receiptData, { rollWidthMm: 80 });
   } else {
-    wrapper.innerHTML = generateDpsReceiptHtml(receiptData, { layout: "full" });
+    htmlContent = generateDpsReceiptHtml(receiptData, { layout: "full" });
   }
-  container.appendChild(wrapper);
-  document.body.appendChild(container);
 
-  try {
-    const targetSelector = mode === "4in1" ? ".dps-4in1-page" : ".dps-receipt-card";
-    const cardEl = (container.querySelector(targetSelector) as HTMLElement) || wrapper;
-    if (mode === "4in1") {
-      cardEl.style.width = "210mm";
-      cardEl.style.maxWidth = "none";
-      cardEl.style.height = "297mm";
-      cardEl.style.maxHeight = "297mm";
-      cardEl.style.border = "none";
-      cardEl.style.borderRadius = "0";
-      cardEl.style.boxShadow = "none";
-    }
-    const canvas = await html2canvas(cardEl, {
-      scale: 2,
-      useCORS: true,
-      backgroundColor: "#ffffff",
-      logging: false,
-    });
+  const widthPx = isA6 ? 397 : mode === "4in1" ? 794 : isPos ? 340 : 720;
+  const canvas = await renderHtmlToCanvasSafe(htmlContent, cssText, {
+    widthPx,
+    scale: 2,
+    backgroundColor: "#ffffff",
+  });
 
-    const imgData = canvas.toDataURL("image/jpeg", 0.95);
-    const pdf = new jsPDF({
+  const imgData = canvas.toDataURL("image/jpeg", 0.95);
+
+  // If A6 mode, produce an authentic A6 PDF
+  if (isA6) {
+    const a6Pdf = new jsPDF({
       orientation: "portrait",
       unit: "mm",
-      format: "a4",
+      format: "a6",
     });
-
-    const pdfWidth = pdf.internal.pageSize.getWidth();
-    const pdfHeight = pdf.internal.pageSize.getHeight();
-
-    if (mode === "4in1") {
-      pdf.addImage(imgData, "JPEG", 0, 0, pdfWidth, pdfHeight);
-    } else {
-      const marginX = 14;
-      const printWidth = pdfWidth - marginX * 2;
-      const printHeight = (canvas.height * printWidth) / canvas.width;
-      const marginY = Math.max(14, (pdfHeight - printHeight) / 2);
-      pdf.addImage(imgData, "JPEG", marginX, marginY, printWidth, printHeight);
-    }
-
-    const blob = pdf.output("blob");
+    const pdfWidth = a6Pdf.internal.pageSize.getWidth();
+    const pdfHeight = a6Pdf.internal.pageSize.getHeight();
+    a6Pdf.addImage(imgData, "JPEG", 0, 0, pdfWidth, pdfHeight);
+    const blob = a6Pdf.output("blob");
     return { blob, filename, receiptData };
-  } finally {
-    if (container.parentNode) {
-      container.parentNode.removeChild(container);
-    }
   }
+
+  // If POS mode, produce an authentic 80mm roll PDF
+  if (isPos) {
+    const rollWidthMm = 80;
+    const rollHeightMm = Math.max(110, (canvas.height * rollWidthMm) / canvas.width + 8);
+    const posPdf = new jsPDF({
+      orientation: "portrait",
+      unit: "mm",
+      format: [rollWidthMm, rollHeightMm],
+    });
+    posPdf.addImage(imgData, "JPEG", 0, 3, rollWidthMm, (canvas.height * rollWidthMm) / canvas.width);
+    const blob = posPdf.output("blob");
+    return { blob, filename, receiptData };
+  }
+
+  const pdf = new jsPDF({
+    orientation: "portrait",
+    unit: "mm",
+    format: "a4",
+  });
+
+  const pdfWidth = pdf.internal.pageSize.getWidth();
+  const pdfHeight = pdf.internal.pageSize.getHeight();
+
+  if (mode === "4in1") {
+    pdf.addImage(imgData, "JPEG", 0, 0, pdfWidth, pdfHeight);
+  } else {
+    const marginX = 14;
+    const printWidth = pdfWidth - marginX * 2;
+    const printHeight = (canvas.height * printWidth) / canvas.width;
+    const marginY = Math.max(14, (pdfHeight - printHeight) / 2);
+    pdf.addImage(imgData, "JPEG", marginX, marginY, printWidth, printHeight);
+  }
+
+  const blob = pdf.output("blob");
+  return { blob, filename, receiptData };
 }
 
 /**
- * Shares or sends the official fee receipt / demand due slip directly to WhatsApp.
- * - Downloads / creates the high-definition PDF document
- * - Uses Web Share API (native file share) on mobile devices to send PDF directly
- * - Opens WhatsApp with pre-filled structured message including Date, Time, Paid, Due, and School details
+ * Builds the structured WhatsApp receipt / demand due message and extracts recipient metadata.
  */
-export async function shareFeeReceiptOnWhatsApp(
-  options: FeeDocumentOptions & { mode?: "4in1" | "full"; targetPhone?: string; isDueDemand?: boolean }
-): Promise<void> {
+export function buildWhatsAppReceiptMessage(
+  options: FeeDocumentOptions & { mode?: "4in1" | "full" | "pos"; targetPhone?: string; isDueDemand?: boolean }
+): {
+  message: string;
+  targetPhone: string;
+  rawPhone: string;
+  receiptData: DpsReceiptData;
+  isDue: boolean;
+  totalBill: number;
+  paidAmount: number;
+  balanceDue: number;
+} {
   const receiptData = buildDpsReceiptData(options);
   const rawPhone = options.targetPhone || options.student?.phone || (options.fee as any).phone || "";
   const digits = rawPhone.replace(/\D/g, "");
@@ -386,80 +385,156 @@ export async function shareFeeReceiptOnWhatsApp(
   const balanceDue = Number(options.fee.balanceDue !== undefined ? options.fee.balanceDue : Math.max(0, totalBill - paidAmount));
 
   const isDue = options.isDueDemand || (!options.fee.paid && paidAmount === 0);
+  const isPos = options.mode === "pos";
   const schoolName = receiptData.schoolName || options.schoolName || "School";
 
-  // Build high-clarity WhatsApp formatted text
+  // Build itemized breakdown text for clear WhatsApp reading
+  const itemLines = (receiptData.items || []).map((it, idx) => {
+    const paidVal = Number(it.paid) || 0;
+    const dueVal = Number(it.due) || 0;
+    const amountStr = paidVal > 0 ? `₹${paidVal.toLocaleString("en-IN")}` : `₹${dueVal.toLocaleString("en-IN")}`;
+    return `  ${idx + 1}. ${it.description}: ${amountStr}`;
+  }).join("\n");
+
   let message = "";
-  if (isDue) {
-    const lastPaidAmt = Number(receiptData.lastPaidAmount || 0);
-    const lastPaidDt = receiptData.lastPaidDate || "";
-    const lastDueAmt = Number(receiptData.lastDueAmount || 0);
-    const lastDueDt = receiptData.lastDueDate || "";
-    const netPayableTotal = Math.max(balanceDue, totalBill);
-    message = `🏫 *${schoolName.toUpperCase()}*\n` +
-      `⚠️ *FEE DEMAND SLIP / बकाया शुल्क तकादा पर्ची*\n` +
-      `----------------------------------------\n` +
-      `👤 *Student Name:* ${receiptData.studentName}\n` +
-      (receiptData.fatherName ? `👨 *Father Name:* ${receiptData.fatherName}\n` : "") +
-      `🆔 *Adm No / Roll:* ${receiptData.admissionNo || "—"}${receiptData.rollNo ? ` (Roll: ${receiptData.rollNo})` : ""}\n` +
-      `📚 *Class:* ${receiptData.className}\n` +
-      `🧾 *Slip No:* ${receiptData.receiptNo} • *Date:* ${receiptData.receiptDate}\n` +
-      `----------------------------------------\n` +
-      `✅ *Last Paid (पिछला जमा):* ₹${lastPaidAmt.toLocaleString("en-IN")}${lastPaidAmt > 0 && lastPaidDt ? ` (${lastPaidDt})` : " (कोई पिछला जमा नहीं)"}\n` +
-      `📌 *Last Due (पिछला बकाया):* ₹${lastDueAmt.toLocaleString("en-IN")}${lastDueAmt > 0 && lastDueDt ? ` (${lastDueDt})` : " (Clear)"}\n` +
-      `💰 *Total Net Payable Due (कुल देय राशि):* ₹${netPayableTotal.toLocaleString("en-IN")}\n` +
-      `----------------------------------------\n` +
-      `🙏 *कृपया निर्धारित तिथि तक शुल्क स्कूल काउंटर या UPI QR द्वारा जमा करें।*`;
-  } else {
-    message = `🏫 *${schoolName.toUpperCase()}*\n` +
-      `🧾 *OFFICIAL FEE PAYMENT RECEIPT / फीस रसीद*\n` +
-      `----------------------------------------\n` +
-      `👤 *Student Name:* ${receiptData.studentName}\n` +
-      `🆔 *Adm No / Roll:* ${receiptData.admissionNo || "—"}\n` +
-      `📚 *Class:* ${receiptData.className}\n` +
-      `🧾 *Receipt No:* ${receiptData.receiptNo}\n` +
-      `📅 *Date & Time:* ${receiptData.receiptDate}\n` +
-      `💳 *Payment Mode:* ${receiptData.payModeInfo.payMode || "Cash"}\n` +
-      `----------------------------------------\n` +
-      `💰 *Total Payable (कुल शुल्क):* ₹${totalBill.toLocaleString("en-IN")}\n` +
-      `✅ *Amount Paid (जमा राशि):* ₹${paidAmount.toLocaleString("en-IN")}\n` +
-      `⚠️ *Remaining Balance (शेष बकाया):* ₹${balanceDue.toLocaleString("en-IN")}\n` +
-      `----------------------------------------\n` +
-      (balanceDue > 0
-        ? `📌 *शेष बकाया ₹${balanceDue.toLocaleString("en-IN")} अगले महीने के बिल में जुड़ेगा।*\n`
-        : `🎉 *सत्र का यह शुल्क पूर्णतः जमा (Full Paid) हो चुका है।*\n`) +
-      `📄 *Official DPS Format PDF Receipt downloaded to your device.*`;
-  }
 
-  // Attempt Web Share with real PDF file if browser supports file sharing
-  try {
-    const { blob, filename } = await generateFeeDocumentPdfBlob(options);
-    const pdfFile = new File([blob], filename, { type: "application/pdf" });
-
-    if (typeof navigator !== "undefined" && navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
-      await navigator.share({
-        files: [pdfFile],
-        title: `${schoolName} Fee Document - ${receiptData.studentName}`,
-        text: message,
-      });
-      return;
+  // 1. DEDICATED POS THERMAL RECEIPT WHATSAPP FORMAT
+  if (isPos) {
+    if (isDue) {
+      message = `🏫 *${schoolName.toUpperCase()}*\n` +
+        (receiptData.schoolAddress ? `📍 ${receiptData.schoolAddress}\n` : "") +
+        (receiptData.schoolPhone ? `📞 Helpline: ${receiptData.schoolPhone}\n` : "") +
+        `================================\n` +
+        `⚠️ *POS FEE DEMAND SLIP (बकाया पर्ची)*\n` +
+        `================================\n` +
+        `🧾 *Slip No:* ${receiptData.receiptNo}\n` +
+        `📅 *Date:* ${receiptData.receiptDate}\n` +
+        `👤 *Student:* *${receiptData.studentName}*\n` +
+        `🆔 *Adm No:* ${receiptData.admissionNo || "—"}\n` +
+        `📚 *Class:* ${receiptData.className}${receiptData.rollNo ? ` (Roll: ${receiptData.rollNo})` : ""}\n` +
+        (receiptData.fatherName ? `👨 *Father:* ${receiptData.fatherName}\n` : "") +
+        `--------------------------------\n` +
+        `*FEE PARTICULARS / विवरण:*\n` +
+        `${itemLines}\n` +
+        `--------------------------------\n` +
+        `💰 *TOTAL DUE (कुल देय बकाया):* *₹${Math.max(balanceDue, totalBill).toLocaleString("en-IN")}*\n` +
+        `================================\n` +
+        `🙏 *कृपया निर्धारित तिथि तक शुल्क स्कूल काउंटर पर जमा करें।*\n` +
+        `📄 *POS 80mm Thermal Slip PDF attached.*`;
+    } else {
+      message = `🏫 *${schoolName.toUpperCase()}*\n` +
+        (receiptData.schoolAddress ? `📍 ${receiptData.schoolAddress}\n` : "") +
+        (receiptData.schoolPhone ? `📞 Helpline: ${receiptData.schoolPhone}\n` : "") +
+        `================================\n` +
+        `🧾 *OFFICIAL POS THERMAL RECEIPT (रसीद)*\n` +
+        `================================\n` +
+        `🧾 *Receipt No:* ${receiptData.receiptNo}\n` +
+        `📅 *Date & Time:* ${receiptData.receiptDate}\n` +
+        `👤 *Student:* *${receiptData.studentName}*\n` +
+        `🆔 *Adm No:* ${receiptData.admissionNo || "—"}\n` +
+        `📚 *Class:* ${receiptData.className}${receiptData.rollNo ? ` (Roll: ${receiptData.rollNo})` : ""}\n` +
+        (receiptData.fatherName ? `👨 *Father:* ${receiptData.fatherName}\n` : "") +
+        `💳 *Pay Mode:* ${receiptData.payModeInfo.payMode || "Cash"}\n` +
+        `--------------------------------\n` +
+        `*FEE HEADS / मद विवरण:*\n` +
+        `${itemLines}\n` +
+        `--------------------------------\n` +
+        `💰 *Gross Total:* ₹${totalBill.toLocaleString("en-IN")}\n` +
+        (Number(options.fee.concession || 0) > 0 ? `🎁 *Concession:* -₹${Number(options.fee.concession).toLocaleString("en-IN")}\n` : "") +
+        `✅ *NET PAID (जमा राशि):* *₹${paidAmount.toLocaleString("en-IN")}*\n` +
+        `⚠️ *Balance Due (शेष):* ₹${balanceDue.toLocaleString("en-IN")}${balanceDue <= 0 ? " (FULL PAID ✓)" : ""}\n` +
+        `================================\n` +
+        `✍️ *Authority:* ${receiptData.signatoryTitle || "Principal / Cashier"} (VERIFIED)\n` +
+        `*Computer Generated Official POS Slip*\n` +
+        `📄 *POS 80mm Thermal Receipt PDF attached.*`;
     }
-
-    // Trigger local PDF download so admin / parent has the file immediately
-    const downloadUrl = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = downloadUrl;
-    a.download = filename;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(downloadUrl), 5000);
-  } catch (pdfErr) {
-    console.warn("Could not generate inline PDF for share:", pdfErr);
+  } else {
+    // 2. STANDARD / DPS RECEIPT FORMAT
+    if (isDue) {
+      const lastPaidAmt = Number(receiptData.lastPaidAmount || 0);
+      const lastPaidDt = receiptData.lastPaidDate || "";
+      const lastDueAmt = Number(receiptData.lastDueAmount || 0);
+      const lastDueDt = receiptData.lastDueDate || "";
+      const netPayableTotal = Math.max(balanceDue, totalBill);
+      message = `🏫 *${schoolName.toUpperCase()}*\n` +
+        `⚠️ *FEE DEMAND SLIP / बकाया शुल्क तकादा पर्ची*\n` +
+        `----------------------------------------\n` +
+        `👤 *Student Name:* ${receiptData.studentName}\n` +
+        (receiptData.fatherName ? `👨 *Father Name:* ${receiptData.fatherName}\n` : "") +
+        `🆔 *Adm No / Roll:* ${receiptData.admissionNo || "—"}${receiptData.rollNo ? ` (Roll: ${receiptData.rollNo})` : ""}\n` +
+        `📚 *Class:* ${receiptData.className}\n` +
+        `🧾 *Slip No:* ${receiptData.receiptNo} • *Date:* ${receiptData.receiptDate}\n` +
+        `----------------------------------------\n` +
+        `*FEE PARTICULARS:*\n${itemLines}\n` +
+        `----------------------------------------\n` +
+        `✅ *Last Paid (पिछला जमा):* ₹${lastPaidAmt.toLocaleString("en-IN")}${lastPaidAmt > 0 && lastPaidDt ? ` (${lastPaidDt})` : " (कोई पिछला जमा नहीं)"}\n` +
+        `📌 *Last Due (पिछला बकाया):* ₹${lastDueAmt.toLocaleString("en-IN")}${lastDueAmt > 0 && lastDueDt ? ` (${lastDueDt})` : " (Clear)"}\n` +
+        `💰 *Total Net Payable Due (कुल देय राशि):* ₹${netPayableTotal.toLocaleString("en-IN")}\n` +
+        `----------------------------------------\n` +
+        `🙏 *कृपया निर्धारित तिथि तक शुल्क स्कूल काउंटर या UPI QR द्वारा जमा करें।*`;
+    } else {
+      message = `🏫 *${schoolName.toUpperCase()}*\n` +
+        `🧾 *OFFICIAL FEE PAYMENT RECEIPT / फीस रसीद*\n` +
+        `----------------------------------------\n` +
+        `👤 *Student Name:* ${receiptData.studentName}\n` +
+        `🆔 *Adm No / Roll:* ${receiptData.admissionNo || "—"}\n` +
+        `📚 *Class:* ${receiptData.className}\n` +
+        `🧾 *Receipt No:* ${receiptData.receiptNo}\n` +
+        `📅 *Date & Time:* ${receiptData.receiptDate}\n` +
+        `💳 *Payment Mode:* ${receiptData.payModeInfo.payMode || "Cash"}\n` +
+        `----------------------------------------\n` +
+        `*FEE PARTICULARS:*\n${itemLines}\n` +
+        `----------------------------------------\n` +
+        `💰 *Total Payable (कुल शुल्क):* ₹${totalBill.toLocaleString("en-IN")}\n` +
+        `✅ *Amount Paid (जमा राशि):* ₹${paidAmount.toLocaleString("en-IN")}\n` +
+        `⚠️ *Remaining Balance (शेष बकाया):* ₹${balanceDue.toLocaleString("en-IN")}\n` +
+        `----------------------------------------\n` +
+        (balanceDue > 0
+          ? `📌 *शेष बकाया ₹${balanceDue.toLocaleString("en-IN")} अगले महीने के बिल में जुड़ेगा।*\n`
+          : `🎉 *सत्र का यह शुल्क पूर्णतः जमा (Full Paid) हो चुका है।*\n`) +
+        `📄 *Official DPS Format PDF Receipt downloaded to your device.*`;
+    }
   }
 
-  // Launch WhatsApp with prefilled message
+  return {
+    message,
+    targetPhone,
+    rawPhone,
+    receiptData,
+    isDue,
+    totalBill,
+    paidAmount,
+    balanceDue,
+  };
+}
+
+/**
+ * Shares or sends the official fee receipt / demand due slip directly to WhatsApp.
+ */
+export async function shareFeeReceiptOnWhatsApp(
+  options: FeeDocumentOptions & { mode?: "4in1" | "full" | "pos"; targetPhone?: string; isDueDemand?: boolean }
+): Promise<void> {
+  const { message, targetPhone } = buildWhatsAppReceiptMessage(options);
+
+  // Launch WhatsApp directly with prefilled message to target parent
   const waUrl = targetPhone
     ? `https://wa.me/${targetPhone}?text=${encodeURIComponent(message)}`
     : `https://wa.me/?text=${encodeURIComponent(message)}`;
 
-  window.open(waUrl, "_blank");
+  try {
+    const link = document.createElement("a");
+    link.href = waUrl;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    document.body.appendChild(link);
+    link.click();
+    setTimeout(() => {
+      if (document.body.contains(link)) document.body.removeChild(link);
+    }, 100);
+  } catch (err) {
+    console.error("Direct link click failed, falling back to window.open", err);
+    window.open(waUrl, "_blank");
+  }
 }
+
+

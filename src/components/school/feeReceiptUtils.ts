@@ -227,6 +227,9 @@ export interface DpsReceiptData {
   directorSignatureUrl?: string;
   directorName?: string;
   signatoryTitle?: string;
+  signatoryMode?: "both" | "cashier_only" | "principal_only";
+  cashierTitle?: string;
+  cashierSignatureUrl?: string;
 }
 
 export interface StudentFeeHistorySummary {
@@ -738,15 +741,17 @@ export function generateDpsReceiptHtml(
   const isCompact = options.layout === "compact" || isMini;
   const copyTitle = options.copyTitle || "";
 
+  if (!data) return "";
   const escapeHtml = (val: unknown) =>
     String(val ?? "").replace(/[&<>"']/g, c => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
     }[c] as string));
 
-  const totalDue = data.items.reduce((s, it) => s + (Number(it.due) || 0), 0);
-  const totalConcession = data.items.reduce((s, it) => s + (Number(it.con) || 0), 0);
+  const items = Array.isArray(data.items) ? data.items : [];
+  const totalDue = items.reduce((s, it) => s + (Number(it?.due) || 0), 0);
+  const totalConcession = items.reduce((s, it) => s + (Number(it?.con) || 0), 0);
   const netPayable = Math.max(0, totalDue - totalConcession);
-  const totalPaid = data.items.reduce((s, it) => s + (Number(it.paid) || 0), 0);
+  const totalPaid = items.reduce((s, it) => s + (Number(it?.paid) || 0), 0);
   const grandTotal = totalPaid > 0 ? totalPaid : netPayable;
   const totalWords = numberToIndianWords(grandTotal);
   const calculatedBalDue = data.balanceDue !== undefined ? Number(data.balanceDue) : Math.max(0, netPayable - totalPaid);
@@ -979,6 +984,18 @@ export function generateDpsReceiptHtml(
     <!-- Itemized Fee Table (Elastic Full-Height Ledger — Eliminates Dead Blank Space) -->
     <div class="dps-table-container">
       <table class="dps-fee-table">
+        <colgroup>
+          <col class="col-sl" />
+          <col class="col-desc" />
+          ${showDemandSimpleCols ? `
+            ${showConCol ? `<col class="col-con" />` : ""}
+            <col class="col-demand-amt" />
+          ` : `
+            <col class="col-due" />
+            <col class="col-con" />
+            <col class="col-paid" />
+          `}
+        </colgroup>
         <thead>
           <tr>
             <th class="th-sl">Sl.</th>
@@ -1074,6 +1091,11 @@ export function generateDpsReceiptHtml(
           * शेष बकाया ₹${calculatedBalDue.toLocaleString("en-IN")} अगले माह के बिल में जुड़ेगा
         </div>
       ` : ""}
+      ${/admission/i.test(data.receiptTitle || "") ? `
+        <div class="dps-words-subnote" style="color:#475569;font-weight:600;margin-top:2px;">
+          * Note: Admission &amp; Registration fees once paid are non-refundable. Computer generated official receipt.
+        </div>
+      ` : ""}
     </div>
 
     ${isDemandNote ? `
@@ -1141,15 +1163,28 @@ export function generateDpsReceiptHtml(
       ` : ""}
 
       <div class="dps-footer-right">
-        <div class="dps-sign-block">
-          ${data.showDigitalSignature && data.principalSignatureUrl ? `
-            <img src="${escapeHtml(data.principalSignatureUrl)}" alt="Principal Signature" class="dps-sign-img" />
-          ` : `
-            <div class="dps-sign-manual-space"></div>
-          `}
-          <span class="dps-sign-title">${escapeHtml(data.principalName || "Principal")}</span>
-          <span class="dps-sign-role">Principal</span>
-        </div>
+        ${(data.signatoryMode === "both" || data.signatoryMode === "cashier_only") ? `
+          <div class="dps-sign-block" style="margin-right: 12px;">
+            ${data.showDigitalSignature && (data.directorSignatureUrl || data.cashierSignatureUrl) ? `
+              <img src="${escapeHtml(data.directorSignatureUrl || data.cashierSignatureUrl)}" alt="Cashier Sign" class="dps-sign-img" />
+            ` : `
+              <div class="dps-sign-manual-space"></div>
+            `}
+            <span class="dps-sign-title">${escapeHtml(data.cashierTitle || "Cashier / Clerk")}</span>
+            <span class="dps-sign-role">Accounts</span>
+          </div>
+        ` : ""}
+        ${(data.signatoryMode !== "cashier_only") ? `
+          <div class="dps-sign-block">
+            ${data.showDigitalSignature && data.principalSignatureUrl ? `
+              <img src="${escapeHtml(data.principalSignatureUrl)}" alt="Principal Signature" class="dps-sign-img" />
+            ` : `
+              <div class="dps-sign-manual-space"></div>
+            `}
+            <span class="dps-sign-title">${escapeHtml(data.principalName || "Principal")}</span>
+            <span class="dps-sign-role">${escapeHtml(data.principalTitle || "Principal (Sign & Seal)")}</span>
+          </div>
+        ` : ""}
       </div>
     </div>
   </div>
@@ -1161,10 +1196,17 @@ export function generateDpsReceiptHtml(
  * divided into 4 equal A6 quadrants (105mm × 148.5mm) with dashed scissor cut lines
  * and equal symmetrical padding on all 4 sides of each cut slip.
  */
-export function generate4in1A4PageHtml(receipts4: { data: DpsReceiptData; copyTitle?: string }[]): string {
+export function generate4in1A4PageHtml(receipts4: any[]): string {
+  const normalized = (Array.isArray(receipts4) ? receipts4 : [receipts4]).filter(Boolean).map(item => {
+    if (item && typeof item === "object" && "data" in item && item.data) {
+      return item as { data: DpsReceiptData; copyTitle?: string };
+    }
+    return { data: item as DpsReceiptData, copyTitle: "" };
+  });
+
   const padded = [
-    ...receipts4.slice(0, 4),
-    ...Array.from({ length: Math.max(0, 4 - receipts4.length) }, () => null),
+    ...normalized.slice(0, 4),
+    ...Array.from({ length: Math.max(0, 4 - normalized.length) }, () => null),
   ];
 
   return `
@@ -1182,7 +1224,7 @@ export function generate4in1A4PageHtml(receipts4: { data: DpsReceiptData; copyTi
       <div class="dps-cut-center-cross" aria-hidden="true">+</div>
 
       ${padded.map((item, idx) =>
-        item
+        item && item.data
           ? `
         <div class="dps-4in1-cell dps-quadrant-${idx + 1}">
           ${generateDpsReceiptHtml(item.data, { layout: "compact", copyTitle: item.copyTitle })}
@@ -1214,6 +1256,83 @@ export function generate6in1A4PageHtml(receipts6: { data: DpsReceiptData; copyTi
       `).join("")}
     </div>
   `;
+}
+
+/**
+ * Generates a standalone single A6 Fee Demand Slip (105mm × 148.5mm, 1/4th of an A4 sheet)
+ * specifically designed for mobile viewing, instant NSTA Messenger delivery, and A6 direct printing.
+ */
+export function generateSingleA6SlipHtml(
+  data: DpsReceiptData,
+  options?: { copyTitle?: string; showWatermark?: boolean }
+): string {
+  const isDueDemand =
+    data.counterNo === "DUE-DEMAND" ||
+    /DUE|DEMAND|मांग|बकाया/i.test(data.receiptTitle || "") ||
+    Number(data.balanceDue || 0) > 0;
+  const defaultTitle = isDueDemand
+    ? "FEE DEMAND SLIP (मांग पर्ची)"
+    : "OFFICIAL FEE RECEIPT (रसीद)";
+
+  return `
+    <div class="dps-a6-standalone-wrapper">
+      <div class="dps-4in1-cell dps-a6-card" style="width: 105mm; min-height: 148.5mm; max-height: 148.5mm; margin: 0 auto; box-sizing: border-box; overflow: hidden; background: #ffffff; border: 1.5px solid #000000; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">
+        ${generateDpsReceiptHtml(data, {
+          layout: "compact",
+          copyTitle: options?.copyTitle || defaultTitle,
+        })}
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Direct print helper for standalone A6 Fee Demand Slip (105mm x 148.5mm portrait)
+ */
+export function printA6SlipDirect(
+  data: DpsReceiptData,
+  options?: { copyTitle?: string }
+): void {
+  const htmlContent = `
+    <!DOCTYPE html>
+    <html lang="hi">
+      <head>
+        <meta charset="utf-8" />
+        <title>A6 Slip - ${data.studentName} (${data.className || "Class"})</title>
+        <style>
+          @page {
+            size: 105mm 148.5mm portrait;
+            margin: 0mm;
+          }
+          ${DPS_RECEIPT_CSS}
+          html, body {
+            margin: 0 !important;
+            padding: 0 !important;
+            width: 105mm !important;
+            height: 148.5mm !important;
+            background: #ffffff !important;
+          }
+          .dps-a6-standalone-wrapper {
+            width: 105mm !important;
+            height: 148.5mm !important;
+            margin: 0 !important;
+            padding: 0 !important;
+          }
+          .dps-a6-card {
+            border: none !important;
+            box-shadow: none !important;
+            width: 105mm !important;
+            height: 148.5mm !important;
+            max-height: 148.5mm !important;
+          }
+        </style>
+      </head>
+      <body>
+        ${generateSingleA6SlipHtml(data, options)}
+      </body>
+    </html>
+  `;
+  printReceiptHtmlInIframe(htmlContent, `A6 Slip - ${data.studentName}`);
 }
 
 /**
@@ -1661,29 +1780,29 @@ export const DPS_RECEIPT_CSS = `
     padding: 0 6px !important;
     border-bottom: none;
   }
-  .th-sl, .td-sl {
+  .th-sl, .td-sl, .col-sl {
     width: 32px;
     text-align: center;
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
   }
-  .th-desc, .td-desc {
+  .th-desc, .td-desc, .col-desc {
     text-align: left;
     padding-left: 10px !important;
   }
-  .th-con, .td-con {
+  .th-con, .td-con, .col-con {
     width: 60px;
     text-align: right;
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
   }
-  .th-num, .td-num {
+  .th-num, .td-num, .col-due, .col-paid, .col-num {
     width: 86px;
     text-align: right;
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
   }
-  .th-demand-amt, .td-demand-amt {
+  .th-demand-amt, .td-demand-amt, .col-demand-amt {
     width: 96px;
     white-space: nowrap;
   }
@@ -2108,28 +2227,28 @@ export const DPS_RECEIPT_CSS = `
     vertical-align: middle !important;
     line-height: 1.22 !important;
   }
-  .is-compact .th-sl, .is-compact .td-sl {
+  .is-compact .th-sl, .is-compact .td-sl, .is-compact .col-sl {
     width: 24px !important;
     text-align: center;
     white-space: nowrap !important;
     vertical-align: middle !important;
   }
-  .is-compact .th-desc, .is-compact .td-desc {
+  .is-compact .th-desc, .is-compact .td-desc, .is-compact .col-desc {
     padding-left: 6px !important;
     vertical-align: middle !important;
     word-break: break-word;
   }
-  .is-compact .th-con, .is-compact .td-con {
+  .is-compact .th-con, .is-compact .td-con, .is-compact .col-con {
     width: 38px !important;
     white-space: nowrap !important;
     vertical-align: middle !important;
   }
-  .is-compact .th-num, .is-compact .td-num {
+  .is-compact .th-num, .is-compact .td-num, .is-compact .col-due, .is-compact .col-paid, .is-compact .col-num {
     width: 58px !important;
     white-space: nowrap !important;
     vertical-align: middle !important;
   }
-  .is-compact .th-demand-amt, .is-compact .td-demand-amt {
+  .is-compact .th-demand-amt, .is-compact .td-demand-amt, .is-compact .col-demand-amt {
     width: 72px !important;
     font-size: 9.2px !important;
     white-space: nowrap !important;

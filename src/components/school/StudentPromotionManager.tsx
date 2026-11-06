@@ -1,6 +1,7 @@
 // @ts-nocheck
 import React, { useState } from "react";
 import type { School, SchoolClass, SchoolSession, SchoolStudent } from "../../school-types";
+import { sortSchoolClasses } from "../../school-types";
 import { promoteStudents } from "../../school-firebase";
 import {
   TrendingUp, ChevronLeft, ArrowRight, CheckSquare, Square, CheckCircle,
@@ -24,10 +25,11 @@ export const StudentPromotionManager: React.FC<Props> = ({
   onBack,
   onRefreshData,
 }) => {
+  const sortedClasses = React.useMemo(() => sortSchoolClasses(classes), [classes]);
   const [fromSessionId, setFromSessionId] = useState(sessions[0]?.id || "");
-  const [fromClassId, setFromClassId] = useState(classes[0]?.id || "");
+  const [fromClassId, setFromClassId] = useState(sortedClasses[0]?.id || "");
   const [toSessionId, setToSessionId] = useState(sessions[1]?.id || sessions[0]?.id || "");
-  const [toClassId, setToClassId] = useState(classes[1]?.id || classes[0]?.id || "");
+  const [toClassId, setToClassId] = useState(sortedClasses[1]?.id || sortedClasses[0]?.id || "");
 
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
   const [promoting, setPromoting] = useState(false);
@@ -125,8 +127,8 @@ export const StudentPromotionManager: React.FC<Props> = ({
                   onChange={e => { setFromClassId(e.target.value); setSelectedStudentIds([]); }}
                   className="w-full px-3 py-2 text-xs font-bold bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-white rounded-xl border-0"
                 >
-                  {classes.map(c => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
+                  {sortedClasses.map(c => (
+                    <option key={c.id} value={c.id}>{c.name} {c.section ? `(${c.section})` : ""}</option>
                   ))}
                 </select>
               </div>
@@ -158,8 +160,8 @@ export const StudentPromotionManager: React.FC<Props> = ({
                   onChange={e => setToClassId(e.target.value)}
                   className="w-full px-3 py-2 text-xs font-bold bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-white rounded-xl border-0"
                 >
-                  {classes.map(c => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
+                  {sortedClasses.map(c => (
+                    <option key={c.id} value={c.id}>{c.name} {c.section ? `(${c.section})` : ""}</option>
                   ))}
                 </select>
               </div>

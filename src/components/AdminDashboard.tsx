@@ -262,6 +262,7 @@ interface Props {
   user?: User; // Pass current user to check permissions
   isDarkMode?: boolean;
   onToggleDarkMode?: (v: boolean) => void;
+  onOpenSchool?: () => void;
 }
 
 // ── IIC × NSTA Badge Position Drag Editor ─────────────────────────────────
@@ -437,6 +438,51 @@ function RevisionSubjectAdder({ localSettings, setLocalSettings }: { localSettin
 }
 
 export const AdminDashboard: React.FC<Props> = (props) => {
+  const userRole = (props.user?.role || '').toString().toUpperCase();
+  const userEmail = (props.user?.email || '').toString().toLowerCase().trim();
+  const isSchoolAdmin =
+    userRole === 'SCHOOL_ADMIN' ||
+    userRole === 'SCHOOLADMIN' ||
+    userRole === 'PRINCIPAL' ||
+    userRole === 'TEACHER' ||
+    userEmail === 'admin@dps.edu.in' ||
+    userEmail === 'dpsgurgaon45@dps.edu.in' ||
+    userEmail === 'principal@dps.edu.in' ||
+    userEmail.endsWith('.edu.in');
+
+  useEffect(() => {
+    if (isSchoolAdmin) {
+      if (props.onNavigate) {
+        props.onNavigate('SCHOOL_ECOSYSTEM');
+      } else if (props.onOpenSchool) {
+        props.onOpenSchool();
+      }
+    }
+  }, [isSchoolAdmin, props]);
+
+  if (isSchoolAdmin) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6 text-center">
+        <div className="w-16 h-16 rounded-3xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mb-4">
+          <Shield className="w-8 h-8 text-amber-400" />
+        </div>
+        <h2 className="text-xl font-black text-white mb-2">School ERP Access Only</h2>
+        <p className="text-sm text-slate-400 max-w-md mb-6">
+          Aapka account School Admin (ERP) ke liye reserved hai. NSTA Master Admin Dashboard par sirf Super Admin ka access hai.
+        </p>
+        <button
+          onClick={() => {
+            if (props.onNavigate) props.onNavigate('SCHOOL_ECOSYSTEM');
+            else if (props.onOpenSchool) props.onOpenSchool();
+          }}
+          className="px-6 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-bold rounded-xl shadow-lg hover:scale-105 active:scale-95 transition cursor-pointer"
+        >
+          Open School ERP
+        </button>
+      </div>
+    );
+  }
+
   return <AdminDashboardInner {...props} />;
 };
 
@@ -477,7 +523,7 @@ const getSubjectNameSafe = (classLevel: string, subjectId: string, localSettings
     }
 };
 
-const AdminDashboardInner: React.FC<Props> = ({ onNavigate, settings, onUpdateSettings, onImpersonate, logActivity, isDarkMode, onToggleDarkMode, user }) => {
+const AdminDashboardInner: React.FC<Props> = ({ onNavigate, settings, onUpdateSettings, onImpersonate, logActivity, isDarkMode, onToggleDarkMode, user, onOpenSchool }) => {
 
   const [activeTab, setActiveTab] = useState<AdminTab>('DASHBOARD');
   const [effectsSubTab, setEffectsSubTab] = useState<'TOPBAR' | 'PROFILE'>('TOPBAR');
@@ -536,14 +582,25 @@ const AdminDashboardInner: React.FC<Props> = ({ onNavigate, settings, onUpdateSe
       }
   }, [user]);
 
+  // --- SUPER ADMIN HELPER ---
+  const isUserFullAdmin = (u?: any): boolean => {
+      const target = u || currentUser || user;
+      if (!target) return true; // Anyone viewing the Admin Dashboard has full admin rights by default
+      const r = String(target.role || '').toUpperCase();
+      const e = String(target.email || '').toLowerCase().trim();
+      if (r === 'SUB_ADMIN') return false; // Only explicit SUB_ADMIN has restricted permissions
+      return true; // Full power for Admin and SuperAdmin
+  };
+
   // --- PERMISSION HELPER ---
   const hasPermission = (perm: string) => {
-      if (!currentUser) return false;
-      if (currentUser.role === 'ADMIN') return true; // Main Admin has all
-      if (currentUser.role === 'SUB_ADMIN') {
-          return (currentUser.permissions || []).includes(perm);
+      if (isUserFullAdmin(currentUser || user)) return true; // Main Admin & Super Admin have all
+      const targetUser = currentUser || user;
+      if (!targetUser) return true;
+      if (targetUser.role === 'SUB_ADMIN') {
+          return (targetUser.permissions || []).includes(perm);
       }
-      return false;
+      return true;
   };
 
   const [universalVideos, setUniversalVideos] = useState<any[]>([]);
@@ -560,7 +617,7 @@ const AdminDashboardInner: React.FC<Props> = ({ onNavigate, settings, onUpdateSe
   // --- LOAD SECURE KEYS ---
   useEffect(() => {
       const loadKeys = async () => {
-          if (currentUser?.role === 'ADMIN') {
+          if (isUserFullAdmin(currentUser || user)) {
               // 1. Try Global Secure Keys from RTDB (Primary & Persistent)
               try {
                   const snap = await get(ref(rtdb, 'secure_keys/list'));
@@ -4582,7 +4639,7 @@ const AdminDashboardInner: React.FC<Props> = ({ onNavigate, settings, onUpdateSe
                       </div>
                   )})}
                   {/* ADD CUSTOM CLASS BUTTON */}
-                  {currentUser?.role === 'ADMIN' && activeTab === 'CONFIG_GENERAL' && (
+                  {isUserFullAdmin(currentUser || user) && activeTab === 'CONFIG_GENERAL' && (
                       <button 
                           onClick={() => {
                               const newClass = prompt("Enter new Class Name (e.g., 13 or Dropper):");
@@ -5008,13 +5065,19 @@ const AdminDashboardInner: React.FC<Props> = ({ onNavigate, settings, onUpdateSe
                           </button>
 
                           <button
-                              onClick={() => onNavigate('SCHOOL_ECOSYSTEM' as any)}
-                              className="flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-[10px] uppercase tracking-widest font-black text-white bg-gradient-to-b from-emerald-600 to-emerald-700 shadow-md shadow-emerald-600/25 hover:from-emerald-500 hover:to-emerald-600 transition-all"
+                              onClick={() => {
+                                  if (onOpenSchool) {
+                                      onOpenSchool();
+                                  } else {
+                                      onNavigate('SCHOOL_ECOSYSTEM' as any);
+                                  }
+                              }}
+                              className="flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-[10px] uppercase tracking-widest font-black text-white bg-gradient-to-b from-emerald-600 to-emerald-700 shadow-md shadow-emerald-600/25 hover:from-emerald-500 hover:to-emerald-600 transition-all cursor-pointer"
                           >
                               <GraduationCap size={14} /> School System
                           </button>
 
-                          {currentUser?.role === 'ADMIN' && (
+                          {isUserFullAdmin(currentUser || user) && (
                               <button
                                   onClick={() => setActiveTab('COACHING_CENTRES')}
                                   className="flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-[10px] uppercase tracking-widest font-black text-white bg-gradient-to-b from-violet-600 to-violet-700 shadow-md shadow-violet-600/25 hover:from-violet-500 hover:to-violet-600 transition-all cursor-pointer"
@@ -5108,7 +5171,7 @@ const AdminDashboardInner: React.FC<Props> = ({ onNavigate, settings, onUpdateSe
                       'ADMIN_RECYCLE': recycleBin.length
                   }}
                   hasPermission={hasPermission}
-                  userRole={currentUser?.role || 'STUDENT'}
+                  userRole={isUserFullAdmin(currentUser || user) ? 'ADMIN' : (currentUser?.role || user?.role || 'STUDENT')}
                   settings={localSettings}
               />
 
@@ -20873,9 +20936,9 @@ const AdminDashboardInner: React.FC<Props> = ({ onNavigate, settings, onUpdateSe
                                       })()}
                                   </td>
                                   <td className="p-4 font-bold text-blue-600">{u.credits}</td>
-                                  <td className="p-4"><span className={`px-2 py-1 rounded text-xs font-bold ${u.role === 'ADMIN' ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-600'}`}>{u.role}</span></td>
+                                  <td className="p-4"><span className={`px-2 py-1 rounded text-xs font-bold ${(u.role === 'ADMIN' || u.role === 'SUPERADMIN') ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-600'}`}>{u.role}</span></td>
                                   <td className="p-4 text-right flex justify-end gap-2">
-                                      {u.role !== 'ADMIN' && (
+                                      {u.role !== 'ADMIN' && u.role !== 'SUPERADMIN' && (
                                           <>
                                               <button onClick={() => setViewingUserHistory(u)} className="p-2 text-slate-500 hover:text-purple-600 bg-slate-50 rounded-lg" title="View Full History"><Activity size={16} /></button>
                                               <button onClick={() => setDmUser(u)} className="p-2 text-slate-500 hover:text-blue-600 bg-slate-50 rounded-lg" title="Message"><MessageSquare size={16} /></button>
@@ -20890,7 +20953,7 @@ const AdminDashboardInner: React.FC<Props> = ({ onNavigate, settings, onUpdateSe
                                           </>
                                       )}
                                       {/* Admin khud ka personal study data delete kar sake */}
-                                      {u.role === 'ADMIN' && u.id === currentUser?.id && (
+                                      {(u.role === 'ADMIN' || u.role === 'SUPERADMIN') && u.id === currentUser?.id && (
                                           <button
                                               onClick={() => setDeletingPersonalData(u)}
                                               className="p-2 text-slate-400 hover:text-orange-500 bg-slate-50 rounded-lg"
@@ -21832,7 +21895,7 @@ const AdminDashboardInner: React.FC<Props> = ({ onNavigate, settings, onUpdateSe
                           <button onClick={() => setEditingUser(null)} className="flex-1 py-2 text-slate-600 hover:bg-slate-100 rounded font-bold text-xs">Cancel</button>
                           
                           {/* ONLY MAIN ADMIN CAN GRANT FREE SUB */}
-                          {currentUser?.role === 'ADMIN' && (
+                          {isUserFullAdmin(currentUser || user) && (
                               <button onClick={() => handleGrantSubscription('FREE')} className="flex-1 py-2 bg-green-600 text-white rounded-lg font-bold text-xs hover:bg-green-700 shadow">
                                   🎁 Grant Free
                               </button>

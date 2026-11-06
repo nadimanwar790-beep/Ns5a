@@ -10,6 +10,7 @@ import {
   CheckCircle2, Sparkles, Filter, Layers, FileSpreadsheet, X, Search,
   Calendar, Award, AlertCircle
 } from "lucide-react";
+import { detectClassWing } from "./MarksheetGenerator";
 
 function getTotalGrade(pct: number) {
   if (pct >= 91) return "A+";
@@ -452,10 +453,15 @@ export const MarksManager: React.FC<Props> = ({
 
           {/* Exam Presets (PA 1, PA 2, Half Yearly, etc.) */}
           <div>
-            <label className="text-xs font-bold text-slate-600 dark:text-slate-300 block mb-1.5">
-              📅 Exam Type Chunein (PA 40 Marks, Half/Final 100 Marks):
-            </label>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-bold text-slate-600 dark:text-slate-300">
+                📅 Exam Type Chunein (PA 1, PA 2, Half Yearly, PA 3, PA 4, Final Annual, ya Extra Exam):
+              </label>
+              <span className="text-[11px] text-blue-600 dark:text-blue-400 font-bold">
+                Selected: {examName || "None"} ({mx} Marks)
+              </span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {COMMON_EXAM_PRESETS.map(p => (
                 <button
                   key={p.name}
@@ -475,6 +481,28 @@ export const MarksManager: React.FC<Props> = ({
                   <p className="text-[10px] opacity-75">{p.date}</p>
                 </button>
               ))}
+
+              {/* + Add Extra Exam Quick Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  const customName = prompt("Naya Extra Exam / Test ka naam daalein (e.g. Unit Test 1, Class Test, Weekly Test):");
+                  if (customName && customName.trim()) {
+                    setExamName(customName.trim());
+                    const m = prompt("Is exam ka Full Marks (Max Marks / पूर्णांक) kitna hai?", "40");
+                    if (m && Number(m) > 0) {
+                      setMaxMarks(Number(m));
+                    }
+                  }
+                }}
+                className="px-3 py-2 rounded-xl text-xs font-black border border-dashed border-amber-400 dark:border-amber-600 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 hover:bg-amber-100 transition cursor-pointer flex flex-col justify-center items-center text-center"
+              >
+                <span className="flex items-center gap-1 font-black">
+                  <Plus className="w-3.5 h-3.5" />
+                  + Extra Exam
+                </span>
+                <span className="text-[10px] text-amber-600 dark:text-amber-400">Custom Test / Exam</span>
+              </button>
             </div>
           </div>
 
@@ -558,17 +586,49 @@ export const MarksManager: React.FC<Props> = ({
                 />
               </div>
               <div>
-                <label className="text-[11px] font-bold text-slate-500 mb-1 block">Max Marks (पूर्णांक)</label>
-                <input
-                  type="number"
-                  value={maxMarks}
-                  onChange={e => setMaxMarks(Number(e.target.value))}
-                  min={1}
-                  max={1000}
-                  className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-xs font-black"
-                />
+                <label className="text-[11px] font-bold text-slate-500 mb-1 block">Full Marks (पूर्णांक / Max Marks)</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    value={maxMarks}
+                    onChange={e => setMaxMarks(Number(e.target.value) || 100)}
+                    min={1}
+                    max={1000}
+                    className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-xs font-black"
+                  />
+                  <div className="flex gap-1 shrink-0">
+                    {[40, 50, 80, 100].map(mVal => (
+                      <button
+                        key={mVal}
+                        type="button"
+                        onClick={() => setMaxMarks(mVal)}
+                        className={`text-[10px] px-2 py-1 rounded font-bold cursor-pointer transition ${
+                          maxMarks === mVal
+                            ? "bg-blue-600 text-white"
+                            : "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200"
+                        }`}
+                      >
+                        {mVal}M
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
+          </div>
+        </div>
+
+        {/* Fast Keyboard Entry Instructions Banner */}
+        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-slate-800 dark:to-slate-800 border border-blue-200 dark:border-slate-700 rounded-2xl p-3 flex items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2 text-blue-900 dark:text-blue-200">
+            <span className="text-base">⚡</span>
+            <span>
+              <strong>Superfast Entry:</strong> Marks bhar kar keyboard ka <strong>Enter (↵)</strong> button dabayein — cursor turant next student par chala jayega! <strong>↑ / ↓</strong> arrows se bhi upar-neeche navigate kar sakte hain.
+            </span>
+          </div>
+          <div className="hidden sm:flex items-center gap-1.5 shrink-0 bg-white dark:bg-slate-900 px-2.5 py-1 rounded-xl border border-blue-200 dark:border-slate-700 text-[11px] font-black text-slate-700 dark:text-slate-200">
+            <span>Full Marks:</span>
+            <span className="text-blue-600 dark:text-blue-400 font-black">{mx}</span>
           </div>
         </div>
 
@@ -577,12 +637,23 @@ export const MarksManager: React.FC<Props> = ({
           <div className="px-4 py-3 bg-slate-50 dark:bg-slate-700/50 border-b dark:border-slate-700 flex items-center justify-between text-xs font-bold text-slate-600 dark:text-slate-300">
             <span className="w-12 text-center">Roll</span>
             <span className="flex-1">Student Name</span>
-            <span className="w-24 text-center">Marks / {mx}</span>
+            <div className="w-32 flex items-center justify-center gap-1.5">
+              <span>Full Marks:</span>
+              <input
+                type="number"
+                min={1}
+                max={1000}
+                value={maxMarks}
+                onChange={e => setMaxMarks(Number(e.target.value) || 100)}
+                className="w-14 px-1 py-0.5 border border-slate-300 dark:border-slate-600 rounded text-center text-xs font-black bg-white dark:bg-slate-900 text-blue-600 dark:text-blue-400"
+                title="Full Marks change karne ke liye yahan edit karein"
+              />
+            </div>
             <span className="w-16 text-center">Absent</span>
           </div>
 
           <div className="divide-y dark:divide-slate-700 max-h-[55vh] overflow-y-auto">
-            {students.map(s => {
+            {students.map((s, idx) => {
               const isAb = absentMap[s.id] || false;
               const val = marksInput[s.id] || "";
               const numVal = parseFloat(val);
@@ -607,8 +678,9 @@ export const MarksManager: React.FC<Props> = ({
                     </p>
                   </div>
 
-                  <div className="w-24 flex flex-col items-center">
+                  <div className="w-32 flex flex-col items-center">
                     <input
+                      id={`student_mark_input_${idx}`}
                       type="number"
                       min={0}
                       max={mx}
@@ -616,13 +688,37 @@ export const MarksManager: React.FC<Props> = ({
                       value={isAb ? "" : val}
                       disabled={isAb}
                       onChange={e => setMarksInput(prev => ({ ...prev, [s.id]: e.target.value }))}
+                      onKeyDown={e => {
+                        if (e.key === "Enter" || e.key === "ArrowDown") {
+                          e.preventDefault();
+                          if (idx < students.length - 1) {
+                            const nextInput = document.getElementById(`student_mark_input_${idx + 1}`) as HTMLInputElement | null;
+                            if (nextInput) {
+                              nextInput.focus();
+                              nextInput.select?.();
+                            }
+                          } else {
+                            const saveBtn = document.getElementById("save_exam_marks_btn") as HTMLButtonElement | null;
+                            if (saveBtn) saveBtn.focus();
+                          }
+                        } else if (e.key === "ArrowUp") {
+                          e.preventDefault();
+                          if (idx > 0) {
+                            const prevInput = document.getElementById(`student_mark_input_${idx - 1}`) as HTMLInputElement | null;
+                            if (prevInput) {
+                              prevInput.focus();
+                              prevInput.select?.();
+                            }
+                          }
+                        }
+                      }}
                       placeholder={isAb ? "AB" : "0"}
-                      className={`w-20 px-2 py-1.5 border rounded-xl text-center text-sm font-black transition ${
+                      className={`w-24 px-2 py-1.5 border rounded-xl text-center text-sm font-black transition ${
                         isInvalid
                           ? "border-red-500 bg-red-50 text-red-600"
                           : isAb
                           ? "border-slate-200 bg-slate-100 text-slate-400 opacity-60"
-                          : "border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                          : "border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                       }`}
                     />
                     {isInvalid && <span className="text-[9px] text-red-500 font-bold mt-0.5">Max {mx}</span>}
@@ -645,10 +741,11 @@ export const MarksManager: React.FC<Props> = ({
 
         {/* Save Button */}
         <button
+          id="save_exam_marks_btn"
           type="button"
           onClick={isNew ? saveNewExam : updateExamMarks}
           disabled={saving}
-          className="w-full py-3.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-2xl font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-blue-500/25 active:scale-98 transition cursor-pointer disabled:opacity-60"
+          className="w-full py-3.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-2xl font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-blue-500/25 active:scale-98 transition cursor-pointer disabled:opacity-60 focus:ring-4 focus:ring-blue-300"
         >
           <Save className="w-4 h-4" />
           <span>{saving ? "Marks Save Ho Rahe Hain..." : `Save Marks (${examSubjectName || "Subject"})`}</span>
@@ -680,8 +777,17 @@ export const MarksManager: React.FC<Props> = ({
                   {subjects.length} Books / Subjects
                 </span>
               </div>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Class: <strong className="text-slate-700 dark:text-slate-300">{className}</strong> • Sabhi subjects ke marks ek hi sheet mein daalein
+              <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
+                <span>Class: <strong className="text-slate-700 dark:text-slate-300">{className}</strong></span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                  {(() => {
+                    const w = detectClassWing(className);
+                    return w === "pre_primary" ? "🧸 Pre-Primary Wing (Oral & Activity Grading)" :
+                           w === "primary" ? "🎒 Primary Wing (Written, Oral, Notebook)" :
+                           "🎓 Middle / Secondary Wing (Theory & Practical / IA)";
+                  })()}
+                </span>
+                <span>• Sabhi subjects ke marks ek hi sheet mein daalein</span>
               </p>
             </div>
 
@@ -766,7 +872,7 @@ export const MarksManager: React.FC<Props> = ({
                 </tr>
               </thead>
               <tbody className="divide-y dark:divide-slate-700">
-                {filteredStudents.map(st => {
+                {filteredStudents.map((st, sIdx) => {
                   let studentTotal = 0;
                   let enteredCount = 0;
 
@@ -798,7 +904,7 @@ export const MarksManager: React.FC<Props> = ({
                         {st.name}
                       </td>
 
-                      {subjects.map(sub => {
+                      {subjects.map((sub, subIdx) => {
                         const val = masterMarksGrid[st.id]?.[sub.name] ?? "";
                         const isAb = masterAbsentGrid[st.id]?.[sub.name] ?? false;
 
@@ -806,6 +912,7 @@ export const MarksManager: React.FC<Props> = ({
                           <td key={sub.id} className="p-1.5 text-center border-r dark:border-slate-700">
                             <div className="flex items-center justify-center gap-1">
                               <input
+                                id={`master_cell_${sIdx}_${subIdx}`}
                                 type="number"
                                 min={0}
                                 max={masterMaxMarks}
@@ -822,6 +929,23 @@ export const MarksManager: React.FC<Props> = ({
                                       [sub.name]: newVal
                                     }
                                   }));
+                                }}
+                                onKeyDown={e => {
+                                  if (e.key === "Enter" || e.key === "ArrowDown") {
+                                    e.preventDefault();
+                                    const nextCell = document.getElementById(`master_cell_${sIdx + 1}_${subIdx}`) as HTMLInputElement | null;
+                                    if (nextCell) {
+                                      nextCell.focus();
+                                      nextCell.select?.();
+                                    }
+                                  } else if (e.key === "ArrowUp") {
+                                    e.preventDefault();
+                                    const prevCell = document.getElementById(`master_cell_${sIdx - 1}_${subIdx}`) as HTMLInputElement | null;
+                                    if (prevCell) {
+                                      prevCell.focus();
+                                      prevCell.select?.();
+                                    }
+                                  }
                                 }}
                                 className={`w-14 px-1.5 py-1 text-center text-xs font-bold rounded-lg border transition ${
                                   isAb

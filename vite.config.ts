@@ -45,7 +45,21 @@ export default defineConfig(({ command }) => {
     },
     optimizeDeps: {
       entries: ['src/main.tsx'],
-      holdUntilCrawlEnd: false,
+      include: [
+        'react',
+        'react-dom',
+        'react-dom/client',
+        'react/jsx-runtime',
+        'react/jsx-dev-runtime',
+        'lucide-react',
+        'firebase/app',
+        'firebase/auth',
+        'firebase/firestore',
+        'firebase/database',
+        'framer-motion',
+        'clsx',
+        'tailwind-merge',
+      ],
     },
     plugins: [
       tailwindcss(),
@@ -128,6 +142,14 @@ export default defineConfig(({ command }) => {
       host: '0.0.0.0',
       allowedHosts: true,
       hmr: false,
+      watch: {
+        ignored: [
+          '**/.aistudio/**',
+          '**/public/assets/aistudio/**',
+          '**/.vapid-keys.json',
+          '**/.push-subscriptions.json',
+        ],
+      },
     },
     preview: {
       port: 3000,

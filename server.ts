@@ -1,16 +1,49 @@
 import express from "express";
 import fs from "fs";
+import os from "os";
 import path from "path";
 import crypto from "crypto";
 import webpush from "web-push";
 
-const PORT = Number(process.env.PORT || 3000);
+// Prevent transient socket resets (e.g. pre-warmer closing connections early)
+// or background async errors from terminating the dev/prod server process.
+process.on("uncaughtException", (err: any) => {
+  if (
+    err?.code === "EPIPE" ||
+    err?.code === "ECONNRESET" ||
+    (err?.code === "EADDRINUSE" && String(err?.message || "").includes("24678")) ||
+    String(err?.message || "").includes("WebSocket")
+  ) {
+    return;
+  }
+  console.error("[Server] Uncaught exception:", err?.message || err);
+});
+
+process.on("unhandledRejection", (reason: any) => {
+  console.error("[Server] Unhandled rejection:", reason?.message || reason);
+});
+
+function resolvePort(): number {
+  const portFlagIdx = process.argv.indexOf("--port");
+  if (portFlagIdx !== -1 && process.argv[portFlagIdx + 1]) {
+    const parsed = Number(process.argv[portFlagIdx + 1]);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return Number(process.env.PORT || 3000);
+}
+
+const PORT = resolvePort();
 const isProduction = process.env.NODE_ENV === "production";
 const ROOT_DIR = process.cwd();
-const VAPID_FILE = path.join(ROOT_DIR, ".vapid-keys.json");
-const SUBS_FILE = path.join(ROOT_DIR, ".push-subscriptions.json");
+const TMP_DIR = os.tmpdir();
+const VAPID_FILE = path.join(TMP_DIR, "nsta-vapid-keys.json");
+const LEGACY_VAPID_FILE = path.join(ROOT_DIR, ".vapid-keys.json");
+const SUBS_FILE = path.join(TMP_DIR, "nsta-push-subscriptions.json");
+const LEGACY_SUBS_FILE = path.join(ROOT_DIR, ".push-subscriptions.json");
 const RTDB_BASE_URL = process.env.FIREBASE_DATABASE_URL || "https://nst2512-6a2e4-default-rtdb.asia-southeast1.firebasedatabase.app";
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "nst2512-6a2e4";
+
+let activeVapidKeys: { publicKey: string; privateKey: string } = { publicKey: "", privateKey: "" };
 
 let cachedFcmAccessToken: { token: string; expiresAt: number } | null = null;
 
@@ -245,29 +278,39 @@ function saveLocalSubscriptions(): void {
   }
 }
 
-async function initPushEngine(): Promise<{ publicKey: string; privateKey: string }> {
-  let publicKey = process.env.VAPID_PUBLIC_KEY || "";
-  let privateKey = process.env.VAPID_PRIVATE_KEY || "";
-
-  if (!publicKey || !privateKey) {
-    try {
-      if (fs.existsSync(VAPID_FILE)) {
-        const saved = JSON.parse(fs.readFileSync(VAPID_FILE, "utf8"));
-        if (saved?.publicKey && saved?.privateKey) {
-          publicKey = saved.publicKey;
-          privateKey = saved.privateKey;
-        }
-      }
-    } catch {}
+function applyVapidDetailsSafe(publicKey: string, privateKey: string): { publicKey: string; privateKey: string } {
+  const rawSubject = (process.env.VAPID_SUBJECT || "mailto:support@nsta.app").trim();
+  const subject =
+    rawSubject.startsWith("mailto:") || rawSubject.startsWith("https://")
+      ? rawSubject
+      : "mailto:support@nsta.app";
+  try {
+    webpush.setVapidDetails(subject, publicKey, privateKey);
+    activeVapidKeys = { publicKey, privateKey };
+    return activeVapidKeys;
+  } catch {
+    const generated = webpush.generateVAPIDKeys();
+    webpush.setVapidDetails("mailto:support@nsta.app", generated.publicKey, generated.privateKey);
+    activeVapidKeys = { publicKey: generated.publicKey, privateKey: generated.privateKey };
+    return activeVapidKeys;
   }
+}
+
+function initPushEngineSync(): { publicKey: string; privateKey: string } {
+  let publicKey = (process.env.VAPID_PUBLIC_KEY || "").trim();
+  let privateKey = (process.env.VAPID_PRIVATE_KEY || "").trim();
 
   if (!publicKey || !privateKey) {
-    const remoteKeys = await rtdbGet<{ publicKey?: string; privateKey?: string }>("system_config/school_webpush_vapid");
-    if (remoteKeys?.publicKey && remoteKeys?.privateKey) {
-      publicKey = remoteKeys.publicKey;
-      privateKey = remoteKeys.privateKey;
+    for (const candidate of [VAPID_FILE, LEGACY_VAPID_FILE]) {
       try {
-        fs.writeFileSync(VAPID_FILE, JSON.stringify({ publicKey, privateKey }, null, 2), "utf8");
+        if (fs.existsSync(candidate)) {
+          const saved = JSON.parse(fs.readFileSync(candidate, "utf8"));
+          if (saved?.publicKey && saved?.privateKey) {
+            publicKey = saved.publicKey;
+            privateKey = saved.privateKey;
+            break;
+          }
+        }
       } catch {}
     }
   }
@@ -279,58 +322,80 @@ async function initPushEngine(): Promise<{ publicKey: string; privateKey: string
     try {
       fs.writeFileSync(VAPID_FILE, JSON.stringify({ publicKey, privateKey }, null, 2), "utf8");
     } catch {}
-    await rtdbPut("system_config/school_webpush_vapid", { publicKey, privateKey });
   }
 
-  const subject = process.env.VAPID_SUBJECT || "mailto:support@nsta.app";
-  webpush.setVapidDetails(subject, publicKey, privateKey);
+  const keys = applyVapidDetailsSafe(publicKey, privateKey);
 
-  // Hydrate subscriptions from local disk & RTDB
+  // Hydrate local disk subscriptions immediately without blocking on network
+  for (const candidate of [SUBS_FILE, LEGACY_SUBS_FILE]) {
+    try {
+      if (fs.existsSync(candidate)) {
+        const parsed = JSON.parse(fs.readFileSync(candidate, "utf8"));
+        if (Array.isArray(parsed?.subscriptions)) {
+          for (const sub of parsed.subscriptions) {
+            if (sub?.id && sub?.subscription?.endpoint) {
+              subscriptionsMap.set(sub.id, sub);
+            }
+          }
+        }
+        if (Array.isArray(parsed?.dues)) {
+          for (const d of parsed.dues) {
+            if (d?.schoolId && d?.studentId) {
+              studentDuesMap.set(`${d.schoolId}__${d.studentId}`, d);
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
+  return keys;
+}
+
+async function hydrateRemotePushEngine(): Promise<void> {
   try {
-    if (fs.existsSync(SUBS_FILE)) {
-      const parsed = JSON.parse(fs.readFileSync(SUBS_FILE, "utf8"));
-      if (Array.isArray(parsed?.subscriptions)) {
-        for (const sub of parsed.subscriptions) {
-          if (sub?.id && sub?.subscription?.endpoint) {
-            subscriptionsMap.set(sub.id, sub);
-          }
+    if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
+      const remoteKeys = await rtdbGet<{ publicKey?: string; privateKey?: string }>("system_config/school_webpush_vapid");
+      if (remoteKeys?.publicKey && remoteKeys?.privateKey) {
+        const applied = applyVapidDetailsSafe(remoteKeys.publicKey, remoteKeys.privateKey);
+        try {
+          fs.writeFileSync(VAPID_FILE, JSON.stringify(applied, null, 2), "utf8");
+        } catch {}
+      } else if (activeVapidKeys.publicKey && activeVapidKeys.privateKey) {
+        await rtdbPut("system_config/school_webpush_vapid", activeVapidKeys);
+      }
+    }
+
+    const [remoteSubs, remoteDues] = await Promise.all([
+      rtdbGet<Record<string, StoredPushSubscription>>("school_webpush_subs"),
+      rtdbGet<Record<string, StudentDueSnapshot>>("school_webpush_dues"),
+    ]);
+
+    if (remoteSubs && typeof remoteSubs === "object") {
+      for (const [id, sub] of Object.entries(remoteSubs)) {
+        if (sub && sub.subscription?.endpoint) {
+          subscriptionsMap.set(id, {
+            ...sub,
+            id,
+            students: Array.isArray(sub.students) ? sub.students : [],
+            notifiedMonthsByStudent: sub.notifiedMonthsByStudent || {},
+          });
         }
       }
-      if (Array.isArray(parsed?.dues)) {
-        for (const d of parsed.dues) {
-          if (d?.schoolId && d?.studentId) {
-            studentDuesMap.set(`${d.schoolId}__${d.studentId}`, d);
-          }
+    }
+
+    if (remoteDues && typeof remoteDues === "object") {
+      for (const [key, snap] of Object.entries(remoteDues)) {
+        if (snap && snap.studentId) {
+          studentDuesMap.set(key, snap);
         }
       }
     }
-  } catch {}
 
-  const remoteSubs = await rtdbGet<Record<string, StoredPushSubscription>>("school_webpush_subs");
-  if (remoteSubs && typeof remoteSubs === "object") {
-    for (const [id, sub] of Object.entries(remoteSubs)) {
-      if (sub && sub.subscription?.endpoint) {
-        subscriptionsMap.set(id, {
-          ...sub,
-          id,
-          students: Array.isArray(sub.students) ? sub.students : [],
-          notifiedMonthsByStudent: sub.notifiedMonthsByStudent || {},
-        });
-      }
-    }
+    saveLocalSubscriptions();
+  } catch (err: any) {
+    console.warn("[Server] Remote push hydration skipped:", err?.message || err);
   }
-
-  const remoteDues = await rtdbGet<Record<string, StudentDueSnapshot>>("school_webpush_dues");
-  if (remoteDues && typeof remoteDues === "object") {
-    for (const [key, snap] of Object.entries(remoteDues)) {
-      if (snap && snap.studentId) {
-        studentDuesMap.set(key, snap);
-      }
-    }
-  }
-
-  saveLocalSubscriptions();
-  return { publicKey, privateKey };
 }
 
 async function dispatchWebPush(
@@ -442,14 +507,14 @@ async function runMonthlyAutoFeeNotifier(): Promise<number> {
 }
 
 async function startServer() {
-  const { publicKey } = await initPushEngine();
+  initPushEngineSync();
   const app = express();
 
   app.use(express.json({ limit: "5mb" }));
 
   // 1. Public VAPID key for browser PushManager.subscribe()
   app.get("/api/school-push/vapid-public-key", (_req, res) => {
-    res.json({ publicKey });
+    res.json({ publicKey: activeVapidKeys.publicKey });
   });
 
   // 2. Subscribe or update linked students for a device (supports Multi-Student under 1 User ID)
@@ -761,6 +826,49 @@ async function startServer() {
     }
   });
 
+  // Telegram helper proxy routes (parity with serverless api/push-router.ts)
+  app.get("/api/telegram/health", async (_req, res) => {
+    const token = (process.env.TELEGRAM_BOT_TOKEN || process.env.VITE_TELEGRAM_BOT_TOKEN || "").trim();
+    if (!token) return res.status(200).json({ ok: false, error: "TELEGRAM_BOT_TOKEN not configured" });
+    try {
+      const r = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+      const data = (await r.json().catch(() => ({ ok: false }))) as any;
+      return res.status(r.ok ? 200 : 502).json({ ok: Boolean(data?.ok), bot: data?.result, error: data?.description });
+    } catch (err: any) {
+      return res.status(502).json({ ok: false, error: err?.message || "Telegram health check failed" });
+    }
+  });
+
+  app.post("/api/telegram/sendMessage", async (req, res) => {
+    const token = (process.env.TELEGRAM_BOT_TOKEN || process.env.VITE_TELEGRAM_BOT_TOKEN || "").trim();
+    const defaultChatId = (process.env.TELEGRAM_CHAT_CHANNEL_ID || process.env.VITE_TELEGRAM_CHAT_CHANNEL_ID || "").trim();
+    if (!token) return res.status(400).json({ ok: false, error: "TELEGRAM_BOT_TOKEN not configured" });
+    try {
+      const { text, chat_id, reply_to_message_id, parse_mode = "HTML" } = req.body || {};
+      const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chat_id || defaultChatId,
+          text,
+          reply_to_message_id,
+          parse_mode,
+        }),
+      });
+      const data = await r.json().catch(() => ({ ok: false }));
+      return res.status(r.ok ? 200 : 502).json(data);
+    } catch (err: any) {
+      return res.status(502).json({ ok: false, error: err?.message || "Telegram sendMessage failed" });
+    }
+  });
+
+  app.get("/api/telegram/file", (req, res) => {
+    const filePath = String(req.query?.path || "");
+    const token = String(req.query?.token || process.env.TELEGRAM_BOT_TOKEN || process.env.VITE_TELEGRAM_BOT_TOKEN || "").trim();
+    if (!filePath || !token) return res.status(400).json({ error: "Missing path or token" });
+    return res.redirect(302, `https://api.telegram.org/file/bot${token}/${filePath}`);
+  });
+
   // Periodic background scheduler (checks every 15 minutes for new month's pending fee alerts)
   setInterval(() => {
     void runMonthlyAutoFeeNotifier();
@@ -769,7 +877,7 @@ async function startServer() {
   if (!isProduction) {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: false },
       appType: "spa",
     });
     app.use(vite.middlewares);
@@ -784,8 +892,23 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  // Global Express error handler so middleware errors never terminate the process
+  app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error("[Server] Express middleware error:", err?.message || err);
+    if (!res.headersSent) {
+      res.status(err?.status || 500).json({ error: err?.message || "Internal Server Error" });
+    }
+  });
+
+  const httpServer = app.listen(PORT, "0.0.0.0", () => {
     console.log(`[Server] Running on http://0.0.0.0:${PORT} (${isProduction ? "production" : "development"})`);
+    // Hydrate remote RTDB push state asynchronously so server startup & pre-warming are never blocked
+    void hydrateRemotePushEngine();
+  });
+
+  httpServer.on("clientError", (err: any, socket) => {
+    if (err?.code === "ECONNRESET" || !socket.writable) return;
+    socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
   });
 }
 

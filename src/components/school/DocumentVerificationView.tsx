@@ -235,6 +235,22 @@ export const DocumentVerificationView: React.FC<Props> = ({
                     {docData?.status || "PASSED"}
                   </span>
                 </div>
+                {(docData?.classRank || docData?.sectionRank) && (
+                  <div className="flex items-center justify-end gap-1.5 flex-wrap pt-1">
+                    {docData?.classRank && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 border border-amber-300 text-amber-950 font-black text-[10px]">
+                        <span>🏅</span>
+                        <span>Class Rank: <b className="text-amber-900 font-black">{docData.classRank}</b></span>
+                      </span>
+                    )}
+                    {docData?.sectionRank && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-50 border border-sky-300 text-sky-950 font-black text-[10px]">
+                        <span>🎖️</span>
+                        <span>Section Rank: <b className="text-sky-900 font-black">{docData.sectionRank}</b></span>
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Photo Box */}

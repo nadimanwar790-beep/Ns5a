@@ -4,8 +4,14 @@ import { UserPlus, X, Save, User, Phone, Calendar, Image as ImageIcon, CheckCirc
 import { DirectUploadButton } from "../DirectUploadButton";
 import { saveStudent, generateId, generateNextAdmissionNo, saveSchoolUserProfile, getLocalStudents, setLocalStudents } from "../../school-firebase";
 import { saveUserToLive } from "../../firebase";
-import type { School, SchoolClass, SchoolStudent } from "../../school-types";
-import { BLOOD_GROUPS } from "../../school-types";
+import type { School, SchoolClass, SchoolStudent, SeniorStream } from "../../school-types";
+import {
+  BLOOD_GROUPS,
+  SENIOR_STREAMS,
+  isSeniorClass,
+  sortSchoolClasses,
+  getDefaultSubjectsForClass,
+} from "../../school-types";
 
 interface Props {
   isOpen: boolean;
@@ -24,8 +30,18 @@ export const QuickAddStudentModal: React.FC<Props> = ({
   defaultClassId,
   onStudentAdded,
 }) => {
-  const initialCls = classes.find(c => c.id === defaultClassId) || classes[0];
-  const [classId, setClassId] = useState<string>(defaultClassId || classes[0]?.id || "");
+  const sortedClasses = React.useMemo(() => sortSchoolClasses(classes), [classes]);
+  const initialCls = sortedClasses.find(c => c.id === defaultClassId) || sortedClasses[0];
+  const [classId, setClassId] = useState<string>(defaultClassId || sortedClasses[0]?.id || "");
+  const [stream, setStream] = useState<SeniorStream>("Science");
+  const selectedCls = React.useMemo(() => sortedClasses.find(c => c.id === classId) || null, [sortedClasses, classId]);
+
+  React.useEffect(() => {
+    if (selectedCls?.stream && (selectedCls.stream === "Science" || selectedCls.stream === "Commerce" || selectedCls.stream === "Arts")) {
+      setStream(selectedCls.stream as SeniorStream);
+    }
+  }, [selectedCls]);
+
   const [name, setName] = useState("");
   const [rollNo, setRollNo] = useState("");
   const [admissionNo, setAdmissionNo] = useState(() =>
@@ -60,11 +76,16 @@ export const QuickAddStudentModal: React.FC<Props> = ({
     setError(null);
     try {
       const studentId = generateId();
+      const isSenior = isSeniorClass(selectedCls?.name);
+      const chosenStream = isSenior ? (selectedCls?.stream || stream) : undefined;
+
       const newStudent: SchoolStudent = {
         id: studentId,
         schoolId,
         sessionId: "",
         classId,
+        className: selectedCls ? `${selectedCls.name}${selectedCls.section ? ` (${selectedCls.section})` : ""}` : "",
+        stream: chosenStream,
         name: name.trim(),
         rollNo: rollNo.trim(),
         admissionNo: admissionNo.trim(),
@@ -100,7 +121,7 @@ export const QuickAddStudentModal: React.FC<Props> = ({
           role: 'STUDENT',
           schoolId,
           classLevel: classId,
-          stream: 'General',
+          stream: chosenStream || 'General',
           credits: 100,
           diamonds: 50,
           streak: 1,
@@ -182,7 +203,7 @@ export const QuickAddStudentModal: React.FC<Props> = ({
                 onChange={e => setClassId(e.target.value)}
                 className="w-full px-3 py-2 text-xs font-bold rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500 outline-hidden"
               >
-                {classes.map(c => (
+                {sortedClasses.map(c => (
                   <option key={c.id} value={c.id}>{c.name} {c.section ? `(${c.section})` : ""}</option>
                 ))}
               </select>
@@ -201,6 +222,44 @@ export const QuickAddStudentModal: React.FC<Props> = ({
               />
             </div>
           </div>
+
+          {isSeniorClass(selectedCls?.name) && (
+            <div className="p-3 bg-gradient-to-r from-emerald-50/80 to-teal-50/80 dark:from-emerald-950/40 dark:to-teal-950/30 rounded-2xl border border-emerald-200 dark:border-emerald-800 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-black text-emerald-900 dark:text-emerald-200 flex items-center gap-1.5">
+                  <span>🔬 Stream Selection (11वीं / 12वीं स्ट्रीम) *</span>
+                </label>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-300">
+                  {selectedCls?.name}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {SENIOR_STREAMS.map(st => {
+                  const isSel = stream === st.id;
+                  return (
+                    <button
+                      type="button"
+                      key={st.id}
+                      onClick={() => setStream(st.id)}
+                      className={`py-1.5 px-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer ${
+                        isSel
+                          ? "bg-emerald-600 text-white shadow-xs ring-2 ring-emerald-400"
+                          : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700"
+                      }`}
+                    >
+                      {st.icon} {st.id}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[10px] text-emerald-800 dark:text-emerald-300 bg-white/70 dark:bg-slate-900/70 p-2 rounded-xl border border-emerald-100 dark:border-emerald-900">
+                <span className="font-bold">विषय (Pre-configured Subjects): </span>
+                <span>
+                  {getDefaultSubjectsForClass(selectedCls?.name || "Class 11", stream).join(", ")}
+                </span>
+              </p>
+            </div>
+          )}
 
           {/* Student Full Name & Adm No */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

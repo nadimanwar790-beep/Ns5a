@@ -4306,6 +4306,17 @@ export const StudentDashboard: React.FC<Props> = ({
   const [homeworkSubjectView, setHomeworkSubjectView] = useState<string | null>(null);
   // Competition MCQ Practice lessons (from admin-added mcq_lessons collection)
   const [compMcqPracticeLessons, setCompMcqPracticeLessons] = useState<any[]>([]);
+  // All Admin-added MCQ lessons across classes and competition (from mcq_lessons collection)
+  const [allAdminMcqLessons, setAllAdminMcqLessons] = useState<any[]>(() => {
+    try {
+      const raw = localStorage.getItem('nst_mcq_lessons_cache');
+      if (raw) {
+        const map = JSON.parse(raw);
+        return Object.values(map || {});
+      }
+    } catch {}
+    return [];
+  });
   // Standalone interactive MCQ session for competition MCQ practice sets
   const [compMcqSession, setCompMcqSession] = useState<{ items: any[]; title: string; subtitle: string; lessonId?: string; isMistakeMode?: boolean; rawIndices?: number[] } | null>(null);
   const [compMcqAnswers, setCompMcqAnswers] = useState<Record<number, number>>({});
@@ -4610,11 +4621,13 @@ export const StudentDashboard: React.FC<Props> = ({
     return () => unsubs.forEach(u => u());
   }, [activeSessionBoard, user?.board]);
 
-  // Subscribe to Competition MCQ Practice lessons from admin-added mcq_lessons collection
+  // Subscribe to all MCQ lessons from admin-added mcq_lessons collection
   useEffect(() => {
     const unsub = subscribeMcqLessons((lessons) => {
+      const safe = Array.isArray(lessons) ? lessons : [];
+      setAllAdminMcqLessons(safe);
       setCompMcqPracticeLessons(
-        lessons.filter((l: any) => (l.classLevel === 'COMPETITION' || !l.classLevel || l.classLevel === 'ALL') && (l.subject === 'MCQ_PRACTICE' || !l.subject || l.practiceSubject || l.subject === 'COMPETITION') && Array.isArray(l.mcqs) && l.mcqs.length > 0)
+        safe.filter((l: any) => (l.classLevel === 'COMPETITION' || !l.classLevel || l.classLevel === 'ALL') && (l.subject === 'MCQ_PRACTICE' || !l.subject || l.practiceSubject || l.subject === 'COMPETITION') && Array.isArray(l.mcqs) && l.mcqs.length > 0)
       );
     });
     return unsub;
@@ -4986,6 +4999,12 @@ export const StudentDashboard: React.FC<Props> = ({
     window.addEventListener('storage', onStorage);
     const t = window.setInterval(refresh, 30000);
     return () => { window.removeEventListener('storage', onStorage); window.clearInterval(t); };
+  }, []);
+
+  useEffect(() => {
+    const handleOpenSets = () => setShowPracticeSetsModal(true);
+    window.addEventListener('nst-open-competition-sets', handleOpenSets);
+    return () => window.removeEventListener('nst-open-competition-sets', handleOpenSets);
   }, []);
   const [tabSnapshots, setTabSnapshots] = useState<Record<string, any>>({});
   const tabSnapshotsRef = React.useRef<Record<string, any>>({});
@@ -5485,14 +5504,14 @@ export const StudentDashboard: React.FC<Props> = ({
   const nstaFabLongPressTimerRef = useRef<any>(null);
   const nstaFabIsLongPressRef = useRef<boolean>(false);
 
-  // ── Screen Long-Press Gestures (NSTA Button Replacement) ──
-  // 1. Home cards: 1.5 seconds opens NSTA Wheel (top bar & bottom nav stay visible)
-  // 2. Study surfaces: 1 second toggles BOTH top bar and bottom navigation.
+  // ── Screen Long-Press Gestures (NSTA Button & Quick Tools) ──
+  // 1. Home page: 2.0 seconds hold opens NSTA Quick Wheel (10 Tools)
+  // 2. Study surfaces (Notes & MCQ): 1.5 seconds hold toggles BOTH top bar and bottom navigation.
   useEffect(() => {
     let holdTimer: any = null;
     let startX = 0;
     let startY = 0;
-    const MOVE_CANCEL_TOLERANCE_PX = 14;
+    const MOVE_CANCEL_TOLERANCE_PX = 24;
     let activePointerId: number | null = null;
     let pointerMovedSinceDown = false;
     let suppressClickAfterMove = false;
@@ -5506,8 +5525,6 @@ export const StudentDashboard: React.FC<Props> = ({
     };
 
     const handlePointerDown = (e: PointerEvent) => {
-      // Controls/cards keep their normal behavior. The Home NSTA logo is also
-      // a valid wheel target because it is the familiar place users hold.
       const target = e.target as HTMLElement | null;
       if (!target || !e.isPrimary || (e.pointerType === 'mouse' && e.button !== 0)) return;
 
@@ -5534,28 +5551,34 @@ export const StudentDashboard: React.FC<Props> = ({
         !compMcqSession &&
         !flashcardMcqs &&
         contentViewStep !== 'PLAYER';
-      const isHomeCardTarget =
-        isCurrentHome && Boolean(target.closest('.nst-card-animated, [data-home-card="true"]'));
-      const isHomeNstaWheelTarget =
-        isCurrentHome && Boolean(target.closest('#nsta-header-brand-btn'));
+
       const isStudyModeSurface = Boolean(
         contentViewStep === 'PLAYER' ||
+        activeTab === 'MCQ' ||
+        activeTab === 'MCQ_REVIEW' ||
+        (showChat && chatMode === 'MCQ') ||
+        showCompMcqHub ||
+        compMcqSession ||
+        flashcardMcqs ||
         hwActiveHwId ||
         mathViewerEntry ||
         lucentNoteViewer ||
-        compMcqSession ||
-        flashcardMcqs ||
-        showGroupStudyModal
+        showGroupStudyModal ||
+        showAllNotesCatalog ||
+        Boolean(selectedSubject) ||
+        Boolean(selectedChapter)
       );
+
       const protectedTarget = target.closest(
         'input, textarea, select, audio, video, [data-no-longpress="true"]',
       );
       const interactiveTarget = target.closest('button, a, [role="button"]');
       if (protectedTarget) return;
+
+      // On Home or Study surfaces, allow holding even if finger touches card or action container
       if (
         interactiveTarget &&
-        !isHomeNstaWheelTarget &&
-        !isHomeCardTarget &&
+        !isCurrentHome &&
         !isStudyModeSurface
       ) {
         return;
@@ -5566,8 +5589,8 @@ export const StudentDashboard: React.FC<Props> = ({
       startY = e.clientY;
 
       // User requirement:
-      // Home page: 1.5s hold opens NSTA Quick Wheel; other pages toggle chrome at 1s.
-      const holdDuration = isCurrentHome ? 1500 : 1000;
+      // Home page: 2s (2000ms) hold opens NSTA Quick Wheel; Notes & MCQ reading areas: 1.5s (1500ms) toggles top & bottom bar.
+      const holdDuration = isCurrentHome ? 2000 : 1500;
 
       if (holdTimer) clearTimeout(holdTimer);
       holdTimer = setTimeout(() => {
@@ -5575,10 +5598,9 @@ export const StudentDashboard: React.FC<Props> = ({
         try { hapticStrong(); } catch (_) {}
         if (isCurrentHome) {
           setShowNstaQuickWheel(true);
-        } else {
+        } else if (isStudyModeSurface) {
           toggleImmersiveStudyMode();
         }
-        // Long press opens wheel or immersive mode without forcing Pedro to reappear
       }, holdDuration);
     };
 
@@ -5605,8 +5627,6 @@ export const StudentDashboard: React.FC<Props> = ({
       if (!touch) return;
       const dx = Math.abs(touch.clientX - startX);
       const dy = Math.abs(touch.clientY - startY);
-      // Finger jitter is normal during a hold. Cancel only for a real drag or
-      // scroll; otherwise touchmove events were cancelling the timer instantly.
       if (dx > MOVE_CANCEL_TOLERANCE_PX || dy > MOVE_CANCEL_TOLERANCE_PX) {
         pointerMovedSinceDown = true;
         cancelHold();
@@ -5623,21 +5643,27 @@ export const StudentDashboard: React.FC<Props> = ({
       }
     };
 
+    const handleContextMenu = (e: MouseEvent) => {
+      if (isLongPressFired) {
+        e.preventDefault();
+      }
+    };
+
     window.addEventListener('pointerdown', handlePointerDown, { capture: true, passive: true });
     window.addEventListener('pointermove', handlePointerMove, { capture: true, passive: true });
     window.addEventListener('pointerup', handlePointerUp, { capture: true, passive: true });
-    window.addEventListener('pointercancel', handlePointerUp, { capture: true, passive: true });
     window.addEventListener('touchmove', handleTouchMove, { capture: true, passive: true });
     window.addEventListener('click', handleClickCapture, true);
+    window.addEventListener('contextmenu', handleContextMenu, true);
 
     return () => {
       cancelHold();
       window.removeEventListener('pointerdown', handlePointerDown, true);
       window.removeEventListener('pointermove', handlePointerMove, true);
       window.removeEventListener('pointerup', handlePointerUp, true);
-      window.removeEventListener('pointercancel', handlePointerUp, true);
       window.removeEventListener('touchmove', handleTouchMove, true);
       window.removeEventListener('click', handleClickCapture, true);
+      window.removeEventListener('contextmenu', handleContextMenu, true);
     };
   }, [
     activeTab,
@@ -5650,6 +5676,11 @@ export const StudentDashboard: React.FC<Props> = ({
     showProgressDashboard,
     showWhatsAppChatModal,
     showGroupStudyModal,
+    showCompMcqHub,
+    chatMode,
+    selectedSubject,
+    selectedChapter,
+    showAllNotesCatalog,
     hwActiveHwId,
     mathViewerEntry,
     lucentNoteViewer,
@@ -8522,9 +8553,39 @@ export const StudentDashboard: React.FC<Props> = ({
     }
   };
 
+  const isSchoolAdminUser =
+    user.role === 'SCHOOL_ADMIN' ||
+    user.role === 'SCHOOLADMIN' ||
+    user.role === 'PRINCIPAL' ||
+    Boolean(user.email && (
+      user.email.toLowerCase() === 'admin@dps.edu.in' ||
+      user.email.toLowerCase() === 'dpsgurgaon45@dps.edu.in' ||
+      user.email.toLowerCase() === 'principal@dps.edu.in' ||
+      user.email.toLowerCase().endsWith('.edu.in')
+    ));
+
   const handleSwitchToAdmin = () => {
+    if (isSchoolAdminUser) return;
     if (onNavigate) onNavigate("ADMIN_DASHBOARD");
   };
+
+  const isUserAdminAnywhere =
+    !isSchoolAdminUser && (
+      user.role === 'ADMIN' ||
+      user.role === 'SUPERADMIN' ||
+      user.role === 'SUB_ADMIN' ||
+      (user as any)?.isAdmin === true ||
+      (user as any)?.isSuperAdmin === true ||
+      isImpersonating ||
+      (user.email && (
+        user.email.toLowerCase().includes('nadimanwar794') ||
+        user.email.toLowerCase() === 'fgkfgffhgg@gmail.com' ||
+        user.email.toLowerCase() === 'n44438403@gmail.com' ||
+        user.email.toLowerCase() === 'ghduug6@gmail.com'
+      )) ||
+      user.id === 'super_admin_nadim' ||
+      user.uid === 'super_admin_nadim'
+    );
 
   const openContentCodeModal = (id: string, title: string) => {
     setContentCodeTarget({ id, title });
@@ -14352,31 +14413,119 @@ export const StudentDashboard: React.FC<Props> = ({
               const classLessonCount = currentClassLessons.length;
 
               let classMcqCount = 0;
+              const seenClassQuestions = new Set<string>();
+              const addClassQ = (q: any) => {
+                const text = String(q?.question || q?.questionText || '').trim().toLowerCase();
+                if (!text || text.length < 3) return;
+                if (!seenClassQuestions.has(text)) {
+                  seenClassQuestions.add(text);
+                  classMcqCount++;
+                }
+              };
+
               currentClassLessons.forEach((l: any) => {
                 (l.pages || []).forEach((p: any) => {
-                  if (Array.isArray(p.mcqs)) classMcqCount += p.mcqs.length;
+                  if (Array.isArray(p.mcqs)) p.mcqs.forEach(addClassQ);
+                  if (Array.isArray(p.parsedMcqs)) p.parsedMcqs.forEach(addClassQ);
+                  if (Array.isArray(p.mcqList)) p.mcqList.forEach(addClassQ);
                 });
               });
-              const classAdminMcqLessons = ((settings?.mcqLessons || []) as any[]).filter(
-                (l: any) => String(l.classLevel) === currentSelectedClass
-              );
-              classAdminMcqLessons.forEach((l: any) => {
-                if (Array.isArray(l.mcqs)) classMcqCount += l.mcqs.length;
+
+              (allAdminMcqLessons || []).forEach((l: any) => {
+                const lCls = String(l.classLevel || '').trim().toLowerCase();
+                if (lCls === currentSelectedClass.toLowerCase() || (lCls === 'all' && !isCompetitionSelected)) {
+                  if (Array.isArray(l.mcqs)) l.mcqs.forEach(addClassQ);
+                  else if (Array.isArray(l.parsedMcqs)) l.parsedMcqs.forEach(addClassQ);
+                  else if (Array.isArray(l.mcqList)) l.mcqList.forEach(addClassQ);
+                  else if (typeof l.mcqCount === 'number' && l.mcqCount > 0) classMcqCount += l.mcqCount;
+                }
               });
+
+              (settings?.homework || []).forEach((hw: any) => {
+                const targetCls = String(hw.classTarget || hw.classLevel || '').trim().toLowerCase();
+                if (targetCls === currentSelectedClass.toLowerCase() || targetCls === 'all') {
+                  if (Array.isArray(hw.parsedMcqs)) hw.parsedMcqs.forEach(addClassQ);
+                  if (Array.isArray(hw.mcqs)) hw.mcqs.forEach(addClassQ);
+                  if (Array.isArray(hw.mcqList)) hw.mcqList.forEach(addClassQ);
+                }
+              });
+
+              if (Array.isArray(settings?.competitionMcqs)) {
+                settings.competitionMcqs.forEach((q: any) => {
+                  const qCls = String(q.classLevel || q.targetClass || '').trim().toLowerCase();
+                  if (qCls === currentSelectedClass.toLowerCase()) {
+                    addClassQ(q);
+                  }
+                });
+              }
+
+              if (classMcqCount === 0) {
+                const cStats = classContentStats[`${_board}_${currentSelectedClass}`];
+                if (cStats && typeof cStats.mcq === 'number' && cStats.mcq > 0) {
+                  classMcqCount = cStats.mcq;
+                }
+              }
 
               // Competition lessons & MCQs for Govt. Exams mode
               const compLessons = ((settings?.lucentNotes || []) as LucentNoteEntry[]).filter(
                 n => n.classLevel === 'COMPETITION' || !n.classLevel
               );
               let compMcqCount = 0;
+              const seenCompQuestions = new Set<string>();
+              const addCompQ = (q: any) => {
+                const text = String(q?.question || q?.questionText || '').trim().toLowerCase();
+                if (!text || text.length < 3) return;
+                if (!seenCompQuestions.has(text)) {
+                  seenCompQuestions.add(text);
+                  compMcqCount++;
+                }
+              };
+
               compLessons.forEach((l: any) => {
                 (l.pages || []).forEach((p: any) => {
-                  if (Array.isArray(p.mcqs)) compMcqCount += p.mcqs.length;
+                  if (Array.isArray(p.mcqs)) p.mcqs.forEach(addCompQ);
+                  if (Array.isArray(p.parsedMcqs)) p.parsedMcqs.forEach(addCompQ);
+                  if (Array.isArray(p.mcqList)) p.mcqList.forEach(addCompQ);
                 });
               });
-              (compMcqPracticeLessons || []).forEach((l: any) => {
-                if (Array.isArray(l.mcqs)) compMcqCount += l.mcqs.length;
+
+              (allAdminMcqLessons || []).forEach((l: any) => {
+                const lCls = String(l.classLevel || '').trim().toUpperCase();
+                if (lCls === 'COMPETITION' || lCls === 'ALL' || !l.classLevel) {
+                  if (Array.isArray(l.mcqs)) l.mcqs.forEach(addCompQ);
+                  else if (Array.isArray(l.parsedMcqs)) l.parsedMcqs.forEach(addCompQ);
+                  else if (Array.isArray(l.mcqList)) l.mcqList.forEach(addCompQ);
+                  else if (typeof l.mcqCount === 'number' && l.mcqCount > 0) compMcqCount += l.mcqCount;
+                }
               });
+
+              (compMcqPracticeLessons || []).forEach((l: any) => {
+                if (Array.isArray(l.mcqs)) l.mcqs.forEach(addCompQ);
+              });
+
+              if (Array.isArray(settings?.competitionMcqs)) {
+                settings.competitionMcqs.forEach(addCompQ);
+              }
+
+              if (Array.isArray(settings?.competitionPracticeMcqs)) {
+                settings.competitionPracticeMcqs.forEach(addCompQ);
+              }
+
+              (settings?.homework || []).forEach((hw: any) => {
+                const targetSub = String(hw.targetSubject || '').trim().toLowerCase();
+                const targetCls = String(hw.classTarget || hw.classLevel || '').trim().toLowerCase();
+                const isComp = targetCls === 'competition' || targetCls === 'comp' || targetCls === 'all' || !targetCls ||
+                  targetSub.includes('sangrah') || targetSub.includes('speedy') || targetSub.includes('lucent') || targetSub === 'mcq';
+                if (isComp) {
+                  if (Array.isArray(hw.parsedMcqs)) hw.parsedMcqs.forEach(addCompQ);
+                  if (Array.isArray(hw.mcqs)) hw.mcqs.forEach(addCompQ);
+                  if (Array.isArray(hw.mcqList)) hw.mcqList.forEach(addCompQ);
+                }
+              });
+
+              if (Array.isArray(user?.customMcqs)) {
+                user.customMcqs.forEach(addCompQ);
+              }
 
               let classTimeSecs = 0;
               try {
@@ -14502,10 +14651,13 @@ export const StudentDashboard: React.FC<Props> = ({
                                     📚 7 Books
                                   </span>
                                   <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold" style={{ background: themeChipBg, border: `1px solid ${themeChipBorder}`, color: themeChipText }}>
-                                    ⚡ {compMcqCount > 0 ? `${compMcqCount}+ MCQs` : '10,000+ MCQs'}
+                                    🎯 SSC • UPSC • Railway • Police
                                   </span>
                                   <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold" style={{ background: themeChipBg, border: `1px solid ${themeChipBorder}`, color: themeChipText }}>
-                                    ⏱️ General Studies
+                                    ⚡ {compMcqCount > 0 ? `${compMcqCount}+ MCQs` : `${compMcqCount} MCQs`}
+                                  </span>
+                                  <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold" style={{ background: themeChipBg, border: `1px solid ${themeChipBorder}`, color: themeChipText }}>
+                                    🧭 General Studies
                                   </span>
                                 </>
                               ) : (
@@ -14782,9 +14934,8 @@ export const StudentDashboard: React.FC<Props> = ({
                   )}
 
                   {/* ── 3. DAILY CHALLENGE, LIVE STUDY ROOM, REVISION HUB & MY MISTAKES (HOME PAGE) ── */}
-                  {(isHomeSectionVisible('home_revision_hub', settings) || isHomeSectionVisible('home_my_routine', settings) || isHomeSectionVisible('home_promo_banners', settings)) && (
-                    <div className="space-y-3">
-                      <div className="flex items-center gap-2 mb-1">
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2 mb-1">
                         <span className="flex-1 h-px" style={{ background: isDarkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' }} />
                         <span className="text-[10px] font-black uppercase tracking-widest" style={{ color: isDarkMode ? '#94a3b8' : tierTheme.textSecondary || '#64748b' }}>Daily Challenge, Study Room, Revision & Mistakes</span>
                         <span className="flex-1 h-px" style={{ background: isDarkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' }} />
@@ -15001,7 +15152,7 @@ export const StudentDashboard: React.FC<Props> = ({
                         })()}
 
                         {/* ── REVISION HUB CARD ── */}
-                        {isHomeSectionVisible('home_revision_hub', settings) && (() => {
+                        {(() => {
                           return (
                             <div id="home-revision-card" className="w-full home-revhub-card-anim flex flex-col">
                               <div
@@ -15169,7 +15320,6 @@ export const StudentDashboard: React.FC<Props> = ({
                         })()}
                       </div>
                     </div>
-                  )}
                 </div>
               );
             })()}
@@ -16871,18 +17021,24 @@ export const StudentDashboard: React.FC<Props> = ({
           <div className="nst-card-animated mx-3 rounded-2xl overflow-hidden mb-3" style={{ background: _pCard, border: _pBdrSoft, boxShadow: _light ? undefined : '0 6px 24px rgba(0,0,0,0.35)' }}>
 
             {/* Admin Panel */}
-            {(user.role === 'ADMIN' || user.role === 'SUB_ADMIN' || isImpersonating) && (
+            {isUserAdminAnywhere && (
               <button onClick={handleSwitchToAdmin}
-                className={`w-full px-4 py-4 flex items-center gap-3.5 ${_pHovCls} transition-colors`}
+                className={`w-full px-4 py-4 flex items-center gap-3.5 ${_pHovCls} transition-all cursor-pointer bg-gradient-to-r from-amber-500/10 via-indigo-500/5 to-transparent`}
                 style={{ borderBottom: _pSep }}>
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{
-                  background: _light ? `${tierTheme.primary}20` : 'rgba(234, 179, 8, 0.15)',
-                  border: _light ? `1px solid ${tierTheme.primary}40` : '1px solid rgba(234, 179, 8, 0.40)',
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 shadow-sm" style={{
+                  background: _light ? `${tierTheme.primary}20` : 'rgba(234, 179, 8, 0.20)',
+                  border: '1px solid rgba(234, 179, 8, 0.50)',
                 }}>
-                  <LayoutGrid size={17} style={{ color: _light ? tierTheme.primary : '#fbbf24' }} />
+                  <LayoutGrid size={18} style={{ color: _light ? tierTheme.primary : '#fbbf24' }} />
                 </div>
-                <p className={`flex-1 text-sm font-bold text-left ${_pTxt}`}>Admin Panel</p>
-                <ChevronRight size={15} style={{ color: _pTxtMutedColor }} className="shrink-0" />
+                <div className="flex-1 text-left min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className={`text-sm font-black ${_pTxt}`}>Admin Panel</p>
+                    <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-amber-400 text-slate-950 uppercase">Console</span>
+                  </div>
+                  <p className={`text-[10px] ${_pTxtSub} truncate mt-0.5`}>NSTA Master Admin Console</p>
+                </div>
+                <ChevronRight size={16} style={{ color: _pTxtMutedColor }} className="shrink-0" />
               </button>
             )}
 
@@ -18676,33 +18832,32 @@ export const StudentDashboard: React.FC<Props> = ({
           showCompMcqHub
         );
 
-        const shouldHideHomeTopBar = isMcqScreen
-          ? (Boolean(mathViewerEntry) && isFullscreenMode)
-          : (
-            showMyRoutine ||
-            showDailyEventPage ||
-            showChat ||
-            (activeTab !== 'HOME' && Boolean(activeTab)) ||
-            activeLogicalScreenKey === 'ROUTINE' ||
-            activeLogicalScreenKey === 'COMMUNITY' ||
-            activeLogicalScreenKey === 'SUPPORT' ||
-            activeLogicalScreenKey === 'PROFILE' ||
-            activeLogicalScreenKey === 'DAILY_EVENT' ||
-            activeLogicalScreenKey === 'REVISION' ||
-            showRevisionHubScreen ||
-            showStarredPage ||
-            showUpdatesPage ||
-            showProgressDashboard ||
-            showAllNotesCatalog ||
-            showWhatsAppChatModal ||
-            showGroupStudyModal ||
-            showNstaQuickWheel ||
-            isCompetitionHomeworkOpen ||
-            isTopBarHidden ||
-            isLandscapeUiHidden ||
-            isFullscreenMode ||
-            Boolean(mathViewerEntry)
-          );
+        const shouldHideHomeTopBar = (
+          isMcqScreen ||
+          showMyRoutine ||
+          showDailyEventPage ||
+          showChat ||
+          (activeTab !== 'HOME' && Boolean(activeTab)) ||
+          activeLogicalScreenKey === 'ROUTINE' ||
+          activeLogicalScreenKey === 'COMMUNITY' ||
+          activeLogicalScreenKey === 'SUPPORT' ||
+          activeLogicalScreenKey === 'PROFILE' ||
+          activeLogicalScreenKey === 'DAILY_EVENT' ||
+          activeLogicalScreenKey === 'REVISION' ||
+          showRevisionHubScreen ||
+          showStarredPage ||
+          showUpdatesPage ||
+          showProgressDashboard ||
+          showAllNotesCatalog ||
+          showWhatsAppChatModal ||
+          showGroupStudyModal ||
+          showNstaQuickWheel ||
+          isCompetitionHomeworkOpen ||
+          isTopBarHidden ||
+          isLandscapeUiHidden ||
+          isFullscreenMode ||
+          Boolean(mathViewerEntry)
+        );
 
         return (
           <div
@@ -25792,7 +25947,7 @@ export const StudentDashboard: React.FC<Props> = ({
               onUpdateUser={handleUserUpdate}
             />
           </div>
-          {mathViewerMode !== 'MCQ' && !showNotifPage && (
+          {!showNotifPage && (
             <DraggableNstaLogoFab
               isActive={mathImmersive}
               onToggle={() => setStudyFocusMode(!mathImmersive)}
@@ -28386,8 +28541,8 @@ RULES:
             )}
 
           </div>
-          {/* Lucent FAB — hidden in video tab and all MCQ/QA/flashcard tabs */}
-          {lucentActiveTab !== 'VIDEO' && lucentActiveTab !== 'MCQ' && lucentActiveTab !== 'MCQS' && lucentActiveTab !== 'QA' && lucentActiveTab !== 'FLASHCARD' && !showNotifPage && (
+          {/* Lucent FAB — available across notes and MCQ study tabs */}
+          {lucentActiveTab !== 'VIDEO' && !showNotifPage && (
             <DraggableNstaLogoFab
               isActive={lucentImmersive}
               onToggle={() => setStudyFocusMode(!lucentImmersive)}
@@ -31190,35 +31345,31 @@ RULES:
         );
       })()}
 
-      {/* FLOATING APP LOGO BUTTON — Sirf Notes content player mein visible. Tapping focus mode toggle karta hai. Draggable. */}
-      {/* Hidden when Lucent viewer is open, or in any MCQ mode (playerMode === 'mcq' or subject is MCQ) */}
-      {/* Must NOT show on any other page: Pro+, Community, MCQ, Profile, Starred, Routine, etc. */}
+      {/* FLOATING APP LOGO BUTTON — Notes aur MCQ dono jagah visible. Tapping focus / immersive mode toggle karta hai. Draggable. */}
       {!activeExternalApp &&
         !hwActiveHwId &&
-        contentViewStep === "PLAYER" &&
         !lucentNoteViewer &&
         !mathViewerEntry &&
-        playerMode !== 'mcq' &&
-        activeTab !== 'MCQ' &&
-        activeTab !== 'MCQ_REVIEW' &&
-        !compMcqSession &&
-        !flashcardMcqs &&
         !showNotifPage &&
-        selectedSubject?.id !== 'mcq' && (
+        (
+          contentViewStep === "PLAYER" ||
+          activeTab === 'MCQ' ||
+          activeTab === 'MCQ_REVIEW' ||
+          Boolean(compMcqSession) ||
+          Boolean(flashcardMcqs) ||
+          showCompMcqHub ||
+          (showChat && chatMode === 'MCQ')
+        ) && (
         <DraggableNstaLogoFab
-          isActive={isLandscapeUiHidden}
+          isActive={isLandscapeUiHidden || isTopBarHidden}
           onToggle={() => {
-            setIsLandscapeUiHidden(prev => {
-              const next = !prev;
-              setIsTopBarHidden(next);
-              return next;
-            });
+            toggleImmersiveStudyMode();
           }}
           appLogo={settings?.appLogo}
           appName={settings?.appShortName || settings?.appName || 'NSTA'}
-          title={isLandscapeUiHidden ? 'बॉटम व टॉप बार दिखाएं • Screen pe move kar sakte hain' : 'बॉटम व टॉप बार छुपाएं • Screen pe move kar sakte hain'}
+          title={isLandscapeUiHidden || isTopBarHidden ? 'बॉटम व टॉप बार दिखाएं • Screen pe move kar sakte hain' : 'बॉटम व टॉप बार छुपाएं • Screen pe move kar sakte hain'}
           defaultPosition={{
-            bottom: (isLandscapeUiHidden || (contentViewStep === "PLAYER" && !!selectedChapter)) ? 20 : 92,
+            bottom: (isLandscapeUiHidden || isTopBarHidden || (contentViewStep === "PLAYER" && !!selectedChapter)) ? 20 : 92,
             right: 16,
           }}
           zIndex={99999}

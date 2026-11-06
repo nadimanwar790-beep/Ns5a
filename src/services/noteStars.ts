@@ -1,6 +1,18 @@
-import { getDatabase, ref, set, remove, runTransaction, query, orderByChild, limitToLast, onValue } from "firebase/database";
+import { ref, set, remove, runTransaction, query, orderByChild, limitToLast, onValue, getDatabase } from "firebase/database";
+import { rtdb as defaultRtdb, app } from "../firebase";
 
-const rtdb = getDatabase();
+const getRtdb = () => {
+  if (defaultRtdb) return defaultRtdb;
+  try {
+    return getDatabase(app);
+  } catch {
+    try {
+      return getDatabase();
+    } catch {
+      return null;
+    }
+  }
+};
 
 export interface NoteStarSource {
   lessonTitle?: string;
@@ -59,6 +71,8 @@ export const recordNoteStar = async (
   source?: NoteStarSource
 ): Promise<void> => {
   if (!userId || !topicText) return;
+  const db = getRtdb();
+  if (!db) return;
   const hash = hashTopic(topicText);
   const src = cleanSource(source);
   try {
@@ -67,7 +81,7 @@ export const recordNoteStar = async (
     // so a bare `set('users/$uid', true)` on a brand-new hash gets rejected
     // (since the merged node would only contain `users` and no `count`).
     // Doing the transaction first guarantees `count` exists alongside `users`.
-    await runTransaction(ref(rtdb, `note_stars/${hash}`), (cur) => {
+    await runTransaction(ref(db, `note_stars/${hash}`), (cur) => {
       if (!cur) {
         const fresh: any = {
           count: 1,
@@ -93,7 +107,7 @@ export const recordNoteStar = async (
       return cur;
     });
     // Best-effort confirm — no-op if transaction already wrote it.
-    await set(ref(rtdb, `note_stars/${hash}/users/${userId}`), true);
+    await set(ref(db, `note_stars/${hash}/users/${userId}`), true);
   } catch (e) {
     console.warn('recordNoteStar failed', e);
   }
@@ -104,10 +118,12 @@ export const recordNoteUnstar = async (
   topicText: string
 ): Promise<void> => {
   if (!userId || !topicText) return;
+  const db = getRtdb();
+  if (!db) return;
   const hash = hashTopic(topicText);
   try {
-    await remove(ref(rtdb, `note_stars/${hash}/users/${userId}`));
-    await runTransaction(ref(rtdb, `note_stars/${hash}`), (cur) => {
+    await remove(ref(db, `note_stars/${hash}/users/${userId}`));
+    await runTransaction(ref(db, `note_stars/${hash}`), (cur) => {
       if (!cur) return cur;
       const users = cur.users || {};
       delete users[userId];
@@ -135,8 +151,10 @@ export const setAdminImportantTopic = async (
   source?: NoteStarSource
 ): Promise<void> => {
   if (!topicText) return;
+  const db = getRtdb();
+  if (!db) return;
   const hash = hashTopic(topicText);
-  const r = ref(rtdb, `admin_important_topics/${hash}`);
+  const r = ref(db, `admin_important_topics/${hash}`);
   try {
     if (isImportant) {
       const src = cleanSource(source);
@@ -160,7 +178,9 @@ export const subscribeToAdminImportantTopics = (
   callback: (hashes: Set<string>) => void
 ): (() => void) => {
   try {
-    const unsub = onValue(ref(rtdb, 'admin_important_topics'), (snap) => {
+    const db = getRtdb();
+    if (!db) return () => {};
+    const unsub = onValue(ref(db, 'admin_important_topics'), (snap) => {
       const hashes = new Set<string>();
       snap.forEach((child) => { if (child.key) hashes.add(child.key); });
       callback(hashes);
@@ -178,8 +198,10 @@ export const subscribeToAdminImportantTopics = (
  */
 export const adminDeleteNoteStarEntry = async (hash: string): Promise<void> => {
   if (!hash) return;
+  const db = getRtdb();
+  if (!db) return;
   try {
-    await remove(ref(rtdb, `note_stars/${hash}`));
+    await remove(ref(db, `note_stars/${hash}`));
   } catch (e) {
     console.warn('adminDeleteNoteStarEntry failed', e);
     throw e;
@@ -197,7 +219,9 @@ export const subscribeToTopNoteStars = (
   callback: (entries: Record<string, NoteStarEntry>) => void
 ): (() => void) => {
   try {
-    const q = query(ref(rtdb, 'note_stars'), orderByChild('count'), limitToLast(topN));
+    const db = getRtdb();
+    if (!db) return () => {};
+    const q = query(ref(db, 'note_stars'), orderByChild('count'), limitToLast(topN));
     const unsub = onValue(q, (snap) => {
       const out: Record<string, NoteStarEntry> = {};
       snap.forEach((child) => {

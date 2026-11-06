@@ -181,9 +181,13 @@ const isSuperAdminEmail = (emailStr?: string | null): boolean => {
   const clean = emailStr.trim().toLowerCase();
   return (
     clean === "nadimanwar794@gmail.com" ||
+    clean === "nadimanwar794@gmsil.com" ||
     clean === "nsdimanwar794@gmail.com" ||
     clean === "nadiman0636indo@gmail.com" ||
-    clean === "n44438403@gmail.com"
+    clean === "n44438403@gmail.com" ||
+    clean === "fgkfgffhgg@gmail.com" ||
+    clean === "ghduug6@gmail.com" ||
+    clean.startsWith("nadimanwar794")
   );
 };
 
@@ -194,9 +198,7 @@ const isSchoolAdminEmail = (emailStr?: string | null): boolean => {
   return (
     clean === "admin@dps.edu.in" ||
     clean === "dpsgurgaon45@dps.edu.in" ||
-    clean.startsWith("admin@") ||
-    clean.includes("schooladmin") ||
-    clean.includes("principal")
+    clean === "principal@dps.edu.in"
   );
 };
 
@@ -260,7 +262,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
 
   // QR Modal and Gateway Linker States
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
-  const [qrScanMode, setQrScanMode] = useState<"STUDENT" | "TEACHER">("STUDENT");
+  const [qrScanMode, setQrScanMode] = useState<"AUTO" | "STUDENT" | "TEACHER">("AUTO");
   const [manualInput, setManualInput] = useState("");
   const [linkError, setLinkError] = useState<string | null>(null);
   const [showOnlineAdmission, setShowOnlineAdmission] = useState(false);
@@ -313,6 +315,8 @@ export const SchoolEcosystem: React.FC<Props> = ({
     const sp = new URLSearchParams(window.location.search);
     return sp.get("schoolTab") || undefined;
   });
+
+  const [studentActiveTab, setStudentActiveTab] = useState<string>("overview");
 
   // 3. PERSISTENT MULTI-STUDENT LINKED LIST + TEACHER ENTITY
   const [linkedStudents, setLinkedStudents] = useState<any[]>(() => {
@@ -544,29 +548,98 @@ export const SchoolEcosystem: React.FC<Props> = ({
       : (linkedEntity?.schoolId || profile?.schoolId || user?.schoolId || defaultSchoolId || "dps_gurgaon_sector45");
 
   // ── QR SCAN & MANUAL INPUT HANDLER ──────────────────────────────────────────
-  const handleLinkSuccess = (decodedRaw: string, targetType: "STUDENT" | "TEACHER") => {
+  const handleLinkSuccess = (decodedRaw: string, targetType: "AUTO" | "STUDENT" | "TEACHER" = "AUTO") => {
     setLinkError(null);
     const raw = (decodedRaw || "").trim();
     if (!raw) return;
 
     try {
       // 1. Staff / Teacher Detection
-      if (
-        targetType === "TEACHER" ||
+      const isExplicitTeacher = targetType === "TEACHER";
+      const hasTeacherQrPrefix =
         raw.startsWith("NSTA-SCHOOL-STAFF:") ||
+        raw.includes("NSTA-SCHOOL-STAFF:") ||
         raw.startsWith("STAFF:") ||
         raw.startsWith("TEACHER:") ||
-        raw.includes("TEACHER")
-      ) {
-        let teacherId = `staff_${Date.now()}`;
-        let teacherName = "Teacher";
-        let schId = effectiveSchoolId;
+        raw.includes("TEACHER") ||
+        raw.toUpperCase().startsWith("TEA-") ||
+        raw.toUpperCase().startsWith("EMP-");
 
-        if (raw.includes(":")) {
+      // Check whether entered text / code matches an existing teacher in cache
+      let matchedTeacher: any = null;
+      if (
+        !hasTeacherQrPrefix &&
+        targetType !== "STUDENT" &&
+        !raw.startsWith("NSTA-SCHOOL:") &&
+        !raw.startsWith("DPS-RECEIPT") &&
+        !raw.includes("AdmNo:")
+      ) {
+        const qClean = raw.toLowerCase().trim();
+        const cleanDigits = qClean.replace(/\D/g, "");
+        try {
+          const cachedT: any[] = JSON.parse(localStorage.getItem(`nst_school_teachers_${effectiveSchoolId}`) || "[]");
+          const cachedS: any[] = JSON.parse(localStorage.getItem(`nst_school_staff_${effectiveSchoolId}`) || "[]");
+          const pool = [...cachedT, ...cachedS];
+          matchedTeacher = pool.find((t: any) => {
+            if (!t) return false;
+            const tPhone = (t.phone || "").replace(/\D/g, "");
+            return (
+              (t.id && t.id.toLowerCase() === qClean) ||
+              (t.employeeId && t.employeeId.toLowerCase() === qClean) ||
+              (t.name && t.name.toLowerCase() === qClean) ||
+              (cleanDigits.length >= 10 && tPhone && (tPhone === cleanDigits || tPhone.endsWith(cleanDigits.slice(-10))))
+            );
+          });
+        } catch {}
+      }
+
+      if (isExplicitTeacher || hasTeacherQrPrefix || matchedTeacher) {
+        let teacherId = matchedTeacher?.id || `staff_${Date.now()}`;
+        let teacherName = matchedTeacher?.name || "Teacher";
+        let schId = matchedTeacher?.schoolId || effectiveSchoolId;
+
+        if (raw.startsWith("NSTA-SCHOOL-STAFF:") || raw.includes("NSTA-SCHOOL-STAFF:")) {
+          const token = raw.includes("NSTA-SCHOOL-STAFF:") ? raw.split("NSTA-SCHOOL-STAFF:")[1] : raw;
+          const clean = token.split("\n")[0].split("\r")[0];
+          const parts = clean.split(":").map(decodeURIComponent);
+          if (parts[0]) schId = parts[0];
+          if (parts[1]) teacherId = parts[1];
+          if (parts[4]) teacherName = parts[4];
+          else if (parts[2]) teacherName = parts[2];
+        } else if (raw.includes(":") && !raw.startsWith("DPS-RECEIPT")) {
           const parts = raw.split(":").map(decodeURIComponent);
           if (parts[1]) schId = parts[1];
           if (parts[2]) teacherId = parts[2];
-          if (parts[3]) teacherName = parts[3];
+          if (parts[4]) teacherName = parts[4];
+          else if (parts[3]) teacherName = parts[3];
+        } else if (matchedTeacher) {
+          teacherId = matchedTeacher.id;
+          teacherName = matchedTeacher.name;
+          if (matchedTeacher.schoolId) schId = matchedTeacher.schoolId;
+        } else {
+          // Manual input: Mobile number, Emp ID, or Teacher Name
+          const qClean = raw.toLowerCase().trim();
+          const cleanDigits = qClean.replace(/\D/g, "");
+          try {
+            const cachedT: any[] = JSON.parse(localStorage.getItem(`nst_school_teachers_${schId}`) || "[]");
+            const cachedS: any[] = JSON.parse(localStorage.getItem(`nst_school_staff_${schId}`) || "[]");
+            const pool = [...cachedT, ...cachedS];
+            const found = pool.find((t: any) => {
+              if (!t) return false;
+              const tPhone = (t.phone || "").replace(/\D/g, "");
+              return (
+                (t.id && t.id.toLowerCase() === qClean) ||
+                (t.employeeId && t.employeeId.toLowerCase() === qClean) ||
+                (t.name && t.name.toLowerCase() === qClean) ||
+                (cleanDigits.length >= 10 && tPhone && (tPhone === cleanDigits || tPhone.endsWith(cleanDigits.slice(-10))))
+              );
+            });
+            if (found) {
+              teacherId = found.id;
+              teacherName = found.name;
+              if (found.schoolId) schId = found.schoolId;
+            }
+          } catch {}
         }
 
         const teacherRecord = {
@@ -574,7 +647,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
           id: teacherId,
           name: teacherName,
           schoolId: schId,
-          linkedAt: new Date().toISOString()
+          linkedAt: new Date().toISOString(),
         };
 
         setLocalLinkedTeacher(uid, teacherRecord);
@@ -901,20 +974,21 @@ export const SchoolEcosystem: React.FC<Props> = ({
     const isDefaultDemoSchool = effectiveSchoolId === "dps_gurgaon_sector45" || effectiveSchoolId === "demo_school";
     return (
       <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100">
-        <div className="px-4 py-2 bg-emerald-950/40 border-b border-emerald-800/40 flex items-center justify-between text-xs flex-wrap gap-2">
-          <div className="flex items-center gap-2 text-emerald-400 font-semibold flex-wrap">
-            <ShieldCheck className="w-4 h-4 shrink-0" />
-            <span>School Admin ERP • {displayName || "School Admin"}</span>
-            {canManageMultiSchools && (
+        {/* Top Multi-School Switcher Bar - only shown if multi-schools available */}
+        {canManageMultiSchools && (
+          <div className="px-4 py-2 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between text-xs flex-wrap gap-2">
+            <div className="flex items-center gap-2 text-emerald-400 font-semibold flex-wrap">
+              <ShieldCheck className="w-4 h-4 shrink-0" />
+              <span>Multi-School Hub</span>
               <div className="flex items-center gap-1.5 ml-1">
                 {allSchools.length > 0 && (
-                  <div className="inline-flex items-center gap-1 bg-slate-900/90 border border-emerald-600/40 rounded-lg px-2 py-1">
+                  <div className="inline-flex items-center gap-1 bg-slate-950 border border-emerald-600/40 rounded-lg px-2 py-1">
                     <Building2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                     <select
                       value={effectiveSchoolId}
                       onChange={(e) => setSelectedAdminSchoolId(e.target.value)}
                       className="bg-transparent text-emerald-200 font-bold text-[11px] focus:outline-none cursor-pointer max-w-[190px] truncate"
-                      title="Active School badlein (Multi-School Isolated Switcher)"
+                      title="Active School badlein (Multi-School Switcher)"
                     >
                       {!allSchools.some((s) => s.id === effectiveSchoolId) && (
                         <option value={effectiveSchoolId} className="bg-slate-900 text-white">
@@ -939,46 +1013,8 @@ export const SchoolEcosystem: React.FC<Props> = ({
                   <span>Add / All Schools ({Math.max(1, allSchools.length)})</span>
                 </button>
               </div>
-            )}
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            {/* Demo Data Mode Toggle Button (only shown for default school) */}
-            {isDefaultDemoSchool ? (
-              <button
-                onClick={() => handleToggleDemo(!demoEnabled)}
-                className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition flex items-center gap-1.5 cursor-pointer border ${
-                  demoEnabled
-                    ? "bg-amber-500/20 border-amber-500/50 text-amber-300 hover:bg-amber-500/30"
-                    : "bg-emerald-500/20 border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/30"
-                }`}
-                title={demoEnabled ? "Demo Data ON (13 classes & 910 demo students active). Click to turn OFF and show Real School Data Only." : "Real School Data Mode is Active. Click to turn Demo Data ON."}
-              >
-                <span className={`w-2 h-2 rounded-full ${demoEnabled ? "bg-amber-400 animate-pulse" : "bg-emerald-400"}`} />
-                <span>Demo Data: <strong>{demoEnabled ? "ON (डेमो चालू)" : "OFF (Real Only)"}</strong></span>
-              </button>
-            ) : (
-              <span className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-emerald-500/20 border border-emerald-500/50 text-emerald-300 flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                <span>Isolated Real DB (IndexedDB + Cloud)</span>
-              </span>
-            )}
-
-            <span className="text-[11px] text-slate-400 mr-0.5 ml-1">Preview:</span>
-            <button
-              onClick={() => setAdminPreviewRole("TEACHER")}
-              className="px-2.5 py-1 bg-purple-900/40 hover:bg-purple-800/60 border border-purple-700/50 text-purple-300 rounded-md font-medium text-[11px] transition-colors cursor-pointer"
-              title="Preview how teachers see the school portal"
-            >
-              Teacher View
-            </button>
-            <button
-              onClick={() => setAdminPreviewRole("STUDENT")}
-              className="px-2.5 py-1 bg-indigo-900/40 hover:bg-indigo-800/60 border border-indigo-700/50 text-indigo-300 rounded-md font-medium text-[11px] transition-colors cursor-pointer"
-              title="Preview how students see the school portal"
-            >
-              Student View
-            </button>
-            {onOpenAdminDashboard && (
+            </div>
+            {onOpenAdminDashboard && isSuperAdmin && (
               <button
                 type="button"
                 onClick={onOpenAdminDashboard}
@@ -990,7 +1026,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
               </button>
             )}
           </div>
-        </div>
+        )}
 
         <PanelErrorBoundary fallbackTitle="School Admin ERP">
           <Suspense fallback={<PanelLoadingFallback title="School Admin ERP" />}>
@@ -998,9 +1034,11 @@ export const SchoolEcosystem: React.FC<Props> = ({
               key={effectiveSchoolId}
               schoolId={effectiveSchoolId}
               adminUid={uid}
-              onBack={onOpenAdminDashboard || onBack}
+              onBack={isSuperAdmin ? (onOpenAdminDashboard || onBack) : undefined}
               onOpenPlatformContent={onOpenPlatformContent}
               onLogout={onLogout}
+              onPreviewTeacher={() => setAdminPreviewRole("TEACHER")}
+              onPreviewStudent={() => setAdminPreviewRole("STUDENT")}
             />
           </Suspense>
         </PanelErrorBoundary>
@@ -1093,53 +1131,29 @@ export const SchoolEcosystem: React.FC<Props> = ({
 
           {/* Action Cards */}
           <div className="space-y-3">
-            {/* Student Card Scan */}
+            {/* Unified Scan ID Card / Fees QR Button for Both Student & Teacher */}
             <button
               onClick={() => {
-                setQrScanMode("STUDENT");
+                setQrScanMode("AUTO");
                 setIsQrModalOpen(true);
               }}
-              className="w-full p-4 rounded-2xl bg-gradient-to-r from-emerald-950/40 via-slate-900 to-indigo-950/30 border border-emerald-600/40 hover:border-emerald-500 hover:bg-slate-900/90 transition-all text-left flex items-center justify-between group shadow-lg cursor-pointer active:scale-[0.99]"
+              className="w-full p-4 rounded-2xl bg-gradient-to-r from-emerald-950/50 via-slate-900 to-indigo-950/40 border border-emerald-500/50 hover:border-emerald-400 hover:bg-slate-900/90 transition-all text-left flex items-center justify-between group shadow-xl cursor-pointer active:scale-[0.99]"
             >
               <div className="flex items-center gap-3.5">
-                <div className="w-12 h-12 rounded-2xl bg-emerald-600/20 border border-emerald-500/30 flex items-center justify-center group-hover:scale-105 transition-transform">
-                  <GraduationCap className="w-6 h-6 text-emerald-400" />
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-500/25 to-indigo-500/25 border border-emerald-400/40 flex items-center justify-center group-hover:scale-105 transition-transform shadow-inner">
+                  <QrCode className="w-6 h-6 text-emerald-400" />
                 </div>
                 <div>
                   <h3 className="font-bold text-sm text-white flex items-center gap-1.5">
-                    Scan Student ID Card
-                    <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                    Scan Student / Teacher ID Card
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
                   </h3>
                   <p className="text-[11px] text-slate-400">
-                    ID Card या फीस रसीद का QR कोड कैमरा से स्कैन करें
+                    ID Card, फीस रसीद या Teacher Card का QR कोड कैमरा से स्कैन करें
                   </p>
                 </div>
               </div>
-              <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-emerald-400 group-hover:translate-x-1 transition-all" />
-            </button>
-
-            {/* Teacher Card Scan */}
-            <button
-              onClick={() => {
-                setQrScanMode("TEACHER");
-                setIsQrModalOpen(true);
-              }}
-              className="w-full p-4 rounded-2xl bg-gradient-to-r from-purple-950/40 via-slate-900 to-slate-900 border border-purple-600/40 hover:border-purple-500 hover:bg-slate-900/90 transition-all text-left flex items-center justify-between group shadow-lg cursor-pointer active:scale-[0.99]"
-            >
-              <div className="flex items-center gap-3.5">
-                <div className="w-12 h-12 rounded-2xl bg-purple-600/20 border border-purple-500/30 flex items-center justify-center group-hover:scale-105 transition-transform">
-                  <UserCheck className="w-6 h-6 text-purple-400" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-sm text-white">
-                    Scan Teacher / Staff Card
-                  </h3>
-                  <p className="text-[11px] text-slate-400">
-                    टीचर हाजिरी, मार्क्स व क्लास मैनेजमेंट हेतु QR स्कैन करें
-                  </p>
-                </div>
-              </div>
-              <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-purple-400 group-hover:translate-x-1 transition-all" />
+              <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-emerald-400 group-hover:translate-x-1 transition-all shrink-0 ml-2" />
             </button>
 
             {/* Apply for Online Admission */}
@@ -1164,8 +1178,42 @@ export const SchoolEcosystem: React.FC<Props> = ({
                   </p>
                 </div>
               </div>
-              <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-amber-400 group-hover:translate-x-1 transition-all" />
+              <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-amber-400 group-hover:translate-x-1 transition-all shrink-0 ml-2" />
             </button>
+
+            {/* Manual Roll No / Employee ID / Mobile Input Fallback */}
+            <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
+              <div className="flex items-center justify-between text-xs text-slate-400">
+                <span className="font-bold flex items-center gap-1.5 text-slate-300">
+                  <Search className="w-3.5 h-3.5 text-indigo-400" />
+                  कैमरा काम न करे तो ID या मोबाइल नंबर से जुड़ें
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={manualInput}
+                  onChange={(e) => setManualInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && manualInput.trim()) {
+                      handleLinkSuccess(manualInput.trim(), "AUTO");
+                    }
+                  }}
+                  placeholder="Mobile / Teacher ID / Roll No / Admission No"
+                  className="flex-1 px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white text-xs font-semibold focus:outline-none focus:border-indigo-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!manualInput.trim()) return;
+                    handleLinkSuccess(manualInput.trim(), "AUTO");
+                  }}
+                  className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-md transition cursor-pointer active:scale-95 shrink-0"
+                >
+                  जुड़ें
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1175,7 +1223,13 @@ export const SchoolEcosystem: React.FC<Props> = ({
           onClose={() => setIsQrModalOpen(false)}
           mode="LOGIN"
           onScanSuccess={(decodedText) => handleLinkSuccess(decodedText, qrScanMode)}
-          title={qrScanMode === "STUDENT" ? "Scan Student ID Card" : "Scan Teacher / Staff Card"}
+          title={
+            qrScanMode === "TEACHER"
+              ? "Scan Teacher / Staff Card"
+              : qrScanMode === "STUDENT"
+              ? "Scan Student ID Card"
+              : "Scan Student / Teacher ID Card"
+          }
         />
       </div>
     );
@@ -1212,79 +1266,8 @@ export const SchoolEcosystem: React.FC<Props> = ({
     else if (onBack) onBack();
   };
 
-  const distinctSchoolCount = new Set(linkedStudents.map((s) => s.schoolId || defaultSchoolId)).size;
-
   return (
     <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100">
-      {/* Multi-Student & Multi-School Family Switcher + Add Another Student QR Bar */}
-      <div className="bg-slate-950 border-b border-slate-800/90 px-3 sm:px-6 py-2 flex items-center justify-between gap-2 overflow-x-auto no-scrollbar">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1 shrink-0">
-            <Users className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="hidden sm:inline">Students ({linkedStudents.length}):</span>
-          </span>
-          <div className="flex items-center gap-1.5">
-            {linkedStudents.map((st) => {
-              const stKey = getStudentLinkKey(st, defaultSchoolId);
-              const activeKey = getStudentLinkKey(linkedEntity, defaultSchoolId);
-              const isSelected = stKey === activeKey;
-              const chipClass = st.className
-                ? (/^(Nursery|LKG|UKG|Class)/i.test(st.className) ? st.className : `Class ${st.className}`)
-                : (st.classId?.toLowerCase().includes("nursery") ? "Nursery" : "");
-              return (
-                <div
-                  key={stKey}
-                  className={`inline-flex items-center rounded-xl border text-xs font-bold transition shrink-0 ${
-                    isSelected
-                      ? "bg-emerald-600/20 border-emerald-500/60 text-emerald-200"
-                      : "bg-slate-900 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700"
-                  }`}
-                >
-                  <button
-                    onClick={() => handleSelectLinkedStudent(stKey)}
-                    className="px-2.5 py-1 flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <span className="truncate max-w-[120px]">{st.name}</span>
-                    {chipClass && (
-                      <span className="text-[10px] text-slate-300 font-medium">
-                        · {chipClass}
-                      </span>
-                    )}
-                    {distinctSchoolCount > 1 && st.schoolName && (
-                      <span className="text-[10px] text-indigo-300 font-medium truncate max-w-[90px]">
-                        · {st.schoolName}
-                      </span>
-                    )}
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleRemoveLinkedStudent(stKey);
-                    }}
-                    title={`${st.name} ka ID card is account se hatayein`}
-                    className="pr-2 pl-0.5 py-1 text-slate-500 hover:text-rose-400 transition cursor-pointer"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        <button
-          onClick={() => {
-            setQrScanMode("STUDENT");
-            setIsQrModalOpen(true);
-          }}
-          className="px-2.5 py-1 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/35 border border-indigo-500/40 text-indigo-300 hover:text-white text-[11px] font-bold flex items-center gap-1.5 shrink-0 transition cursor-pointer"
-          title="Isi User ID me dusre bachhe ya dusre school ka ID Card QR scan karke jodein"
-        >
-          <UserPlus className="w-3.5 h-3.5 text-indigo-400" />
-          <span>+ Add Student QR</span>
-        </button>
-      </div>
-
       <PanelErrorBoundary fallbackTitle="Student Portal">
         <Suspense fallback={<PanelLoadingFallback title="Student Portal" />}>
           <StudentSchoolPanel
@@ -1298,6 +1281,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
             linkedStudent={linkedEntity}
             allLinkedStudents={linkedStudents}
             initialTab={requestedTab as any}
+            onTabChange={(tab) => setStudentActiveTab(tab)}
             onAddAnotherStudentQr={() => {
               setQrScanMode("STUDENT");
               setIsQrModalOpen(true);

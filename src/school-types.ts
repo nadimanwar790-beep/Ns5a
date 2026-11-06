@@ -4,13 +4,15 @@ export type SchoolRole = 'SUPER_ADMIN' | 'SCHOOL_ADMIN' | 'SCHOOL_SUB_ADMIN' | '
 
 export type SubscriptionFeature = 'reading' | 'writing' | 'pdf' | 'mcq';
 
-export type PlanDuration = 'weekly' | 'monthly' | '3months' | 'yearly';
+export type PlanDuration = '1_year' | '2_years' | 'lifetime' | 'monthly' | 'weekly' | '3months' | 'yearly';
+
+export type SubscriptionTier = 'starter_200' | 'growth_500' | 'enterprise_2000' | 'lite' | 'full';
 
 export interface SchoolSubscription {
-  reading: boolean;
-  writing: boolean;
-  pdf: boolean;
-  mcq: boolean;
+  reading?: boolean;
+  writing?: boolean;
+  pdf?: boolean;
+  mcq?: boolean;
   expiresAt?: string; // ISO date — plan hard expiry (set on assign)
   monthlyAmount: number;
   paidUntil?: string; // ISO date — subscription paid up to this date
@@ -18,10 +20,72 @@ export interface SchoolSubscription {
   lastPaidAmount?: number; // amount received in last payment
   paymentNotes?: string; // admin notes on payment
   status: 'active' | 'inactive' | 'suspended';
-  tier?: 'lite' | 'full'; // lite = student data only, full = content + student data
+  tier?: SubscriptionTier;
+  maxStudents?: number; // 200, 500, or 2000 students
+  maxTeachers?: number; // 10, 25, or unlimited
   planDuration?: PlanDuration; // duration of last assigned plan
   assignedAt?: string; // ISO date — when plan was last assigned by super admin
 }
+
+export const TIER_CONFIG: Record<SubscriptionTier, { name: string; maxStudents: number; maxTeachers: number; monthlyPrice: number; sessionPrice: number; badge: string; desc: string }> = {
+  starter_200: {
+    name: "Basic Plan (200 Students)",
+    maxStudents: 200,
+    maxTeachers: 10,
+    monthlyPrice: 999,
+    sessionPrice: 9999,
+    badge: "BASIC 200",
+    desc: "Upto 200 Students • 10 Teachers • Core Student ERP & Fee Due Register"
+  },
+  growth_500: {
+    name: "Standard Plan (500 Students)",
+    maxStudents: 500,
+    maxTeachers: 25,
+    monthlyPrice: 1999,
+    sessionPrice: 19999,
+    badge: "STANDARD 500",
+    desc: "Upto 500 Students • 25 Teachers • Sub-Admins, QR ID Cards & Admit Cards"
+  },
+  enterprise_2000: {
+    name: "Pro Plan (2000 Students)",
+    maxStudents: 2000,
+    maxTeachers: 9999,
+    monthlyPrice: 3999,
+    sessionPrice: 39999,
+    badge: "PRO 2000",
+    desc: "Upto 2000 Students • Unlimited Staff • Multi-Admins, Full Payroll HRM, Advance Accounts & Website"
+  },
+  lite: {
+    name: "Basic Plan (200 Students)",
+    maxStudents: 200,
+    maxTeachers: 10,
+    monthlyPrice: 999,
+    sessionPrice: 9999,
+    badge: "BASIC 200",
+    desc: "Upto 200 Students • 10 Teachers • Core Student ERP & Fee Due Register"
+  },
+  full: {
+    name: "Pro Plan (2000 Students)",
+    maxStudents: 2000,
+    maxTeachers: 9999,
+    monthlyPrice: 3999,
+    sessionPrice: 39999,
+    badge: "PRO 2000",
+    desc: "Upto 2000 Students • Unlimited Staff • Multi-Admins, Full Payroll HRM, Advance Accounts & Website"
+  }
+};
+
+export const getSchoolMaxStudents = (school?: School | null): number => {
+  const tier = school?.subscription?.tier || 'enterprise_2000';
+  if (tier && TIER_CONFIG[tier]) return TIER_CONFIG[tier].maxStudents;
+  return school?.subscription?.maxStudents || 2000;
+};
+
+export const getSchoolMaxTeachers = (school?: School | null): number => {
+  const tier = school?.subscription?.tier || 'enterprise_2000';
+  if (tier && TIER_CONFIG[tier]) return TIER_CONFIG[tier].maxTeachers;
+  return school?.subscription?.maxTeachers || 9999;
+};
 
 export interface SchoolProfileCustomField {
   id: string;
@@ -105,25 +169,41 @@ export interface SchoolSession {
 
 export interface ClassFeeHead {
   id: string;
-  name: string; // e.g. "Admission Fee", "Tuition Fee", "Caution Money", "Annual Charges", "Bus Fee"
+  name: string; // e.g. "Exam Fee", "ID Card & Belt", "Computer Lab"
   amount: number;
+  enabled?: boolean; // If false, hidden & excluded from online admission total
+}
+
+export interface ClassAdmissionHeadToggles {
+  admissionFee: boolean;
+  registrationFee: boolean;
+  annualCharges: boolean;
+  tuitionFee: boolean;
+  cautionMoney: boolean;
+  busFee: boolean; // Allows user to select/unselect bus transport on online form
 }
 
 export interface ClassFeeStructure {
   admissionFee: number;
+  registrationFee?: number;
   tuitionFee: number;
   cautionMoney: number;
   annualCharges: number;
+  developmentFee?: number;
   busFee: number;
+  enabledHeads?: Partial<ClassAdmissionHeadToggles>;
   customHeads?: ClassFeeHead[];
 }
+
+export type SeniorStream = 'Science' | 'Commerce' | 'Arts';
 
 export interface SchoolClass {
   id: string;
   schoolId: string;
   sessionId: string;
-  name: string; // e.g. "Class 6"
+  name: string; // e.g. "Class 6" or "Class 11"
   section?: string; // e.g. "A" or "B"
+  stream?: SeniorStream | string; // Stream for Class 11 & 12 (Science, Commerce, Arts)
   classTeacherId?: string;
   defaultFee?: number;
   feeStructure?: ClassFeeStructure;
@@ -135,7 +215,8 @@ export interface SchoolSubject {
   schoolId: string;
   sessionId: string;
   classId: string;
-  name: string; // e.g. "Mathematics"
+  name: string; // e.g. "Physics", "Accountancy"
+  stream?: SeniorStream | string; // Stream for Senior Secondary subjects
   teacherId?: string;
   createdAt: string;
 }
@@ -242,7 +323,181 @@ export interface SchoolStudent {
   identificationMark?: string;
   medicalHistory?: string;
   admissionType?: 'NEW' | 'READMISSION';
+  // Teacher Referral & 10% Commission Tracking
+  referredByTeacherId?: string;
+  referredByTeacherName?: string;
+  referralCommissionPct?: number; // Default 10
+  referralCommissionScope?: 'admission_only' | 'all_fees';
+  referralCommissionDuration?: '1_year' | '2_years' | 'lifetime';
+  // Same-Family / Sibling Detection & Discount Tracking
+  familyGroupId?: string;
+  isSiblingMarked?: boolean;
+  siblingStudentIds?: string[];
+  siblingDiscountPct?: number;
+  siblingDiscountAmount?: number; // Monthly concession amount if applied to monthly fee
+  admissionSiblingDiscount?: number; // One-time admission concession given for sibling
+  baseMonthlyFee?: number; // Original class tuition fee prior to sibling discount
+  stream?: SeniorStream | string; // Senior Secondary stream: Science, Commerce, Arts
 }
+
+// ── CANONICAL CLASS & STREAM CONFIGURATION ──────────────────────────────────
+export const CLASS_PRESETS = [
+  "Nursery",
+  "LKG",
+  "UKG",
+  "Class 1",
+  "Class 2",
+  "Class 3",
+  "Class 4",
+  "Class 5",
+  "Class 6",
+  "Class 7",
+  "Class 8",
+  "Class 9",
+  "Class 10",
+  "Class 11",
+  "Class 12"
+] as const;
+
+export const SENIOR_STREAMS: { id: SeniorStream; label: string; icon: string; desc: string }[] = [
+  { id: 'Science', label: 'Science (विज्ञान)', icon: '🔬', desc: 'Physics, Chemistry, Maths, Biology, Computer Science, PE' },
+  { id: 'Commerce', label: 'Commerce (वाणिज्य)', icon: '📊', desc: 'Accountancy, Business Studies, Economics, Applied Maths, IP' },
+  { id: 'Arts', label: 'Arts / Humanities (कला)', icon: '🎨', desc: 'History, Political Science, Geography, Economics, Hindi, Sociology' },
+];
+
+export const isSeniorClass = (className: string = ""): boolean => {
+  const clean = (className || "").trim().toLowerCase();
+  return (
+    clean === "11" ||
+    clean === "12" ||
+    clean.includes("class 11") ||
+    clean.includes("class 12") ||
+    clean.includes("11th") ||
+    clean.includes("12th") ||
+    /\b(11|12|xi|xii)\b/i.test(clean)
+  );
+};
+
+export const isBoardClass = (className: string = ""): boolean => {
+  const clean = (className || "").trim().toLowerCase();
+  const is10 = clean === "10" || clean === "x" || clean.includes("class 10") || clean.includes("class x") || clean.includes("10th") || clean.includes("grade 10") || clean.includes("std 10") || clean.includes("tenth");
+  const is12 = clean === "12" || clean === "xii" || clean.includes("class 12") || clean.includes("class xii") || clean.includes("12th") || clean.includes("grade 12") || clean.includes("std 12") || clean.includes("twelfth");
+  return is10 || is12;
+};
+
+export const getClassSortRank = (className: string = "", stream?: string): number => {
+  const clean = (className || "").trim().toLowerCase();
+
+  // Play / Pre-Nursery
+  if (clean.includes("play") || clean.includes("pre-nur") || clean.includes("prenursery")) return 1;
+  // Nursery
+  if (clean.includes("nursery") || clean === "nur") return 2;
+  // LKG / KG-1
+  if (clean.includes("lkg") || clean.includes("kg-1") || clean.includes("kg 1") || clean.includes("jr")) return 3;
+  // UKG / KG-2 / Prep
+  if (clean.includes("ukg") || clean.includes("kg-2") || clean.includes("kg 2") || clean.includes("prep") || clean.includes("sr")) return 4;
+
+  // Exact number match for 1 to 12
+  const numMatch = clean.match(/\b([1-9]|1[0-2])\b/);
+  if (numMatch) {
+    const n = parseInt(numMatch[1], 10);
+    let rank = n * 10;
+    if (n === 11 || n === 12) {
+      const st = (stream || clean).toLowerCase();
+      if (st.includes("sci")) rank += 1;
+      else if (st.includes("com")) rank += 2;
+      else if (st.includes("art") || st.includes("hum")) rank += 3;
+    }
+    return rank;
+  }
+
+  // Fallback digits extraction
+  const digits = clean.replace(/\D+/g, "");
+  if (digits) {
+    const n = parseInt(digits, 10);
+    if (n >= 1 && n <= 12) {
+      let rank = n * 10;
+      if (n === 11 || n === 12) {
+        const st = (stream || clean).toLowerCase();
+        if (st.includes("sci")) rank += 1;
+        else if (st.includes("com")) rank += 2;
+        else if (st.includes("art") || st.includes("hum")) rank += 3;
+      }
+      return rank;
+    }
+  }
+
+  return 999;
+};
+
+export const sortSchoolClasses = <T extends { name: string; section?: string; stream?: string }>(classes: T[]): T[] => {
+  if (!Array.isArray(classes)) return [];
+  return [...classes].sort((a, b) => {
+    const rankA = getClassSortRank(a.name, a.stream);
+    const rankB = getClassSortRank(b.name, b.stream);
+    if (rankA !== rankB) return rankA - rankB;
+    const secA = (a.section || "").trim();
+    const secB = (b.section || "").trim();
+    if (secA !== secB) return secA.localeCompare(secB);
+    return (a.name || "").localeCompare(b.name || "");
+  });
+};
+
+// ── PRE-CONFIGURED STREAM-WISE & GRADE-WISE SUBJECTS ────────────────────────
+export const DEFAULT_CLASS_SUBJECTS: Record<string, string[]> = {
+  "Nursery": ["English Rhymes", "Hindi Balgeet", "Pre-Math Numbers", "Drawing & Coloring", "General Awareness"],
+  "LKG": ["English Phonics & Writing", "Hindi Akshar Gyan", "Mathematics Basics", "EVS & Nature", "Art & Craft"],
+  "UKG": ["English Words & Sentences", "Hindi Shabad Rachna", "Mathematics Add/Sub", "Environmental Awareness", "Creative Arts"],
+  "Class 1": ["English Marigold", "Hindi Rimjhim", "Mathematics Math-Magic", "EVS Our Environment", "Computer Studies", "General Knowledge"],
+  "Class 2": ["English Marigold", "Hindi Rimjhim", "Mathematics Math-Magic", "EVS Our World", "Computer Studies", "General Knowledge"],
+  "Class 3": ["English Marigold", "Hindi Rimjhim", "Mathematics Math-Magic", "EVS Looking Around", "General Science", "Computer Coding", "General Knowledge"],
+  "Class 4": ["English Marigold", "Hindi Rimjhim", "Mathematics Math-Magic", "EVS Looking Around", "General Science", "Computer & AI", "General Knowledge"],
+  "Class 5": ["English Marigold", "Hindi Rimjhim", "Mathematics Math-Magic", "EVS Looking Around", "General Science", "Computer & AI", "General Knowledge"],
+  "Class 6": ["English Honeysuckle", "Hindi Vasant", "Mathematics NCERT", "Science (PCB)", "Social Science", "Sanskrit", "Computer Science"],
+  "Class 7": ["English Honeycomb", "Hindi Vasant", "Mathematics NCERT", "Science (PCB)", "Social Science", "Sanskrit", "Computer Science"],
+  "Class 8": ["English Honeydew", "Hindi Bharat Ki Khoj", "Mathematics NCERT", "Science (PCB)", "Social Science", "Sanskrit", "Computer & Coding"],
+  "Class 9": ["English Beehive & Moments", "Hindi Kshitij & Kritika", "Mathematics NCERT", "Science (Physics, Chemistry, Biology)", "Social Science", "Information Technology 402"],
+  "Class 10": ["English First Flight & Footprints", "Hindi Kshitij & Kritika", "Mathematics NCERT Standard", "Science (Physics, Chem, Bio)", "Social Science Board", "Information Technology 402"],
+  // Stream-wise subjects for 11 & 12
+  "Class 11_Science": ["Physics", "Chemistry", "Mathematics", "Biology", "English Core", "Computer Science", "Physical Education"],
+  "Class 11_Commerce": ["Accountancy", "Business Studies", "Economics", "English Core", "Applied Mathematics", "Informatics Practices"],
+  "Class 11_Arts": ["History", "Political Science", "Geography", "Economics", "English Core", "Hindi Elective", "Sociology"],
+  "Class 12_Science": ["Physics", "Chemistry", "Mathematics", "Biology", "English Core", "Computer Science", "Physical Education"],
+  "Class 12_Commerce": ["Accountancy", "Business Studies", "Economics", "English Core", "Applied Mathematics", "Informatics Practices"],
+  "Class 12_Arts": ["History", "Political Science", "Geography", "Economics", "English Core", "Hindi Elective", "Sociology"],
+};
+
+export const getDefaultSubjectsForClass = (className: string, stream?: string): string[] => {
+  const clean = (className || "").trim();
+  const st = (stream || "").trim().toLowerCase();
+
+  if (isSeniorClass(clean)) {
+    const is12 = clean.includes("12") || clean.includes("xii");
+    const prefix = is12 ? "Class 12" : "Class 11";
+    if (st.includes("sci") || clean.toLowerCase().includes("sci")) {
+      return DEFAULT_CLASS_SUBJECTS[`${prefix}_Science`];
+    }
+    if (st.includes("com") || clean.toLowerCase().includes("com")) {
+      return DEFAULT_CLASS_SUBJECTS[`${prefix}_Commerce`];
+    }
+    if (st.includes("art") || st.includes("hum") || clean.toLowerCase().includes("art")) {
+      return DEFAULT_CLASS_SUBJECTS[`${prefix}_Arts`];
+    }
+    // Default to Science stream if unspecified
+    return DEFAULT_CLASS_SUBJECTS[`${prefix}_Science`];
+  }
+
+  // Exact lookup
+  if (DEFAULT_CLASS_SUBJECTS[clean]) return DEFAULT_CLASS_SUBJECTS[clean];
+
+  // Case-insensitive lookup
+  for (const [k, v] of Object.entries(DEFAULT_CLASS_SUBJECTS)) {
+    if (clean.toLowerCase() === k.toLowerCase()) return v;
+  }
+
+  // Fallback
+  return ["English", "Hindi", "Mathematics", "Science", "Social Science", "Computer / IT"];
+};
 
 export const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"] as const;
 export type BloodGroup = typeof BLOOD_GROUPS[number];
@@ -363,6 +618,9 @@ export interface MonthlyFee {
     con: number;
     paid: number;
   }[];
+  siblingDiscountAmount?: number;
+  referredByTeacherId?: string;
+  referredByTeacherName?: string;
 }
 
 // HOMEWORK
@@ -519,6 +777,8 @@ export interface StaffEmployee {
   phone: string;
   designation: string; // e.g. "Senior PGT Teacher", "Lab Assistant", "Accountant"
   department: string;
+  employeeId?: string;
+  lateEntriesCount?: number;
   joinDate: string;
   monthlySalary: number;
   active: boolean;
@@ -542,6 +802,34 @@ export interface StaffLeave {
   appliedAt: string;
   approvedBy?: string;
   remarks?: string;
+}
+
+export type ReferralCommissionScope = 'admission_only' | 'all_fees';
+export type ReferralCommissionDuration = '1_year' | '2_years' | 'lifetime';
+
+export interface SchoolReferralSettings {
+  schoolId: string;
+  enabled?: boolean;
+  defaultCommissionPct: number; // Default 10%
+  commissionScope: ReferralCommissionScope; // 'admission_only' or 'all_fees'
+  commissionDuration?: ReferralCommissionDuration; // '1_year' | '2_years' | 'lifetime' (Admin controlled)
+  excludeTransportFee?: boolean;
+  siblingDiscountEnabled?: boolean;
+  defaultSiblingDiscountPct: number; // Default 10%
+  updatedAt: string;
+}
+
+export interface TeacherReferralPayout {
+  id: string;
+  schoolId: string;
+  teacherId: string;
+  teacherName: string;
+  amount: number;
+  paidDate: string; // YYYY-MM-DD or ISO
+  paymentMode: string; // Cash, UPI, Bank Transfer, Added to Salary
+  referenceNo?: string;
+  remarks?: string;
+  createdAt: string;
 }
 
 // ── ONLINE ADMISSIONS & REGISTRATION ──
@@ -621,6 +909,12 @@ export interface AdmissionApplication {
   assignedSection?: string;
   paymentScreenshotUrl?: string;
   transactionRef?: string;
+  referredByTeacherId?: string;
+  referredByTeacherName?: string;
+  familyGroupId?: string;
+  isSiblingMarked?: boolean;
+  siblingDiscountAmount?: number;
+  stream?: SeniorStream | string; // Senior Secondary stream: Science, Commerce, Arts
 }
 
 // ── SCHOOL PUBLIC WEBSITE & PORTAL ──
@@ -677,6 +971,9 @@ export interface TimetablePeriod {
   teacherName: string;
   room?: string;
   isBreak?: boolean;
+  youtubeUrl?: string;
+  youtubeVideoId?: string;
+  topic?: string;
 }
 
 export interface ClassWeeklyTimetable {
@@ -688,6 +985,28 @@ export interface ClassWeeklyTimetable {
   sessionId: string;
   schedule: Record<string, TimetablePeriod[]>; // key: "Monday", "Tuesday", etc.
   updatedAt: string;
+}
+
+// ── DAILY CLASSROOM VIDEO LECTURE ARCHIVE ──
+export interface DailyClassLecture {
+  id: string;
+  schoolId: string;
+  sessionId: string;
+  classId: string;
+  className: string;
+  date: string; // YYYY-MM-DD
+  month: string; // YYYY-MM
+  periodNumber: number;
+  periodTime?: string;
+  subjectName: string;
+  topic: string;
+  teacherName: string;
+  teacherId?: string;
+  youtubeUrl: string;
+  youtubeVideoId: string;
+  notes?: string;
+  addedAt: string;
+  addedBy: "TEACHER" | "ADMIN";
 }
 
 // ── 2. DAILY HOMEWORK & ASSIGNMENTS ──
@@ -822,4 +1141,40 @@ export interface StoreSaleRecord {
   paymentMode: 'cash' | 'online_upi' | 'card';
   date: string;
   soldBy: string;
+}
+
+// ── 6. NSTA MESSENGER SUITE (WhatsApp-Style 3-Screen Architecture) ──
+export type NstaThreadType = "CLASS_GROUP" | "SCHOOL_DESK" | "TEACHER_CHAT";
+
+export interface NstaFeeSlipData {
+  type: "A6_DEMAND_SLIP" | "FEE_RECEIPT";
+  month?: string;
+  monthLabel?: string;
+  amount?: number;
+  balanceDue?: number;
+  receiptNo?: string;
+  dueDate?: string;
+  pdfUrl?: string;
+  payLink?: string;
+  particulars?: { head: string; amount: number }[];
+}
+
+export interface NstaMessage {
+  id: string;
+  schoolId: string;
+  threadType: NstaThreadType;
+  classId?: string;       // For CLASS_GROUP
+  studentId?: string;     // For SCHOOL_DESK & TEACHER_CHAT
+  studentName?: string;
+  teacherId?: string;     // For TEACHER_CHAT
+  teacherName?: string;
+  senderId: string;
+  senderName: string;
+  senderRole: "ADMIN" | "TEACHER" | "STUDENT";
+  text: string;
+  attachmentUrl?: string;
+  attachmentType?: "IMAGE" | "VIDEO" | "PDF" | "NOTICE" | "AUDIO";
+  feeSlip?: NstaFeeSlipData;
+  createdAt: string;      // ISO string
+  status?: "sent" | "delivered" | "read";
 }

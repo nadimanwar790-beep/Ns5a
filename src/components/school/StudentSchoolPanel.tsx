@@ -1,14 +1,17 @@
 // @ts-nocheck
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   GraduationCap,
   Calendar,
+  CalendarDays,
+  CalendarCheck,
   CreditCard,
   Award,
   BookOpen,
   Bell,
   QrCode,
   ArrowLeft,
+  ArrowRight,
   CheckCircle2,
   XCircle,
   Clock,
@@ -28,11 +31,28 @@ import {
   MessageCircle,
   Home,
   Users,
-  Megaphone,
   Image as ImageIcon,
   Search,
+  ReceiptText,
+  Youtube,
+  Palmtree,
+  Sun,
+  Play,
+  Share2,
+  Heart,
+  Film,
+  Filter,
+  Layers,
+  Eye,
+  RefreshCw,
+  UserPlus,
+  ChevronDown,
+  Check,
+  X,
 } from "lucide-react";
 import QRCode from "react-qr-code";
+import { ClassroomVideoArchive } from "./ClassroomVideoArchive";
+import { CustomPlayer } from "../CustomPlayer";
 import {
   getSchool,
   getLocalStudents,
@@ -66,8 +86,12 @@ import {
 import { getSavedSchoolLogo, isAppLogo } from "./feeReceiptUtils";
 import { getDemoSchoolDataset, isHolidayDate, isDemoDataEnabled, setDemoDataEnabled } from "./demoDataStore";
 import { OfficialFeeReceiptModal } from "./OfficialFeeReceiptModal";
+import { AdmissionFormPrintModal } from "./AdmissionFormPrintModal";
+import { AnnualBulkFeeStatementModal } from "./AnnualBulkFeeStatementModal";
 import { QrAttendanceScannerModal } from "./QrAttendanceScannerModal";
 import { SchoolCommunityFeed } from "./SchoolCommunityFeed";
+import { SchoolClassChannelView } from "./SchoolClassChannelView";
+import { NstaMessengerSuite } from "./NstaMessengerSuite";
 import { downloadFeeDocument, shareFeeReceiptOnWhatsApp } from "./feeDocument";
 import {
   getSchoolPushEnabledState,
@@ -88,6 +112,7 @@ interface Props {
   linkedStudent?: any;
   allLinkedStudents?: any[];
   initialTab?: TabType;
+  onTabChange?: (tab: TabType) => void;
   onAddAnotherStudentQr?: () => void;
   onOpenPlatformContent?: () => void;
   onBack?: () => void;
@@ -98,7 +123,22 @@ interface Props {
   onSelectForFee?: any;
 }
 
-type TabType = "overview" | "attendance" | "fees" | "exams" | "homework" | "notices" | "community" | "idcard" | "teachers";
+type TabType =
+  | "overview"
+  | "channel"
+  | "attendance"
+  | "fees"
+  | "exams"
+  | "homework"
+  | "notices"
+  | "community"
+  | "idcard"
+  | "teachers"
+  | "videos"
+  | "holidays"
+  | "events_memories"
+  | "explore_plus"
+  | "profile";
 
 export const StudentSchoolPanel: React.FC<Props> = ({
   uid,
@@ -110,6 +150,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   linkedStudent,
   allLinkedStudents,
   initialTab,
+  onTabChange,
   onAddAnotherStudentQr,
   onOpenPlatformContent,
   onBack,
@@ -117,8 +158,16 @@ export const StudentSchoolPanel: React.FC<Props> = ({
 }) => {
   const normalizeTab = (t?: string): TabType => {
     if (!t) return "overview";
-    if (t === "notices" || t === "community") return "community";
-    if (["overview", "attendance", "fees", "exams", "homework", "idcard", "teachers"].includes(t)) {
+    if (t === "profile") return "overview";
+    if (t === "updates") return "channel";
+    if (t === "feed" || t === "community" || t === "notices") return "holidays";
+    if (t === "memories" || t === "events") return "events_memories";
+    if (t === "explore") return "explore_plus";
+    if ([
+      "overview", "channel", "attendance", "fees", "exams", "homework",
+      "idcard", "teachers", "videos", "holidays", "events_memories",
+      "explore_plus"
+    ].includes(t)) {
       return t as TabType;
     }
     return "overview";
@@ -132,6 +181,10 @@ export const StudentSchoolPanel: React.FC<Props> = ({
       setActiveTab(normalizeTab(initialTab));
     }
   }, [initialTab]);
+
+  useEffect(() => {
+    onTabChange?.(activeTab);
+  }, [activeTab, onTabChange]);
 
   const effectiveUid = useMemo(() => {
     if (uid) return uid;
@@ -166,6 +219,15 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   };
   const [school, setSchool] = useState<School | null>(null);
   const [selectedFeeForReceipt, setSelectedFeeForReceipt] = useState<any | null>(null);
+  const [feeModalFormat, setFeeModalFormat] = useState<"a6" | "pos">("pos");
+  const [feeViewMode, setFeeViewMode] = useState<"cards" | "table">("cards");
+  const [showPreAdmissionMonths, setShowPreAdmissionMonths] = useState<boolean>(false);
+  const [selectedAdmissionModal, setSelectedAdmissionModal] = useState<{
+    isOpen: boolean;
+    mode: "receipt_only" | "form_only" | "combined";
+    feeRecord?: any;
+  } | null>(null);
+  const [showBulkFeeModal, setShowBulkFeeModal] = useState(false);
   const [showQrAttendanceScanner, setShowQrAttendanceScanner] = useState(false);
   const [attendanceSuccessMsg, setAttendanceSuccessMsg] = useState<string | null>(null);
   const [liveFees, setLiveFees] = useState<any[]>([]);
@@ -173,6 +235,25 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   const [liveAttendanceRecords, setLiveAttendanceRecords] = useState<any[]>([]);
   const [studentPhoto, setStudentPhoto] = useState<string | null>(null);
   const photoInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  // ── School Events & Memories states
+  const [selectedMemoryMedia, setSelectedMemoryMedia] = useState<{
+    type: "IMAGE" | "VIDEO";
+    url: string;
+    title: string;
+    eventName?: string;
+    date?: string;
+    description?: string;
+  } | null>(null);
+  const [eventsFilter, setEventsFilter] = useState<string>("ALL");
+
+  // ── Holidays page states
+  const [holidaysFilter, setHolidaysFilter] = useState<string>("ALL");
+  const [holidaysSearch, setHolidaysSearch] = useState<string>("");
+
+  // ── Notification and Student Switcher Modals
+  const [showNotificationModal, setShowNotificationModal] = useState<boolean>(false);
+  const [showStudentSwitcherModal, setShowStudentSwitcherModal] = useState<boolean>(false);
 
   // Load demo dataset for fallback / syllabus / calendar
   const dataset = useMemo(() => getDemoSchoolDataset(), []);
@@ -449,6 +530,16 @@ export const StudentSchoolPanel: React.FC<Props> = ({
     reader.readAsDataURL(file);
   };
 
+  const handleExploreFullApp = () => {
+    try {
+      localStorage.setItem("nst_app_view_mode", "STUDENT");
+      window.dispatchEvent(new CustomEvent("nst_open_student_dashboard"));
+    } catch {}
+    if (onOpenPlatformContent) {
+      onOpenPlatformContent();
+    }
+  };
+
   const [classesList, setClassesList] = useState<any[]>(() => schoolId ? getLocalClasses(schoolId) : []);
   const [demoEnabled, setDemoEnabled] = useState<boolean>(() => isDemoDataEnabled());
   const schoolDemoActive = demoEnabled && shouldUseDemoForSchool(schoolId);
@@ -474,6 +565,21 @@ export const StudentSchoolPanel: React.FC<Props> = ({
       if (cls && cls.length > 0) setClassesList(cls);
     }).catch(() => {});
   }, [schoolId]);
+
+  const allStudentsInSchool = useMemo(() => {
+    const local = getLocalStudents(schoolId) || [];
+    const demo = (shouldUseDemoForSchool(schoolId) && Array.isArray(dataset?.students)) ? dataset.students : [];
+    const combined = [...local];
+    demo.forEach((d) => {
+      if (d && !combined.some((c) => c && (c.id === d.id || (c.admissionNo && c.admissionNo === d.admissionNo)))) {
+        combined.push(d);
+      }
+    });
+    if (activeStudent && !combined.some((c) => c && c.id === activeStudent.id)) {
+      combined.unshift(activeStudent);
+    }
+    return combined;
+  }, [schoolId, dataset?.students, activeStudent]);
 
   const studentClassLabel = useMemo(() => {
     const isBogusZeroRoll = (val?: string) => {
@@ -846,6 +952,40 @@ export const StudentSchoolPanel: React.FC<Props> = ({
     const liveMonthMap = new Map<string, any>();
     const extraFees: any[] = [];
 
+    // 1. Identify authentic admission date & month of this student
+    const studentJoinDate =
+      (activeStudent as any)?.joinDate ||
+      (currentStudent as any)?.joinDate ||
+      (activeStudent as any)?.admissionDate ||
+      (currentStudent as any)?.admissionDate ||
+      (typeof activeStudent?.createdAt === "string" ? activeStudent.createdAt.slice(0, 10) : "") ||
+      (typeof currentStudent?.createdAt === "string" ? currentStudent.createdAt.slice(0, 10) : "") ||
+      (enrichedData as any)?.joinDate ||
+      (enrichedData as any)?.admissionDate;
+
+    // Find admission fee record if present
+    const rawAdmissionFee = filteredLiveFees.find(
+      (f: any) =>
+        f.feeType === "admission" ||
+        f.receiptCategory === "admission" ||
+        (typeof f.receiptNo === "string" && f.receiptNo.startsWith("ADM-"))
+    );
+
+    const admissionDateFromFee =
+      rawAdmissionFee?.paidDate ||
+      rawAdmissionFee?.paymentDate ||
+      (typeof rawAdmissionFee?.createdAt === "string" ? rawAdmissionFee.createdAt.slice(0, 10) : "");
+
+    const effectiveJoinDate = studentJoinDate || admissionDateFromFee || "";
+    let admissionMonthCode = "";
+    if (effectiveJoinDate && /^\d{4}-\d{2}/.test(effectiveJoinDate)) {
+      admissionMonthCode = effectiveJoinDate.slice(0, 7);
+    } else if (rawAdmissionFee?.month && /^\d{4}-\d{2}$/.test(rawAdmissionFee.month)) {
+      admissionMonthCode = rawAdmissionFee.month;
+    } else if (!schoolDemoActive && !currentStudent.id?.startsWith("demo_std_")) {
+      admissionMonthCode = activeMonth;
+    }
+
     filteredLiveFees.forEach((rawFee: any) => {
       let f = rawFee;
       if (
@@ -868,7 +1008,21 @@ export const StudentSchoolPanel: React.FC<Props> = ({
         }
       }
 
-      if (f.feeType === "admission" || f.receiptCategory === "admission") {
+      const isAdm =
+        f.feeType === "admission" ||
+        f.receiptCategory === "admission" ||
+        (typeof f.receiptNo === "string" && f.receiptNo.startsWith("ADM-"));
+
+      if (isAdm) {
+        // Ensure admission fee billed amount reflects total admission payable/paid rather than single monthly fee
+        const admBilled = Number(f.grossTotal ?? f.grossAmount ?? f.amount ?? f.paidAmount ?? 0);
+        f = {
+          ...f,
+          feeType: "admission",
+          receiptCategory: "admission",
+          amount: admBilled > 0 ? admBilled : (f.amount || studentMonthlyFee),
+          monthlyAmount: admBilled > 0 ? admBilled : (f.monthlyAmount || studentMonthlyFee),
+        };
         extraFees.push(f);
       } else if (f.month) {
         liveMonthMap.set(f.month, f);
@@ -887,6 +1041,31 @@ export const StudentSchoolPanel: React.FC<Props> = ({
       const recorded = liveMonthMap.get(m.code);
       if (recorded) {
         return recorded;
+      }
+
+      // Pre-admission months: Any session month strictly prior to student's admission date
+      const isPreAdmission = Boolean(admissionMonthCode && m.code < admissionMonthCode);
+      if (isPreAdmission) {
+        return {
+          id: `fee_pre_${m.code}_${currentStudent.id}`,
+          schoolId,
+          sessionId: currentStudent.sessionId || "demo_session_2026_27",
+          studentId: currentStudent.id,
+          studentName: currentStudent.name,
+          rollNo: currentStudent.rollNo,
+          classId: currentStudent.classId,
+          month: m.code,
+          amount: 0,
+          monthlyAmount: 0,
+          paid: false,
+          paidAmount: 0,
+          balanceDue: 0,
+          isPreAdmission: true,
+          status: "pre_admission",
+          receiptNo: "—",
+          paidDate: undefined,
+          paymentMode: "Pre-Admission (नामांकन पूर्व)",
+        };
       }
 
       const isUpcoming = m.code > activeMonth;
@@ -939,7 +1118,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
     });
 
     return [...extraFees, ...sessionList];
-  }, [liveFees, currentStudent, dataset, studentMonthlyFee, schoolId, schoolDemoActive]);
+  }, [liveFees, currentStudent, dataset, studentMonthlyFee, schoolId, schoolDemoActive, activeStudent, enrichedData]);
 
   const feeSummary = useMemo(() => {
     let totalBilled = 0;
@@ -947,9 +1126,20 @@ export const StudentSchoolPanel: React.FC<Props> = ({
     let totalRemaining = 0;
 
     allStudentFees.forEach((f: any) => {
+      // Exclude pre-admission session months completely from pending dues & billed totals
+      if (f.isPreAdmission || f.status === "pre_admission") return;
+
       const isUpcoming = Boolean(f.isUpcoming || f.status === "upcoming");
       const isPaid = typeof f.paid === "boolean" ? f.paid : f.status === "paid";
-      const billed = Number(f.monthlyAmount ?? f.amount ?? studentMonthlyFee);
+      const isAdm =
+        f.feeType === "admission" ||
+        f.receiptCategory === "admission" ||
+        String(f.receiptNo || "").startsWith("ADM-");
+
+      const billed = isAdm
+        ? Number(f.grossTotal ?? f.grossAmount ?? f.amount ?? f.paidAmount ?? studentMonthlyFee)
+        : Number(f.monthlyAmount ?? f.amount ?? studentMonthlyFee);
+
       const paid = Number(f.paidAmount !== undefined ? f.paidAmount : (isPaid ? billed : 0));
       const remaining = isUpcoming
         ? 0
@@ -962,6 +1152,17 @@ export const StudentSchoolPanel: React.FC<Props> = ({
 
     return { totalBilled, totalDeposited, totalRemaining };
   }, [allStudentFees, studentMonthlyFee]);
+
+  const studentAdmissionFeeRecord = useMemo(() => {
+    return (
+      allStudentFees.find(
+        (f: any) =>
+          f.feeType === "admission" ||
+          f.receiptCategory === "admission" ||
+          (typeof f.receiptNo === "string" && f.receiptNo.startsWith("ADM-"))
+      ) || null
+    );
+  }, [allStudentFees]);
 
   const pendingDues = feeSummary.totalRemaining;
 
@@ -1485,102 +1686,154 @@ export const StudentSchoolPanel: React.FC<Props> = ({
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
-      {/* ── TOP NAV HEADER ─────────────────────────────────────────────────── */}
-      <header className="sticky top-0 z-30 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 px-3 sm:px-6 py-2.5 flex items-center justify-between gap-3 shadow-lg">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2.5">
-            {resolvedSchoolLogo && !isAppLogo(resolvedSchoolLogo) ? (
-              <img
-                src={resolvedSchoolLogo}
-                alt="Logo"
-                className="w-9 h-9 rounded-xl object-contain bg-white p-0.5 border border-slate-700 shadow-md shadow-emerald-600/20"
-              />
-            ) : (
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center font-black text-white text-xs shadow-md shadow-emerald-600/30">
-                {schoolInitials}
-              </div>
-            )}
-            <div>
-              <div className="flex items-center gap-1.5">
-                <h1 className="text-xs sm:text-sm font-black text-white tracking-tight">
-                  {schoolDisplayName}
-                </h1>
-                <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                  Student Portal
-                </span>
-              </div>
-              <p className="text-[10px] text-slate-400">
-                {activeStudent.name} • {formatClassLabel(studentClassLabel)} • Roll #{activeStudent.rollNo}
-              </p>
+      {/* ── TOP NAV HEADER (SHOWN STRICTLY ONLY ON HOME OVERVIEW PAGE) ─────── */}
+      {activeTab === "overview" && (
+        <header className="sticky top-0 z-30 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 px-3 sm:px-6 py-2 flex items-center justify-between gap-2 overflow-x-auto no-scrollbar shadow-lg">
+          {/* Left: Users icon + All linked student accounts as pills */}
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1 shrink-0">
+              <Users className="w-4 h-4 text-emerald-400" />
+            </span>
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+              {(() => {
+                const list = Array.isArray(allLinkedStudents) && allLinkedStudents.length > 0
+                  ? allLinkedStudents
+                  : [activeStudent];
+                return list.map((st: any) => {
+                  const isSelected = st.id === activeStudent.id || st.admissionNo === activeStudent.admissionNo;
+                  const chipClass = st.className
+                    ? (/^(Nursery|LKG|UKG|Class)/i.test(st.className) ? st.className : `Class ${st.className}`)
+                    : (formatClassLabel(studentClassLabel) || "");
+                  return (
+                    <div
+                      key={st.id || st.admissionNo || st.name}
+                      className={`inline-flex items-center rounded-xl border text-xs font-bold transition shrink-0 ${
+                        isSelected
+                          ? "bg-emerald-600/20 border-emerald-500/60 text-emerald-200"
+                          : "bg-slate-900 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700"
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!isSelected) {
+                            try {
+                              localStorage.setItem("nst_current_user", JSON.stringify(st));
+                              window.location.reload();
+                            } catch {}
+                          }
+                        }}
+                        className="px-2.5 py-1 flex items-center gap-1.5 cursor-pointer"
+                        title={isSelected ? `${st.name} (Active Student)` : `Switch to ${st.name}`}
+                      >
+                        <span className="truncate max-w-[120px]">{st.name}</span>
+                        {chipClass && (
+                          <span className="text-[10px] text-slate-300 font-medium">
+                            · {chipClass}
+                          </span>
+                        )}
+                      </button>
+                      {list.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            try {
+                              const remaining = list.filter((x: any) => (x.id || x.admissionNo) !== (st.id || st.admissionNo));
+                              localStorage.setItem("nst_linked_students", JSON.stringify(remaining));
+                              if (isSelected && remaining.length > 0) {
+                                localStorage.setItem("nst_current_user", JSON.stringify(remaining[0]));
+                              }
+                              window.location.reload();
+                            } catch {}
+                          }}
+                          title={`${st.name} ka ID card is account se hatayein`}
+                          className="pr-2 pl-0.5 py-1 text-slate-500 hover:text-rose-400 transition cursor-pointer"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                });
+              })()}
             </div>
           </div>
-        </div>
 
-        {/* Right side actions */}
-        <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap justify-end">
-          {/* 1-Tap Monthly Fee & Notice Push Notification Toggle */}
+          {/* Right: + Add Student QR button */}
           <button
-            onClick={handleTogglePushAlerts}
-            disabled={pushBusy}
-            className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border ${
-              pushEnabled
-                ? "bg-emerald-500/20 border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/30"
-                : "bg-indigo-600 hover:bg-indigo-500 border-indigo-400/50 text-white shadow-md shadow-indigo-600/25"
-            }`}
-            title="Monthly Fee Due aur School Notice ka Lock Screen Push Notification ON/OFF karein"
+            type="button"
+            onClick={() => {
+              if (onAddAnotherStudentQr) {
+                onAddAnotherStudentQr();
+              } else {
+                setShowStudentSwitcherModal(true);
+              }
+            }}
+            className="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/35 border border-indigo-500/40 text-indigo-300 hover:text-white text-[11px] sm:text-xs font-bold flex items-center gap-1.5 shrink-0 transition cursor-pointer"
+            title="Add another student ID / QR"
           >
-            <Bell className={`w-3.5 h-3.5 ${pushEnabled ? "text-emerald-400" : "text-amber-300 animate-bounce"}`} />
-            <span>{pushBusy ? "..." : pushEnabled ? "Alerts ON" : "Enable Alerts"}</span>
+            <UserPlus className="w-3.5 h-3.5 text-indigo-400" />
+            <span>+ Add Student QR</span>
           </button>
+        </header>
+      )}
 
-          {/* Demo Data Mode Toggle Button */}
-          <button
-            onClick={() => handleToggleDemo(!demoEnabled)}
-            className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border ${
-              demoEnabled
-                ? "bg-amber-500/20 border-amber-500/50 text-amber-300 hover:bg-amber-500/30"
-                : "bg-emerald-500/20 border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/30"
-            }`}
-            title="Turn Demo Data ON/OFF"
-          >
-            <span className={`w-2 h-2 rounded-full ${demoEnabled ? "bg-amber-400 animate-pulse" : "bg-emerald-400"}`} />
-            <span className="hidden sm:inline">Demo:</span>
-            <span>{demoEnabled ? "ON" : "OFF (Real Only)"}</span>
-          </button>
-
-          <button
-            onClick={() => setShowQrAttendanceScanner(true)}
-            className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-emerald-600/25 transition active:scale-95"
-            title="Scan Class Attendance QR Code"
-          >
-            <Camera className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Mark Attendance</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab("idcard")}
-            className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-indigo-400 border border-slate-700 transition cursor-pointer"
-            title="View Digital ID Card (QR Code)"
-          >
-            <QrCode className="w-4 h-4" />
-          </button>
-
-          {/* Logout button directly following QR code */}
-          <button
-            onClick={handleStudentLogout}
-            className="px-2.5 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-400 hover:text-rose-300 transition flex items-center gap-1.5 text-xs font-bold active:scale-95 cursor-pointer shadow-sm shadow-rose-950/40"
-            title="Logout (लॉगआउट — आपके जुड़े हुए Student ID सुरक्षित रहेंगे)"
-          >
-            <LogOut className="w-3.5 h-3.5 text-rose-400" />
-            <span>Logout</span>
-          </button>
-        </div>
-      </header>
-
-      {/* ── STUDENT IDENTITY HERO BANNER (SHOWN ON HOME OVERVIEW) ───────────── */}
-      {activeTab === "overview" ? (
+      {/* ── STUDENT IDENTITY HERO BANNER (SHOWN STRICTLY ONLY ON HOME OVERVIEW) ── */}
+      {activeTab === "overview" && (
         <div className="bg-slate-900/90 border-b border-slate-800 px-4 sm:px-6 py-4">
-          <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="max-w-6xl mx-auto space-y-3.5">
+            {/* School Name & Official Notification Row (Moved Down From Top Bar) */}
+            <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-800/80">
+              <div className="flex items-center gap-2.5 min-w-0">
+                {resolvedSchoolLogo && !isAppLogo(resolvedSchoolLogo) ? (
+                  <img
+                    src={resolvedSchoolLogo}
+                    alt="Logo"
+                    className="w-8 h-8 rounded-xl object-contain bg-white p-0.5 border border-slate-700 shadow-sm shrink-0"
+                  />
+                ) : (
+                  <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center font-black text-white text-xs shrink-0">
+                    {schoolInitials}
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-xs sm:text-sm font-black text-white tracking-tight truncate">
+                      {schoolDisplayName}
+                    </h2>
+                    <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 shrink-0">
+                      Student Portal
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-400">Official Student &amp; Parent Digital Campus</p>
+                </div>
+              </div>
+
+              {/* Notification Button beside School Name */}
+              <button
+                type="button"
+                onClick={() => setShowNotificationModal(true)}
+                className={`px-2.5 py-1.5 rounded-xl border flex items-center gap-1.5 transition cursor-pointer active:scale-95 shrink-0 ${
+                  pushEnabled
+                    ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/20"
+                    : "bg-slate-800/90 border-slate-700 hover:bg-slate-700 text-slate-300"
+                }`}
+                title="School Notifications &amp; History"
+              >
+                <div className="relative">
+                  <Bell className={`w-3.5 h-3.5 ${pushEnabled ? "text-emerald-400" : "text-amber-400"}`} />
+                  {pushEnabled && (
+                    <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  )}
+                </div>
+                <span className="text-[11px] font-bold">
+                  {pushEnabled ? "Alerts ON" : "Notifications"}
+                </span>
+              </button>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div className="flex items-center gap-3.5 flex-1 min-w-0">
               <div className="relative group shrink-0">
                 {activePhoto ? (
@@ -1612,6 +1865,10 @@ export const StudentSchoolPanel: React.FC<Props> = ({
               </div>
 
               <div className="flex-1 min-w-0">
+                <div className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold mb-1.5">
+                  <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                  <span>Verified Enrolled Student</span>
+                </div>
                 <div className="flex items-center gap-2 flex-wrap">
                   <h2 className="text-base sm:text-lg font-bold text-white truncate">{activeStudent.name}</h2>
                   <span className="text-xs text-slate-400">
@@ -1637,6 +1894,23 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                     <span className="font-semibold text-emerald-400 tabular-nums">{activeStudent.phone || "—"}</span>
                   </div>
                 </div>
+
+                <div className="flex items-center gap-2 pt-2.5">
+                  <button
+                    onClick={() => setActiveTab("idcard")}
+                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-bold flex items-center gap-1 border border-slate-700 transition cursor-pointer active:scale-95"
+                  >
+                    <QrCode className="w-3 h-3 text-indigo-400" />
+                    <span>Digital ID Card</span>
+                  </button>
+                  <button
+                    onClick={() => setSelectedAdmissionModal({ isOpen: true, mode: "form_only", feeRecord: studentAdmissionFeeRecord })}
+                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-bold flex items-center gap-1 border border-slate-700 transition cursor-pointer active:scale-95"
+                  >
+                    <FileText className="w-3 h-3 text-emerald-400" />
+                    <span>A4 Admission Form</span>
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -1645,51 +1919,47 @@ export const StudentSchoolPanel: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => setActiveTab("attendance")}
-                className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-700 text-center min-w-[88px] cursor-pointer transition"
+                className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-emerald-500/50 text-center min-w-[88px] cursor-pointer transition active:scale-95 group shadow-sm"
+                title="View full attendance details"
               >
                 <span className="text-[11px] text-slate-400 block">Attendance</span>
-                <span className="text-sm sm:text-base font-bold text-emerald-400 tabular-nums">
+                <span className="text-sm sm:text-base font-bold text-emerald-400 tabular-nums block">
                   {attendanceStats.percentage}%
+                </span>
+                <span className="text-[10px] font-semibold text-slate-400 group-hover:text-emerald-400 flex items-center justify-center gap-0.5 mt-0.5 transition-colors">
+                  More →
                 </span>
               </button>
               <button
                 type="button"
                 onClick={() => setActiveTab("fees")}
-                className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-700 text-center min-w-[88px] cursor-pointer transition"
+                className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-amber-500/50 text-center min-w-[88px] cursor-pointer transition active:scale-95 group shadow-sm"
+                title="View full fee passbook & dues"
               >
                 <span className="text-[11px] text-slate-400 block">Fee Dues</span>
-                <span className={`text-sm sm:text-base font-bold tabular-nums ${pendingDues === 0 ? "text-emerald-400" : "text-amber-400"}`}>
+                <span className={`text-sm sm:text-base font-bold tabular-nums block ${pendingDues === 0 ? "text-emerald-400" : "text-amber-400"}`}>
                   {pendingDues === 0 ? "Cleared" : `₹${pendingDues.toLocaleString("en-IN")}`}
+                </span>
+                <span className="text-[10px] font-semibold text-slate-400 group-hover:text-amber-400 flex items-center justify-center gap-0.5 mt-0.5 transition-colors">
+                  More →
                 </span>
               </button>
               <button
                 type="button"
                 onClick={() => setActiveTab("exams")}
-                className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-700 text-center min-w-[88px] cursor-pointer transition"
+                className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-indigo-500/50 text-center min-w-[88px] cursor-pointer transition active:scale-95 group shadow-sm"
+                title="View exam results & report card"
               >
                 <span className="text-[11px] text-slate-400 block">Result</span>
-                <span className="text-sm sm:text-base font-bold text-indigo-400 tabular-nums">
+                <span className="text-sm sm:text-base font-bold text-indigo-400 tabular-nums block">
                   {latestExamSummary.hasMarks ? `${latestExamSummary.percentage}%` : "Active"}
+                </span>
+                <span className="text-[10px] font-semibold text-slate-400 group-hover:text-indigo-400 flex items-center justify-center gap-0.5 mt-0.5 transition-colors">
+                  More →
                 </span>
               </button>
             </div>
           </div>
-        </div>
-      ) : (
-        /* Focused Sub-Page Header Bar when inside a specific section */
-        <div className="sticky top-[53px] z-20 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 px-4 sm:px-6 py-2.5">
-          <div className="max-w-6xl mx-auto flex items-center justify-between gap-3">
-            <button
-              type="button"
-              onClick={() => setActiveTab("overview")}
-              className="inline-flex items-center gap-2 text-xs sm:text-sm font-bold text-emerald-400 hover:text-white transition cursor-pointer"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              <span>Back to Student Home</span>
-            </button>
-            <div className="text-xs text-slate-400 truncate">
-              <strong className="text-white">{activeStudent.name}</strong> · {formatClassLabel(studentClassLabel)}
-            </div>
           </div>
         </div>
       )}
@@ -1725,330 +1995,323 @@ export const StudentSchoolPanel: React.FC<Props> = ({
         </div>
       )}
 
-      {/* ── 1-TAP LOCK SCREEN MONTHLY FEE & NOTICE PUSH BANNER (HOME ONLY) ── */}
-      {activeTab === "overview" && (
-        <div className="max-w-6xl w-full mx-auto px-4 sm:px-6 pt-4">
-          <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border ${pushEnabled ? "bg-emerald-500/15 border-emerald-500/35 text-emerald-400" : "bg-indigo-500/15 border-indigo-500/35 text-indigo-300"}`}>
-                <Bell className="w-5 h-5" />
-              </div>
-              <div>
-                <h4 className="text-xs sm:text-sm font-bold text-white">
-                  Monthly Fee &amp; Community Push Alerts ·{" "}
-                  <span className={pushEnabled ? "text-emerald-400" : "text-amber-400"}>
-                    {pushEnabled ? "ON (Lock Screen Active)" : "OFF"}
-                  </span>
-                </h4>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  {pushEnabled
-                    ? `हर माह देय फीस (वर्तमान: ₹${pendingDues.toLocaleString("en-IN")}), छुट्टी और कम्युनिटी पोस्ट फ़ोन लॉक होने पर भी अपने आप दिखेंगे।`
-                    : "1 टैप में चालू करें — मासिक फीस, छुट्टी व स्कूल कम्युनिटी अपडेट Lock Screen पर पाएं।"}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
-              {pushEnabled ? (
-                <button
-                  onClick={handleSendTestLockScreenPush}
-                  disabled={pushBusy}
-                  className="flex-1 sm:flex-none px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition cursor-pointer"
-                >
-                  Test Lock Screen Push
-                </button>
-              ) : (
-                <button
-                  onClick={handleTogglePushAlerts}
-                  disabled={pushBusy}
-                  className="w-full sm:w-auto px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition cursor-pointer flex items-center justify-center gap-1.5"
-                >
-                  <Bell className="w-3.5 h-3.5" />
-                  <span>{pushBusy ? "Activating..." : "1-Tap Enable Alerts"}</span>
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* ── MAIN TAB CONTENT CONTAINER ─────────────────────────────────────── */}
       <main className="flex-1 max-w-6xl w-full mx-auto p-4 sm:p-6 pb-28 space-y-6">
-        {/* TAB 1: CLEAN APP LAUNCHPAD HOME ──────────────────────────────────── */}
+        {/* TAB 1: UNIFIED APP LAUNCHPAD HOME & PROFILE ──────────────────────────── */}
         {activeTab === "overview" && (
           <div className="space-y-6">
-            {/* Today's Attendance & Quick QR Action */}
-            <div className="p-4 sm:p-5 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center shrink-0">
-                  <ShieldCheck className="w-5 h-5 text-emerald-400" />
+            {/* Clean Multi-Section Official Feature Button Grid */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-bold text-white">Student Portal Services &amp; Documents</h3>
+                <span className="text-xs text-slate-400">आधिकारिक दस्तावेज व स्कूल सुविधाएं</span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+                {/* Dedicated Card 1: Official Admission Fee Receipt */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedAdmissionModal({ isOpen: true, mode: "receipt_only", feeRecord: studentAdmissionFeeRecord })}
+                  className="p-3.5 rounded-2xl bg-slate-900 hover:bg-slate-800/90 border border-slate-800 hover:border-emerald-500/40 text-left transition cursor-pointer flex flex-col justify-between gap-3 group"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 group-hover:scale-105 transition-transform">
+                      <ReceiptText className="w-4 h-4" />
+                    </div>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold uppercase">
+                      Receipt
+                    </span>
+                  </div>
+                  <div>
+                    <p className="text-xs sm:text-sm font-bold text-white">प्रवेश शुल्क रसीद</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      मदवार रसीद
+                    </p>
+                  </div>
+                </button>
+
+                {/* Dedicated Card 2: Student Admission Form Details */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedAdmissionModal({ isOpen: true, mode: "form_only", feeRecord: studentAdmissionFeeRecord })}
+                  className="p-3.5 rounded-2xl bg-slate-900 hover:bg-slate-800/90 border border-slate-800 hover:border-indigo-500/40 text-left transition cursor-pointer flex flex-col justify-between gap-3 group"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="w-9 h-9 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 group-hover:scale-105 transition-transform">
+                      <FileText className="w-4 h-4" />
+                    </div>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-bold uppercase">
+                      A4 Form
+                    </span>
+                  </div>
+                  <div>
+                    <p className="text-xs sm:text-sm font-bold text-white">A4 फॉर्म विवरण</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      नामांकन फॉर्म
+                    </p>
+                  </div>
+                </button>
+
+                {/* Dedicated Card 3: Annual Session Passbook A4 */}
+                <button
+                  type="button"
+                  onClick={() => setShowBulkFeeModal(true)}
+                  className="p-3.5 rounded-2xl bg-slate-900 hover:bg-slate-800/90 border border-slate-800 hover:border-purple-500/40 text-left transition cursor-pointer flex flex-col justify-between gap-3 group"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="w-9 h-9 rounded-xl bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-purple-400 group-hover:scale-105 transition-transform">
+                      <BookOpen className="w-4 h-4" />
+                    </div>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30 font-bold uppercase">
+                      Passbook
+                    </span>
+                  </div>
+                  <div>
+                    <p className="text-xs sm:text-sm font-bold text-white">पासबुक A4</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      12 माह लेजर
+                    </p>
+                  </div>
+                </button>
+
+                {/* Dedicated Card 4: Fee Statements */}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("fees")}
+                  className="p-3.5 rounded-2xl bg-slate-900 hover:bg-slate-800/90 border border-slate-800 hover:border-teal-500/40 text-left transition cursor-pointer flex flex-col justify-between gap-3 group"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="w-9 h-9 rounded-xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-400 group-hover:scale-105 transition-transform">
+                      <CreditCard className="w-4 h-4" />
+                    </div>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/30 font-bold uppercase">
+                      Fees
+                    </span>
+                  </div>
+                  <div>
+                    <p className="text-xs sm:text-sm font-bold text-white">Fee Statements</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      मासिक मांग
+                    </p>
+                  </div>
+                </button>
+
+                {/* Dedicated Card 5: Teachers Faculty */}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("teachers")}
+                  className="p-3.5 rounded-2xl bg-slate-900 hover:bg-slate-800/90 border border-slate-800 hover:border-blue-500/40 text-left transition cursor-pointer flex flex-col justify-between gap-3 group"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="w-9 h-9 rounded-xl bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-blue-400 group-hover:scale-105 transition-transform">
+                      <GraduationCap className="w-4 h-4" />
+                    </div>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30 font-bold uppercase">
+                      Faculty
+                    </span>
+                  </div>
+                  <div>
+                    <p className="text-xs sm:text-sm font-bold text-white">Our Teachers</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      फैकल्टी परिचय
+                    </p>
+                  </div>
+                </button>
+
+                {/* Dedicated Card 6: Digital ID Card */}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("idcard")}
+                  className="p-3.5 rounded-2xl bg-slate-900 hover:bg-slate-800/90 border border-slate-800 hover:border-amber-500/40 text-left transition cursor-pointer flex flex-col justify-between gap-3 group"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 group-hover:scale-105 transition-transform">
+                      <QrCode className="w-4 h-4" />
+                    </div>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold uppercase">
+                      ID Card
+                    </span>
+                  </div>
+                  <div>
+                    <p className="text-xs sm:text-sm font-bold text-white">Digital ID Card</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      स्मार्ट पहचान पत्र
+                    </p>
+                  </div>
+                </button>
+              </div>
+            </div>
+
+            {/* Sibling Switcher if multiple students are linked */}
+            {allLinkedStudents && allLinkedStudents.length > 1 && (
+              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+                <h3 className="text-sm font-bold text-white mb-2 flex items-center gap-2">
+                  <Users className="w-4 h-4 text-indigo-400" />
+                  <span>Linked Sibling Accounts (परिवार के अन्य छात्र)</span>
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {allLinkedStudents.map((sib: any) => (
+                    <button
+                      key={sib.id}
+                      onClick={() => {
+                        try {
+                          localStorage.setItem("nst_current_user", JSON.stringify(sib));
+                          window.location.reload();
+                        } catch {}
+                      }}
+                      className={`p-3 rounded-xl text-left border flex items-center justify-between gap-3 transition cursor-pointer ${
+                        sib.id === activeStudent.id
+                          ? "bg-emerald-500/10 border-emerald-500/40 text-emerald-300"
+                          : "bg-slate-950 border-slate-800 hover:border-slate-700 text-white"
+                      }`}
+                    >
+                      <div>
+                        <p className="text-xs font-bold">{sib.name}</p>
+                        <p className="text-[11px] text-slate-400">Class: {sib.className || sib.classId} • Roll #{sib.rollNo}</p>
+                      </div>
+                      {sib.id === activeStudent.id ? (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400">Active</span>
+                      ) : (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">Switch</span>
+                      )}
+                    </button>
+                  ))}
                 </div>
-                <div>
-                  <h3 className="text-sm sm:text-base font-bold text-white">
-                    Today's Attendance:{" "}
-                    {todayEntry ? (
-                      <span className="text-emerald-400">
-                        {todayEntry.status === "late" ? "Late Entry" : "Present"}
-                      </span>
-                    ) : todayHolidayInfo.isHoliday ? (
-                      <span className="text-amber-400">Holiday ({todayHolidayInfo.name})</span>
-                    ) : (
-                      <span className="text-rose-400">Not Marked Yet</span>
-                    )}
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    {todayEntry
-                      ? `Marked at ${todayEntry.inTime || "08:15 AM"} · Overall Attendance ${attendanceStats.percentage}%`
-                      : todayHolidayInfo.isHoliday
-                      ? "आज विद्यालय में अवकाश है।"
-                      : "क्लास QR स्कैन करके आज की उपस्थिति दर्ज करें।"}
+              </div>
+            )}
+
+            {/* ── STUDENT ACCOUNT MANAGEMENT ── */}
+            <div id="portal-settings" className="p-4 sm:p-5 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm">
+              <div>
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <User className="w-4 h-4 text-indigo-400" />
+                  <span>Student Account Management</span>
+                </h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  Logout karne par aapka linked data aur ID card surakshit rahega
+                </p>
+              </div>
+
+              <div className="w-full sm:w-auto shrink-0">
+                <button
+                  type="button"
+                  onClick={handleStudentLogout}
+                  className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/40 text-xs font-bold flex items-center justify-center gap-2 transition active:scale-95 cursor-pointer shadow-sm shadow-rose-950/40"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>Full App Logout</span>
+                </button>
+              </div>
+            </div>
+
+            {/* ── COMPACT PREMIUM NSTA LEARNING APP BUTTON (PAGE LAST) ── */}
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 hover:border-indigo-500/40 transition flex flex-col sm:flex-row items-center justify-between gap-3 shadow-md">
+              <div className="flex items-center gap-3 w-full sm:w-auto">
+                <div className="w-10 h-10 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0">
+                  <Sparkles className="w-5 h-5 text-amber-300" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-xs sm:text-sm font-bold text-white truncate">
+                      Explore Full NSTA App
+                    </h4>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 shrink-0">
+                      Study &amp; MCQs
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-0.5 truncate">
+                    Govt. Exams, 100 MCQs Daily Challenge, Live Study Room &amp; Revision Engine
                   </p>
                 </div>
               </div>
 
               <button
-                onClick={() => setShowQrAttendanceScanner(true)}
-                className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer shrink-0"
+                type="button"
+                onClick={handleExploreFullApp}
+                className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-md shadow-indigo-600/30 transition cursor-pointer shrink-0"
               >
-                <Camera className="w-4 h-4" />
-                <span>Scan Attendance QR</span>
+                <span>Open Full App</span>
+                <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </div>
+          </div>
+        )}
 
-            {/* Clean Multi-Section Feature Button Grid */}
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-bold text-white">Student Portal Sections</h3>
-                <span className="text-xs text-slate-400">किसी भी सेक्शन को खोलने के लिए टैप करें</span>
-              </div>
+        {/* ── TAB: NSTA MESSENGER SUITE (CLASS | SCHOOL | TEACHER) ─────────── */}
+        {activeTab === "channel" && (
+          <div className="fixed inset-0 pb-16 z-30 bg-slate-950 flex flex-col">
+            <NstaMessengerSuite
+              school={{
+                ...(school || {}),
+                id: schoolId,
+                name: schoolDisplayName,
+                logoUrl: resolvedSchoolLogo,
+                address: school?.address || "Institutional Academic Campus, Educational Zone",
+                affiliation: school?.affiliation || "Affiliated School Campus",
+                code: school?.code || "NSTZ",
+              } as any}
+              currentUserRole="STUDENT"
+              currentUserId={activeStudent?.id || studentId || "std_current"}
+              currentUserName={activeStudent?.name || studentName || "Student"}
+              student={activeStudent || undefined}
+              classes={classesList}
+              teachers={schoolTeachers}
+              students={allStudentsInSchool}
+              fees={allStudentFees}
+              onBack={() => setActiveTab("overview")}
+              onOpenFeeReceipt={(f) => {
+                setSelectedFeeForReceipt(f);
+              }}
+              onOpenWhatsAppPay={(f) => {
+                setPendingWhatsAppFee(f);
+                setShowWhatsAppModal(true);
+              }}
+            />
+          </div>
+        )}
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCommunityInitialFilter("ALL");
-                    setActiveTab("community");
-                  }}
-                  className="p-4 rounded-2xl bg-slate-900 hover:bg-slate-800/90 border border-slate-800 hover:border-emerald-500/40 text-left transition cursor-pointer flex flex-col justify-between gap-3"
-                >
-                  <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
-                    <ImageIcon className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-white">School Community</p>
-                    <p className="text-xs text-slate-400 mt-0.5">
-                      फ़ोटो, वीडियो, छुट्टी व नोटिस ({liveCommunityPosts.length + noticesList.length})
-                    </p>
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("fees")}
-                  className="p-4 rounded-2xl bg-slate-900 hover:bg-slate-800/90 border border-slate-800 hover:border-amber-500/40 text-left transition cursor-pointer flex flex-col justify-between gap-3"
-                >
-                  <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
-                    <CreditCard className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-white">Fees &amp; Receipts</p>
-                    <p className="text-xs text-slate-400 mt-0.5 tabular-nums">
-                      {pendingDues === 0 ? "कोई बकाया नहीं" : `देय बकाया: ₹${pendingDues.toLocaleString("en-IN")}`}
-                    </p>
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("attendance")}
-                  className="p-4 rounded-2xl bg-slate-900 hover:bg-slate-800/90 border border-slate-800 hover:border-sky-500/40 text-left transition cursor-pointer flex flex-col justify-between gap-3"
-                >
-                  <div className="w-10 h-10 rounded-xl bg-sky-500/15 border border-sky-500/30 flex items-center justify-center text-sky-400">
-                    <Calendar className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-white">My Attendance</p>
-                    <p className="text-xs text-slate-400 mt-0.5 tabular-nums">
-                      Present: {attendanceStats.percentage}% ({attendanceStats.present} दिन)
-                    </p>
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("exams")}
-                  className="p-4 rounded-2xl bg-slate-900 hover:bg-slate-800/90 border border-slate-800 hover:border-indigo-500/40 text-left transition cursor-pointer flex flex-col justify-between gap-3"
-                >
-                  <div className="w-10 h-10 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
-                    <Award className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-white">Marks &amp; Result</p>
-                    <p className="text-xs text-slate-400 mt-0.5">
-                      {latestExamSummary.hasMarks ? `Grade ${latestExamSummary.grade} (${latestExamSummary.percentage}%)` : "Report Card देखें"}
-                    </p>
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("homework")}
-                  className="p-4 rounded-2xl bg-slate-900 hover:bg-slate-800/90 border border-slate-800 hover:border-purple-500/40 text-left transition cursor-pointer flex flex-col justify-between gap-3"
-                >
-                  <div className="w-10 h-10 rounded-xl bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-purple-400">
-                    <FileText className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-white">Homework Diary</p>
-                    <p className="text-xs text-slate-400 mt-0.5">
-                      {homeworkList.filter((h) => homeworkStatusMap[h.id] !== "completed").length} कार्य बाकी
-                    </p>
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("teachers")}
-                  className="p-4 rounded-2xl bg-slate-900 hover:bg-slate-800/90 border border-slate-800 hover:border-blue-500/40 text-left transition cursor-pointer flex flex-col justify-between gap-3"
-                >
-                  <div className="w-10 h-10 rounded-xl bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-blue-400">
-                    <GraduationCap className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-white">Our Teachers (फैकल्टी)</p>
-                    <p className="text-xs text-slate-400 mt-0.5">योग्यता, अनुभव व परिचय</p>
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("idcard")}
-                  className="p-4 rounded-2xl bg-slate-900 hover:bg-slate-800/90 border border-slate-800 hover:border-teal-500/40 text-left transition cursor-pointer flex flex-col justify-between gap-3"
-                >
-                  <div className="w-10 h-10 rounded-xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-400">
-                    <QrCode className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-white">Digital ID Card</p>
-                    <p className="text-xs text-slate-400 mt-0.5">QR Identity &amp; Print</p>
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCommunityInitialFilter("HOLIDAY");
-                    setActiveTab("community");
-                  }}
-                  className="p-4 rounded-2xl bg-slate-900 hover:bg-slate-800/90 border border-slate-800 hover:border-rose-500/40 text-left transition cursor-pointer flex flex-col justify-between gap-3"
-                >
-                  <div className="w-10 h-10 rounded-xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
-                    <Megaphone className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-white">Holidays (छुट्टियाँ)</p>
-                    <p className="text-xs text-slate-400 mt-0.5">{holidaysList.length} अवकाश सूची</p>
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (onAddAnotherStudentQr) onAddAnotherStudentQr();
-                    else setActiveTab("idcard");
-                  }}
-                  className="p-4 rounded-2xl bg-slate-900 hover:bg-slate-800/90 border border-slate-800 hover:border-indigo-500/40 text-left transition cursor-pointer flex flex-col justify-between gap-3"
-                >
-                  <div className="w-10 h-10 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
-                    <Users className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-white">+ Add Student QR</p>
-                    <p className="text-xs text-slate-400 mt-0.5">दूसरे बच्चे या स्कूल का QR जोड़ें</p>
-                  </div>
-                </button>
+        {/* ── TAB: CLASSROOM VIDEO LECTURES & REVISION ARCHIVE ────────────────── */}
+        {activeTab === "videos" && activeStudent && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setActiveTab("attendance")}
+                className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span>वापस (Back to Attendance)</span>
+              </button>
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-1 rounded-lg bg-red-500/20 text-red-300 border border-red-500/30 text-xs font-black flex items-center gap-1.5">
+                  <Youtube className="w-4 h-4 text-red-500" />
+                  <span>Class: {activeStudent.className || "My Class"}</span>
+                </span>
               </div>
             </div>
 
-            {/* Latest Community / Holiday Highlight Card */}
-            <div className="p-4 sm:p-5 rounded-2xl bg-slate-900 border border-slate-800">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-bold text-white">Latest School Community Update</h3>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCommunityInitialFilter("ALL");
-                    setActiveTab("community");
-                  }}
-                  className="text-xs font-bold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 cursor-pointer"
-                >
-                  <span>Open Community Feed</span>
-                  <ChevronRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              {liveCommunityPosts.length > 0 ? (
-                <div
-                  onClick={() => {
-                    setCommunityInitialFilter("ALL");
-                    setActiveTab("community");
-                  }}
-                  className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-700 transition cursor-pointer flex items-center justify-between gap-3"
-                >
-                  <div className="min-w-0">
-                    <p className="text-xs sm:text-sm font-bold text-white truncate">
-                      {liveCommunityPosts[0].title || "School Update"}
-                    </p>
-                    <p className="text-xs text-slate-400 mt-0.5 line-clamp-2">{liveCommunityPosts[0].text}</p>
-                  </div>
-                  <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
-                </div>
-              ) : noticesList.length > 0 ? (
-                <div
-                  onClick={() => {
-                    setCommunityInitialFilter("ALL");
-                    setActiveTab("community");
-                  }}
-                  className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-700 transition cursor-pointer flex items-center justify-between gap-3"
-                >
-                  <div className="min-w-0">
-                    <p className="text-xs sm:text-sm font-bold text-white truncate">{noticesList[0].title}</p>
-                    <p className="text-xs text-slate-400 mt-0.5 line-clamp-2">{noticesList[0].body}</p>
-                  </div>
-                  <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
-                </div>
-              ) : (
-                <p className="text-xs text-slate-400">
-                  स्कूल कम्युनिटी में आने वाली सभी नई फ़ोटो, वीडियो और छुट्टी की सूचनाएँ यहाँ तुरंत लाइव दिखेंगी।
-                </p>
-              )}
-            </div>
+            <ClassroomVideoArchive
+              school={{
+                ...(school || {}),
+                id: schoolId,
+                name: schoolDisplayName,
+                logoUrl: resolvedSchoolLogo,
+                address: school?.address || "Institutional Academic Campus, Educational Zone",
+                affiliation: school?.affiliation || "Affiliated School Campus",
+                code: school?.code || "NSTZ",
+              } as any}
+              classes={classesList}
+              teachers={schoolTeachers}
+              currentUserRole="STUDENT"
+              studentClassId={activeStudent.classId}
+              onBack={() => setActiveTab("attendance")}
+            />
           </div>
         )}
 
         {/* TAB 2: MY ATTENDANCE ────────────────────────────────────────────── */}
         {activeTab === "attendance" && (
           <div className="space-y-6">
-            <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-              <div>
-                <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <Calendar className="w-5 h-5 text-emerald-400" />
-                  Academic Year Attendance Record (2026-27)
-                </h3>
-                <p className="text-xs text-slate-400 mt-1">
-                  100% transparent daily attendance logged via teacher attendance register &amp; biometric/QR scan
-                </p>
-              </div>
-
-              <button
-                onClick={() => setShowQrAttendanceScanner(true)}
-                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-emerald-600/30 transition"
-              >
-                <Camera className="w-4 h-4" />
-                Scan Class QR Attendance
-              </button>
-            </div>
-
             {/* Attendance Stat Cards */}
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
               <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 text-center">
@@ -2134,219 +2397,732 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                 </table>
               </div>
             </div>
+
+            {/* Dedicated Card: Daily Class Video Lectures (YouTube Archive) placed below Monthly Attendance Summary */}
+            <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-red-950/80 via-slate-900 to-rose-950/80 border-2 border-red-500/50 shadow-xl shadow-red-950/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="flex items-start sm:items-center gap-3.5">
+                <div className="w-12 h-12 rounded-xl bg-red-600 text-white flex items-center justify-center shrink-0 shadow-lg shadow-red-600/40">
+                  <Youtube className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-red-500/20 text-red-300 border border-red-500/40 font-black uppercase">
+                      YouTube 🔴 Live &amp; Archive
+                    </span>
+                    <span className="text-[10px] text-emerald-400 font-bold bg-emerald-950/50 px-2 py-0.5 rounded-full border border-emerald-500/30">
+                      Class: {activeStudent.className || "Class 10"}
+                    </span>
+                  </div>
+                  <h4 className="text-sm sm:text-base font-black text-white">
+                    Daily Class Video Lectures (आज की क्लास वीडियो)
+                  </h4>
+                  <p className="text-xs text-red-200/90 mt-0.5">
+                    Daily period-wise YouTube lectures dekhein aur revision ke liye video archive kholein
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveTab("videos")}
+                className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-black flex items-center justify-center gap-2 shadow-lg shadow-red-600/40 transition active:scale-95 cursor-pointer shrink-0"
+              >
+                <Play className="w-4 h-4 fill-white" />
+                <span>Watch Class Videos (वीडियो देखें)</span>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         )}
 
         {/* TAB 3: FEES & RECEIPTS ─────────────────────────────────────────── */}
-        {activeTab === "fees" && (
-          <div className="space-y-6">
-            {/* Summary Metrics Bar */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
-              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-sm flex items-center justify-between">
-                <div>
-                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">कुल सत्र शुल्क (Total Fee)</span>
-                  <span className="text-xl sm:text-2xl font-black text-white font-mono tabular-nums mt-1 block">
-                    ₹{feeSummary.totalBilled.toLocaleString("en-IN")}
-                  </span>
-                  <span className="text-[10px] text-slate-500 font-medium mt-0.5 block">Session 2026-27</span>
+        {activeTab === "fees" && (() => {
+          // Separate active fees from pre-admission months
+          const activeFeesList = allStudentFees.filter(
+            (f: any) => !f.isPreAdmission && f.status !== "pre_admission"
+          );
+          const preAdmissionFeesList = allStudentFees.filter(
+            (f: any) => f.isPreAdmission || f.status === "pre_admission"
+          );
+          const displayedFees = showPreAdmissionMonths
+            ? [...activeFeesList, ...preAdmissionFeesList]
+            : activeFeesList;
+
+          return (
+            <div className="space-y-4 sm:space-y-5">
+              {/* Executive 3-Column KPI Summary Ribbon */}
+              <div className="grid grid-cols-3 gap-2 sm:gap-3.5">
+                <div className="p-3 sm:p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-sm flex items-center justify-between">
+                  <div className="min-w-0">
+                    <span className="text-[10px] sm:text-[11px] font-bold text-slate-400 uppercase tracking-wider block truncate">
+                      कुल देय (Billed)
+                    </span>
+                    <span className="text-base sm:text-2xl font-black text-white font-mono tabular-nums mt-0.5 sm:mt-1 block">
+                      ₹{feeSummary.totalBilled.toLocaleString("en-IN")}
+                    </span>
+                    <span className="text-[9px] sm:text-[10px] text-slate-500 font-medium block truncate">
+                      Session 2026-27
+                    </span>
+                  </div>
+                  <div className="hidden sm:flex w-10 h-10 rounded-xl bg-slate-800 border border-slate-700 items-center justify-center text-slate-300 shrink-0">
+                    <CreditCard className="w-5 h-5 text-indigo-400" />
+                  </div>
                 </div>
-                <div className="w-10 h-10 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300">
-                  <CreditCard className="w-5 h-5 text-indigo-400" />
+
+                <div className="p-3 sm:p-4 rounded-2xl bg-emerald-950/20 border border-emerald-500/25 shadow-sm flex items-center justify-between">
+                  <div className="min-w-0">
+                    <span className="text-[10px] sm:text-[11px] font-bold text-emerald-400 uppercase tracking-wider block truncate">
+                      कुल जमा (Paid)
+                    </span>
+                    <span className="text-base sm:text-2xl font-black text-emerald-400 font-mono tabular-nums mt-0.5 sm:mt-1 block">
+                      ₹{feeSummary.totalDeposited.toLocaleString("en-IN")}
+                    </span>
+                    <span className="text-[9px] sm:text-[10px] text-emerald-500/80 font-medium block truncate">
+                      सफलतापूर्वक प्राप्त
+                    </span>
+                  </div>
+                  <div className="hidden sm:flex w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/30 items-center justify-center text-emerald-400 shrink-0">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                  </div>
+                </div>
+
+                <div className={`p-3 sm:p-4 rounded-2xl border shadow-sm flex items-center justify-between ${
+                  feeSummary.totalRemaining === 0
+                    ? "bg-emerald-950/20 border-emerald-500/25"
+                    : "bg-amber-950/20 border-amber-500/25"
+                }`}>
+                  <div className="min-w-0">
+                    <span className="text-[10px] sm:text-[11px] font-bold text-amber-400 uppercase tracking-wider block truncate">
+                      शेष बकाया (Due)
+                    </span>
+                    <span className={`text-base sm:text-2xl font-black font-mono tabular-nums mt-0.5 sm:mt-1 block ${
+                      feeSummary.totalRemaining === 0 ? "text-emerald-400" : "text-amber-400"
+                    }`}>
+                      {feeSummary.totalRemaining === 0 ? "₹0" : `₹${feeSummary.totalRemaining.toLocaleString("en-IN")}`}
+                    </span>
+                    <span className="text-[9px] sm:text-[10px] text-slate-500 font-medium block truncate">
+                      {feeSummary.totalRemaining === 0 ? "पूर्ण चुकता" : "लंबित देय राशि"}
+                    </span>
+                  </div>
+                  <div className={`hidden sm:flex w-10 h-10 rounded-xl border items-center justify-center shrink-0 ${
+                    feeSummary.totalRemaining === 0
+                      ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                      : "bg-amber-500/10 border-amber-500/30 text-amber-400"
+                  }`}>
+                    <Clock className="w-5 h-5" />
+                  </div>
                 </div>
               </div>
 
-              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-sm flex items-center justify-between">
-                <div>
-                  <span className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider block">जमा राशि (Total Deposited)</span>
-                  <span className="text-xl sm:text-2xl font-black text-emerald-400 font-mono tabular-nums mt-1 block">
-                    ₹{feeSummary.totalDeposited.toLocaleString("en-IN")}
-                  </span>
-                  <span className="text-[10px] text-emerald-500/80 font-medium mt-0.5 block">सफलतापूर्वक प्राप्त (Verified)</span>
+              {/* School Info Header + View Toggle + Single A4 Passbook Button */}
+              <div className="p-3.5 sm:p-4 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+                    <CreditCard className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                      <span>{schoolDisplayName}</span>
+                      <span className="text-xs text-slate-400 font-normal hidden sm:inline">• छात्र शुल्क पासबुक</span>
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      छात्र: <strong className="text-slate-200">{activeStudent.name}</strong> • रोल: <strong className="text-slate-200">{activeStudent.rollNo || "—"}</strong> • कक्षा: <strong className="text-slate-200">{formatClassLabel(studentClassLabel)}</strong>
+                    </p>
+                  </div>
                 </div>
-                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+
+                <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end flex-wrap">
+                  {/* View Mode Toggle: Cards (Mobile-friendly) vs Table */}
+                  <div className="inline-flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setFeeViewMode("cards")}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                        feeViewMode === "cards"
+                          ? "bg-indigo-600 text-white shadow-xs"
+                          : "text-slate-400 hover:text-slate-200"
+                      }`}
+                    >
+                      <Layers className="w-3.5 h-3.5" />
+                      <span>कार्ड दृश्य</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFeeViewMode("table")}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                        feeViewMode === "table"
+                          ? "bg-indigo-600 text-white shadow-xs"
+                          : "text-slate-400 hover:text-slate-200"
+                      }`}
+                    >
+                      <Filter className="w-3.5 h-3.5" />
+                      <span>तालिका दृश्य</span>
+                    </button>
+                  </div>
+
+                  {/* Single Clean Consolidated A4 Passbook Print Button */}
+                  <button
+                    type="button"
+                    onClick={() => setShowBulkFeeModal(true)}
+                    className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-black transition flex items-center gap-1.5 shadow-md shadow-indigo-950/40 active:scale-95 cursor-pointer"
+                    title="सभी 12 महीनों का Fee Demand + Fee Receipt एक A4 शीट पर डाउनलोड व प्रिंट करें"
+                  >
+                    <Printer className="w-3.5 h-3.5 text-amber-300" />
+                    <span>वार्षिक पासबुक A4</span>
+                  </button>
                 </div>
               </div>
 
-              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-sm flex items-center justify-between">
-                <div>
-                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">शेष बकाया (Net Balance Due)</span>
-                  <span className={`text-xl sm:text-2xl font-black font-mono tabular-nums mt-1 block ${feeSummary.totalRemaining === 0 ? "text-emerald-400" : "text-amber-400"}`}>
-                    {feeSummary.totalRemaining === 0 ? "₹0 (Cleared)" : `₹${feeSummary.totalRemaining.toLocaleString("en-IN")}`}
-                  </span>
-                  <span className="text-[10px] text-slate-500 font-medium mt-0.5 block">
-                    {feeSummary.totalRemaining === 0 ? "कोई बकाया नहीं" : "अगले देय माह में जुड़ेगा"}
-                  </span>
+              {/* Informative Pre-Admission Banner (Collapsible to eliminate empty '---' rows) */}
+              {preAdmissionFeesList.length > 0 && (
+                <div className="p-3 sm:p-3.5 rounded-xl bg-slate-900/70 border border-slate-800 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-slate-400">
+                    <span className="w-2 h-2 rounded-full bg-slate-500 shrink-0" />
+                    <span>
+                      सत्र 2026-27: छात्र का नामांकन सत्र के दौरान हुआ। <strong className="text-slate-300">{preAdmissionFeesList.length} सत्र-पूर्व माह</strong> शुल्क मुक्त हैं।
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowPreAdmissionMonths(!showPreAdmissionMonths)}
+                    className="self-start sm:self-auto px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-bold border border-slate-700 transition cursor-pointer flex items-center gap-1"
+                  >
+                    <Eye className="w-3 h-3" />
+                    <span>{showPreAdmissionMonths ? "सत्र-पूर्व माह छुपाएं" : `सत्र-पूर्व माह देखें (${preAdmissionFeesList.length})`}</span>
+                  </button>
                 </div>
-                <div className={`w-10 h-10 rounded-xl border flex items-center justify-center ${feeSummary.totalRemaining === 0 ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400" : "bg-amber-500/10 border-amber-500/30 text-amber-400"}`}>
-                  <Clock className="w-5 h-5" />
-                </div>
-              </div>
-            </div>
+              )}
 
-            {/* School Info Header */}
-            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
-                  <CreditCard className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-white">
-                    {schoolDisplayName} • छात्र शुल्क पासबुक (Student Fee Ledger)
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    छात्र: <strong className="text-slate-200">{activeStudent.name}</strong> • अनुक्रमांक: <strong className="text-slate-200">{activeStudent.rollNo || "—"}</strong> • कक्षा: <strong className="text-slate-200">{formatClassLabel(studentClassLabel)}</strong>
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] text-slate-400">
-                  {allStudentFees.filter((f: any) => f.paid).length} of {allStudentFees.length} Entries Paid
-                </span>
-              </div>
-            </div>
+              {/* ────────────────────────────────────────────────────────────── */}
+              {/* MODE 1: MOBILE-FIRST ALL-IN-ONE CARD VIEW                       */}
+              {/* Month name, Price, Status & Receipt/Slip are ALWAYS VISIBLE     */}
+              {/* ────────────────────────────────────────────────────────────── */}
+              {feeViewMode === "cards" && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {displayedFees.map((f: any, idx: number) => {
+                    const isPreAdmission = Boolean(f.isPreAdmission || f.status === "pre_admission");
+                    const isUpcoming = !isPreAdmission && Boolean(f.isUpcoming || f.status === "upcoming");
+                    const isPaid = !isPreAdmission && (typeof f.paid === "boolean" ? f.paid : f.status === "paid");
+                    const isAdmissionFee =
+                      f.feeType === "admission" ||
+                      f.receiptCategory === "admission" ||
+                      String(f.receiptNo || "").startsWith("ADM-");
 
-            {/* Fee Ledger Table */}
-            <div className="p-4 sm:p-5 rounded-2xl bg-slate-900 border border-slate-800 shadow-sm overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs text-left text-slate-300">
-                  <thead className="bg-slate-800/90 text-slate-400 uppercase text-[10px] font-bold">
-                    <tr>
-                      <th className="py-3 px-3 rounded-l-lg">विवरण / माह</th>
-                      <th className="py-3 px-3">जमा तिथि व समय</th>
-                      <th className="py-3 px-3">रसीद सं.</th>
-                      <th className="py-3 px-3 text-right">कुल देय (Billed)</th>
-                      <th className="py-3 px-3 text-right">जमा (Paid)</th>
-                      <th className="py-3 px-3 text-right">शेष (Due)</th>
-                      <th className="py-3 px-3 text-center">स्थिति</th>
-                      <th className="py-3 px-3 text-right rounded-r-lg">आधिकारिक दस्तावेज</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/60 font-medium">
-                    {allStudentFees.map((f: any, idx: number) => {
-                      const isUpcoming = Boolean(f.isUpcoming || f.status === "upcoming");
-                      const isPaid = typeof f.paid === "boolean" ? f.paid : f.status === "paid";
-                      const monthCode = f.month || "2026-04";
-                      let monthDisplay = monthCode;
-                      if (f.feeType === "admission" || f.receiptCategory === "admission") {
-                        monthDisplay = "प्रवेश शुल्क व किट (Admission & Kit)";
-                      } else if (/^\d{4}-\d{2}$/.test(monthCode)) {
-                        const d = new Date(`${monthCode}-01T00:00:00`);
-                        if (!isNaN(d.getTime())) {
-                          monthDisplay = d.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
-                        }
+                    const monthCode = f.month || "2026-04";
+                    let monthDisplay = monthCode;
+                    if (isAdmissionFee) {
+                      monthDisplay = "प्रवेश शुल्क व किट (Admission & Kit)";
+                    } else if (/^\d{4}-\d{2}$/.test(monthCode)) {
+                      const d = new Date(`${monthCode}-01T00:00:00`);
+                      if (!isNaN(d.getTime())) {
+                        monthDisplay = d.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
                       }
+                    }
 
-                      const billed = Number(f.monthlyAmount ?? f.amount ?? studentMonthlyFee);
-                      const paid = Number(f.paidAmount !== undefined ? f.paidAmount : (isPaid ? billed : 0));
-                      const remaining = isUpcoming
-                        ? 0
-                        : Number(f.balanceDue !== undefined ? f.balanceDue : (isPaid ? 0 : Math.max(0, billed - paid)));
+                    const billed = isPreAdmission
+                      ? 0
+                      : isAdmissionFee
+                      ? Number(f.grossTotal ?? f.grossAmount ?? f.amount ?? f.paidAmount ?? studentMonthlyFee)
+                      : Number(f.monthlyAmount ?? f.amount ?? studentMonthlyFee);
 
-                      const isPartial = !isPaid && !isUpcoming && paid > 0 && remaining > 0;
-                      const rNo = isPaid || paid > 0 ? (f.receiptNo || `DPS-26-${String(idx + 1).padStart(4, "0")}`) : "—";
+                    const paid = isPreAdmission
+                      ? 0
+                      : Number(f.paidAmount !== undefined ? f.paidAmount : (isPaid ? billed : 0));
 
-                      const dtInfo = formatPaymentDateTime(f.paidDate || f.paymentDate);
+                    const remaining = isPreAdmission || isUpcoming
+                      ? 0
+                      : Number(f.balanceDue !== undefined ? f.balanceDue : (isPaid ? 0 : Math.max(0, billed - paid)));
 
-                      return (
-                        <tr key={f.id || f.receiptNo || `${monthCode}_${idx}`} className="hover:bg-slate-800/40 transition">
-                          <td className="py-3.5 px-3">
-                            <div className="font-bold text-white flex items-center gap-1.5">
-                              {f.feeType === "admission" && <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
-                              <span>{monthDisplay}</span>
-                            </div>
-                            <span className="text-[10px] text-slate-500 font-mono">
-                              {isUpcoming ? "Upcoming Session Month" : (f.payModeInfo?.payMode || f.paymentMode || (isPaid ? "Cash / Counter" : "Fee Counter"))}
-                            </span>
-                          </td>
-                          <td className="py-3.5 px-3">
-                            {isPaid || paid > 0 ? (
-                              <div>
-                                <span className="font-medium text-slate-200 block">{dtInfo.date}</span>
-                                {dtInfo.time ? (
-                                  <span className="text-[10px] text-emerald-400/90 font-mono flex items-center gap-1">
-                                    <Clock className="w-2.5 h-2.5" /> {dtInfo.time}
-                                  </span>
+                    const isPartial = !isPreAdmission && !isPaid && !isUpcoming && paid > 0 && remaining > 0;
+                    const rNo = isPreAdmission ? "—" : (isPaid || paid > 0 ? (f.receiptNo || `DPS-26-${String(idx + 1).padStart(4, "0")}`) : "—");
+                    const dtInfo = formatPaymentDateTime(f.paidDate || f.paymentDate);
+
+                    return (
+                      <div
+                        key={f.id || f.receiptNo || `${monthCode}_${idx}`}
+                        className={`p-4 rounded-2xl border transition shadow-sm flex flex-col justify-between ${
+                          isAdmissionFee
+                            ? "bg-gradient-to-br from-emerald-950/40 via-slate-900 to-indigo-950/40 border-emerald-500/35"
+                            : isPreAdmission
+                            ? "bg-slate-900/40 border-slate-800 opacity-70"
+                            : isPaid
+                            ? "bg-slate-900/95 border-emerald-500/30 hover:border-emerald-500/50"
+                            : isPartial
+                            ? "bg-slate-900/95 border-amber-500/35 hover:border-amber-500/55"
+                            : isUpcoming
+                            ? "bg-slate-900/60 border-slate-800"
+                            : "bg-slate-900/95 border-rose-500/35 hover:border-rose-500/55"
+                        }`}
+                      >
+                        <div>
+                          {/* Top Row: Month Name & Status Badge */}
+                          <div className="flex items-start justify-between gap-2 border-b border-slate-800/80 pb-3 mb-3">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                                isAdmissionFee
+                                  ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                                  : isPreAdmission
+                                  ? "bg-slate-800 text-slate-500"
+                                  : isPaid
+                                  ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                                  : isPartial
+                                  ? "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+                                  : isUpcoming
+                                  ? "bg-slate-800 text-slate-400"
+                                  : "bg-rose-500/20 text-rose-400 border border-rose-500/30"
+                              }`}>
+                                {isAdmissionFee ? (
+                                  <Sparkles className="w-4 h-4" />
+                                ) : isPaid ? (
+                                  <CheckCircle2 className="w-4 h-4" />
+                                ) : isPartial ? (
+                                  <Clock className="w-4 h-4" />
+                                ) : isUpcoming ? (
+                                  <Calendar className="w-4 h-4" />
+                                ) : isPreAdmission ? (
+                                  <span className="text-xs font-mono font-bold">N/A</span>
                                 ) : (
-                                  <span className="text-[10px] text-slate-500 font-mono">Official Hours</span>
+                                  <AlertTriangle className="w-4 h-4" />
                                 )}
                               </div>
-                            ) : isUpcoming ? (
-                              <span className="text-slate-500 italic">आगामी माह</span>
-                            ) : (
-                              <span className="text-slate-500 italic">देय (Unpaid)</span>
-                            )}
-                          </td>
-                          <td className="py-3.5 px-3 font-mono text-slate-400 font-bold">{rNo}</td>
-                          <td className="py-3.5 px-3 text-right font-mono font-bold text-slate-300 tabular-nums">
-                            ₹{billed.toLocaleString("en-IN")}
-                          </td>
-                          <td className="py-3.5 px-3 text-right font-mono font-black text-emerald-400 tabular-nums">
-                            ₹{paid.toLocaleString("en-IN")}
-                          </td>
-                          <td className="py-3.5 px-3 text-right font-mono font-black tabular-nums">
-                            <span className={remaining > 0 ? "text-amber-400" : "text-slate-500"}>
-                              {isUpcoming ? "—" : `₹${remaining.toLocaleString("en-IN")}`}
-                            </span>
-                          </td>
-                          <td className="py-3.5 px-3 text-center">
-                            {isPaid ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                                <CheckCircle2 className="w-2.5 h-2.5" /> पूर्ण जमा
-                              </span>
-                            ) : isPartial ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                                <Clock className="w-2.5 h-2.5" /> आंशिक
-                              </span>
-                            ) : isUpcoming ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-slate-800 text-slate-400 border border-slate-700">
-                                आगामी (Upcoming)
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-rose-500/20 text-rose-400 border border-rose-500/30">
-                                बकाया (Due)
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-3.5 px-3 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
-                              <button
-                                onClick={() => setSelectedFeeForReceipt(f)}
-                                className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-[11px] font-bold transition flex items-center gap-1"
-                                title="View Official Receipt"
-                              >
-                                <FileText className="w-3 h-3 text-indigo-400" />
-                                <span>देखें</span>
-                              </button>
+                              <div className="min-w-0">
+                                <h4 className="text-sm font-bold text-white flex items-center gap-1.5 leading-tight truncate">
+                                  <span>{monthDisplay}</span>
+                                </h4>
+                                <span className="text-[11px] text-slate-400 font-mono block mt-0.5 truncate">
+                                  {isAdmissionFee ? (
+                                    <span className="text-emerald-400 font-semibold">{f.receiptNo || "ADM-DOSSIER"}</span>
+                                  ) : isPreAdmission ? (
+                                    "सत्र-पूर्व अवधि (शुल्क लागू नहीं)"
+                                  ) : isPaid && rNo !== "—" ? (
+                                    <span>रसीद: <strong className="text-slate-300">{rNo}</strong></span>
+                                  ) : isUpcoming ? (
+                                    "आगामी सत्र माह"
+                                  ) : (
+                                    <span className="text-rose-400/90 font-medium">माह शुल्क देय (Pending)</span>
+                                  )}
+                                </span>
+                              </div>
+                            </div>
 
+                            {/* Status Badge */}
+                            <div className="shrink-0">
+                              {isPreAdmission ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-800 text-slate-400 border border-slate-700">
+                                  सत्र पूर्व
+                                </span>
+                              ) : isPaid ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/35 shadow-xs">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                                  <span>पूर्ण जमा</span>
+                                </span>
+                              ) : isPartial ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black uppercase bg-amber-500/20 text-amber-300 border border-amber-500/35">
+                                  <Clock className="w-3 h-3 text-amber-400" />
+                                  <span>आंशिक</span>
+                                </span>
+                              ) : isUpcoming ? (
+                                <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase bg-slate-800 text-slate-400 border border-slate-700">
+                                  आगामी
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black uppercase bg-rose-500/20 text-rose-300 border border-rose-500/35">
+                                  <AlertTriangle className="w-3 h-3 text-rose-400" />
+                                  <span>बकाया</span>
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* 3 Price Columns - GUARANTEED VISIBLE TOGETHER AT ALL TIMES */}
+                          <div className="grid grid-cols-3 gap-2 bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80 mb-3 text-center">
+                            <div>
+                              <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">
+                                कुल देय (Billed)
+                              </span>
+                              <span className="text-sm font-black text-slate-200 font-mono tabular-nums mt-0.5 block">
+                                {isPreAdmission ? "—" : `₹${billed.toLocaleString("en-IN")}`}
+                              </span>
+                            </div>
+                            <div className="border-x border-slate-800/80">
+                              <span className="text-[10px] uppercase font-bold text-emerald-400 block tracking-wider">
+                                जमा (Paid)
+                              </span>
+                              <span className="text-sm font-black text-emerald-400 font-mono tabular-nums mt-0.5 block">
+                                {isPreAdmission ? "—" : `₹${paid.toLocaleString("en-IN")}`}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-[10px] uppercase font-bold text-amber-400 block tracking-wider">
+                                शेष (Due)
+                              </span>
+                              <span className={`text-sm font-black font-mono tabular-nums mt-0.5 block ${
+                                remaining > 0 ? "text-amber-400" : "text-slate-500"
+                              }`}>
+                                {isPreAdmission || isUpcoming ? "—" : remaining > 0 ? `₹${remaining.toLocaleString("en-IN")}` : "₹0"}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Payment Timestamp Details */}
+                          {(isPaid || paid > 0) && dtInfo.date !== "—" && (
+                            <div className="flex items-center justify-between text-[11px] text-slate-400 mb-3 px-1">
+                              <div className="flex items-center gap-1.5 font-medium">
+                                <Clock className="w-3 h-3 text-emerald-400" />
+                                <span>जमा: <strong className="text-slate-200">{dtInfo.date}</strong> {dtInfo.time && `(${dtInfo.time})`}</span>
+                              </div>
+                              <span className="text-[10px] text-slate-500 font-mono">
+                                {f.payModeInfo?.payMode || f.paymentMode || "Cash / Counter"}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Direct Action Buttons: Always in the card, never scrolled out */}
+                        <div className="pt-2 border-t border-slate-800/70">
+                          {isPreAdmission ? (
+                            <div className="text-center py-1 text-slate-600 text-xs font-medium">
+                              सत्र-पूर्व माह • कोई दस्तावेज आवश्यक नहीं
+                            </div>
+                          ) : isAdmissionFee ? (
+                            <div className="flex items-center gap-2 flex-wrap">
                               <button
+                                type="button"
+                                onClick={() => setSelectedAdmissionModal({ isOpen: true, mode: "receipt_only", feeRecord: f })}
+                                className="flex-1 py-2 px-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center justify-center gap-1.5 active:scale-95 cursor-pointer shadow-xs"
+                                title="प्रवेश शुल्क रसीद देखें व प्रिंट करें"
+                              >
+                                <ReceiptText className="w-3.5 h-3.5" />
+                                <span>प्रवेश रसीद</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedAdmissionModal({ isOpen: true, mode: "form_only", feeRecord: f })}
+                                className="flex-1 py-2 px-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition flex items-center justify-center gap-1.5 active:scale-95 cursor-pointer shadow-xs"
+                                title="नामांकन फॉर्म विवरण देखें"
+                              >
+                                <FileText className="w-3.5 h-3.5" />
+                                <span>फॉर्म विवरण</span>
+                              </button>
+                              <button
+                                type="button"
                                 onClick={() => handleDownloadStudentPdf(f)}
                                 disabled={downloadingFeeId === (f.id || f.month)}
-                                className="px-2 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white border border-emerald-500/30 text-[11px] font-bold transition flex items-center gap-1 disabled:opacity-50"
-                                title="Download Official PDF Document"
+                                className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition flex items-center justify-center gap-1 active:scale-95 cursor-pointer disabled:opacity-50"
+                                title="आधिकारिक PDF डाउनलोड करें"
                               >
-                                <Download className="w-3 h-3" />
+                                <Download className="w-3.5 h-3.5" />
                                 <span>PDF</span>
                               </button>
-
+                            </div>
+                          ) : isPaid ? (
+                            <div className="flex items-center gap-2 flex-wrap">
                               <button
-                                onClick={() => handleShareStudentWhatsApp(f)}
-                                className="px-2 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[11px] font-bold transition flex items-center gap-1"
-                                title="Share on WhatsApp"
+                                type="button"
+                                onClick={() => {
+                                  setFeeModalFormat("pos");
+                                  setSelectedFeeForReceipt(f);
+                                }}
+                                className="flex-1 py-2 px-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center justify-center gap-1.5 active:scale-95 cursor-pointer shadow-xs"
+                                title="3-इंच (80mm) थर्मल फीस रसीद देखें"
                               >
-                                <MessageCircle className="w-3 h-3 text-emerald-400" />
+                                <ReceiptText className="w-3.5 h-3.5" />
+                                <span>रसीद (Receipt)</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setFeeModalFormat("a6");
+                                  setSelectedFeeForReceipt(f);
+                                }}
+                                className="flex-1 py-2 px-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition flex items-center justify-center gap-1.5 active:scale-95 cursor-pointer shadow-xs"
+                                title="A6 फीस स्लिप देखें"
+                              >
+                                <FileText className="w-3.5 h-3.5" />
+                                <span>फीस स्लिप</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadStudentPdf(f)}
+                                disabled={downloadingFeeId === (f.id || f.month)}
+                                className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition flex items-center justify-center gap-1 active:scale-95 cursor-pointer disabled:opacity-50"
+                                title="PDF डाउनलोड करें"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                                <span>PDF</span>
                               </button>
                             </div>
-                          </td>
+                          ) : isUpcoming ? (
+                            <div className="w-full text-center py-1 text-slate-500 text-xs italic">
+                              सत्र अनुसार आगामी माह (अभी देय नहीं)
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setFeeModalFormat("a6");
+                                  setSelectedFeeForReceipt(f);
+                                }}
+                                className="flex-1 py-2 px-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold transition flex items-center justify-center gap-1.5 active:scale-95 cursor-pointer shadow-xs"
+                                title="आधिकारिक फीस मांग पर्ची (Demand Slip) देखें"
+                              >
+                                <FileText className="w-3.5 h-3.5 text-slate-950" />
+                                <span>फीस मांग पर्ची (Slip)</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadStudentPdf(f)}
+                                disabled={downloadingFeeId === (f.id || f.month)}
+                                className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition flex items-center justify-center gap-1 active:scale-95 cursor-pointer disabled:opacity-50"
+                                title="मांग पर्ची PDF डाउनलोड करें"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                                <span>PDF स्लिप</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* ────────────────────────────────────────────────────────────── */}
+              {/* MODE 2: TABLE VIEW WITH STICKY MONTH COLUMN                    */}
+              {/* When scrolling horizontally, Month column NEVER disappears     */}
+              {/* ────────────────────────────────────────────────────────────── */}
+              {feeViewMode === "table" && (
+                <div className="p-3 sm:p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-sm overflow-hidden">
+                  <div className="overflow-x-auto relative">
+                    <table className="w-full text-xs text-left text-slate-300 border-collapse">
+                      <thead className="bg-slate-800/90 text-slate-400 uppercase text-[10px] font-bold">
+                        <tr>
+                          {/* Sticky first column so month name NEVER hides */}
+                          <th className="py-3 px-3.5 sticky left-0 z-20 bg-slate-800/95 backdrop-blur-md shadow-[2px_0_5px_rgba(0,0,0,0.5)] border-r border-slate-700">
+                            विवरण / माह
+                          </th>
+                          <th className="py-3 px-3">जमा तिथि व समय</th>
+                          <th className="py-3 px-3">रसीद सं.</th>
+                          <th className="py-3 px-3 text-right">कुल देय (Billed)</th>
+                          <th className="py-3 px-3 text-right">जमा (Paid)</th>
+                          <th className="py-3 px-3 text-right">शेष (Due)</th>
+                          <th className="py-3 px-3 text-center">स्थिति</th>
+                          <th className="py-3 px-3 text-right">आधिकारिक दस्तावेज</th>
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60 font-medium">
+                        {displayedFees.map((f: any, idx: number) => {
+                          const isPreAdmission = Boolean(f.isPreAdmission || f.status === "pre_admission");
+                          const isUpcoming = !isPreAdmission && Boolean(f.isUpcoming || f.status === "upcoming");
+                          const isPaid = !isPreAdmission && (typeof f.paid === "boolean" ? f.paid : f.status === "paid");
+                          const isAdmissionFee =
+                            f.feeType === "admission" ||
+                            f.receiptCategory === "admission" ||
+                            String(f.receiptNo || "").startsWith("ADM-");
+
+                          const monthCode = f.month || "2026-04";
+                          let monthDisplay = monthCode;
+                          if (isAdmissionFee) {
+                            monthDisplay = "प्रवेश शुल्क व किट (Admission & Kit)";
+                          } else if (/^\d{4}-\d{2}$/.test(monthCode)) {
+                            const d = new Date(`${monthCode}-01T00:00:00`);
+                            if (!isNaN(d.getTime())) {
+                              monthDisplay = d.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+                            }
+                          }
+
+                          const billed = isPreAdmission
+                            ? 0
+                            : isAdmissionFee
+                            ? Number(f.grossTotal ?? f.grossAmount ?? f.amount ?? f.paidAmount ?? studentMonthlyFee)
+                            : Number(f.monthlyAmount ?? f.amount ?? studentMonthlyFee);
+
+                          const paid = isPreAdmission
+                            ? 0
+                            : Number(f.paidAmount !== undefined ? f.paidAmount : (isPaid ? billed : 0));
+
+                          const remaining = isPreAdmission || isUpcoming
+                            ? 0
+                            : Number(f.balanceDue !== undefined ? f.balanceDue : (isPaid ? 0 : Math.max(0, billed - paid)));
+
+                          const isPartial = !isPreAdmission && !isPaid && !isUpcoming && paid > 0 && remaining > 0;
+                          const rNo = isPreAdmission ? "—" : (isPaid || paid > 0 ? (f.receiptNo || `DPS-26-${String(idx + 1).padStart(4, "0")}`) : "—");
+                          const dtInfo = formatPaymentDateTime(f.paidDate || f.paymentDate);
+
+                          return (
+                            <tr key={f.id || f.receiptNo || `${monthCode}_${idx}`} className="hover:bg-slate-800/40 transition">
+                              {/* Sticky Month Name Column */}
+                              <td className="py-3 px-3.5 sticky left-0 z-10 bg-slate-900 shadow-[2px_0_5px_rgba(0,0,0,0.5)] border-r border-slate-800 min-w-[150px]">
+                                <div className="font-bold text-white flex items-center gap-1.5">
+                                  {isAdmissionFee && <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
+                                  <span>{monthDisplay}</span>
+                                </div>
+                                <span className="text-[10px] text-slate-500 font-mono block">
+                                  {isPreAdmission
+                                    ? "सत्र पूर्व (लागू नहीं)"
+                                    : isUpcoming
+                                    ? "आगामी माह"
+                                    : (f.payModeInfo?.payMode || f.paymentMode || (isPaid ? "Cash / Counter" : "Fee Counter"))}
+                                </span>
+                              </td>
+                              <td className="py-3 px-3 whitespace-nowrap">
+                                {isPreAdmission ? (
+                                  <span className="text-slate-600 font-mono">—</span>
+                                ) : isPaid || paid > 0 ? (
+                                  <div>
+                                    <span className="font-medium text-slate-200 block">{dtInfo.date}</span>
+                                    {dtInfo.time ? (
+                                      <span className="text-[10px] text-emerald-400/90 font-mono flex items-center gap-1">
+                                        <Clock className="w-2.5 h-2.5" /> {dtInfo.time}
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] text-slate-500 font-mono">Official Hours</span>
+                                    )}
+                                  </div>
+                                ) : isUpcoming ? (
+                                  <span className="text-slate-500 italic">आगामी माह</span>
+                                ) : (
+                                  <span className="text-slate-500 italic">देय (Unpaid)</span>
+                                )}
+                              </td>
+                              <td className="py-3 px-3 font-mono text-slate-400 font-bold whitespace-nowrap">{rNo}</td>
+                              <td className="py-3 px-3 text-right font-mono font-bold text-slate-300 tabular-nums whitespace-nowrap">
+                                {isPreAdmission ? "—" : `₹${billed.toLocaleString("en-IN")}`}
+                              </td>
+                              <td className="py-3 px-3 text-right font-mono font-black text-emerald-400 tabular-nums whitespace-nowrap">
+                                {isPreAdmission ? "—" : `₹${paid.toLocaleString("en-IN")}`}
+                              </td>
+                              <td className="py-3 px-3 text-right font-mono font-black tabular-nums whitespace-nowrap">
+                                <span className={remaining > 0 ? "text-amber-400" : "text-slate-500"}>
+                                  {isPreAdmission || isUpcoming ? "—" : `₹${remaining.toLocaleString("en-IN")}`}
+                                </span>
+                              </td>
+                              <td className="py-3 px-3 text-center whitespace-nowrap">
+                                {isPreAdmission ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase bg-slate-800/80 text-slate-400 border border-slate-700/60">
+                                    सत्र पूर्व
+                                  </span>
+                                ) : isPaid ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                                    <CheckCircle2 className="w-2.5 h-2.5" /> पूर्ण जमा
+                                  </span>
+                                ) : isPartial ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                                    <Clock className="w-2.5 h-2.5" /> आंशिक
+                                  </span>
+                                ) : isUpcoming ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-slate-800 text-slate-400 border border-slate-700">
+                                    आगामी
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                                    बकाया
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3 px-3 text-right whitespace-nowrap">
+                                {isPreAdmission ? (
+                                  <span className="text-[11px] text-slate-600 font-medium">लागू नहीं</span>
+                                ) : isAdmissionFee ? (
+                                  <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedAdmissionModal({ isOpen: true, mode: "receipt_only", feeRecord: f })}
+                                      className="px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/40 text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
+                                      title="प्रवेश शुल्क रसीद देखें व प्रिंट करें"
+                                    >
+                                      <ReceiptText className="w-3 h-3 text-emerald-400" />
+                                      <span>प्रवेश रसीद</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedAdmissionModal({ isOpen: true, mode: "form_only", feeRecord: f })}
+                                      className="px-2.5 py-1 rounded-lg bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
+                                      title="छात्र नामांकन फॉर्म व विवरण देखें"
+                                    >
+                                      <FileText className="w-3 h-3 text-indigo-400" />
+                                      <span>फॉर्म विवरण</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDownloadStudentPdf(f)}
+                                      disabled={downloadingFeeId === (f.id || f.month)}
+                                      className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-[11px] font-bold transition flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+                                      title="Download Official PDF Document"
+                                    >
+                                      <Download className="w-3 h-3" />
+                                      <span>PDF</span>
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                                    {isPaid ? (
+                                      <>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setFeeModalFormat("pos");
+                                            setSelectedFeeForReceipt(f);
+                                          }}
+                                          className="px-2 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/40 text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
+                                          title="3-इंच (80mm) थर्मल फीस रसीद देखें"
+                                        >
+                                          <ReceiptText className="w-3 h-3 text-emerald-400" />
+                                          <span>रसीद</span>
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setFeeModalFormat("a6");
+                                            setSelectedFeeForReceipt(f);
+                                          }}
+                                          className="px-2 py-1 rounded-lg bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white border border-blue-500/40 text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
+                                          title="A6 फीस डिमांड स्लिप (मांग पर्ची) देखें"
+                                        >
+                                          <FileText className="w-3 h-3 text-blue-400" />
+                                          <span>स्लिप</span>
+                                        </button>
+                                      </>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setFeeModalFormat("a6");
+                                          setSelectedFeeForReceipt(f);
+                                        }}
+                                        className="px-2 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-white border border-amber-500/40 text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
+                                        title="आधिकारिक फीस डिमांड स्लिप देखें (कुल बकाया राशि सहित)"
+                                      >
+                                        <FileText className="w-3 h-3 text-amber-400" />
+                                        <span>मांग पर्ची</span>
+                                      </button>
+                                    )}
+
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDownloadStudentPdf(f)}
+                                      disabled={downloadingFeeId === (f.id || f.month)}
+                                      className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-[11px] font-bold transition flex items-center gap-1 disabled:opacity-50 cursor-pointer shadow-xs"
+                                      title="Download Official PDF Document"
+                                    >
+                                      <Download className="w-3 h-3" />
+                                      <span>PDF</span>
+                                    </button>
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* TAB 4: EXAMS & REPORT CARD ──────────────────────────────────────── */}
         {activeTab === "exams" && (
@@ -2363,11 +3139,24 @@ export const StudentSchoolPanel: React.FC<Props> = ({
               </div>
 
               <button
-                onClick={() => window.print()}
-                className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-indigo-600/30 transition"
+                onClick={async () => {
+                  const mEl = document.getElementById("student-marksheet-card-section");
+                  if (!mEl) return;
+                  try {
+                    const html2canvas = (await import("html2canvas")).default;
+                    const canvas = await html2canvas(mEl, { scale: 2, useCORS: true, backgroundColor: "#0f172a" });
+                    const a = document.createElement("a");
+                    a.download = `Marksheet_${selectedExamCycle}_${(activeStudent.name || "Student").replace(/\s+/g, "_")}.png`;
+                    a.href = canvas.toDataURL("image/png");
+                    a.click();
+                  } catch (e) {
+                    console.warn("Marksheet download error:", e);
+                  }
+                }}
+                className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-emerald-600/30 transition cursor-pointer"
               >
-                <Printer className="w-4 h-4" />
-                Print Official Marksheet
+                <Download className="w-4 h-4" />
+                Download Marksheet
               </button>
             </div>
 
@@ -2392,7 +3181,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
             {(() => {
               const currentCycle = examCycles.find((c) => c.id === selectedExamCycle) || examCycles[0];
               return (
-                <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 shadow-sm">
+                <div id="student-marksheet-card-section" className="p-5 rounded-2xl bg-slate-900 border border-slate-800 shadow-sm">
                   <div className="flex items-center justify-between mb-4">
                     <div>
                       <h4 className="text-base font-black text-white">{currentCycle.name} Result Card</h4>
@@ -2537,7 +3326,573 @@ export const StudentSchoolPanel: React.FC<Props> = ({
           </div>
         )}
 
-        {/* TAB 6: SCHOOL COMMUNITY (PHOTOS, VIDEOS, HOLIDAYS & NOTICES) ─── */}
+        {/* ── TAB: SCHOOL HOLIDAYS HUB ────────────────────────────────────────── */}
+        {activeTab === "holidays" && (() => {
+          const parsedHolidays = holidaysList.map((h, idx) => ({
+            ...h,
+            key: h.id || `hol_${idx}`,
+          }));
+
+          const filteredHols = parsedHolidays.filter((h) => {
+            if (holidaysSearch) {
+              const q = holidaysSearch.toLowerCase();
+              return h.name?.toLowerCase().includes(q) || h.date?.toLowerCase().includes(q) || h.days?.toLowerCase().includes(q);
+            }
+            if (holidaysFilter === "FESTIVAL") return h.type === "festival" || h.name.includes("पूजा") || h.name.includes("दिवाली") || h.name.includes("होली");
+            if (holidaysFilter === "NATIONAL") return h.type === "national" || h.name.includes("दिवस") || h.name.includes("Jayanti");
+            if (holidaysFilter === "VACATION") return h.type === "vacation" || h.days?.toLowerCase().includes("vacation") || h.days?.toLowerCase().includes("break");
+            return true;
+          });
+
+          const nextHoliday = parsedHolidays[0];
+
+          return (
+            <div className="space-y-6">
+
+
+              {/* Search & Category Filter Pills */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+                  {[
+                    { id: "ALL", label: `All Holidays (${holidaysList.length})` },
+                    { id: "FESTIVAL", label: "Festivals (त्यौहार)" },
+                    { id: "NATIONAL", label: "National (राष्ट्रीय)" },
+                    { id: "VACATION", label: "Vacations (अवकाश)" },
+                  ].map((f) => (
+                    <button
+                      key={f.id}
+                      onClick={() => setHolidaysFilter(f.id)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition cursor-pointer border ${
+                        holidaysFilter === f.id
+                          ? "bg-rose-600 text-white border-rose-500 shadow-md shadow-rose-600/30"
+                          : "bg-slate-900 text-slate-400 border-slate-800 hover:text-white"
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="relative min-w-[220px]">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={holidaysSearch}
+                    onChange={(e) => setHolidaysSearch(e.target.value)}
+                    placeholder="Search holiday or date..."
+                    className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white text-xs placeholder-slate-500 focus:outline-none focus:border-rose-500 transition"
+                  />
+                </div>
+              </div>
+
+              {/* Holidays Cards Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                {filteredHols.map((h, i) => {
+                  const isFestival = h.type === "festival" || h.name.includes("पूजा") || h.name.includes("दिवाली") || h.name.includes("होली");
+                  const isNational = h.type === "national" || h.name.includes("दिवस") || h.name.includes("Jayanti");
+                  const isVacation = h.type === "vacation" || h.days?.toLowerCase().includes("vacation") || h.days?.toLowerCase().includes("break");
+                  
+                  return (
+                    <div
+                      key={h.key || i}
+                      className="p-4 rounded-2xl bg-slate-900 border border-slate-800 hover:border-slate-700 transition flex items-start gap-3.5 group shadow-sm hover:shadow-md"
+                    >
+                      {/* Date Badge */}
+                      <div className={`w-14 h-14 rounded-2xl flex flex-col items-center justify-center shrink-0 border text-center font-bold ${
+                        isFestival
+                          ? "bg-amber-500/10 border-amber-500/30 text-amber-300"
+                          : isNational
+                          ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                          : isVacation
+                          ? "bg-blue-500/10 border-blue-500/30 text-blue-300"
+                          : "bg-rose-500/10 border-rose-500/30 text-rose-300"
+                      }`}>
+                        <span className="text-[10px] uppercase font-mono tracking-wider opacity-80">
+                          {h.date?.split(" ")[1] || "HOL"}
+                        </span>
+                        <span className="text-base font-black leading-none mt-0.5">
+                          {h.date?.split(" ")[0]?.slice(0, 5) || (i + 1)}
+                        </span>
+                      </div>
+
+                      {/* Info */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${
+                            isFestival
+                              ? "bg-amber-500/15 text-amber-300 border border-amber-500/30"
+                              : isNational
+                              ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                              : isVacation
+                              ? "bg-blue-500/15 text-blue-300 border border-blue-500/30"
+                              : "bg-rose-500/15 text-rose-300 border border-rose-500/30"
+                          }`}>
+                            {h.type || "Holiday"}
+                          </span>
+                          <span className="text-[11px] text-slate-400 font-mono">{h.days}</span>
+                        </div>
+
+                        <h4 className="text-sm font-black text-white group-hover:text-rose-300 transition-colors">
+                          {h.name}
+                        </h4>
+                        <p className="text-xs text-slate-400 mt-0.5 font-medium flex items-center gap-1">
+                          <Calendar className="w-3 h-3 text-slate-500 shrink-0" />
+                          <span>{h.date}</span>
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Total Session Leave Statistics */}
+              <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 flex flex-wrap items-center justify-around gap-4 text-center">
+                <div>
+                  <span className="text-xs text-slate-400">Total School Holidays</span>
+                  <p className="text-lg font-black text-white mt-0.5">{holidaysList.length} दिन</p>
+                </div>
+                <div className="w-px h-8 bg-slate-800 hidden sm:block" />
+                <div>
+                  <span className="text-xs text-slate-400">Major Festival Leaves</span>
+                  <p className="text-lg font-black text-amber-400 mt-0.5">दिवाली, छठ, होली, ईद</p>
+                </div>
+                <div className="w-px h-8 bg-slate-800 hidden sm:block" />
+                <div>
+                  <span className="text-xs text-slate-400">Summer &amp; Winter Vacation</span>
+                  <p className="text-lg font-black text-blue-400 mt-0.5">ग्रीष्मकालीन व शीतकालीन</p>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ── TAB: SCHOOL EVENTS & MEMORIES (PHOTOS & VIDEOS) ────────────────── */}
+        {activeTab === "events_memories" && (() => {
+          const liveMedia = liveCommunityPosts.filter(
+            (p) => p.category === "EVENT_MEDIA" || Boolean(p.imageUrl) || Boolean(p.videoUrl)
+          );
+
+          const combinedMemories = [
+            ...liveMedia.map((p) => ({
+              id: p.id,
+              title: p.title || "School Celebration & Memory",
+              category: "SCHOOL",
+              date: p.timestamp ? new Date(p.timestamp).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "Recent",
+              type: p.videoUrl ? "VIDEO" : "IMAGE",
+              url: p.imageUrl || p.videoUrl || "",
+              videoUrl: p.videoUrl || "",
+              description: p.text || "School campus event and student activity memory.",
+              tags: ["School Post", "Campus Memory"],
+              likes: p.likesCount || 42,
+            })),
+            {
+              id: "mem_sports_2026",
+              title: "Annual Sports Meet 2026 (वार्षिक खेलकूद प्रतियोगिता)",
+              category: "SPORTS",
+              date: "14 Feb 2026",
+              type: "IMAGE",
+              url: "https://images.unsplash.com/photo-1526676037777-05a232554f77?auto=format&fit=crop&w=1200&q=80",
+              description: "100m, 200m दौड़, रिले रेस और खेलकूद में छात्र-छात्राओं का शानदार प्रदर्शन व मेडल वितरण।",
+              tags: ["Sports", "Medals", "Athletics"],
+              likes: 124,
+            },
+            {
+              id: "mem_republic_2026",
+              title: "Republic Day Celebration (77वां गणतंत्र दिवस समारोह)",
+              category: "ANNUAL",
+              date: "26 Jan 2026",
+              type: "IMAGE",
+              url: "https://images.unsplash.com/photo-1577495508048-b635879837f1?auto=format&fit=crop&w=1200&q=80",
+              description: "ध्वजारोहण, एनसीसी मार्च पास्ट, देशभक्ति गीतों पर समूह नृत्य व राष्ट्रीय एकता संदेश।",
+              tags: ["Republic Day", "Patriotic", "Dance"],
+              likes: 98,
+            },
+            {
+              id: "mem_science_2026",
+              title: "Science, Robotics & AI Expo (विज्ञान व रोबोटिक्स प्रदर्शनी)",
+              category: "EXPO",
+              date: "10 Jan 2026",
+              type: "IMAGE",
+              url: "https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=1200&q=80",
+              description: "कक्षा 6 से 12 के छात्रों द्वारा बनाए गए सोलर एनर्जी, स्मार्ट इरिगेशन व रोबोटिक्स के वर्किंग मॉडल्स।",
+              tags: ["Science", "Robotics", "Innovation"],
+              likes: 156,
+            },
+            {
+              id: "mem_annual_dance_2025",
+              title: "Annual Cultural Fest & Drama (वार्षिक सांस्कृतिक संध्या)",
+              category: "ANNUAL",
+              date: "20 Dec 2025",
+              type: "VIDEO",
+              url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+              videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+              description: "छात्रों द्वारा 'पर्यावरण संरक्षण' पर नाट्य मंचन और लोकनृत्य प्रस्तुति।",
+              tags: ["Annual Day", "Drama", "Dance"],
+              likes: 210,
+            },
+            {
+              id: "mem_children_2025",
+              title: "Children's Day Carnival (बाल दिवस मेला व प्रतियोगिताएं)",
+              category: "SPORTS",
+              date: "14 Nov 2025",
+              type: "IMAGE",
+              url: "https://images.unsplash.com/photo-1509062522246-3755977927d7?auto=format&fit=crop&w=1200&q=80",
+              description: "फूड स्टॉल, फन गेम्स, क्विज प्रतियोगिता और शिक्षकों द्वारा बच्चों के लिए विशेष कार्यक्रम।",
+              tags: ["Children's Day", "Carnival", "Games"],
+              likes: 87,
+            },
+            {
+              id: "mem_picnic_2025",
+              title: "School Nature Excursion (शैक्षणिक भ्रमण व पिकनिक)",
+              category: "EXPO",
+              date: "05 Oct 2025",
+              type: "IMAGE",
+              url: "https://images.unsplash.com/photo-1544717305-2782549b5136?auto=format&fit=crop&w=1200&q=80",
+              description: "बोटैनिकल गार्डन और विज्ञान केंद्र का शैक्षणिक भ्रमण व फोटोग्राफी सत्र।",
+              tags: ["Picnic", "Nature", "Excursion"],
+              likes: 142,
+            },
+          ];
+
+          const filteredMemories = combinedMemories.filter((m) => {
+            if (eventsFilter === "PHOTOS") return m.type === "IMAGE";
+            if (eventsFilter === "VIDEOS") return m.type === "VIDEO";
+            if (eventsFilter === "SPORTS") return m.category === "SPORTS";
+            if (eventsFilter === "ANNUAL") return m.category === "ANNUAL";
+            if (eventsFilter === "EXPO") return m.category === "EXPO";
+            return true;
+          });
+
+          return (
+            <div className="space-y-6">
+
+
+              {/* Category Filter Tabs */}
+              <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
+                {[
+                  { id: "ALL", label: `All Memories (${combinedMemories.length})` },
+                  { id: "PHOTOS", label: "📸 Photos Only" },
+                  { id: "VIDEOS", label: "🎬 Videos Only" },
+                  { id: "SPORTS", label: "🏆 Sports Day" },
+                  { id: "ANNUAL", label: "🎭 Annual Fest" },
+                  { id: "EXPO", label: "🔬 Science & Art Expo" },
+                ].map((f) => (
+                  <button
+                    key={f.id}
+                    onClick={() => setEventsFilter(f.id)}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition cursor-pointer border ${
+                      eventsFilter === f.id
+                        ? "bg-amber-500 text-slate-950 font-black border-amber-400 shadow-md shadow-amber-500/20"
+                        : "bg-slate-900 text-slate-400 border-slate-800 hover:text-white"
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Memories Media Cards Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredMemories.map((mem) => {
+                  const isVideo = mem.type === "VIDEO";
+                  return (
+                    <div
+                      key={mem.id}
+                      onClick={() => setSelectedMemoryMedia(mem)}
+                      className="group rounded-2xl bg-slate-900 border border-slate-800 hover:border-amber-500/50 overflow-hidden transition-all duration-200 cursor-pointer flex flex-col shadow-lg hover:shadow-amber-950/30 hover:-translate-y-0.5"
+                    >
+                      {/* Media Thumbnail */}
+                      <div className="relative aspect-video w-full bg-slate-950 overflow-hidden">
+                        {isVideo ? (
+                          <div className="w-full h-full relative flex items-center justify-center bg-gradient-to-tr from-slate-950 via-slate-900 to-rose-950">
+                            {mem.url && mem.url.includes("img") ? (
+                              <img src={mem.url} alt={mem.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
+                            ) : (
+                              <div className="absolute inset-0 bg-cover bg-center opacity-40 group-hover:opacity-60 transition-opacity" style={{ backgroundImage: `url('https://images.unsplash.com/photo-1511578314322-379afb476865?auto=format&fit=crop&w=800&q=80')` }} />
+                            )}
+                            <div className="w-12 h-12 rounded-full bg-red-600/90 text-white flex items-center justify-center shadow-lg shadow-red-600/40 group-hover:scale-110 transition-transform z-10">
+                              <Play className="w-5 h-5 fill-current ml-0.5" />
+                            </div>
+                            <span className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-slate-950/80 text-[10px] font-mono text-white font-bold border border-slate-700/60 z-10">
+                              Video Lecture / Event
+                            </span>
+                          </div>
+                        ) : (
+                          <>
+                            <img
+                              src={mem.url}
+                              alt={mem.title}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                              loading="lazy"
+                            />
+                            <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent opacity-60" />
+                          </>
+                        )}
+
+                        {/* Top Badges */}
+                        <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none">
+                          <span className="px-2 py-0.5 rounded-full bg-slate-950/80 backdrop-blur-md border border-slate-700/80 text-[10px] font-bold text-amber-300 uppercase">
+                            {mem.category}
+                          </span>
+                          <span className="px-2 py-0.5 rounded-full bg-slate-950/80 backdrop-blur-md border border-slate-700/80 text-[10px] font-mono text-slate-300">
+                            {mem.date}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Content */}
+                      <div className="p-4 flex-1 flex flex-col justify-between gap-2.5">
+                        <div>
+                          <h4 className="text-sm font-black text-white group-hover:text-amber-300 transition-colors line-clamp-1">
+                            {mem.title}
+                          </h4>
+                          <p className="text-xs text-slate-400 mt-1 line-clamp-2 leading-relaxed">
+                            {mem.description}
+                          </p>
+                        </div>
+
+                        <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
+                          <div className="flex items-center gap-1.5 text-rose-400">
+                            <Heart className="w-3.5 h-3.5 fill-current" />
+                            <span className="font-bold">{mem.likes}</span>
+                          </div>
+                          <span className="text-[11px] font-bold text-amber-400 group-hover:underline flex items-center gap-1">
+                            <span>{isVideo ? "Play Video" : "View Photo"}</span>
+                            <ArrowRight className="w-3 h-3" />
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Lightbox / Video Modal */}
+              {selectedMemoryMedia && (
+                <div
+                  className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex items-center justify-center p-3 sm:p-6"
+                  onClick={() => setSelectedMemoryMedia(null)}
+                >
+                  <div
+                    className="relative max-w-4xl w-full bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {/* Modal Top Bar */}
+                    <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
+                      <div>
+                        <h3 className="text-sm sm:text-base font-black text-white">{selectedMemoryMedia.title}</h3>
+                        <p className="text-[11px] text-slate-400">{selectedMemoryMedia.date} • {schoolDisplayName}</p>
+                      </div>
+                      <button
+                        onClick={() => setSelectedMemoryMedia(null)}
+                        className="p-1.5 rounded-full bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer"
+                      >
+                        <XCircle className="w-5 h-5" />
+                      </button>
+                    </div>
+
+                    {/* Media Display */}
+                    <div className="flex-1 bg-black overflow-y-auto flex items-center justify-center min-h-[320px] max-h-[60vh]">
+                      {selectedMemoryMedia.type === "VIDEO" ? (
+                        <div className="w-full h-full min-h-[360px] flex items-center justify-center">
+                          <CustomPlayer
+                            videoUrl={selectedMemoryMedia.videoUrl || selectedMemoryMedia.url}
+                            videoTitle={selectedMemoryMedia.title}
+                            onBack={() => setSelectedMemoryMedia(null)}
+                            brandingText={schoolDisplayName}
+                          />
+                        </div>
+                      ) : (
+                        <img
+                          src={selectedMemoryMedia.url}
+                          alt={selectedMemoryMedia.title}
+                          className="max-h-[60vh] w-auto max-w-full object-contain mx-auto"
+                        />
+                      )}
+                    </div>
+
+                    {/* Caption & Actions */}
+                    <div className="p-4 bg-slate-900 border-t border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                      <p className="text-xs sm:text-sm text-slate-300 leading-relaxed max-w-2xl">
+                        {selectedMemoryMedia.description}
+                      </p>
+                      {selectedMemoryMedia.type === "IMAGE" && (
+                        <a
+                          href={selectedMemoryMedia.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          download="school_memory.jpg"
+                          className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-1.5 shrink-0 transition"
+                        >
+                          <Download className="w-4 h-4" />
+                          <span>Save Photo</span>
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* ── TAB: EXPLORE+ COMPLETE LEARNING UNIVERSE ────────────────────────── */}
+        {activeTab === "explore_plus" && (
+          <div className="space-y-6">
+            {/* Hero Card with Blurred Student Dashboard Preview */}
+            <div
+              onClick={handleExploreFullApp}
+              className="relative rounded-3xl overflow-hidden border-2 border-indigo-500/40 hover:border-indigo-400 transition-all cursor-pointer group shadow-2xl shadow-indigo-950/60"
+            >
+              <div
+                className="absolute inset-0 bg-cover bg-top filter blur-[3px] scale-105 opacity-40 group-hover:opacity-55 transition-opacity"
+                style={{ backgroundImage: `url('/assets/aistudio/Screenshot_20261106_025216_Chrome_cb98684f.jpg')` }}
+              />
+              <div className="absolute inset-0 bg-gradient-to-r from-slate-950/95 via-slate-900/90 to-indigo-950/85" />
+
+              <div className="relative z-10 p-5 sm:p-7 flex flex-col md:flex-row items-start md:items-center justify-between gap-5">
+                <div className="space-y-3 max-w-2xl">
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 text-xs font-black tracking-wider uppercase backdrop-blur-md">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-300 animate-spin" />
+                    <span>NSTA Complete Learning Ecosystem</span>
+                  </div>
+
+                  <h3 className="text-xl sm:text-3xl font-black text-white tracking-tight flex items-center gap-2 group-hover:text-indigo-200 transition-colors">
+                    <span>Explore the Full App</span>
+                    <ArrowRight className="w-6 h-6 text-indigo-400 group-hover:translate-x-2 transition-transform" />
+                  </h3>
+
+                  <p className="text-xs sm:text-sm text-slate-300 leading-relaxed font-medium">
+                    25,000+ लाइन्स का मुख्य लर्निंग डैशबोर्ड: 53+ प्रतियोगी किताबें, 100 MCQs डेली चैलेंज, लाइव स्टडी रूम और मेमोरी इंजन।
+                  </p>
+
+                  <div className="flex items-center gap-2 flex-wrap pt-1">
+                    <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-700/60 text-xs font-bold text-slate-200">
+                      🏆 Daily Challenge
+                    </span>
+                    <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-700/60 text-xs font-bold text-slate-200">
+                      👥 Live Study Room
+                    </span>
+                    <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-700/60 text-xs font-bold text-slate-200">
+                      🧠 Revision Hub
+                    </span>
+                    <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-700/60 text-xs font-bold text-slate-200">
+                      📚 Govt. Exams &amp; 53+ Books
+                    </span>
+                  </div>
+                </div>
+
+                <div className="w-full md:w-auto shrink-0">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleExploreFullApp();
+                    }}
+                    className="w-full md:w-auto px-6 py-4 rounded-2xl bg-gradient-to-r from-indigo-600 via-blue-600 to-emerald-500 hover:from-indigo-500 hover:to-emerald-400 text-white font-black text-sm sm:text-base flex items-center justify-center gap-2 shadow-xl shadow-indigo-600/35 transition active:scale-95 cursor-pointer"
+                  >
+                    <span>Launch Full Platform</span>
+                    <ArrowRight className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Explore Modules Grid */}
+            <div>
+              <div className="flex items-center justify-between mb-3 px-1">
+                <h3 className="text-sm font-bold text-white">Academic &amp; Competitive Learning Modules</h3>
+                <span className="text-xs text-slate-400">1-टैप में सीधे शुरू करें</span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                {[
+                  {
+                    title: "100 MCQs Daily Challenge",
+                    desc: "रोज़ाना 100 बहुविकल्पीय प्रश्नों की टाइमर परीक्षा, लाइव लीडरबोर्ड व कॉइन्स रिवॉर्ड।",
+                    icon: "🎯",
+                    badge: "Live Arena",
+                    color: "from-rose-950/60 to-slate-900 border-rose-500/30",
+                    action: handleExploreFullApp,
+                  },
+                  {
+                    title: "Live Virtual Study Room",
+                    desc: "सहपाठियों के साथ वर्चुअल स्टडी रूम, पोमोडोरो टाइमर व फोकस मोड में पढ़ाई।",
+                    icon: "👥",
+                    badge: "Peers Online",
+                    color: "from-blue-950/60 to-slate-900 border-blue-500/30",
+                    action: handleExploreFullApp,
+                  },
+                  {
+                    title: "Revision Hub & Memory Engine",
+                    desc: "स्पैस्ड रिपीटिशन तकनीक से कभी न भूलने वाले फॉर्मूले व कमजोर विषयों की ड्रिल।",
+                    icon: "🧠",
+                    badge: "Memory Engine",
+                    color: "from-purple-950/60 to-slate-900 border-purple-500/30",
+                    action: handleExploreFullApp,
+                  },
+                  {
+                    title: "Govt. Exams & 53+ Books",
+                    desc: "Lucent GK, Speedy Science, सार संग्रह, NCERT और प्रतियोगी परीक्षाओं की किताबें।",
+                    icon: "📚",
+                    badge: "7+ Books",
+                    color: "from-emerald-950/60 to-slate-900 border-emerald-500/30",
+                    action: handleExploreFullApp,
+                  },
+                  {
+                    title: "Class 1 to 12 Academic Notes",
+                    desc: "कक्षावार विस्तृत अध्ययन नोट्स, महत्वपूर्ण प्रश्नोत्तर और अभ्यास सेट्स।",
+                    icon: "📖",
+                    badge: "Syllabus",
+                    color: "from-indigo-950/60 to-slate-900 border-indigo-500/30",
+                    action: handleExploreFullApp,
+                  },
+                  {
+                    title: "Spin Wheel & Brain Games",
+                    desc: "डेली लॉगिन बोनस, लकी व्हील, मेमोरी गेम्स व कॉइन्स रिवॉर्ड्स।",
+                    icon: "🎮",
+                    badge: "Win Coins",
+                    color: "from-amber-950/60 to-slate-900 border-amber-500/30",
+                    action: handleExploreFullApp,
+                  },
+                ].map((item, idx) => (
+                  <div
+                    key={idx}
+                    onClick={item.action}
+                    className={`p-4 rounded-2xl bg-gradient-to-br ${item.color} border hover:border-indigo-400 transition cursor-pointer flex flex-col justify-between gap-3 group shadow-md hover:shadow-indigo-950/40`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="w-10 h-10 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center text-xl group-hover:scale-110 transition-transform">
+                        {item.icon}
+                      </div>
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-950/80 text-indigo-300 border border-slate-700 font-bold uppercase">
+                        {item.badge}
+                      </span>
+                    </div>
+
+                    <div>
+                      <h4 className="text-sm font-black text-white group-hover:text-indigo-300 transition-colors">
+                        {item.title}
+                      </h4>
+                      <p className="text-xs text-slate-400 mt-1 line-clamp-2">
+                        {item.desc}
+                      </p>
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs font-bold text-indigo-400 group-hover:text-indigo-300">
+                      <span>Open in Main Platform</span>
+                      <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+
+
+        {/* ── BACKWARD COMPATIBILITY: COMMUNITY / NOTICES TAB ────────────────── */}
         {(activeTab === "community" || activeTab === "notices") && (
           <SchoolCommunityFeed
             schoolId={schoolId}
@@ -2566,17 +3921,31 @@ export const StudentSchoolPanel: React.FC<Props> = ({
               </div>
 
               <button
-                onClick={() => window.print()}
-                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-emerald-600/30 transition"
+                onClick={async () => {
+                  const card = document.getElementById("student-id-card-cr80-element");
+                  if (!card) return;
+                  try {
+                    const html2canvas = (await import("html2canvas")).default;
+                    const canvas = await html2canvas(card, { scale: 3, useCORS: true, backgroundColor: "#ffffff" });
+                    const a = document.createElement("a");
+                    a.download = `ID_Card_${(activeStudent.name || "Student").replace(/\s+/g, "_")}.png`;
+                    a.href = canvas.toDataURL("image/png");
+                    a.click();
+                  } catch (e) {
+                    console.warn("Download error:", e);
+                  }
+                }}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-emerald-600/30 transition cursor-pointer"
               >
-                <Printer className="w-4 h-4" />
-                Print ID Card
+                <Download className="w-4 h-4" />
+                Download ID Card
               </button>
             </div>
 
             {/* Rendered CR80 Card */}
             <div className="flex justify-center p-4 sm:p-8 bg-slate-900/50 border border-slate-800 rounded-2xl">
               <div
+                id="student-id-card-cr80-element"
                 className="w-[360px] min-h-[225px] bg-white text-slate-900 rounded-2xl shadow-2xl border-2 border-emerald-600 flex flex-col overflow-hidden relative"
                 style={{ fontFamily: "'Inter', sans-serif" }}
               >
@@ -2858,32 +4227,30 @@ export const StudentSchoolPanel: React.FC<Props> = ({
         <div className="max-w-xl mx-auto grid grid-cols-5 gap-1">
           {[
             { id: "overview", label: "Home", icon: Home },
-            { id: "attendance", label: "Attendance", icon: Calendar },
-            { id: "fees", label: "Fees", icon: CreditCard },
-            { id: "community", label: "Community", icon: ImageIcon },
-            { id: "exams", label: "Results", icon: Award },
+            { id: "attendance", label: "Attendance", icon: CalendarCheck },
+            { id: "channel", label: "Updates", icon: Bell },
+            { id: "holidays", label: "Holidays", icon: CalendarDays },
+            { id: "events_memories", label: "Memories", icon: Sparkles },
           ].map((item) => {
             const Icon = item.icon;
-            const isActive =
-              item.id === "community"
-                ? activeTab === "community" || activeTab === "notices"
-                : activeTab === item.id;
+            const isActive = activeTab === item.id;
             return (
               <button
                 key={item.id}
                 type="button"
                 onClick={() => {
-                  if (item.id === "community") setCommunityInitialFilter("ALL");
                   setActiveTab(item.id as TabType);
                 }}
                 className={`py-1.5 px-1 rounded-xl flex flex-col items-center justify-center gap-0.5 transition cursor-pointer ${
                   isActive
-                    ? "bg-emerald-600/20 text-emerald-400 font-bold"
+                    ? "bg-emerald-600/20 text-emerald-400 font-bold shadow-sm"
                     : "text-slate-400 hover:text-white"
                 }`}
               >
-                <Icon className="w-4 h-4 sm:w-5 sm:h-5" />
-                <span className="text-[10px] sm:text-[11px] leading-tight">{item.label}</span>
+                <Icon className="w-5 h-5" />
+                <span className="text-[10px] sm:text-[11px] leading-tight font-medium truncate max-w-full">
+                  {item.label}
+                </span>
               </button>
             );
           })}
@@ -2908,6 +4275,63 @@ export const StudentSchoolPanel: React.FC<Props> = ({
           student={activeStudent}
           className={formatClassLabel(studentClassLabel)}
           sessionName="2026-2027"
+          initialFormat={feeModalFormat}
+          isStudentView={true}
+        />
+      )}
+
+      {/* ── OFFICIAL ADMISSION FORM & RECEIPT MODAL ───────────────────────── */}
+      {selectedAdmissionModal && (
+        <AdmissionFormPrintModal
+          key={`adm_modal_${selectedAdmissionModal.mode}`}
+          isOpen={true}
+          onClose={() => setSelectedAdmissionModal(null)}
+          school={{
+            ...(school || {}),
+            id: schoolId,
+            name: schoolDisplayName,
+            logoUrl: resolvedSchoolLogo,
+            address: school?.address || "Affour nzgra saran",
+            affiliation: school?.affiliation || "",
+            code: school?.code || "",
+            email: school?.email || "",
+            mobile: school?.mobile || school?.phone || "",
+          } as any}
+          student={activeStudent}
+          application={enrichedData || activeStudent}
+          className={formatClassLabel(studentClassLabel)}
+          sessionName={activeStudent.sessionId || "2026-27"}
+          feeRecord={selectedAdmissionModal.feeRecord || studentAdmissionFeeRecord}
+          initialMode={selectedAdmissionModal.mode}
+          isStudentView={true}
+        />
+      )}
+
+      {/* ── ANNUAL BULK FEE STATEMENT (A4 DOSSIER) MODAL ─────────────────── */}
+      {showBulkFeeModal && (
+        <AnnualBulkFeeStatementModal
+          isOpen={true}
+          onClose={() => setShowBulkFeeModal(false)}
+          school={{
+            ...(school || {}),
+            id: schoolId,
+            name: schoolDisplayName,
+            logoUrl: resolvedSchoolLogo,
+            address: school?.address || "Affour nzgra saran",
+            affiliation: school?.affiliation || "",
+            code: school?.code || "",
+            email: school?.email || "",
+            mobile: school?.mobile || school?.phone || "",
+            upiId: school?.upiId || "",
+            principalName: school?.principalName || "Principal",
+            principalSignatureUrl: school?.principalSignatureUrl || "",
+          } as any}
+          student={activeStudent}
+          className={formatClassLabel(studentClassLabel)}
+          sessionName={activeStudent.sessionId || "2026-2027"}
+          allFees={allStudentFees}
+          feeSummary={feeSummary}
+          isStudentView={true}
         />
       )}
 
@@ -2932,6 +4356,277 @@ export const StudentSchoolPanel: React.FC<Props> = ({
             setTimeout(() => setAttendanceSuccessMsg(null), 6000);
           }}
         />
+      )}
+
+      {/* ── NOTIFICATION CENTER & NOTICES HISTORY MODAL ───────────────────── */}
+      {showNotificationModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in">
+          <div className="bg-slate-900 border border-slate-800 w-full sm:max-w-lg rounded-t-3xl sm:rounded-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            {/* Header */}
+            <div className="px-4 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900/90 sticky top-0 z-10">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
+                  <Bell className="w-4 h-4 text-emerald-400" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Notifications &amp; Alerts</h3>
+                  <p className="text-[10px] text-slate-400">स्कूल सूचनाएं, मासिक फीस व अवकाश अपडेट</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowNotificationModal(false)}
+                className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-4 overflow-y-auto space-y-4 flex-1">
+              {/* Push Alerts Toggle Box */}
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800">
+                <div className="flex items-center justify-between gap-3 mb-2">
+                  <div className="flex items-center gap-2">
+                    <div className={`w-2 h-2 rounded-full ${pushEnabled ? "bg-emerald-400 animate-pulse" : "bg-amber-400"}`} />
+                    <span className="text-xs font-bold text-white">
+                      Lock Screen Push Alerts:{" "}
+                      <span className={pushEnabled ? "text-emerald-400" : "text-amber-400"}>
+                        {pushEnabled ? "Active (चालू)" : "Inactive (बंद)"}
+                      </span>
+                    </span>
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-400 mb-3">
+                  {pushEnabled
+                    ? `हर माह देय फीस (वर्तमान: ₹${pendingDues.toLocaleString("en-IN")}), छुट्टी और कम्युनिटी पोस्ट फ़ोन लॉक होने पर भी अपने आप दिखेंगे।`
+                    : "1 टैप में चालू करें — मासिक फीस, छुट्टी व स्कूल कम्युनिटी अपडेट Lock Screen पर पाएं।"}
+                </p>
+                <div className="flex items-center gap-2">
+                  {pushEnabled ? (
+                    <button
+                      type="button"
+                      onClick={handleSendTestLockScreenPush}
+                      disabled={pushBusy}
+                      className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition cursor-pointer"
+                    >
+                      Test Lock Screen Push
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleTogglePushAlerts}
+                      disabled={pushBusy}
+                      className="flex-1 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <Bell className="w-3.5 h-3.5" />
+                      <span>{pushBusy ? "Activating..." : "1-Tap Enable Alerts"}</span>
+                    </button>
+                  )}
+                  {pushEnabled && (
+                    <button
+                      type="button"
+                      onClick={handleTogglePushAlerts}
+                      disabled={pushBusy}
+                      className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition cursor-pointer"
+                    >
+                      Turn Off
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Notification History Section */}
+              <div>
+                <h4 className="text-xs font-bold text-slate-300 mb-2.5 flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Notification History (ताज़ा अलर्ट व सर्कुलर)</span>
+                </h4>
+
+                <div className="space-y-2.5">
+                  {/* Automated Fee Due Alert */}
+                  {pendingDues > 0 ? (
+                    <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300">
+                          Fee Due Notice
+                        </span>
+                        <span className="text-[10px] text-slate-400">Current Session</span>
+                      </div>
+                      <p className="text-xs font-bold text-white">
+                        मासिक शिक्षण शुल्क देय: ₹{pendingDues.toLocaleString("en-IN")}
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        कृपया समय पर शुल्क भुगतान करें ताकि परीक्षा व रिपोर्ट कार्ड में व्यवधान न हो।
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300">
+                          Fee Status
+                        </span>
+                        <span className="text-[10px] text-slate-400">Up to date</span>
+                      </div>
+                      <p className="text-xs font-bold text-white">
+                        सभी देय शुल्क पूर्ण रूप से चुकता हैं।
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Automated Attendance Alert */}
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300">
+                        Attendance Status
+                      </span>
+                      <span className="text-[10px] text-slate-400">Today</span>
+                    </div>
+                    <p className="text-xs font-bold text-white">
+                      कुल उपस्थिति: {attendanceStats.percentage}% ({attendanceStats.presentCount} दिन उपस्थित)
+                    </p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      नियमित उपस्थिति के लिए धन्यवाद।
+                    </p>
+                  </div>
+
+                  {/* School Circulars / Notices */}
+                  {noticesList && noticesList.length > 0 ? (
+                    noticesList.map((ntc: any) => (
+                      <div key={ntc.id} className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/25">
+                            {ntc.category || "School Notice"}
+                          </span>
+                          <span className="text-[10px] text-slate-400">{ntc.date}</span>
+                        </div>
+                        <h5 className="text-xs font-bold text-white">{ntc.title}</h5>
+                        {ntc.body && (
+                          <p className="text-[11px] text-slate-400 mt-1 line-clamp-3">
+                            {ntc.body}
+                          </p>
+                        )}
+                      </div>
+                    ))
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MULTI-STUDENT SWITCHER & ADD ID MODAL ───────────────────────── */}
+      {showStudentSwitcherModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in">
+          <div className="bg-slate-900 border border-slate-800 w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            {/* Header */}
+            <div className="px-4 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900/90 sticky top-0 z-10">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
+                  <Users className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Student Account Switcher</h3>
+                  <p className="text-[10px] text-slate-400">छात्र आईडी चुनें या नई आईडी जोड़ें</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowStudentSwitcherModal(false)}
+                className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-4 overflow-y-auto space-y-3 flex-1">
+              <p className="text-xs text-slate-400">
+                एक ही डिवाइस में परिवार के सभी बच्चों की आईडी लिंक करें और कभी भी स्विच करें:
+              </p>
+
+              <div className="space-y-2">
+                {/* Active Student */}
+                <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/40 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-9 h-9 rounded-xl bg-emerald-600/30 border border-emerald-500/50 flex items-center justify-center text-white font-bold text-xs shrink-0">
+                      {studentInitials}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-white truncate">{activeStudent.name}</p>
+                      <p className="text-[10px] text-slate-400">
+                        Class: {formatClassLabel(studentClassLabel)} • Roll #{activeStudent.rollNo}
+                      </p>
+                      <p className="text-[10px] font-mono text-emerald-400 truncate">
+                        ID: {activeStudent.admissionNo}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1 shrink-0">
+                    <Check className="w-3 h-3 text-emerald-400" />
+                    <span>Active</span>
+                  </span>
+                </div>
+
+                {/* Sibling / Other Linked Students */}
+                {allLinkedStudents &&
+                  allLinkedStudents
+                    .filter((s: any) => s.id !== activeStudent.id && s.admissionNo !== activeStudent.admissionNo)
+                    .map((sib: any) => (
+                      <button
+                        key={sib.id || sib.admissionNo}
+                        type="button"
+                        onClick={() => {
+                          try {
+                            localStorage.setItem("nst_current_user", JSON.stringify(sib));
+                            window.location.reload();
+                          } catch {}
+                        }}
+                        className="w-full p-3 rounded-xl bg-slate-950 hover:bg-slate-800/80 border border-slate-800 hover:border-slate-700 text-left flex items-center justify-between gap-3 transition cursor-pointer group"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-9 h-9 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300 font-bold text-xs shrink-0 group-hover:bg-slate-700">
+                            {(sib.name || "S").slice(0, 2).toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-white truncate">{sib.name}</p>
+                            <p className="text-[10px] text-slate-400">
+                              Class: {sib.className || sib.classId} • Roll #{sib.rollNo}
+                            </p>
+                            <p className="text-[10px] font-mono text-slate-400 truncate">
+                              ID: {sib.admissionNo || sib.id}
+                            </p>
+                          </div>
+                        </div>
+                        <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 group-hover:bg-indigo-600 group-hover:text-white transition shrink-0">
+                          Switch
+                        </span>
+                      </button>
+                    ))}
+              </div>
+
+              {/* Add New Student ID Action Button */}
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowStudentSwitcherModal(false);
+                    if (onAddAnotherStudentQr) {
+                      onAddAnotherStudentQr();
+                    } else {
+                      setActiveTab("idcard");
+                    }
+                  }}
+                  className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer shadow-md active:scale-95"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span>+ Add New Student ID Card (QR Scan)</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
