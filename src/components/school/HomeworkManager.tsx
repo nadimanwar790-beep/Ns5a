@@ -10,6 +10,7 @@ import type {
   DailyHomework, HomeworkSubmission
 } from "../../school-types";
 import { DirectUploadButton } from "../DirectUploadButton";
+import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 
 interface Props {
   school: School;
@@ -170,6 +171,17 @@ export const HomeworkManager: React.FC<Props> = ({
     setFormTitle("");
     setFormDescription("");
     setFormAttachmentUrl("");
+
+    // Broadcast instant homework notification to all students in the class
+    void sendSchoolPushNotification({
+      schoolId: school.id,
+      classId: cls.id,
+      title: `📚 ${school.name || "School"} • ${cls.name} Homework`,
+      body: `नया गृहकार्य (Homework): ${newHw.subjectName} — "${newHw.title}". जमा करने की अंतिम तिथि: ${newHw.dueDate || "कल"}।`,
+      type: "HOMEWORK",
+      url: `/?schoolPortal=1&classId=${cls.id}&schoolTab=homework`,
+      urgent: true,
+    });
   };
 
   // Delete Homework

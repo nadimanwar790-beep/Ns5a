@@ -38,6 +38,7 @@ import { LibraryManager } from "./LibraryManager";
 import { ParentTeacherQueryManager } from "./ParentTeacherQueryManager";
 import { SchoolMessengerBroadcastStudio } from "./SchoolMessengerBroadcastStudio";
 import { NstaMessengerSuite } from "./NstaMessengerSuite";
+import { AbsenteeActionPage } from "./AbsenteeActionPage";
 
 interface Props {
   schoolId: string;
@@ -50,6 +51,7 @@ interface Props {
 type TeacherView =
   | "dashboard"
   | "community"
+  | "absentee"
   | "all_students"
   | "classes"
   | "class_students"
@@ -562,6 +564,22 @@ export const TeacherPanel: React.FC<Props> = ({ schoolId, teacherId, teacherName
     );
   };
 
+  if (view === "absentee") {
+    return (
+      <div className="pb-20">
+        <AbsenteeActionPage
+          schoolId={schoolId}
+          schoolName={school?.name}
+          classes={classes}
+          currentRole="TEACHER"
+          currentUserId={teacherId}
+          onBack={() => setView("dashboard")}
+        />
+        {renderBottomNav()}
+      </div>
+    );
+  }
+
   if (view === "attendance" && selectedClass) {
     return (
       <div className="pb-20">
@@ -966,6 +984,30 @@ export const TeacherPanel: React.FC<Props> = ({ schoolId, teacherId, teacherName
                   </p>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">
                     Present, Absent, Late &amp; Leave live update karein
+                  </p>
+                </div>
+              </button>
+
+              {/* 2b. Absenty Action Center (1-Day Push & 2-Day+ Direct Call) */}
+              <button
+                type="button"
+                onClick={() => setView("absentee")}
+                className="bg-gradient-to-br from-rose-500/10 via-white to-amber-500/10 dark:from-rose-950/40 dark:via-slate-800 dark:to-amber-950/30 rounded-2xl p-4 shadow-sm border border-rose-300 dark:border-rose-800/60 flex flex-col justify-between gap-3 hover:shadow-md hover:border-rose-500 transition active:scale-[0.98] text-left cursor-pointer"
+              >
+                <div className="flex items-center justify-between w-full">
+                  <div className="w-11 h-11 rounded-2xl bg-rose-500 text-white flex items-center justify-center shadow-md shadow-rose-500/30">
+                    <Bell className="w-5 h-5 animate-pulse" />
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-rose-100 text-rose-700 dark:bg-rose-900/50 dark:text-rose-300">
+                    1-Day &amp; 2-Day
+                  </span>
+                </div>
+                <div>
+                  <p className="font-black text-slate-900 dark:text-white text-sm leading-snug">
+                    Absenty Action Center
+                  </p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">
+                    1-Day absent par push alert, 2-Day+ par direct call suvidha
                   </p>
                 </div>
               </button>

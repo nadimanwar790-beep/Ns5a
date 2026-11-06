@@ -4272,14 +4272,39 @@ export const autoSendFeeSlipToSchoolDesk = async (payload: {
   monthLabel: string;
   amount: number;
   balanceDue: number;
+  monthlyAmount?: number;
+  oldArrears?: number;
+  earlyDiscount?: number;
+  netPayableWithDiscount?: number;
   receiptNo?: string;
   dueDate?: string;
   payLink?: string;
 }): Promise<void> => {
   const isReceipt = payload.slipType === "FEE_RECEIPT";
-  const text = isReceipt
-    ? `Aapka ${payload.monthLabel} ka fee payment (₹${payload.amount.toLocaleString("en-IN")}) safalta-purvak receive ho gaya hai. Official receipt no: ${payload.receiptNo || "N/A"}. Dhanyawad!`
-    : `Aapka ${payload.monthLabel} ka shulk baaki hai. Kul deya rashi: ₹${payload.balanceDue.toLocaleString("en-IN")}. Kripya antam tithi ${payload.dueDate || "jaldi"} se pehle jama karein.`;
+  const todayDateNum = new Date().getDate();
+  const isBeforeOrOn10th = todayDateNum <= 10;
+
+  const currentMonthFee = Number(payload.monthlyAmount || payload.amount || 0);
+  const arrears = Math.max(0, Number(payload.oldArrears || Math.max(0, payload.balanceDue - currentMonthFee)));
+  
+  // 10% Early Discount Rule: Strictly applies to current month regular fee, NEVER on old arrears!
+  const earlyDiscount = isBeforeOrOn10th && currentMonthFee > 0
+    ? (payload.earlyDiscount !== undefined ? payload.earlyDiscount : Math.round(currentMonthFee * 0.10))
+    : 0;
+  const netPayableWithDiscount = earlyDiscount > 0
+    ? (currentMonthFee - earlyDiscount) + arrears
+    : payload.balanceDue;
+
+  let text = "";
+  if (isReceipt) {
+    text = `Aapka ${payload.monthLabel} ka fee payment (₹${payload.amount.toLocaleString("en-IN")}) safalta-purvak receive ho gaya hai. Official receipt no: ${payload.receiptNo || "N/A"}. Dhanyawad!`;
+  } else {
+    if (isBeforeOrOn10th && earlyDiscount > 0) {
+      text = `📢 ${payload.monthLabel} फीस सूचना: कुल बकाया ₹${payload.balanceDue.toLocaleString("en-IN")} है। ⚡ 10 तारीख तक जमा करने पर चालू माह फीस पर 10% विशेष छूट (बचत: ₹${earlyDiscount.toLocaleString("en-IN")})! छूट के बाद देय: ₹${netPayableWithDiscount.toLocaleString("en-IN")}${arrears > 0 ? ` (पुराने बकाए ₹${arrears.toLocaleString("en-IN")} पर छूट लागू नहीं)` : ""}।`;
+    } else {
+      text = `Aapka ${payload.monthLabel} ka shulk baaki hai. Kul deya rashi: ₹${payload.balanceDue.toLocaleString("en-IN")}. Kripya antam tithi ${payload.dueDate || "jaldi"} se pehle jama karein. (10 तारीख के बाद 10% छूट समाप्त)।`;
+    }
+  }
 
   const msg: NstaMessage = {
     id: `slip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -4297,8 +4322,14 @@ export const autoSendFeeSlipToSchoolDesk = async (payload: {
       monthLabel: payload.monthLabel,
       amount: payload.amount,
       balanceDue: payload.balanceDue,
+      monthlyAmount: currentMonthFee,
+      oldArrears: arrears,
+      earlyDiscount,
+      netPayableWithDiscount,
+      discountValidUntil: "10 तारीख तक",
+      isEligibleForEarlyDiscount: isBeforeOrOn10th && earlyDiscount > 0,
       receiptNo: payload.receiptNo,
-      dueDate: payload.dueDate,
+      dueDate: payload.dueDate || "10th of Month",
       payLink: payload.payLink,
     },
     createdAt: new Date().toISOString(),

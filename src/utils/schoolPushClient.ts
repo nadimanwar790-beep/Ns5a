@@ -185,6 +185,40 @@ export async function sendSchoolPushNotification(payload: {
   url?: string;
   urgent?: boolean;
 }): Promise<{ delivered: number; matchedDevices: number }> {
+  // 1. Dual-write to RTDB for instantaneous in-app wake up & chime
+  try {
+    const { rtdb } = await import("../firebase");
+    const { ref, set } = await import("firebase/database");
+    if (rtdb) {
+      const timestamp = Date.now();
+      const notifId = `school_notif_${timestamp}_${Math.random().toString(36).slice(2, 7)}`;
+      const notifPayload = {
+        id: notifId,
+        type: payload.type || "SCHOOL_NOTICE",
+        title: payload.title,
+        body: payload.body,
+        url: payload.url || "/?schoolPortal=1",
+        timestamp,
+        status: "UNREAD",
+        schoolId: payload.schoolId || "",
+        classId: payload.classId || "",
+      };
+
+      if (Array.isArray(payload.studentIds) && payload.studentIds.length > 0) {
+        payload.studentIds.forEach((stId) => {
+          const cleanId = String(stId).replace(/[.#$[\]/]/g, "_");
+          void set(ref(rtdb, `user_notifications/${cleanId}/${notifId}`), notifPayload).catch(() => {});
+        });
+      } else if (payload.userId) {
+        const cleanUid = String(payload.userId).replace(/[.#$[\]/]/g, "_");
+        void set(ref(rtdb, `user_notifications/${cleanUid}/${notifId}`), notifPayload).catch(() => {});
+      } else {
+        void set(ref(rtdb, `broadcast_notifications/${notifId}`), notifPayload).catch(() => {});
+      }
+    }
+  } catch (_) {}
+
+  // 2. Dispatch server WebPush + Firebase Cloud Messaging (FCM v1)
   try {
     const res = await fetch("/api/school-push/send", {
       method: "POST",

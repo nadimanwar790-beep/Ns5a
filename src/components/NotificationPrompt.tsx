@@ -15,6 +15,7 @@ import {
   subscribeUserToPush,
   dispatchSmartNotification,
 } from './NotificationManager';
+import { enableSchoolPushForUser } from '../utils/schoolPushClient';
 
 interface Props {
   userId?: string;
@@ -87,6 +88,21 @@ export const NotificationPrompt: React.FC<Props> = ({ userId }) => {
       const granted = await requestNotificationPermission();
       if (granted) {
         await subscribeUserToPush(userId);
+
+        // Also register WebPush subscription for lock-screen alerts & fee demand slips
+        try {
+          const studentList: any[] = [];
+          const activeStdRaw = localStorage.getItem('nst_active_student') || localStorage.getItem('nst_cached_student');
+          if (activeStdRaw) {
+            const parsed = JSON.parse(activeStdRaw);
+            if (parsed?.id) studentList.push(parsed);
+          }
+          await enableSchoolPushForUser({
+            userId: userId || 'guest',
+            students: studentList,
+          });
+        } catch (_) {}
+
         setEnabledSuccess(true);
 
         const targetTitle = schoolName

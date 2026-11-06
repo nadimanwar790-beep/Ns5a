@@ -184,17 +184,24 @@ export const ClassFeeAlertBroadcastModal: React.FC<ClassFeeAlertBroadcastModalPr
 
     try {
       const targetClassName =
-        selectedClassId === "all" ? "Sabhi Classes" : currentClassObj.name;
+        selectedClassId === "all" ? "Sabhi Classes" : (currentClassObj?.name || "Class");
       const schoolTitle = school?.name || "DPS School";
 
       // 1. Dispatch Web-Push Notification with Class-Level Filter (Lock screen push!)
+      const todayDateNum = new Date().getDate();
+      const isBeforeOrOn10th = todayDateNum <= 10;
+      const notifBody = isBeforeOrOn10th
+        ? `📢 ${monthLabel} फीस सूचना: 10 तारीख तक फीस जमा करें और चालू माह फीस पर पाएं 10% OFF! (पुराने बकाए पर छूट लागू नहीं)। A6 Fee Demand Slip देखें।`
+        : `📢 ${monthLabel} Mahine ki fees jama karne hetu A6 Fee Demand Slip jari ki gayi hai. Kripya samay par jama karein.`;
+
       const pushResult = await sendSchoolPushNotification({
         schoolId: school?.id,
         classId: selectedClassId === "all" ? undefined : selectedClassId,
         studentIds: selectedStudentIds,
         title: `🏫 ${schoolTitle} • ${targetClassName} Fee Alert`,
-        body: `📢 ${monthLabel} Mahine ki fees jama karne hetu A6 Fee Demand Slip jari ki gayi hai. Kripya samay par jama karein.`,
+        body: notifBody,
         type: "MONTHLY_FEE",
+        url: `/?schoolPortal=1&schoolTab=fees`,
         urgent: true,
       });
 
@@ -210,7 +217,9 @@ export const ClassFeeAlertBroadcastModal: React.FC<ClassFeeAlertBroadcastModalPr
         title: `📢 ${targetClassName} • Fee Demand Slip (${monthLabel})`,
         text:
           customRemark.trim() ||
-          `Aadarniya Abhibhavak, ${monthLabel} mahine ki school fees jama karne hetu A6 Fee Demand Slip jari kar di gayi hai. Niche diye gaye link se slip dekhein ya direct UPI/WhatsApp se jama karein.`,
+          (isBeforeOrOn10th
+            ? `Aadarniya Abhibhavak, ${monthLabel} mahine ki school fees hetu A6 Fee Demand Slip jari kar di gayi hai. ⚡ 10 tarikh tak jama karne par chalu mah fees par 10% ki vishesh chhoot milegi (purane bakaye par chhoot lagoo nahi). Kripya samay par jama karein.`
+            : `Aadarniya Abhibhavak, ${monthLabel} mahine ki school fees jama karne hetu A6 Fee Demand Slip jari kar di gayi hai. Niche diye gaye link se slip dekhein ya direct UPI/WhatsApp se jama karein.`),
         slipType: "A6_DEMAND_SLIP",
         month: currentMonth,
         monthLabel,
@@ -228,23 +237,34 @@ export const ClassFeeAlertBroadcastModal: React.FC<ClassFeeAlertBroadcastModalPr
 
       // Auto-deliver A6 Fee Demand Slip directly to student's NSTA Messenger School Desk
       selectedStudentIds.forEach((stId) => {
-        const studentObj = students.find(s => s.id === stId);
-        const dueBalance = studentWiseDues[stId]?.balanceDue || 500;
+        const studentObj = students.find((s) => s.id === stId);
+        const defItem = classDefaulters.find((d) => d.studentId === stId);
+        const dueBalance = Number(defItem?.pendingDue || 500);
+        const feeObj = defItem?.fee;
+        const currentMonthFee = Number(feeObj?.monthlyAmount || feeObj?.amount || dueBalance);
+        const oldArrears = Math.max(0, Number(feeObj?.previousDue || Math.max(0, dueBalance - currentMonthFee)));
+        const earlyDiscount = isBeforeOrOn10th && currentMonthFee > 0 ? Math.round(currentMonthFee * 0.10) : 0;
+        const netPayableWithDiscount = earlyDiscount > 0 ? (currentMonthFee - earlyDiscount) + oldArrears : dueBalance;
+
         autoSendFeeSlipToSchoolDesk({
           schoolId: school?.id || "school",
           studentId: stId,
-          studentName: studentObj?.name || "Student",
+          studentName: studentObj?.name || defItem?.studentName || "Student",
           slipType: "A6_DEMAND_SLIP",
           month: currentMonth,
           monthLabel,
-          amount: dueBalance,
+          amount: currentMonthFee,
           balanceDue: dueBalance,
-          dueDate: new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0],
-          payLink: school?.bankUpiId ? `upi://pay?pa=${school.bankUpiId}&pn=${encodeURIComponent(school.name)}&am=${dueBalance}` : undefined
+          monthlyAmount: currentMonthFee,
+          oldArrears,
+          earlyDiscount,
+          netPayableWithDiscount,
+          dueDate: isBeforeOrOn10th ? "10 तारीख तक (10% OFF)" : new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0],
+          payLink: school?.bankUpiId ? `upi://pay?pa=${school.bankUpiId}&pn=${encodeURIComponent(school?.name || "School")}&am=${netPayableWithDiscount}` : undefined
         }).catch(() => {});
       });
 
-      const msg = `✅ ${targetClassName} ke ${selectedStudentIds.length} chhatron ke parents ko A6 Fee Demand Slip & Lock-screen Push bhej diya gaya! (Delivered: ${pushResult.delivered})`;
+      const msg = `✅ ${targetClassName} ke ${selectedStudentIds.length} chhatron ke parents ko A6 Fee Demand Slip & Lock-screen Push bhej diya gaya! ${pushResult.delivered > 0 ? `(Delivered: ${pushResult.delivered})` : `(Queued on Device)`}`;
       setBroadcastSuccessMsg(msg);
       if (onSuccess) onSuccess(msg);
 
@@ -255,7 +275,7 @@ export const ClassFeeAlertBroadcastModal: React.FC<ClassFeeAlertBroadcastModalPr
       }, 3500);
     } catch (err: any) {
       console.error("Broadcast failed:", err);
-      setBroadcastSuccessMsg("❌ Alert bhejne me samasya aayi. Kripya punah prayas karein.");
+      setBroadcastSuccessMsg(`❌ Alert bhejne me samasya: ${err?.message || "Kripya punah prayas karein"}`);
     } finally {
       setIsBroadcasting(false);
     }
@@ -296,10 +316,20 @@ export const ClassFeeAlertBroadcastModal: React.FC<ClassFeeAlertBroadcastModalPr
 
         {/* Modal Body */}
         <div className="p-4 sm:p-6 space-y-4 overflow-y-auto flex-1">
-          {/* Success Banner */}
+          {/* Status Banner */}
           {broadcastSuccessMsg && (
-            <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-xs font-bold flex items-center gap-2.5 animate-in fade-in">
-              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+            <div
+              className={`p-3.5 rounded-2xl ${
+                broadcastSuccessMsg.startsWith("❌")
+                  ? "bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200"
+                  : "bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200"
+              } text-xs font-bold flex items-center gap-2.5 animate-in fade-in`}
+            >
+              {broadcastSuccessMsg.startsWith("❌") ? (
+                <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+              ) : (
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+              )}
               <span>{broadcastSuccessMsg}</span>
             </div>
           )}
@@ -384,6 +414,19 @@ export const ClassFeeAlertBroadcastModal: React.FC<ClassFeeAlertBroadcastModalPr
             <p className="text-xs text-amber-900 dark:text-amber-300 leading-relaxed">
               💡 Har chhatra ke parent ke phone par <strong>Lock-screen Push Notification</strong> bajega. Tapping par unhe seedha unke bache ka <strong>A6 Fee Demand Slip (A4 ka ¼)</strong> school seal, breakdown aur payment QR ke sath dikhega!
             </p>
+
+            {/* Early Payment 10% Discount Callout */}
+            <div className="p-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center gap-2.5">
+              <Sparkles className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <div className="text-[11px] leading-tight">
+                <span className="font-black text-emerald-800 dark:text-emerald-300">
+                  ⚡ 10 तारीख अर्ली पेमेंट ऑफर (10% OFF):
+                </span>
+                <span className="text-emerald-900 dark:text-emerald-200 ml-1">
+                  10 तारीख तक जमा करने पर केवल चालू माह शुल्क पर 10% छूट लागू होगी। (⚠️ पुराने बकाए पर कोई छूट नहीं)।
+                </span>
+              </div>
+            </div>
 
             {/* Custom Admin Note / Circular Text */}
             <div className="space-y-1">

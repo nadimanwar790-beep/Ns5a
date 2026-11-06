@@ -1152,6 +1152,12 @@ export interface NstaFeeSlipData {
   monthLabel?: string;
   amount?: number;
   balanceDue?: number;
+  monthlyAmount?: number;
+  oldArrears?: number;
+  earlyDiscount?: number;
+  netPayableWithDiscount?: number;
+  discountValidUntil?: string;
+  isEligibleForEarlyDiscount?: boolean;
   receiptNo?: string;
   dueDate?: string;
   pdfUrl?: string;

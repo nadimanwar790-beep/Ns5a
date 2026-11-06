@@ -55,6 +55,7 @@ import { TeacherIdCardModal } from "./TeacherIdCardModal";
 import { SchoolCommunityFeed } from "./SchoolCommunityFeed";
 import { SchoolMessengerBroadcastStudio } from "./SchoolMessengerBroadcastStudio";
 import { NstaMessengerSuite } from "./NstaMessengerSuite";
+import { AbsenteeActionPage } from "./AbsenteeActionPage";
 import {
   Users, BookOpen, Calendar, IndianRupee, Plus, Trash2, Settings,
   ChevronRight, ChevronLeft, X, Edit3, FileText, Award,
@@ -87,6 +88,7 @@ interface Props {
 type AdminView =
   | "dashboard"
   | "community"
+  | "absentee"
   | "sessions" | "classes" | "subjects" | "teachers" | "students"
   | "content" | "attendance" | "fees" | "fee_class" | "fee_all" | "fee_structure" | "report_card" | "marks" | "results"
   | "store" | "subscription"
@@ -1003,6 +1005,19 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
 
 
 
+  if (view === "absentee") {
+    return (
+      <AbsenteeActionPage
+        schoolId={schoolId}
+        schoolName={school?.name}
+        classes={classes}
+        currentRole="ADMIN"
+        currentUserId={adminUid}
+        onBack={() => setView("dashboard")}
+      />
+    );
+  }
+
   if (view === "attendance" && selectedClass) {
     return (
       <AttendanceManager
@@ -1439,6 +1454,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
   }
 
   const menuItems = [
+    { label: "Absenty Action Center", subtitle: "1-Day Push Notice & 2-Day+ Direct Call Tracker", icon: <AlertCircle className="w-5 h-5 text-rose-500" />, view: "absentee", count: "Action 🚨", locked: false, featured: true },
     { label: "NSTA Messenger", subtitle: "Class Groups, School Desk & Teacher Chat", icon: <MessageSquare className="w-5 h-5 text-indigo-500" />, view: "nsta_broadcast", count: "3 Screens ⚡", locked: false, featured: true },
     { label: "School Community", subtitle: "Photo, Video & Chhutti Post", icon: <ImageIcon className="w-5 h-5 text-rose-500" />, view: "community", count: "LIVE", locked: false, featured: true },
     { label: "Timetable & Routine", subtitle: "Weekly Periods & Routine", icon: <Clock className="w-5 h-5 text-amber-500" />, view: "timetable", count: "8 Periods", locked: false },
@@ -4192,6 +4208,32 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
               className="py-2.5 px-4 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs transition active:scale-[0.98] shadow-md flex items-center justify-center gap-2 shrink-0 cursor-pointer"
             >
               <span>ओपन ब्रॉडकास्ट स्टूडियो</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* ── ABSENTEE ACTION CENTER HERO BANNER ─────────────────── */}
+          <div className="mb-4 p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-rose-950 via-slate-900 to-amber-950 text-white shadow-xl border-2 border-rose-500/50 relative overflow-hidden flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-lg shadow-rose-600/50 ring-2 ring-rose-400/60">
+                <AlertCircle className="w-6 h-6 animate-pulse" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h4 className="font-black text-sm sm:text-base text-white">Absenty Action Center</h4>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-rose-400 text-slate-950">1-DAY PUSH & 2-DAY CALL</span>
+                </div>
+                <p className="text-xs text-rose-200 mt-1">
+                  1-Day Absentees ko direct app push notification aur 2-Day+ lagatar absentees ko 1-tap call karne ki suvidha
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setView("absentee")}
+              className="py-2.5 px-4 rounded-xl bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white font-black text-xs transition active:scale-[0.98] shadow-md flex items-center justify-center gap-2 shrink-0 cursor-pointer"
+            >
+              <span>ओपन Absenty Center</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </div>

@@ -10,6 +10,7 @@ import {
 import { markStudentQrAttendance, todayStr, getStudents } from "../../school-firebase";
 import { playSoundCorrect, playSoundWrong } from "../../utils/soundEffects";
 import { hapticStrong, hapticMedium } from "../../utils/haptic";
+import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 
 export interface QrAttendanceScannerModalProps {
   isOpen: boolean;
@@ -636,6 +637,26 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
           ]);
 
           onStudentMarked?.({ id: studentId, name: studentName, rollNo });
+
+          // Instant real-time push notification to student's parents
+          const notifTitle = res.action === "in"
+            ? (isLate ? "⚠️ विद्यालय प्रवेश (Late Entry)" : "🏫 विद्यालय उपस्थिति सूचना (Present)")
+            : "🚪 विद्यालय प्रस्थान सूचना (Out/Dispersal)";
+
+          const notifBody = res.action === "in"
+            ? `🔔 उपस्थिति सूचना: ${studentName} ${rollNo ? `(Roll: #${rollNo})` : ""} आज ${res.inTime || punchTime} पर विद्यालय पहुँच चुके हैं। सुरक्षित प्रवेश दर्ज। ✅`
+            : `🚶‍♂️ प्रस्थान सूचना: ${studentName} ${rollNo ? `(Roll: #${rollNo})` : ""} आज ${res.outTime || punchTime} पर विद्यालय से प्रस्थान कर चुके हैं। कुल रुकने का समय: ${res.stayDuration || "Recorded"}।`;
+
+          void sendSchoolPushNotification({
+            schoolId,
+            classId,
+            studentIds: [studentId],
+            title: notifTitle,
+            body: notifBody,
+            type: "SCHOOL_NOTICE",
+            url: `/?schoolPortal=1&studentId=${studentId}&schoolTab=attendance`,
+            urgent: true,
+          });
         } else {
           throw new Error(res.message);
         }
@@ -690,6 +711,23 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
             date: qrDate,
             timestamp: punchTime,
             source,
+          });
+
+          // Instant real-time push notification to student's parents
+          const notifTitle = res.action === "in" ? "🏫 विद्यालय उपस्थिति सूचना (Present)" : "🚪 विद्यालय प्रस्थान सूचना (Out/Dispersal)";
+          const notifBody = res.action === "in"
+            ? `🔔 उपस्थिति सूचना: ${currentStudent.name} ${currentStudent.rollNo ? `(Roll: #${currentStudent.rollNo})` : ""} आज ${res.inTime || punchTime} पर विद्यालय उपस्थित हो चुके हैं। सुरक्षित प्रवेश दर्ज। ✅`
+            : `🚶‍♂️ प्रस्थान सूचना: ${currentStudent.name} आज ${res.outTime || punchTime} पर विद्यालय से प्रस्थान कर चुके हैं।`;
+
+          void sendSchoolPushNotification({
+            schoolId,
+            classId,
+            studentIds: [currentStudent.id],
+            title: notifTitle,
+            body: notifBody,
+            type: "SCHOOL_NOTICE",
+            url: `/?schoolPortal=1&studentId=${currentStudent.id}&schoolTab=attendance`,
+            urgent: true,
           });
         } else {
           throw new Error(res.message);

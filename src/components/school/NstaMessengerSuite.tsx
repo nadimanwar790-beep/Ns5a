@@ -60,6 +60,7 @@ import {
 } from "../../school-firebase";
 import { uploadToCloudinary } from "../../services/cloudinaryService";
 import { formatMonthLabel } from "../../utils/feeFifoAllocation";
+import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 
 interface Props {
   school: School;
@@ -197,7 +198,8 @@ export const NstaMessengerSuite: React.FC<Props> = ({
 
   const [selectedStudentId, setSelectedStudentId] = useState<string>(() => {
     if (student?.id) return student.id;
-    return safeStudents[0]?.id || "";
+    if (currentUserRole === "ADMIN") return "all";
+    return safeStudents[0]?.id || "all";
   });
 
   const [selectedTeacherId, setSelectedTeacherId] = useState<string>(() => {
@@ -433,16 +435,13 @@ export const NstaMessengerSuite: React.FC<Props> = ({
 
   const activeStudent = useMemo(() => {
     if (currentUserRole === "STUDENT" && student) return student;
+    if (selectedStudentId === "all") return null;
     const found = safeStudents.find(s => s.id === selectedStudentId);
     if (found) return found;
-    if (safeStudents[0]) return safeStudents[0];
+    if (currentUserRole !== "ADMIN" && safeStudents[0]) return safeStudents[0];
     if (student) return student;
-    return {
-      id: currentUserId || "std_user",
-      name: currentUserName || "Student",
-      rollNo: "01"
-    } as any;
-  }, [safeStudents, selectedStudentId, student, currentUserRole, currentUserId, currentUserName]);
+    return null;
+  }, [safeStudents, selectedStudentId, student, currentUserRole]);
 
   const activeTeacher = useMemo(() => {
     if (currentUserRole === "TEACHER" && teacher) return teacher;
@@ -555,14 +554,16 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     const targetThreadType: NstaThreadType =
       activeTab === "class" ? "CLASS_GROUP" : activeTab === "school" ? "SCHOOL_DESK" : "TEACHER_CHAT";
 
+    const isSchoolDeskBroadcast = activeTab === "school" && (!selectedStudentId || selectedStudentId === "all");
+
     const newMsg: NstaMessage = {
       id: generateId("msg"),
       schoolId: school?.id || "default",
       threadType: targetThreadType,
       // Strictly set IDs relevant ONLY to this specific tab/thread type
       classId: activeTab === "class" ? (activeClass?.id || "general") : undefined,
-      studentId: activeTab === "class" ? undefined : (activeStudent?.id || undefined),
-      studentName: activeTab === "class" ? undefined : (activeStudent?.name || undefined),
+      studentId: activeTab === "class" ? undefined : (isSchoolDeskBroadcast ? undefined : (activeStudent?.id || undefined)),
+      studentName: activeTab === "class" ? undefined : (isSchoolDeskBroadcast ? "Sabhi Chhatra (All Students)" : (activeStudent?.name || undefined)),
       teacherId: activeTab === "teacher" ? (activeTeacher?.id || undefined) : undefined,
       teacherName: activeTab === "teacher" ? (activeTeacher?.name || undefined) : undefined,
       senderId: currentUserId || "user",
@@ -576,6 +577,30 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     try {
       await saveNstaMessage(newMsg);
       setInputText("");
+
+      // Dispatch real lock-screen push notification to receiver
+      try {
+        const isClassGroup = newMsg.threadType === "CLASS_GROUP";
+        const isSchoolDesk = newMsg.threadType === "SCHOOL_DESK";
+        const senderTitle = newMsg.senderName || (newMsg.senderRole === "ADMIN" ? "School Admin" : "Teacher");
+        const title = isClassGroup
+          ? `👥 ${senderTitle} (${activeClass?.name || "Class Group"})`
+          : isSchoolDesk
+          ? `🏫 ${school?.name || "School"} • Official Notice`
+          : `💬 ${senderTitle}`;
+        const body = newMsg.text || "Naya sandesh aaya hai";
+
+        void sendSchoolPushNotification({
+          schoolId: newMsg.schoolId,
+          classId: isClassGroup ? newMsg.classId : undefined,
+          studentIds: isClassGroup ? undefined : (newMsg.studentId ? [newMsg.studentId] : undefined),
+          title,
+          body,
+          type: isSchoolDesk ? "SCHOOL_NOTICE" : "DEFAULT",
+          url: `/?schoolPortal=1&schoolTab=messenger`,
+          urgent: true,
+        });
+      } catch (_) {}
     } catch (err) {
       console.error("[NstaMessenger] Send error:", err);
     } finally {
@@ -667,13 +692,15 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       const targetThreadType: NstaThreadType =
         activeTab === "class" ? "CLASS_GROUP" : activeTab === "school" ? "SCHOOL_DESK" : "TEACHER_CHAT";
 
+      const isSchoolDeskBroadcast = activeTab === "school" && (!selectedStudentId || selectedStudentId === "all");
+
       const newMsg: NstaMessage = {
         id: generateId("msg"),
         schoolId: school?.id || "default",
         threadType: targetThreadType,
         classId: activeTab === "class" ? (activeClass?.id || "general") : undefined,
-        studentId: activeTab === "class" ? undefined : (activeStudent?.id || undefined),
-        studentName: activeTab === "class" ? undefined : (activeStudent?.name || undefined),
+        studentId: activeTab === "class" ? undefined : (isSchoolDeskBroadcast ? undefined : (activeStudent?.id || undefined)),
+        studentName: activeTab === "class" ? undefined : (isSchoolDeskBroadcast ? "Sabhi Chhatra (All Students)" : (activeStudent?.name || undefined)),
         teacherId: activeTab === "teacher" ? (activeTeacher?.id || undefined) : undefined,
         teacherName: activeTab === "teacher" ? (activeTeacher?.name || undefined) : undefined,
         senderId: currentUserId || "user",
@@ -687,6 +714,22 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       };
 
       await saveNstaMessage(newMsg);
+      try {
+        void sendSchoolPushNotification({
+          schoolId: newMsg.schoolId,
+          classId: newMsg.threadType === "CLASS_GROUP" ? newMsg.classId : undefined,
+          studentIds: newMsg.threadType === "CLASS_GROUP" ? undefined : (newMsg.studentId ? [newMsg.studentId] : undefined),
+          title: newMsg.threadType === "CLASS_GROUP"
+            ? `👥 ${newMsg.senderName} (${activeClass?.name || "Class Group"})`
+            : newMsg.threadType === "SCHOOL_DESK"
+            ? `🏫 ${school?.name || "School"} • Official Notice`
+            : `📷 Photo: ${newMsg.senderName}`,
+          body: newMsg.text || "📷 Photo bheji gayi hai",
+          type: "SCHOOL_NOTICE",
+          url: `/?schoolPortal=1&schoolTab=messenger`,
+          urgent: true,
+        });
+      } catch (_) {}
       setSelectedImageFile(null);
       setImagePreviewUrl(null);
       setImageCaption("");
@@ -729,13 +772,15 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       const targetThreadType: NstaThreadType =
         activeTab === "class" ? "CLASS_GROUP" : activeTab === "school" ? "SCHOOL_DESK" : "TEACHER_CHAT";
 
+      const isSchoolDeskBroadcast = activeTab === "school" && (!selectedStudentId || selectedStudentId === "all");
+
       const newMsg: NstaMessage = {
         id: generateId("msg"),
         schoolId: school?.id || "default",
         threadType: targetThreadType,
         classId: activeTab === "class" ? (activeClass?.id || "general") : undefined,
-        studentId: activeTab === "class" ? undefined : (activeStudent?.id || undefined),
-        studentName: activeTab === "class" ? undefined : (activeStudent?.name || undefined),
+        studentId: activeTab === "class" ? undefined : (isSchoolDeskBroadcast ? undefined : (activeStudent?.id || undefined)),
+        studentName: activeTab === "class" ? undefined : (isSchoolDeskBroadcast ? "Sabhi Chhatra (All Students)" : (activeStudent?.name || undefined)),
         teacherId: activeTab === "teacher" ? (activeTeacher?.id || undefined) : undefined,
         teacherName: activeTab === "teacher" ? (activeTeacher?.name || undefined) : undefined,
         senderId: currentUserId || "user",
@@ -749,6 +794,22 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       };
 
       await saveNstaMessage(newMsg);
+      try {
+        void sendSchoolPushNotification({
+          schoolId: newMsg.schoolId,
+          classId: newMsg.threadType === "CLASS_GROUP" ? newMsg.classId : undefined,
+          studentIds: newMsg.threadType === "CLASS_GROUP" ? undefined : (newMsg.studentId ? [newMsg.studentId] : undefined),
+          title: newMsg.threadType === "CLASS_GROUP"
+            ? `👥 ${newMsg.senderName} (${activeClass?.name || "Class Group"})`
+            : newMsg.threadType === "SCHOOL_DESK"
+            ? `🏫 ${school?.name || "School"} • Official Notice`
+            : `🎥 Video: ${newMsg.senderName}`,
+          body: newMsg.text || "🎥 Video bheja gaya hai",
+          type: "SCHOOL_NOTICE",
+          url: `/?schoolPortal=1&schoolTab=messenger`,
+          urgent: true,
+        });
+      } catch (_) {}
       setSelectedVideoFile(null);
       setVideoPreviewUrl(null);
       setVideoCaption("");
@@ -898,6 +959,21 @@ export const NstaMessengerSuite: React.FC<Props> = ({
             >
               {safeClasses.map(c => (
                 <option key={c.id} value={c.id}>{c.name} {c.section ? `(${c.section})` : ""}</option>
+              ))}
+            </select>
+          )}
+
+          {/* Admin Recipient Selector for School Desk (Sabhi Chhatra Broadcast vs Specific Student) */}
+          {currentUserRole === "ADMIN" && activeTab === "school" && (
+            <select
+              value={selectedStudentId || "all"}
+              onChange={e => setSelectedStudentId(e.target.value)}
+              className="px-2 py-1.5 rounded-xl bg-blue-900/60 text-blue-100 border border-blue-500/60 text-xs font-bold cursor-pointer max-w-[120px] sm:max-w-[170px] truncate"
+              title="School Desk Praptkarta Chunein"
+            >
+              <option value="all">📢 Sabhi Chhatra (Broadcast)</option>
+              {safeStudents.map(s => (
+                <option key={s.id} value={s.id}>{s.name} ({s.rollNo ? `Roll ${s.rollNo}` : "Std"})</option>
               ))}
             </select>
           )}
@@ -1112,6 +1188,32 @@ export const NstaMessengerSuite: React.FC<Props> = ({
                         </p>
                       </div>
                     </div>
+
+                    {/* Early Payment 10% Discount Callout */}
+                    {!isReceipt && (msg.feeSlip.earlyDiscount ? msg.feeSlip.earlyDiscount > 0 : (new Date().getDate() <= 10)) && (
+                      <div className="p-2.5 rounded-xl bg-emerald-950/60 border border-emerald-500/40 text-[11px] space-y-1">
+                        <div className="flex items-center justify-between font-black text-emerald-300">
+                          <span className="flex items-center gap-1">
+                            <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                            10 तारीख तक 10% OFF
+                          </span>
+                          <span className="text-emerald-400 font-mono">
+                            -₹{Number(msg.feeSlip.earlyDiscount || Math.round((msg.feeSlip.monthlyAmount || msg.feeSlip.amount || msg.feeSlip.balanceDue || 0) * 0.10)).toLocaleString("en-IN")}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-slate-300 text-[10px]">
+                          <span>छूट के बाद कुल देय:</span>
+                          <span className="font-bold text-white text-xs">
+                            ₹{Number(msg.feeSlip.netPayableWithDiscount || ((msg.feeSlip.balanceDue || 0) - (msg.feeSlip.earlyDiscount || 0))).toLocaleString("en-IN")}
+                          </span>
+                        </div>
+                        {Boolean(msg.feeSlip.oldArrears && msg.feeSlip.oldArrears > 0) && (
+                          <p className="text-[9px] text-amber-300/90 leading-tight">
+                            * 10% छूट केवल चालू माह शुल्क पर लागू है। पुराने बकाए (₹{msg.feeSlip.oldArrears?.toLocaleString("en-IN")}) पर छूट नहीं।
+                          </p>
+                        )}
+                      </div>
+                    )}
 
                     {/* Action buttons on Slip card */}
                     <div className="flex items-center gap-2 pt-1 flex-wrap">

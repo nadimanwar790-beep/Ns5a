@@ -178,17 +178,46 @@ async function dispatchWebPush(
   }
 }
 
+function normalizeServiceAccount(
+  rawEmail?: string,
+  rawKey?: string
+): { clientEmail: string; privateKey: string } | null {
+  if (!rawEmail || !rawKey) return null;
+  const match = rawEmail.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+  const clientEmail = match ? match[0] : rawEmail.trim().replace(/^["']+|["',\s]+$/g, "");
+
+  let key = rawKey.replace(/\\n/g, "\n").trim();
+  if (key.startsWith("nMI")) {
+    key = key.slice(1);
+  }
+  if (!key.includes("-----BEGIN PRIVATE KEY-----")) {
+    key = `-----BEGIN PRIVATE KEY-----\n${key}\n-----END PRIVATE KEY-----`;
+  }
+  return { clientEmail, privateKey: key };
+}
+
 async function getFcmAccessToken(): Promise<string | null> {
-  const clientEmail = (process.env.FIREBASE_CLIENT_EMAIL || "").trim().replace(/^["']+|["',\s]+$/g, "");
-  const rawPrivateKey = (process.env.FIREBASE_PRIVATE_KEY || "").trim().replace(/^["']+|["',\s]+$/g, "");
-  if (!clientEmail || !rawPrivateKey) return null;
+  let clientEmail = (process.env.FIREBASE_CLIENT_EMAIL || "").trim();
+  let rawPrivateKey = (process.env.FIREBASE_PRIVATE_KEY || "").trim();
+
+  if (!clientEmail || !rawPrivateKey) {
+    const rtdbCreds = await rtdbGet<{ clientEmail?: string; privateKey?: string }>(
+      "system_config/firebase_service_account"
+    );
+    if (rtdbCreds?.clientEmail && rtdbCreds?.privateKey) {
+      clientEmail = rtdbCreds.clientEmail;
+      rawPrivateKey = rtdbCreds.privateKey;
+    }
+  }
+
+  const normalized = normalizeServiceAccount(clientEmail, rawPrivateKey);
+  if (!normalized) return null;
 
   if (cachedFcmAccessToken && Date.now() < cachedFcmAccessToken.expiresAt - 60_000) {
     return cachedFcmAccessToken.token;
   }
 
   try {
-    const privateKey = rawPrivateKey.replace(/\\n/g, "\n");
     const nowSec = Math.floor(Date.now() / 1000);
     const b64url = (input: string | Buffer) =>
       Buffer.from(input).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
@@ -196,7 +225,7 @@ async function getFcmAccessToken(): Promise<string | null> {
     const header = b64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
     const claim = b64url(
       JSON.stringify({
-        iss: clientEmail,
+        iss: normalized.clientEmail,
         scope: "https://www.googleapis.com/auth/firebase.messaging",
         aud: "https://oauth2.googleapis.com/token",
         iat: nowSec,
@@ -207,7 +236,7 @@ async function getFcmAccessToken(): Promise<string | null> {
     const signer = crypto.createSign("RSA-SHA256");
     signer.update(unsignedJwt);
     signer.end();
-    const signature = b64url(signer.sign(privateKey));
+    const signature = b64url(signer.sign(normalized.privateKey));
     const assertion = `${unsignedJwt}.${signature}`;
 
     const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
@@ -227,7 +256,8 @@ async function getFcmAccessToken(): Promise<string | null> {
       expiresAt: Date.now() + Number(tokenJson.expires_in || 3600) * 1000,
     };
     return tokenJson.access_token;
-  } catch {
+  } catch (err) {
+    console.warn("[FCM] Access token generation error:", err);
     return null;
   }
 }
@@ -235,12 +265,13 @@ async function getFcmAccessToken(): Promise<string | null> {
 async function dispatchFcmToUsers(
   recipientIds: string[],
   broadcast: boolean,
-  payload: { title: string; body: string; type?: string; url?: string; icon?: string }
+  payload: { title: string; body: string; type?: string; url?: string; icon?: string },
+  filter?: { schoolId?: string; classId?: string }
 ): Promise<number> {
   const accessToken = await getFcmAccessToken();
   if (!accessToken) return 0;
 
-  const allTokens = await rtdbGet<Record<string, { token?: string; userId?: string }>>("fcm_tokens");
+  const allTokens = await rtdbGet<Record<string, any>>("fcm_tokens");
   if (!allTokens || typeof allTokens !== "object") return 0;
 
   const cleanSet = new Set(recipientIds.map((id) => String(id).trim().replace(/[.#$[\]/]/g, "_")));
@@ -249,7 +280,20 @@ async function dispatchFcmToUsers(
   const targets: string[] = [];
   for (const [key, entry] of Object.entries(allTokens)) {
     if (!entry?.token) continue;
-    if (broadcast || cleanSet.size === 0 || cleanSet.has(key) || (entry.userId && rawSet.has(String(entry.userId)))) {
+    if (filter?.schoolId && entry.schoolId && entry.schoolId !== filter.schoolId) continue;
+    if (filter?.classId && entry.classId && entry.classId !== filter.classId) continue;
+
+    const entryUserId = entry.userId ? String(entry.userId).trim() : "";
+    const entryStudentId = entry.studentId ? String(entry.studentId).trim() : "";
+
+    const isMatch =
+      broadcast ||
+      cleanSet.size === 0 ||
+      cleanSet.has(key) ||
+      (entryUserId && (rawSet.has(entryUserId) || cleanSet.has(entryUserId.replace(/[.#$[\]/]/g, "_")))) ||
+      (entryStudentId && (rawSet.has(entryStudentId) || cleanSet.has(entryStudentId.replace(/[.#$[\]/]/g, "_"))));
+
+    if (isMatch) {
       targets.push(entry.token);
     }
   }
@@ -431,10 +475,15 @@ export default async function handler(req: any, res: any) {
         }
         if (!matchedStudent && schoolId && !targetStudentSet && !userId) {
           matchedStudent = (record.students || []).find((s) => {
-            if (s.schoolId !== schoolId) return false;
+            if (s.schoolId && s.schoolId !== schoolId) return false;
             if (classId && s.classId && s.classId !== classId) return false;
             return true;
-          });
+          }) || record.students?.[0];
+        }
+
+        // If it is a school broadcast without target students, deliver to all subscribers
+        if (!matchedStudent && !targetStudentSet && !userId) {
+          matchedStudent = record.students?.[0] || ({ id: "all", schoolId: schoolId || "" } as any);
         }
 
         if (!matchedStudent && !(userId && record.userId === String(userId))) continue;
@@ -457,9 +506,31 @@ export default async function handler(req: any, res: any) {
         if (ok) delivered++;
       }
 
-      if (userId) {
-        delivered += await dispatchFcmToUsers([String(userId)], false, { title, body, type, url });
+      // Also dispatch FCM push to all matching devices
+      const fcmRecipients: string[] = [
+        ...(userId ? [String(userId)] : []),
+        ...(Array.isArray(studentIds) ? studentIds.map(String) : []),
+      ];
+
+      // Add linked parent userIds for targeted students
+      if (Array.isArray(studentIds) && studentIds.length > 0) {
+        const studentIdSet = new Set(studentIds.map(String));
+        for (const sub of Object.values(subsObj)) {
+          const hasStudent = (sub.students || []).some((s) => studentIdSet.has(String(s.id)));
+          if (hasStudent && sub.userId) {
+            fcmRecipients.push(String(sub.userId));
+          }
+        }
       }
+
+      const isFcmBroadcast = !userId && (!studentIds || studentIds.length === 0 || studentIds.includes("all"));
+      const fcmDelivered = await dispatchFcmToUsers(
+        fcmRecipients,
+        isFcmBroadcast,
+        { title, body, type, url },
+        { schoolId, classId }
+      );
+      delivered += fcmDelivered;
 
       return res.status(200).json({ ok: true, matchedDevices, delivered });
     }

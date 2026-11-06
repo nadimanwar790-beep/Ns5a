@@ -1,10 +1,15 @@
 // @ts-nocheck
 import React, { useState, useEffect, useCallback } from "react";
 import {
-  saveAttendance, subscribeToAttendance, getMonthlyAttendance, getStudents, todayStr, currentMonthStr
+  saveAttendance, subscribeToAttendance, getAttendance, getMonthlyAttendance, getStudents, todayStr, currentMonthStr
 } from "../../school-firebase";
 import type { SchoolStudent, AttendanceRecord } from "../../school-types";
-import { CheckCircle, XCircle, Download, Calendar, Users, ChevronLeft, ChevronRight, Camera, QrCode } from "lucide-react";
+import {
+  CheckCircle, XCircle, Download, Calendar, Users, ChevronLeft, ChevronRight,
+  Camera, QrCode, Phone, PhoneCall, Bell, Send, AlertTriangle, AlertCircle,
+  CheckCircle2, MessageCircle, ShieldAlert, Sparkles, PhoneOutgoing, Loader2
+} from "lucide-react";
+import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 import { QrAttendanceScannerModal } from "./QrAttendanceScannerModal";
 import { ClassQrCodeModal } from "./ClassQrCodeModal";
 import { StudentQuickActionModal } from "./StudentQuickActionModal";
@@ -24,7 +29,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
   const [existingRecord, setExistingRecord] = useState<AttendanceRecord | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [viewMode, setViewMode] = useState<"mark" | "report" | "matrix">("mark");
+  const [viewMode, setViewMode] = useState<"mark" | "absentee" | "report" | "matrix">("mark");
   const [monthlyData, setMonthlyData] = useState<AttendanceRecord[]>([]);
   const [selectedMonth, setSelectedMonth] = useState(currentMonthStr());
   const [loading, setLoading] = useState(true);
@@ -33,6 +38,41 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
   const [modalInitialTab, setModalInitialTab] = useState<"id_card" | "fees" | "attendance">("attendance");
   const [showClassQrModal, setShowClassQrModal] = useState(false);
   const [selectedCellInfo, setSelectedCellInfo] = useState<{ studentName: string; rollNo: string; date: string; info: any } | null>(null);
+
+  // Absentee Action Center & 2-Day Tracker States
+  const [yesterdayRecord, setYesterdayRecord] = useState<AttendanceRecord | null>(null);
+  const [broadcastingAbsentees, setBroadcastingAbsentees] = useState(false);
+  const [absenteeBroadcastToast, setAbsenteeBroadcastToast] = useState<string | null>(null);
+  const [absenteeCallNotes, setAbsenteeCallNotes] = useState<{ [id: string]: { note?: string; called?: boolean } }>(() => {
+    try {
+      const saved = localStorage.getItem(`nst_call_logs_${schoolId}_${classId}`);
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  // Calculate previous working day date
+  const getPreviousWorkingDateStr = (dateStr: string) => {
+    try {
+      const d = new Date(dateStr);
+      d.setDate(d.getDate() - 1);
+      if (d.getDay() === 0) { // If Sunday, skip to Saturday
+        d.setDate(d.getDate() - 1);
+      }
+      return d.toISOString().split("T")[0];
+    } catch {
+      return dateStr;
+    }
+  };
+
+  // Fetch yesterday's attendance to compute 2-day consecutive absentees
+  useEffect(() => {
+    const prevDate = getPreviousWorkingDateStr(selectedDate);
+    getAttendance(schoolId, classId, prevDate).then(rec => {
+      setYesterdayRecord(rec);
+    }).catch(() => setYesterdayRecord(null));
+  }, [schoolId, classId, selectedDate]);
 
   useEffect(() => {
     getStudents(schoolId, classId).then(s => {
@@ -109,6 +149,114 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
   const presentCount = Object.values(attendance).filter(Boolean).length;
   const absentCount = students.length - presentCount;
 
+  // Filter today's absent students
+  const absentStudents = students.filter(s => {
+    const isPresent = attendance[s.id] ?? existingRecord?.students?.[s.id]?.present;
+    return isPresent === false;
+  });
+
+  // Split into Day 1 Absent vs Day 2+ Consecutive Absent
+  const { day1Absentees, day2PlusAbsentees } = (() => {
+    const day1: SchoolStudent[] = [];
+    const day2Plus: SchoolStudent[] = [];
+
+    absentStudents.forEach(st => {
+      const wasAbsentYesterday = yesterdayRecord?.students?.[st.id]?.present === false;
+      if (wasAbsentYesterday) {
+        day2Plus.push(st);
+      } else {
+        day1.push(st);
+      }
+    });
+
+    return { day1Absentees: day1, day2PlusAbsentees: day2Plus };
+  })();
+
+  // 1-Click Broadcast Absentee Notices
+  const handleBroadcastAbsenteeNotices = async () => {
+    if (absentStudents.length === 0) {
+      alert("आज कोई भी छात्र अनुपस्थित नहीं है।");
+      return;
+    }
+    setBroadcastingAbsentees(true);
+    try {
+      const studentIds = absentStudents.map(s => s.id);
+      const pushRes = await sendSchoolPushNotification({
+        schoolId,
+        classId,
+        studentIds,
+        title: `⚠️ विद्यालय अनुपस्थिति सूचना • ${className}`,
+        body: `आदरणीय अभिभावक, आपका बच्चा आज विद्यालय में अनुपस्थित है। यदि कोई समस्या या अवकाश है तो कृपया सूचित करें।`,
+        type: "SCHOOL_NOTICE",
+        url: `/?schoolPortal=1&classId=${classId}&schoolTab=attendance`,
+        urgent: true,
+      });
+
+      setAbsenteeBroadcastToast(`✅ ${studentIds.length} अनुपस्थित छात्रों के अभिभावकों को पुश नोटिफिकेशन भेज दिया गया! (Delivered: ${pushRes.delivered})`);
+      setTimeout(() => setAbsenteeBroadcastToast(null), 4000);
+    } catch {
+      alert("Notification भेजने में समस्या आई।");
+    } finally {
+      setBroadcastingAbsentees(false);
+    }
+  };
+
+  // 1-Tap Single Absent Push Notice
+  const handleSendSingleAbsentPush = async (student: SchoolStudent) => {
+    try {
+      await sendSchoolPushNotification({
+        schoolId,
+        classId,
+        studentIds: [student.id],
+        title: `⚠️ अनुपस्थिति सूचना • ${className}`,
+        body: `आदरणीय अभिभावक, आपका बच्चा ${student.name} (Roll #${student.rollNo || "-"}) आज विद्यालय में उपस्थित नहीं है। कृपया कारण सूचित करें।`,
+        type: "SCHOOL_NOTICE",
+        url: `/?schoolPortal=1&studentId=${student.id}&schoolTab=attendance`,
+        urgent: true,
+      });
+      setAbsenteeBroadcastToast(`✅ ${student.name} के पेरेंट्स को अनुपस्थिति अलर्ट भेजा गया!`);
+      setTimeout(() => setAbsenteeBroadcastToast(null), 3500);
+    } catch {
+      alert("अलर्ट भेजने में समस्या आई।");
+    }
+  };
+
+  // WhatsApp Alert Link
+  const handleSendSingleWhatsApp = (student: SchoolStudent, isDay2: boolean) => {
+    const rawPhone = student.phone || (student as any).whatsappNo || (student as any).fatherPhone || "";
+    const cleanPhone = rawPhone.replace(/\D/g, "");
+    const msg = isDay2
+      ? `आदरणीय अभिभावक, आपका बच्चा ${student.name} (Roll #${student.rollNo || "-"}) लगातार 2 दिनों से विद्यालय में अनुपस्थित है। कृपया तुरंत विद्यालय प्रशासन से संपर्क करें। - ${className}`
+      : `आदरणीय अभिभावक, आपका बच्चा ${student.name} (Roll #${student.rollNo || "-"}) आज विद्यालय में उपस्थित नहीं हुआ है। यदि अवकाश का कारण है तो कृपया विद्यालय को अवगत कराएं। - ${className}`;
+    
+    if (cleanPhone) {
+      window.open(`https://wa.me/91${cleanPhone.slice(-10)}?text=${encodeURIComponent(msg)}`, "_blank");
+    } else {
+      alert("इस छात्र के पेरेंट्स का फोन नंबर उपलब्ध नहीं है।");
+    }
+  };
+
+  // Call status & notes logging
+  const updateCallNote = (studentId: string, note: string) => {
+    setAbsenteeCallNotes(prev => {
+      const next = { ...prev, [studentId]: { ...(prev[studentId] || {}), note, called: true } };
+      try {
+        localStorage.setItem(`nst_call_logs_${schoolId}_${classId}`, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  };
+
+  const markStudentCalled = (studentId: string) => {
+    setAbsenteeCallNotes(prev => {
+      const next = { ...prev, [studentId]: { ...(prev[studentId] || {}), called: true } };
+      try {
+        localStorage.setItem(`nst_call_logs_${schoolId}_${classId}`, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  };
+
   // Monthly Report: compute per-student attendance stats
   const studentStats = students.map(s => {
     const days = monthlyData.filter(r => r.students[s.id] !== undefined);
@@ -165,6 +313,10 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
         </div>
         <div className="flex gap-1.5 overflow-x-auto">
           <button onClick={() => setViewMode("mark")} className={`px-2.5 py-1.5 rounded-lg text-xs sm:text-sm font-bold whitespace-nowrap transition-colors ${viewMode === "mark" ? "bg-blue-600 text-white" : "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"}`}>Mark (दैनिक)</button>
+          <button onClick={() => setViewMode("absentee")} className={`px-2.5 py-1.5 rounded-lg text-xs sm:text-sm font-bold whitespace-nowrap transition-colors flex items-center gap-1.5 ${viewMode === "absentee" ? "bg-rose-600 text-white shadow-md shadow-rose-600/30" : "bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800"}`}>
+            <AlertCircle className="w-3.5 h-3.5" />
+            <span>🚨 Absenty Action Center ({absentStudents.length})</span>
+          </button>
           <button onClick={() => setViewMode("report")} className={`px-2.5 py-1.5 rounded-lg text-xs sm:text-sm font-bold whitespace-nowrap transition-colors ${viewMode === "report" ? "bg-blue-600 text-white" : "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"}`}>Report</button>
           <button onClick={() => setViewMode("matrix")} className={`px-2.5 py-1.5 rounded-lg text-xs sm:text-sm font-bold whitespace-nowrap transition-colors ${viewMode === "matrix" ? "bg-indigo-600 text-white" : "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"}`}>📅 31-Day Matrix</button>
         </div>
@@ -172,6 +324,14 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
 
       {viewMode === "mark" ? (
         <div className="p-4 space-y-4 max-w-2xl mx-auto">
+          {/* Toast Notification */}
+          {absenteeBroadcastToast && (
+            <div className="p-3 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-xs font-bold rounded-xl flex items-center gap-2 animate-in fade-in">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{absenteeBroadcastToast}</span>
+            </div>
+          )}
+
           {/* Date Picker */}
           <div className="bg-white dark:bg-slate-800 rounded-xl p-4 flex items-center gap-3 shadow-sm">
             <Calendar className="w-5 h-5 text-blue-500" />
@@ -211,6 +371,36 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
             <button onClick={() => markAll(true)} className="flex-1 py-2 bg-green-500 hover:bg-green-600 text-white rounded-xl text-xs font-bold transition">All Present</button>
             <button onClick={() => markAll(false)} className="flex-1 py-2 bg-red-500 hover:bg-red-600 text-white rounded-xl text-xs font-bold transition">All Absent</button>
           </div>
+
+          {/* 1-Click Absentee Broadcast Button (If any absent student) */}
+          {absentStudents.length > 0 && (
+            <div className="p-3 rounded-xl bg-gradient-to-r from-rose-500/10 via-amber-500/10 to-rose-500/10 border border-rose-500/30 flex flex-col sm:flex-row items-center justify-between gap-2.5">
+              <div className="flex items-center gap-2 text-xs">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span className="font-bold text-slate-800 dark:text-white">
+                  आज {absentStudents.length} छात्र अनुपस्थित हैं।
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleBroadcastAbsenteeNotices}
+                disabled={broadcastingAbsentees}
+                className="w-full sm:w-auto px-4 py-2 bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow-md shadow-rose-600/30 active:scale-95 transition cursor-pointer"
+              >
+                {broadcastingAbsentees ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>भेजा जा रहा है...</span>
+                  </>
+                ) : (
+                  <>
+                    <Bell className="w-3.5 h-3.5" />
+                    <span>📢 1-Click सभी अभिभावकों को अनुपस्थिति अलर्ट भेजें</span>
+                  </>
+                )}
+              </button>
+            </div>
+          )}
 
           {/* QR Code Quick Actions */}
           <div className="grid grid-cols-2 gap-2">
@@ -321,6 +511,321 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
               {saving ? "Saving..." : saved ? "✓ Attendance Saved!" : "Save Attendance"}
             </button>
           )}
+        </div>
+      ) : viewMode === "absentee" ? (
+        /* ABSENTEE ACTION CENTER (ABSENTY PAGE) */
+        <div className="p-4 space-y-4 max-w-3xl mx-auto animate-in fade-in">
+          {/* Header & Date */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-4 sm:p-5 border border-slate-200 dark:border-slate-700 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2.5">
+                <span className="p-2.5 rounded-xl bg-rose-500/10 text-rose-600 dark:text-rose-400">
+                  <ShieldAlert className="w-5 h-5" />
+                </span>
+                <div>
+                  <h3 className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
+                    Absentee Action Center (अनुपस्थिति ट्रैकर)
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Day 1 अनुपस्थिति नोटिस व Day 2+ लगातार अनुपस्थित छात्रों पर 1-टैप कॉल एक्शन
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Date selector */}
+            <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-750 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 w-full sm:w-auto">
+              <Calendar className="w-4 h-4 text-slate-400 shrink-0" />
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                className="bg-transparent text-xs font-bold text-slate-800 dark:text-white outline-hidden cursor-pointer"
+              />
+            </div>
+          </div>
+
+          {/* Toast Notification */}
+          {absenteeBroadcastToast && (
+            <div className="p-3 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-xs font-bold rounded-2xl flex items-center gap-2 animate-in fade-in">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+              <span>{absenteeBroadcastToast}</span>
+            </div>
+          )}
+
+          {/* KPI Summary Cards */}
+          <div className="grid grid-cols-3 gap-2.5">
+            <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-center shadow-xs">
+              <p className="text-2xl font-black text-rose-600 dark:text-rose-400 tabular-nums">
+                {absentStudents.length}
+              </p>
+              <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400 mt-0.5">
+                कुल अनुपस्थित आज
+              </p>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 text-center shadow-xs">
+              <p className="text-2xl font-black text-amber-600 dark:text-amber-400 tabular-nums">
+                {day1Absentees.length}
+              </p>
+              <p className="text-[11px] font-bold text-amber-800 dark:text-amber-300 mt-0.5">
+                पहला दिन (Day 1)
+              </p>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-900/60 text-center shadow-xs">
+              <p className="text-2xl font-black text-rose-700 dark:text-rose-400 tabular-nums">
+                {day2PlusAbsentees.length}
+              </p>
+              <p className="text-[11px] font-bold text-rose-800 dark:text-rose-300 mt-0.5 flex items-center justify-center gap-1">
+                <AlertTriangle className="w-3 h-3 text-rose-600" />
+                लगातार 2+ दिन ⚠️
+              </p>
+            </div>
+          </div>
+
+          {/* 1-Click Broadcast Button to all Absentees */}
+          <div className="p-4 rounded-2xl bg-gradient-to-r from-rose-600 via-rose-700 to-amber-700 text-white shadow-lg shadow-rose-600/20 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <Bell className="w-5 h-5 animate-pulse text-amber-300" />
+                <h4 className="text-sm font-black">
+                  1-Click Absent Alert Broadcast
+                </h4>
+              </div>
+              <p className="text-xs text-rose-100 mt-0.5">
+                सभी {absentStudents.length} अनुपस्थित बच्चों के माता-पिता के फोन पर लॉक-स्क्रीन अलर्ट भेजें
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleBroadcastAbsenteeNotices}
+              disabled={broadcastingAbsentees || absentStudents.length === 0}
+              className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-white text-rose-700 hover:bg-rose-50 font-black text-xs shadow-md active:scale-95 transition cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
+            >
+              {broadcastingAbsentees ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-rose-700" />
+                  <span>भेजा जा रहा है...</span>
+                </>
+              ) : (
+                <>
+                  <Send className="w-4 h-4 text-rose-700" />
+                  <span>📢 सभी अनुपस्थित को Alert भेजें</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* ── SECTION 1: 2-DAY CONSECUTIVE ABSENTEES (CALL ACTION CENTER) ── */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-rose-600 animate-ping" />
+                <h4 className="text-sm font-black text-rose-700 dark:text-rose-400 uppercase tracking-wide flex items-center gap-1.5">
+                  <PhoneCall className="w-4 h-4" />
+                  2 दिन से लगातार अनुपस्थित छात्र (Day 2+ Action Center)
+                </h4>
+              </div>
+              <span className="text-xs font-bold text-rose-600 bg-rose-100 dark:bg-rose-950 px-2.5 py-0.5 rounded-full">
+                {day2PlusAbsentees.length} छात्र
+              </span>
+            </div>
+
+            {day2PlusAbsentees.length === 0 ? (
+              <div className="p-6 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/40 text-center space-y-1">
+                <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto" />
+                <h5 className="text-xs font-black text-slate-800 dark:text-white">
+                  शानदार! कोई भी छात्र लगातार 2 दिन से अनुपस्थित नहीं है।
+                </h5>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  सभी छात्र नियमित हैं या कल उपस्थित थे।
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {day2PlusAbsentees.map((st) => {
+                  const phone = st.phone || (st as any).whatsappNo || (st as any).fatherPhone || "";
+                  const callInfo = absenteeCallNotes[st.id];
+                  const hasCalled = Boolean(callInfo?.called);
+
+                  return (
+                    <div
+                      key={st.id}
+                      className="p-4 rounded-2xl bg-white dark:bg-slate-800 border-2 border-rose-300 dark:border-rose-800/80 shadow-md space-y-3"
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-700">
+                        <div className="flex items-center gap-3">
+                          <span className="w-9 h-9 rounded-xl bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 font-mono font-black text-sm flex items-center justify-center shrink-0">
+                            #{st.rollNo || "-"}
+                          </span>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h5 className="font-black text-sm text-slate-900 dark:text-white">
+                                {st.name}
+                              </h5>
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-600 text-white animate-pulse">
+                                ⚠️ 2 दिन से Absent
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                              Class: {className} • Roll: #{st.rollNo || "N/A"} • Parent: {st.parentName || st.fatherName || "Guardian"}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Call Status Badge */}
+                        <div className="flex items-center gap-2">
+                          {hasCalled ? (
+                            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 flex items-center gap-1">
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              कॉल किया गया ✓
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-rose-100 dark:bg-rose-950 text-rose-800 dark:text-rose-300 flex items-center gap-1">
+                              <Clock className="w-3.5 h-3.5" />
+                              कॉल बाकी है
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Direct Action Buttons: 1-Tap Call & WhatsApp */}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {phone ? (
+                          <a
+                            href={`tel:${phone}`}
+                            onClick={() => markStudentCalled(st.id)}
+                            className="flex-1 min-w-[160px] py-2.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-500 active:scale-95 text-white text-xs font-black flex items-center justify-center gap-2 shadow-md shadow-rose-600/30 transition cursor-pointer"
+                          >
+                            <Phone className="w-4 h-4 animate-bounce" />
+                            <span>📞 1-Tap Call ({phone})</span>
+                          </a>
+                        ) : (
+                          <span className="text-xs text-rose-500 font-bold px-3 py-2 bg-rose-50 dark:bg-rose-950/40 rounded-xl">
+                            फोन नंबर उपलब्ध नहीं
+                          </span>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => handleSendSingleWhatsApp(st, true)}
+                          className="py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-xs font-black flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/20 transition cursor-pointer"
+                        >
+                          <MessageCircle className="w-4 h-4" />
+                          <span>WhatsApp Notice</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleSendSingleAbsentPush(st)}
+                          className="py-2.5 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-black flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/20 transition cursor-pointer"
+                        >
+                          <Bell className="w-4 h-4" />
+                          <span>Push Alert</span>
+                        </button>
+                      </div>
+
+                      {/* Reason Log Dropdown */}
+                      <div className="flex items-center gap-2 pt-1">
+                        <label className="text-[11px] font-bold text-slate-500 shrink-0">
+                          अनुपस्थिति का कारण दर्ज करें:
+                        </label>
+                        <select
+                          value={callInfo?.note || ""}
+                          onChange={(e) => updateCallNote(st.id, e.target.value)}
+                          className="flex-1 text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-750 text-slate-800 dark:text-white font-medium focus:outline-hidden"
+                        >
+                          <option value="">-- कारण चुनें (Select Reason) --</option>
+                          <option value="बीमारी / अस्वस्थ (Sick Leave)">बीमारी / अस्वस्थ (Sick Leave)</option>
+                          <option value="पारिवारिक कार्य / इमरजेंसी (Family Emergency)">पारिवारिक कार्य / इमरजेंसी (Family Emergency)</option>
+                          <option value="बिना सूचना अनुपस्थित (Uninformed)">बिना सूचना अनुपस्थित (Uninformed)</option>
+                          <option value="गाँव या बाहर गए हैं (Out of Station)">गाँव या बाहर गए हैं (Out of Station)</option>
+                          <option value="अन्य कारण (Other Reason)">अन्य कारण (Other Reason)</option>
+                        </select>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* ── SECTION 2: DAY 1 ABSENTEES (NOTIFICATION CENTER) ── */}
+          <div className="space-y-3 pt-2">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-black text-amber-700 dark:text-amber-400 uppercase tracking-wide flex items-center gap-1.5">
+                <Bell className="w-4 h-4" />
+                आज का पहला दिन अनुपस्थित (Day 1 Absent Notice)
+              </h4>
+              <span className="text-xs font-bold text-amber-600 bg-amber-100 dark:bg-amber-950 px-2.5 py-0.5 rounded-full">
+                {day1Absentees.length} छात्र
+              </span>
+            </div>
+
+            {day1Absentees.length === 0 ? (
+              <div className="p-5 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 text-center space-y-1">
+                <CheckCircle2 className="w-6 h-6 text-slate-400 mx-auto" />
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  आज कोई नया छात्र अनुपस्थित नहीं है।
+                </p>
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100 dark:divide-slate-800 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 overflow-hidden shadow-xs">
+                {day1Absentees.map((st) => {
+                  const phone = st.phone || (st as any).whatsappNo || (st as any).fatherPhone || "";
+                  return (
+                    <div
+                      key={st.id}
+                      className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50 dark:hover:bg-slate-750 transition"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="text-xs font-mono font-bold text-slate-400 w-7 text-right">
+                          #{st.rollNo}
+                        </span>
+                        <div>
+                          <h5 className="font-bold text-xs text-slate-900 dark:text-white">
+                            {st.name}
+                          </h5>
+                          <p className="text-[11px] text-slate-400">
+                            {phone ? `Ph: ${phone}` : "No phone registered"}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleSendSingleAbsentPush(st)}
+                          className="px-3 py-1.5 rounded-xl bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
+                        >
+                          <Bell className="w-3.5 h-3.5" />
+                          <span>Push Alert</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSendSingleWhatsApp(st, false)}
+                          className="px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
+                        >
+                          <MessageCircle className="w-3.5 h-3.5" />
+                          <span>WhatsApp</span>
+                        </button>
+                        {phone && (
+                          <a
+                            href={`tel:${phone}`}
+                            className="p-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 transition"
+                            title="Direct Call"
+                          >
+                            <Phone className="w-3.5 h-3.5" />
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       ) : viewMode === "matrix" ? (
         /* 31-DAY MONTHLY ATTENDANCE MATRIX */

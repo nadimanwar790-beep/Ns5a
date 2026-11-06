@@ -375,20 +375,29 @@ export const SchoolCommunityFeed: React.FC<SchoolCommunityFeedProps> = ({
 
       // Send Lock-Screen Push Notification to all linked parents/students of THIS schoolId
       if (sendPushAlert && canCreateOfficialPost) {
+        const isMemory = postCategory === "EVENT_MEDIA" || Boolean(uploadedImageUrl || uploadedVideoUrl);
         const pushType = postCategory === "HOLIDAY" ? "SCHOOL_HOLIDAY" : "SCHOOL_NOTICE";
-        const mediaTag = uploadedVideoUrl ? " [Video]" : uploadedImageUrl ? " [Photo]" : "";
+        const mediaTag = uploadedVideoUrl ? " [Video 🎥]" : uploadedImageUrl ? " [Photo 📷]" : "";
         const dateNote =
           postCategory === "HOLIDAY" && holidayStart
             ? ` (${holidayEnd && holidayEnd !== holidayStart ? `${holidayStart} से ${holidayEnd}` : holidayStart})`
             : "";
 
+        const categoryPrefix = postCategory === "HOLIDAY"
+          ? "🏖️ अवकाश सूचना"
+          : (isMemory ? "📸 School Memory & Event" : "📢 विद्यालय सूचना");
+
+        const targetUrl = isMemory
+          ? `/?schoolPortal=1&schoolId=${encodeURIComponent(schoolId)}&schoolTab=events_memories`
+          : `/?schoolPortal=1&schoolId=${encodeURIComponent(schoolId)}&schoolTab=community`;
+
         void sendSchoolPushNotification({
           schoolId,
           classId: targetClassId !== "ALL" ? targetClassId : undefined,
           type: pushType,
-          title: `${schoolName} · ${newPost.title}${mediaTag}`,
+          title: `${schoolName} • ${categoryPrefix}: ${newPost.title}${mediaTag}`,
           body: `${(newPost.text || "नया अपडेट देखने के लिए टैप करें").slice(0, 140)}${dateNote}`,
-          url: `/?schoolPortal=1&schoolId=${encodeURIComponent(schoolId)}&schoolTab=community`,
+          url: targetUrl,
           urgent: true,
         });
       }

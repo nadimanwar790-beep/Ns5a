@@ -230,14 +230,44 @@ export const saveFcmToken = async (userId: string, token: string) => {
       set(ref(rtdb, `users/${safeUserId}/notificationTokenUpdatedAt`), new Date().toISOString()),
     ]).catch(() => {});
 
+    // Extract linked student & school metadata from local cache if present
+    let studentId = "";
+    let schoolId = "";
+    let classId = "";
+    try {
+      const stRaw = localStorage.getItem('nst_active_student') || localStorage.getItem('nst_cached_student');
+      if (stRaw) {
+        const parsed = JSON.parse(stRaw);
+        if (parsed?.id) studentId = String(parsed.id);
+        if (parsed?.schoolId) schoolId = String(parsed.schoolId);
+        if (parsed?.classId) classId = String(parsed.classId);
+      }
+      if (!schoolId) {
+        schoolId = localStorage.getItem('nst_active_school_id') || "";
+      }
+      if (!classId) {
+        classId = localStorage.getItem('nst_user_class') || "";
+      }
+    } catch (_) {}
+
     // Save in user's token list for broadcast pushes
     const broadcastRef = ref(rtdb, `fcm_tokens/${safeUserId}`);
-    await set(broadcastRef, {
+    const tokenRecord = {
       token,
       updatedAt: new Date().toISOString(),
-        platform: 'pwa',
-        userId,
-    }).catch(() => {});
+      platform: 'pwa',
+      userId,
+      ...(studentId ? { studentId } : {}),
+      ...(schoolId ? { schoolId } : {}),
+      ...(classId ? { classId } : {}),
+    };
+    await set(broadcastRef, tokenRecord).catch(() => {});
+
+    // If student ID is available and different from userId, also register alias so studentIds lookup matches
+    if (studentId && studentId !== userId) {
+      const safeStudentId = String(studentId).replace(/[.#$[\]/]/g, '_');
+      await set(ref(rtdb, `fcm_tokens/${safeStudentId}`), tokenRecord).catch(() => {});
+    }
 
     // Save in Firestore
     const userDoc = doc(db, 'users', safeUserId);
