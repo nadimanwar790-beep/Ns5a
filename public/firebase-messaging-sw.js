@@ -2,6 +2,7 @@
  * Handles push notifications with native browser push event and Firebase messaging compat.
  * Works even when app is closed or phone is locked.
  */
+self.skipWaiting();
 importScripts('https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js');
 
@@ -25,16 +26,21 @@ try {
     const body = notification.body || data.body || 'New notification received!';
     const type = data.type || 'DEFAULT';
     const url = data.url || '/';
-    const urgent = type === 'CHAT' || type === 'FRIEND_REQUEST' || type === 'DIRECT_MESSAGE';
+    const tagKey = data.messageId
+      ? `nsta-${type}-${data.messageId}`
+      : data.senderId
+      ? `nsta-${type}-${data.senderId}-${Date.now()}`
+      : `nsta-${type}-${Date.now()}`;
 
     return self.registration.showNotification(title, {
       body,
       icon: notification.icon || data.icon || data.senderPhoto || '/icons/icon-192.png?v=3',
-      badge: '/icons/icon-192.png?v=3',
-      tag: data.senderId ? `nsta-${type}-${data.senderId}` : `nsta-${type}-${Date.now()}`,
-      renotify: urgent,
-      requireInteraction: urgent,
-      vibrate: urgent ? [200, 100, 200] : [100, 50, 100],
+      badge: '/icons/badge-monochrome.png?v=4',
+      tag: tagKey,
+      renotify: true,
+      requireInteraction: true,
+      silent: false,
+      vibrate: [300, 150, 300, 150, 300],
       data: { url, ...data },
       actions: [
         { action: 'open', title: 'Open App' },
@@ -44,7 +50,11 @@ try {
       return self.registration.showNotification(title, {
         body,
         icon: '/icons/icon-192.png?v=3',
-        badge: '/icons/icon-192.png?v=3',
+        badge: '/icons/badge-monochrome.png?v=4',
+        tag: tagKey,
+        renotify: true,
+        requireInteraction: true,
+        silent: false,
         data: { url, ...data },
       });
     });
@@ -92,19 +102,20 @@ self.addEventListener('push', (event) => {
       : 'Open App';
 
   const tagKey = data.studentId
-    ? `nsta-${type}-${data.studentId}`
+    ? `nsta-${type}-${data.studentId}-${Date.now()}`
     : data.senderId
-    ? `nsta-${type}-${data.senderId}`
+    ? `nsta-${type}-${data.senderId}-${Date.now()}`
     : `nsta-${type}-${Date.now()}`;
 
   const promise = self.registration.showNotification(title, {
     body,
     icon: data.icon || data.senderPhoto || '/icons/icon-192.png?v=3',
-    badge: '/icons/icon-192.png?v=3',
+    badge: '/icons/badge-monochrome.png?v=4',
     tag: tagKey,
     renotify: true,
-    requireInteraction: urgent,
-    vibrate: urgent ? [250, 100, 250, 100, 250] : [100, 50, 100],
+    requireInteraction: true,
+    silent: false,
+    vibrate: [300, 150, 300, 150, 300],
     data: { url: data.url || '/', ...data },
     actions: [
       { action: 'open', title: openTitle },
@@ -114,7 +125,11 @@ self.addEventListener('push', (event) => {
     return self.registration.showNotification(title, {
       body,
       icon: '/icons/icon-192.png?v=3',
-      badge: '/icons/icon-192.png?v=3',
+      badge: '/icons/badge-monochrome.png?v=4',
+      tag: tagKey,
+      renotify: true,
+      requireInteraction: true,
+      silent: false,
       data: { url: data.url || '/', ...data },
     });
   });
@@ -138,7 +153,12 @@ self.addEventListener('notificationclick', (event) => {
               url: targetUrl,
               studentId: notifData.studentId || '',
               schoolId: notifData.schoolId || '',
-              notifType: notifData.type || '',
+              notifType: notifData.type || notifData.notifType || '',
+              tab: notifData.tab || notifData.schoolTab || '',
+              schoolTab: notifData.schoolTab || notifData.tab || '',
+              threadType: notifData.threadType || '',
+              classId: notifData.classId || '',
+              teacherId: notifData.teacherId || '',
             });
           } catch (_) {}
           if ('navigate' in client) client.navigate(targetUrl);

@@ -3082,7 +3082,7 @@ export const promoteStudents = async (
 
 // ── UTILITY ──────────────────────────────────────────────────────────────────
 
-export const generateId = () => doc(collection(db, "_")).id;
+export const generateId = (prefix?: string) => prefix ? `${prefix}_${doc(collection(db, "_")).id}` : doc(collection(db, "_")).id;
 
 export const todayStr = () => new Date().toISOString().split("T")[0];
 
@@ -4144,6 +4144,286 @@ export const saveNstaMessage = async (msg: NstaMessage): Promise<void> => {
   }
 };
 
+export const deleteNstaMessage = async (schoolId: string, messageId: string): Promise<void> => {
+  const cacheKey = `nst_school_nsta_msgs_${schoolId}`;
+
+  try {
+    const cur = getSchoolCacheSync<NstaMessage[]>(cacheKey, []);
+    const updated = Array.isArray(cur) ? cur.filter(m => m.id !== messageId) : [];
+    setSchoolCacheSync(cacheKey, updated);
+  } catch {}
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("nsta-messages-updated", { detail: { schoolId, messageId, action: "DELETE" } }));
+  }
+
+  if (rtdb) {
+    try {
+      await withTimeout(remove(ref(rtdb, `schools/${schoolId}/nsta_messages/${messageId}`)), 2000);
+    } catch {}
+  }
+  if (db) {
+    try {
+      await withTimeout(deleteDoc(d(`schools/${schoolId}/nsta_messages/${messageId}`)), 2500);
+    } catch {}
+  }
+};
+
+export const deleteNstaMessageForMe = async (
+  schoolId: string,
+  messageId: string,
+  userId: string
+): Promise<void> => {
+  if (!schoolId || !messageId || !userId) return;
+  const cacheKey = `nst_school_nsta_msgs_${schoolId}`;
+  let updatedMsg: NstaMessage | null = null;
+
+  try {
+    const cur = getSchoolCacheSync<NstaMessage[]>(cacheKey, []);
+    const updated = (Array.isArray(cur) ? cur : []).map((m) => {
+      if (m.id === messageId) {
+        const deletedFor = Array.isArray(m.deletedFor) ? [...m.deletedFor] : [];
+        if (!deletedFor.includes(userId)) deletedFor.push(userId);
+        updatedMsg = { ...m, deletedFor };
+        return updatedMsg;
+      }
+      return m;
+    });
+    setSchoolCacheSync(cacheKey, updated);
+  } catch {}
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("nsta-messages-updated", {
+        detail: { schoolId, messageId, action: "DELETE_FOR_ME", userId }
+      })
+    );
+  }
+
+  if (updatedMsg) {
+    const sanitized = sanitizeForFirestore(updatedMsg);
+    if (rtdb) {
+      try {
+        await withTimeout(set(ref(rtdb, `schools/${schoolId}/nsta_messages/${messageId}`), sanitized), 2000);
+      } catch {}
+    }
+    if (db) {
+      try {
+        await withTimeout(setDoc(d(`schools/${schoolId}/nsta_messages/${messageId}`), sanitized), 2500);
+      } catch {}
+    }
+  }
+};
+
+export const deleteNstaMessageForEveryone = async (
+  schoolId: string,
+  messageId: string
+): Promise<void> => {
+  if (!schoolId || !messageId) return;
+  const cacheKey = `nst_school_nsta_msgs_${schoolId}`;
+  let updatedMsg: NstaMessage | null = null;
+
+  try {
+    const cur = getSchoolCacheSync<NstaMessage[]>(cacheKey, []);
+    const updated = (Array.isArray(cur) ? cur : []).map((m) => {
+      if (m.id === messageId) {
+        updatedMsg = {
+          ...m,
+          text: "🚫 This message was deleted",
+          deletedForEveryone: true,
+          deletedForEveryoneAt: new Date().toISOString(),
+          attachmentUrl: undefined,
+          attachmentType: undefined,
+          feeSlip: undefined
+        };
+        return updatedMsg;
+      }
+      return m;
+    });
+    setSchoolCacheSync(cacheKey, updated);
+  } catch {}
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("nsta-messages-updated", {
+        detail: { schoolId, messageId, action: "DELETE_FOR_EVERYONE" }
+      })
+    );
+  }
+
+  if (updatedMsg) {
+    const sanitized = sanitizeForFirestore(updatedMsg);
+    if (rtdb) {
+      try {
+        await withTimeout(set(ref(rtdb, `schools/${schoolId}/nsta_messages/${messageId}`), sanitized), 2000);
+      } catch {}
+    }
+    if (db) {
+      try {
+        await withTimeout(setDoc(d(`schools/${schoolId}/nsta_messages/${messageId}`), sanitized), 2500);
+      } catch {}
+    }
+  }
+};
+
+export const toggleNstaMessageReaction = async (
+  schoolId: string,
+  messageId: string,
+  emoji: string,
+  userId: string
+): Promise<void> => {
+  if (!schoolId || !messageId || !emoji || !userId) return;
+  const cacheKey = `nst_school_nsta_msgs_${schoolId}`;
+  let updatedMsg: NstaMessage | null = null;
+
+  try {
+    const cur = getSchoolCacheSync<NstaMessage[]>(cacheKey, []);
+    const updated = (Array.isArray(cur) ? cur : []).map((m) => {
+      if (m.id === messageId) {
+        const reactions: Record<string, string[]> = { ...(m.reactions || {}) };
+        const userCurrentReaction = Object.entries(reactions).find(([_, users]) =>
+          Array.isArray(users) && users.includes(userId)
+        )?.[0];
+
+        // Remove user from any existing reactions
+        Object.keys(reactions).forEach((k) => {
+          if (Array.isArray(reactions[k])) {
+            reactions[k] = reactions[k].filter((uid) => uid !== userId);
+            if (reactions[k].length === 0) delete reactions[k];
+          }
+        });
+
+        // If clicking a different emoji, add it
+        if (userCurrentReaction !== emoji) {
+          if (!reactions[emoji]) reactions[emoji] = [];
+          reactions[emoji].push(userId);
+        }
+
+        updatedMsg = { ...m, reactions };
+        return updatedMsg;
+      }
+      return m;
+    });
+    setSchoolCacheSync(cacheKey, updated);
+  } catch {}
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("nsta-messages-updated", {
+        detail: { schoolId, messageId, action: "REACTION" }
+      })
+    );
+  }
+
+  if (updatedMsg) {
+    const sanitized = sanitizeForFirestore(updatedMsg);
+    if (rtdb) {
+      try {
+        await withTimeout(set(ref(rtdb, `schools/${schoolId}/nsta_messages/${messageId}`), sanitized), 2000);
+      } catch {}
+    }
+    if (db) {
+      try {
+        await withTimeout(setDoc(d(`schools/${schoolId}/nsta_messages/${messageId}`), sanitized), 2500);
+      } catch {}
+    }
+  }
+};
+
+export const markNstaMessagesDeliveredOrRead = async (
+  schoolId: string,
+  messageIds: string[],
+  user: { userId: string; userName: string; role?: string },
+  markAs: "delivered" | "read"
+): Promise<void> => {
+  if (!schoolId || !Array.isArray(messageIds) || messageIds.length === 0 || !user.userId) return;
+  const cacheKey = `nst_school_nsta_msgs_${schoolId}`;
+  const nowIso = new Date().toISOString();
+  const modifiedMsgs: NstaMessage[] = [];
+
+  try {
+    const cur = getSchoolCacheSync<NstaMessage[]>(cacheKey, []);
+    if (!Array.isArray(cur) || cur.length === 0) return;
+
+    let hasChanges = false;
+    const updated = cur.map((m) => {
+      if (!messageIds.includes(m.id)) return m;
+      // Do not mark own messages as read by self
+      if (m.senderId === user.userId) return m;
+
+      let changed = false;
+      const deliveredTo = Array.isArray(m.deliveredTo) ? [...m.deliveredTo] : [];
+      const readBy = Array.isArray(m.readBy) ? [...m.readBy] : [];
+
+      // Add to deliveredTo if not already there
+      if (!deliveredTo.some((d) => d.userId === user.userId)) {
+        deliveredTo.push({
+          userId: user.userId,
+          userName: user.userName,
+          deliveredAt: nowIso,
+          role: user.role
+        });
+        changed = true;
+      }
+
+      let newStatus = m.status || "sent";
+      if (newStatus === "sent") {
+        newStatus = "delivered";
+        changed = true;
+      }
+
+      if (markAs === "read") {
+        if (!readBy.some((r) => r.userId === user.userId)) {
+          readBy.push({
+            userId: user.userId,
+            userName: user.userName,
+            readAt: nowIso,
+            role: user.role
+          });
+          changed = true;
+        }
+        newStatus = "read";
+      }
+
+      if (changed) {
+        hasChanges = true;
+        const up = { ...m, status: newStatus, deliveredTo, readBy };
+        modifiedMsgs.push(up);
+        return up;
+      }
+      return m;
+    });
+
+    if (hasChanges) {
+      setSchoolCacheSync(cacheKey, updated);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("nsta-messages-updated", {
+            detail: { schoolId, action: markAs === "read" ? "READ" : "DELIVERED" }
+          })
+        );
+      }
+    }
+  } catch {}
+
+  // Sync back modified messages
+  if (modifiedMsgs.length > 0) {
+    for (const msg of modifiedMsgs.slice(0, 5)) {
+      const sanitized = sanitizeForFirestore(msg);
+      if (rtdb) {
+        try {
+          void set(ref(rtdb, `schools/${schoolId}/nsta_messages/${msg.id}`), sanitized);
+        } catch {}
+      }
+      if (db) {
+        try {
+          void setDoc(d(`schools/${schoolId}/nsta_messages/${msg.id}`), sanitized);
+        } catch {}
+      }
+    }
+  }
+};
+
 export const subscribeToNstaMessages = (
   schoolId: string,
   filter: { threadType: NstaThreadType; classId?: string; studentId?: string; teacherId?: string },
@@ -4205,15 +4485,11 @@ export const subscribeToNstaMessages = (
         const val = snap?.val?.();
         if (val && typeof val === "object") {
           const remoteList: NstaMessage[] = Object.values(val);
-          if (remoteList.length > 0) {
-            const cur = getSchoolCacheSync<NstaMessage[]>(cacheKey, []);
-            const merged = [
-              ...remoteList,
-              ...(Array.isArray(cur) ? cur.filter(m => !remoteList.some(r => r.id === m.id)) : [])
-            ];
-            setSchoolCacheSync(cacheKey, merged);
-            loadFromCacheAndNotify();
-          }
+          setSchoolCacheSync(cacheKey, remoteList);
+          loadFromCacheAndNotify();
+        } else if (val === null) {
+          setSchoolCacheSync(cacheKey, []);
+          loadFromCacheAndNotify();
         }
       };
       const unsub = onValue(rtdbPath, onRtdbValue);
@@ -4229,12 +4505,8 @@ export const subscribeToNstaMessages = (
     try {
       unsubFirestore = onSnapshot(col(`schools/${schoolId}/nsta_messages`), (snap) => {
         const remote = snap.docs.map(docSnap => docSnap.data() as NstaMessage);
-        if (remote.length > 0) {
-          const cur = getSchoolCacheSync<NstaMessage[]>(cacheKey, []);
-          const merged = [...remote, ...(Array.isArray(cur) ? cur.filter(m => !remote.some(r => r.id === m.id)) : [])];
-          setSchoolCacheSync(cacheKey, merged);
-          loadFromCacheAndNotify();
-        }
+        setSchoolCacheSync(cacheKey, remote);
+        loadFromCacheAndNotify();
       });
     } catch {}
   }
@@ -4267,6 +4539,10 @@ export const autoSendFeeSlipToSchoolDesk = async (payload: {
   schoolId: string;
   studentId: string;
   studentName: string;
+  className?: string;
+  rollNo?: string;
+  admissionNo?: string;
+  feeItems?: any[];
   slipType: "A6_DEMAND_SLIP" | "FEE_RECEIPT";
   month: string;
   monthLabel: string;
@@ -4328,6 +4604,11 @@ export const autoSendFeeSlipToSchoolDesk = async (payload: {
       netPayableWithDiscount,
       discountValidUntil: "10 तारीख तक",
       isEligibleForEarlyDiscount: isBeforeOrOn10th && earlyDiscount > 0,
+      studentName: payload.studentName,
+      className: payload.className,
+      rollNo: payload.rollNo,
+      admissionNo: payload.admissionNo,
+      feeItems: payload.feeItems,
       receiptNo: payload.receiptNo,
       dueDate: payload.dueDate || "10th of Month",
       payLink: payload.payLink,

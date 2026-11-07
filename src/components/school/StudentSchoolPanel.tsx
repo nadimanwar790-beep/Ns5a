@@ -158,8 +158,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
 }) => {
   const normalizeTab = (t?: string): TabType => {
     if (!t) return "overview";
-    if (t === "profile") return "overview";
-    if (t === "updates") return "channel";
+    if (t === "updates" || t === "messenger" || t === "chat" || t === "nsta_messenger") return "channel";
     if (t === "feed" || t === "community" || t === "notices") return "holidays";
     if (t === "memories" || t === "events") return "events_memories";
     if (t === "explore") return "explore_plus";
@@ -2260,6 +2259,8 @@ export const StudentSchoolPanel: React.FC<Props> = ({
               fees={allStudentFees}
               onBack={() => setActiveTab("overview")}
               onOpenFeeReceipt={(f) => {
+                const isA6Demand = f?.type === "A6_DEMAND_SLIP" || f?.slipType === "A6_DEMAND_SLIP" || f?.isDueDemand || (f?.paid === false && Number(f?.paidAmount || 0) === 0);
+                setFeeModalFormat(isA6Demand ? "a6" : "pos");
                 setSelectedFeeForReceipt(f);
               }}
               onOpenWhatsAppPay={(f) => {
@@ -3472,7 +3473,16 @@ export const StudentSchoolPanel: React.FC<Props> = ({
             (p) => p.category === "EVENT_MEDIA" || Boolean(p.imageUrl) || Boolean(p.videoUrl)
           );
 
+          const adminCustomMemories: any[] = (() => {
+            try {
+              return JSON.parse(localStorage.getItem(`school_memories_${schoolId}`) || "[]");
+            } catch {
+              return [];
+            }
+          })();
+
           const combinedMemories = [
+            ...adminCustomMemories,
             ...liveMedia.map((p) => ({
               id: p.id,
               title: p.title || "School Celebration & Memory",

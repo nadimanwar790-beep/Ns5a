@@ -440,7 +440,8 @@ export function buildWhatsAppReceiptMessage(
         `${itemLines}\n` +
         `--------------------------------\n` +
         `💰 *Gross Total:* ₹${totalBill.toLocaleString("en-IN")}\n` +
-        (Number(options.fee.concession || 0) > 0 ? `🎁 *Concession:* -₹${Number(options.fee.concession).toLocaleString("en-IN")}\n` : "") +
+        ((Number(options.fee.earlyDiscount || 0) > 0 || Number(options.fee.concession || 0) > 0)
+          ? `🎁 *10% Early Bird Concession:* -₹${Number(options.fee.earlyDiscount || options.fee.concession).toLocaleString("en-IN")}\n` : "") +
         `✅ *NET PAID (जमा राशि):* *₹${paidAmount.toLocaleString("en-IN")}*\n` +
         `⚠️ *Balance Due (शेष):* ₹${balanceDue.toLocaleString("en-IN")}${balanceDue <= 0 ? " (FULL PAID ✓)" : ""}\n` +
         `================================\n` +
@@ -456,6 +457,10 @@ export function buildWhatsAppReceiptMessage(
       const lastDueAmt = Number(receiptData.lastDueAmount || 0);
       const lastDueDt = receiptData.lastDueDate || "";
       const netPayableTotal = Math.max(balanceDue, totalBill);
+      const curMonthRate = Number(options.fee.monthlyAmount) || 0;
+      const earlyDisc = curMonthRate > 0 ? Math.round(curMonthRate * 0.10) : 0;
+      const earlyPayable = Math.max(0, netPayableTotal - earlyDisc);
+
       message = `🏫 *${schoolName.toUpperCase()}*\n` +
         `⚠️ *FEE DEMAND SLIP / बकाया शुल्क तकादा पर्ची*\n` +
         `----------------------------------------\n` +
@@ -469,10 +474,12 @@ export function buildWhatsAppReceiptMessage(
         `----------------------------------------\n` +
         `✅ *Last Paid (पिछला जमा):* ₹${lastPaidAmt.toLocaleString("en-IN")}${lastPaidAmt > 0 && lastPaidDt ? ` (${lastPaidDt})` : " (कोई पिछला जमा नहीं)"}\n` +
         `📌 *Last Due (पिछला बकाया):* ₹${lastDueAmt.toLocaleString("en-IN")}${lastDueAmt > 0 && lastDueDt ? ` (${lastDueDt})` : " (Clear)"}\n` +
-        `💰 *Total Net Payable Due (कुल देय राशि):* ₹${netPayableTotal.toLocaleString("en-IN")}\n` +
+        `💰 *Gross Total Due (कुल देय):* ₹${netPayableTotal.toLocaleString("en-IN")}\n` +
+        (earlyDisc > 0 ? `⚡ *10 तारीख के पहले जमा करें और पाएं 10% OFF!* (-₹${earlyDisc.toLocaleString("en-IN")})\n🎉 *10 तारीख तक छूट के बाद देय:* *₹${earlyPayable.toLocaleString("en-IN")}*\n` : "") +
         `----------------------------------------\n` +
         `🙏 *कृपया निर्धारित तिथि तक शुल्क स्कूल काउंटर या UPI QR द्वारा जमा करें।*`;
     } else {
+      const earlyDiscountAmt = Number(options.fee.earlyDiscount || options.fee.concession || 0);
       message = `🏫 *${schoolName.toUpperCase()}*\n` +
         `🧾 *OFFICIAL FEE PAYMENT RECEIPT / फीस रसीद*\n` +
         `----------------------------------------\n` +
@@ -485,13 +492,14 @@ export function buildWhatsAppReceiptMessage(
         `----------------------------------------\n` +
         `*FEE PARTICULARS:*\n${itemLines}\n` +
         `----------------------------------------\n` +
-        `💰 *Total Payable (कुल शुल्क):* ₹${totalBill.toLocaleString("en-IN")}\n` +
-        `✅ *Amount Paid (जमा राशि):* ₹${paidAmount.toLocaleString("en-IN")}\n` +
-        `⚠️ *Remaining Balance (शेष बकाया):* ₹${balanceDue.toLocaleString("en-IN")}\n` +
+        `💰 *Gross Bill (कुल शुल्क):* ₹${totalBill.toLocaleString("en-IN")}\n` +
+        (earlyDiscountAmt > 0 ? `🎁 *10% Early Bird Concession:* -₹${earlyDiscountAmt.toLocaleString("en-IN")}\n` : "") +
+        `✅ *Amount Paid (जमा राशि):* *₹${paidAmount.toLocaleString("en-IN")}*\n` +
+        `⚠️ *Remaining Balance (शेष बकाया):* ₹${balanceDue.toLocaleString("en-IN")}${balanceDue <= 0 ? " (FULL PAID ✓)" : ""}\n` +
         `----------------------------------------\n` +
         (balanceDue > 0
           ? `📌 *शेष बकाया ₹${balanceDue.toLocaleString("en-IN")} अगले महीने के बिल में जुड़ेगा।*\n`
-          : `🎉 *सत्र का यह शुल्क पूर्णतः जमा (Full Paid) हो चुका है।*\n`) +
+          : `🎉 *सत्र का यह शुल्क 10% अर्ली बर्ड छूट के साथ पूर्णतः जमा (Full Paid) हो चुका है।*\n`) +
         `📄 *Official DPS Format PDF Receipt downloaded to your device.*`;
     }
   }

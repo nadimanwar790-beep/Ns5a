@@ -1529,8 +1529,7 @@ export const WhatsAppChatModal: React.FC<Props> = ({
         }
       }
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        showToast('Microphone recording available nahi hai. Audio file chunein.');
-        audioFileInputRef.current?.click();
+        showToast('Microphone recording browser me block hai. Address bar me mic allow karein.');
         return;
       }
 
@@ -1564,8 +1563,7 @@ export const WhatsAppChatModal: React.FC<Props> = ({
       }, 1000);
     } catch (err: any) {
       console.warn('Microphone permission error:', err);
-      showToast('Microphone access nahi mil paya. Audio file select karein.');
-      audioFileInputRef.current?.click();
+      showToast('Microphone permission block hai. Full screen app kholein.');
     }
   };
 

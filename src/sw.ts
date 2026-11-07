@@ -34,27 +34,36 @@ const showNstaNotification = (payload: NstaPushPayload) => {
   const body = notification.body || data.body || 'New notification received!';
   const type = data.type || 'DEFAULT';
   const url = data.url || '/';
-  const urgent = type === 'CHAT' || type === 'FRIEND_REQUEST' || type === 'DIRECT_MESSAGE';
 
   const rawIcon = notification.icon || data.icon || data.senderPhoto;
   const icon = (rawIcon && !rawIcon.endsWith('.svg')) ? rawIcon : '/icons/icon-192.png?v=3';
 
-  const options = {
+  // Unique tag per notification with renotify=true ensures Android OS plays sound & pops banner every time
+  const tagKey = data.messageId
+    ? `nsta-${type}-${data.messageId}`
+    : data.senderId
+    ? `nsta-${type}-${data.senderId}-${Date.now()}`
+    : `nsta-${type}-${Date.now()}`;
+
+  const options: NotificationOptions & {
+    renotify?: boolean;
+    vibrate?: number[];
+    silent?: boolean;
+    timestamp?: number;
+  } = {
     body,
     icon,
-    badge: '/icons/icon-192.png?v=3',
-    tag: data.senderId ? `nsta-${type}-${data.senderId}` : `nsta-${type}-${Date.now()}`,
-    renotify: urgent,
-    requireInteraction: urgent,
-    vibrate: urgent ? [200, 100, 200] : [80],
+    badge: '/icons/badge-monochrome.png?v=4',
+    tag: tagKey,
+    renotify: true,
+    requireInteraction: true,
+    silent: false,
+    vibrate: [300, 150, 300, 150, 300],
     data: { url, ...data },
     actions: [
       { action: 'open', title: 'Open App' },
       { action: 'dismiss', title: 'Dismiss' },
     ],
-  } as NotificationOptions & {
-    renotify?: boolean;
-    vibrate?: number[];
   };
 
   return self.registration.showNotification(title, options).catch(() => {
@@ -62,7 +71,11 @@ const showNstaNotification = (payload: NstaPushPayload) => {
     return self.registration.showNotification(title, {
       body,
       icon: '/icons/icon-192.png?v=3',
-      badge: '/icons/icon-192.png?v=3',
+      badge: '/icons/badge-monochrome.png?v=4',
+      tag: tagKey,
+      renotify: true,
+      requireInteraction: true,
+      silent: false,
       data: { url, ...data },
     });
   });
@@ -86,12 +99,27 @@ self.addEventListener('push', (event: PushEvent) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   if (event.action === 'dismiss') return;
-  const targetUrl = event.notification.data?.url || '/';
+  const notifData = event.notification.data || {};
+  const targetUrl = notifData.url || '/';
 
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
       for (const client of windowClients) {
         if ('focus' in client) {
+          try {
+            client.postMessage({
+              type: 'SCHOOL_PUSH_NAVIGATE',
+              url: targetUrl,
+              studentId: notifData.studentId || '',
+              schoolId: notifData.schoolId || '',
+              notifType: notifData.type || notifData.notifType || '',
+              tab: notifData.tab || notifData.schoolTab || '',
+              schoolTab: notifData.schoolTab || notifData.tab || '',
+              threadType: notifData.threadType || '',
+              classId: notifData.classId || '',
+              teacherId: notifData.teacherId || '',
+            });
+          } catch (_) {}
           if ('navigate' in client) void client.navigate(targetUrl);
           return client.focus();
         }

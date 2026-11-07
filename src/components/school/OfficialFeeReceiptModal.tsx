@@ -142,16 +142,19 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
     }
 
     const baseFee = Number(fee.monthlyAmount ?? fee.amount ?? 0) || 2000;
-    const effectivePaid = fee.paidAmount !== undefined ? Number(fee.paidAmount) : (fee.paid ? baseFee : 0);
+    const earlyDisc = Number(fee.earlyDiscount || fee.concession || 0);
+    const effectivePaid = fee.paidAmount !== undefined
+      ? Number(fee.paidAmount)
+      : (fee.paid ? Math.max(0, baseFee - earlyDisc) : 0);
 
     const initialList: FeeReceiptItem[] = [];
     let sl = 1;
     initialList.push({
       id: "tuition",
       slNo: sl++,
-      description: "Tuition Fee",
+      description: earlyDisc > 0 ? "Tuition Fee (10% Early Bird Concession)" : "Tuition Fee (चालू माह शुल्क)",
       due: baseFee,
-      con: Number(fee.concession || 0),
+      con: earlyDisc,
       paid: effectivePaid
     });
 
@@ -276,6 +279,7 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
     lastDueAmount: fee.lastDueAmount !== undefined ? fee.lastDueAmount : historySummary.lastDueAmount,
     lastDueDate: fee.lastDueDate || historySummary.lastDueDate,
     fifoSummary: fee.note || undefined,
+    earlyDiscount: Number(fee.earlyDiscount || fee.concession || 0) || undefined,
     payModeInfo: {
       payMode: !fee.paid && totalPaid === 0 ? "Payment Pending / Due Slip" : payMode,
       date: payDate,

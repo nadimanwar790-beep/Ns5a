@@ -537,17 +537,35 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
         ? student.busFee
         : (struct?.busFee !== undefined ? struct.busFee : 1000));
     setCustomBusFeeAmount(String(initialBusFee));
-    setCustomMonthlyAmount(String(fee.monthlyAmount ?? struct?.tuitionFee ?? 2000));
-    // Default to empty ("") for new collections so it starts as Unpaid (₹0), never auto full paid
+    const baseMonthly = Number(fee.monthlyAmount ?? struct?.tuitionFee ?? 2000);
+    setCustomMonthlyAmount(String(baseMonthly));
+
+    const todayDateStr = fee.paidDate ? fee.paidDate.slice(0, 10) : new Date().toISOString().slice(0, 10);
+    setCustomPaymentDate(todayDateStr);
+
+    // Parse day cleanly without timezone shifts (e.g. 2026-11-09 -> 9)
+    const dayParts = todayDateStr.split("-");
+    const paymentDay = dayParts.length >= 3 ? parseInt(dayParts[2], 10) : new Date().getDate();
+    const isEarlyBird = paymentDay <= 10;
+    const earlyDisc = isEarlyBird && baseMonthly > 0 ? Math.round(baseMonthly * 0.10) : 0;
+    const effectiveConcession = (fee.earlyDiscount && fee.earlyDiscount > 0)
+      ? fee.earlyDiscount
+      : (earlyDisc > 0 ? earlyDisc : Number(fee.concession || 0));
+    setCustomConcession(effectiveConcession > 0 ? String(effectiveConcession) : "");
+
+    // Auto calculate net payable: Old Arrears (no discount) + Discounted Current Tuition (10% off)
+    const arrears = Number(fee.arrearsAmount || 0);
+    const autoNetPayable = arrears + Math.max(0, baseMonthly - earlyDisc);
+
+    // Auto pre-fill with net payable (e.g. 300 arrears + 360 current = 660) if new collection, or prior paidAmount
     const initialPaid = fee.paid && Number(fee.paidAmount || 0) > 0
       ? String(fee.paidAmount)
-      : "";
+      : String(autoNetPayable);
     setCustomPaidAmount(initialPaid);
-    setCustomConcession(fee.concession ? String(fee.concession) : "");
+
     setCustomPayMode(fee.payModeInfo?.payMode || "Cash");
     setCustomBankName(fee.payModeInfo?.bank || "");
     setCustomChequeNo(fee.payModeInfo?.number || "");
-    setCustomPaymentDate(fee.paidDate ? fee.paidDate.slice(0, 10) : new Date().toISOString().slice(0, 10));
   };
 
   const buildAdmissionItemsForStudent = (targetStudent: SchoolStudent | null) => {
@@ -710,9 +728,20 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     const busRate = Number(customBusFeeAmount) || 0;
     const busAmount = customIncludeBusFee ? busRate : 0;
     const arrearsAmount = Number(fee.arrearsAmount || 0);
-    const concession = Number(customConcession) || 0;
 
-    const currentMonthHeadDue = Math.max(0, monthlyAmount + admAmount + cauAmount + annAmount + busAmount - concession);
+    // Calculate early bird 10% discount based on payment date (10th or earlier)
+    const dateStr = customPaymentDate || new Date().toISOString().slice(0, 10);
+    const dayParts = dateStr.split("-");
+    const paymentDay = dayParts.length >= 3 ? parseInt(dayParts[2], 10) : new Date().getDate();
+    const isEarlyBirdEligible = paymentDay <= 10;
+    const earlyDiscount = isEarlyBirdEligible && monthlyAmount > 0 ? Math.round(monthlyAmount * 0.10) : 0;
+
+    const manualConcession = Number(customConcession) || 0;
+    const totalConcession = Math.max(manualConcession, earlyDiscount);
+
+    // 10% discount applies ONLY to current month regular tuition fee (e.g. ₹400 -> ₹360), NEVER to old arrears!
+    const currentMonthTuition = Math.max(0, monthlyAmount - earlyDiscount);
+    const currentMonthHeadDue = Math.max(0, currentMonthTuition + admAmount + cauAmount + annAmount + busAmount - (manualConcession > earlyDiscount ? manualConcession - earlyDiscount : 0));
     const totalBill = currentMonthHeadDue + arrearsAmount;
 
     if (markUnpaidDirectly || customPaidAmount.trim() === "0") {
@@ -901,13 +930,16 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       balanceDue: currentMonthBalance,
       arrearsAmount: priorRemainingArrears,
       arrearsMonths: priorRemainingMonths,
-      concession,
+      concession: totalConcession,
+      earlyDiscount: earlyDiscount,
       paidDate: effectivePaid > 0 ? paidDate : undefined,
       paidBy: effectivePaid > 0 ? adminId : undefined,
       receiptNo: effectivePaid > 0 ? receiptNo : undefined,
       payModeInfo,
       items: fifoResult.receiptItems.length > 0 ? fifoResult.receiptItems : [],
-      note: `${fifoResult.summaryHindi} (Receipt: ${receiptNo})`,
+      note: earlyDiscount > 0
+        ? `Paid on/before 10th with 10% Early Bird Concession (-₹${earlyDiscount}) (Receipt: ${receiptNo})`
+        : `${fifoResult.summaryHindi} (Receipt: ${receiptNo})`,
     } as MonthlyFee;
 
     // Snapshot for immediate receipt printing showing full payment collected & total remaining session balance
@@ -915,6 +947,7 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       ...updatedFee,
       paidAmount: effectivePaid,
       balanceDue: fifoResult.totalOutstandingDueAfter,
+      earlyDiscount: earlyDiscount,
     };
 
     // Optimistic UI update
@@ -1577,9 +1610,24 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
   const studentBusFee = Number(customBusFeeAmount) || 0;
   const modalBus = customIncludeBusFee ? studentBusFee : 0;
   const modalArrears = Number(collectingFee?.arrearsAmount || 0);
-  const modalConcession = Number(customConcession) || 0;
 
-  const modalCurrentMonthBill = Math.max(0, modalMonthly + modalAdm + modalCau + modalAnn + modalBus - modalConcession);
+  // Dynamic 10% Early Bird discount calculation based on selected payment date:
+  const dayParts = (customPaymentDate || "").split("-");
+  const modalPaymentDay = dayParts.length >= 3 ? parseInt(dayParts[2], 10) : new Date().getDate();
+  const isEarlyBirdEligible = modalPaymentDay <= 10;
+  const modalEarlyDiscount = isEarlyBirdEligible && modalMonthly > 0 ? Math.round(modalMonthly * 0.10) : 0;
+
+  const modalConcession = Number(customConcession) || 0;
+  const effectiveEarlyDiscount = (collectingFee?.earlyDiscount && collectingFee.earlyDiscount > 0)
+    ? collectingFee.earlyDiscount
+    : modalEarlyDiscount;
+
+  // 10% applies strictly to regular tuition fee, never to old arrears
+  const currentMonthTuitionAfterDiscount = Math.max(0, modalMonthly - effectiveEarlyDiscount);
+  const modalCurrentMonthGross = modalMonthly + modalAdm + modalCau + modalAnn + modalBus;
+  const modalGrossTotalBeforeDiscount = modalArrears + modalCurrentMonthGross;
+
+  const modalCurrentMonthBill = Math.max(0, currentMonthTuitionAfterDiscount + modalAdm + modalCau + modalAnn + modalBus - (modalConcession > effectiveEarlyDiscount ? modalConcession - effectiveEarlyDiscount : 0));
   const modalTotalBill = modalCurrentMonthBill + modalArrears;
   // Default to 0 (Unpaid) when nothing is typed; only allocates what user explicitly writes or clicks
   const enteredPaid = customPaidAmount.trim() !== "" ? Math.max(0, Number(customPaidAmount)) : 0;
@@ -2796,13 +2844,66 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                 )}
               </div>
 
+              {/* 10% Early Bird Rule Callout Card */}
+              {effectiveEarlyDiscount > 0 ? (
+                <div className="p-3 rounded-xl bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-100/70 dark:from-emerald-950/40 dark:to-teal-950/30 border border-emerald-300 dark:border-emerald-700/60 text-xs shadow-sm space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 font-black text-emerald-900 dark:text-emerald-200">
+                      <Sparkles className="w-4 h-4 text-emerald-600" />
+                      <span>🎉 10 तारीख के पहले जमा: 10% विशेष छूट लागू!</span>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-600 text-white">
+                      -₹{effectiveEarlyDiscount} OFF (10%)
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-center bg-white/80 dark:bg-slate-800/80 p-2 rounded-lg border border-emerald-200/60 dark:border-emerald-800/40 text-[11px]">
+                    <div>
+                      <span className="text-slate-500 block text-[10px]">पुराना बकाया (Due)</span>
+                      <strong className="text-slate-800 dark:text-slate-200 font-black">₹{modalArrears}</strong>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block text-[10px]">चालू माह (छूट बाद)</span>
+                      <strong className="text-emerald-700 dark:text-emerald-400 font-black">
+                        ₹{currentMonthTuitionAfterDiscount} <span className="line-through text-[9px] text-slate-400">₹{modalMonthly}</span>
+                      </strong>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block text-[10px]">कुल देय राशि</span>
+                      <strong className="text-indigo-700 dark:text-indigo-400 font-black">₹{modalTotalBill}</strong>
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-emerald-800 dark:text-emerald-300 font-medium">
+                    ⚡ <strong>नियम:</strong> 10% छूट केवल चालू माह की फीस (₹{modalMonthly} - ₹{effectiveEarlyDiscount} = ₹{currentMonthTuitionAfterDiscount}) पर लागू है। पुराना बकाया (₹{modalArrears}) पूरा देय है।
+                  </p>
+                </div>
+              ) : (
+                <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 text-xs text-amber-900 dark:text-amber-200 flex items-center justify-between">
+                  <div>
+                    <span className="font-bold block text-[11px]">ℹ️ 10 तारीख के बाद भुगतान:</span>
+                    <span className="text-[10px] text-amber-800 dark:text-amber-300">
+                      10% अर्ली बर्ड छूट की तिथि (10 तारीख) समाप्त हो चुकी है। सामान्य शुल्क लागू है।
+                    </span>
+                  </div>
+                  <span className="text-xs font-black text-amber-800 dark:text-amber-300">
+                    कुल देय: ₹{modalTotalBill}
+                  </span>
+                </div>
+              )}
+
               {/* Total Calculated Bill Overview */}
               <div className="p-3 bg-slate-900 text-white rounded-xl flex items-center justify-between">
                 <div>
                   <span className="text-[11px] text-slate-400 font-bold block uppercase tracking-wider">Kul Deen (Total Payable):</span>
-                  <span className="text-xl font-black text-amber-300">
-                    ₹{modalTotalBill.toLocaleString("en-IN")}
-                  </span>
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-xl font-black text-amber-300">
+                      ₹{modalTotalBill.toLocaleString("en-IN")}
+                    </span>
+                    {effectiveEarlyDiscount > 0 && (
+                      <span className="text-xs text-slate-400 line-through">
+                        ₹{modalGrossTotalBeforeDiscount.toLocaleString("en-IN")}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="text-right text-[11px] text-slate-300">
                   <span>Month: <strong>{new Date(`${collectingFee.month}-01T00:00:00`).toLocaleDateString("en-IN", { month: "short", year: "numeric" })}</strong></span>
@@ -2817,6 +2918,16 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                       Kitna Paid Kiya? (₹)
                     </label>
                     <div className="flex items-center gap-1 flex-wrap">
+                      {effectiveEarlyDiscount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setCustomPaidAmount(String(modalTotalBill))}
+                          className="px-2.5 py-0.5 rounded text-[10px] font-black bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm cursor-pointer"
+                          title="10 तारीख तक 10% छूट के बाद कुल देय"
+                        >
+                          ⚡ 10% OFF: ₹{modalTotalBill.toLocaleString("en-IN")}
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => setCustomPaidAmount(String(modalTotalBill))}
@@ -2824,6 +2935,16 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                       >
                         Full (₹{modalTotalBill.toLocaleString("en-IN")})
                       </button>
+                      {effectiveEarlyDiscount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setCustomPaidAmount(String(modalGrossTotalBeforeDiscount))}
+                          className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
+                          title="बिना छूट के कुल राशि"
+                        >
+                          Gross (₹{modalGrossTotalBeforeDiscount.toLocaleString("en-IN")})
+                        </button>
+                      )}
                       {modalTotalBill >= 10000 && (
                         <button
                           type="button"
@@ -2831,7 +2952,7 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                           className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 hover:bg-indigo-200 text-indigo-800 cursor-pointer"
                           title="Test 10 Months (₹18,000 Due -> ₹10,000 Paid)"
                         >
-                          ₹10,000 (Example)
+                          ₹10,000
                         </button>
                       )}
                       <button
@@ -2996,11 +3117,23 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                     />
                   </div>
                   <div>
-                    <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Payment Date:</label>
+                    <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Payment Date {isEarlyBirdEligible ? <span className="text-emerald-600 font-bold">(10 तारीख तक: 10% OFF लागू)</span> : <span className="text-amber-600 font-bold">(10 के बाद: छूट समाप्त)</span>}:
+                    </label>
                     <input
                       type="date"
                       value={customPaymentDate}
-                      onChange={e => setCustomPaymentDate(e.target.value)}
+                      onChange={e => {
+                        const newDt = e.target.value;
+                        setCustomPaymentDate(newDt);
+                        const parts = newDt.split("-");
+                        const d = parts.length >= 3 ? parseInt(parts[2], 10) : new Date(newDt).getDate();
+                        const isEarly = d <= 10;
+                        const disc = isEarly && modalMonthly > 0 ? Math.round(modalMonthly * 0.10) : 0;
+                        setCustomConcession(disc > 0 ? String(disc) : "");
+                        const newNet = modalArrears + Math.max(0, modalMonthly - disc + modalAdm + modalCau + modalAnn + modalBus);
+                        setCustomPaidAmount(String(newNet));
+                      }}
                       className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 font-bold text-slate-800 dark:text-white"
                     />
                   </div>

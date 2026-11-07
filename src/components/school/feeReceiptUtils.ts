@@ -211,6 +211,8 @@ export interface DpsReceiptData {
   lastDueDate?: string;
   nextMonthEstimatedFee?: number;
   fifoSummary?: string;
+  earlyDiscount?: number;
+  earlyNotice?: string;
 
   // Payment info
   payModeInfo: PayModeInfo;
@@ -903,6 +905,19 @@ export function generateDpsReceiptHtml(
       <span>${escapeHtml(bannerTitle)}</span>
       ${copyTitle ? `<span class="dps-copy-tag">[ ${escapeHtml(copyTitle)} ]</span>` : ""}
     </div>
+
+    <!-- 10% Early Bird Special Offer Notice / Applied Concession Ribbon -->
+    ${isDemandNote ? `
+    <div class="dps-early-bird-strip" style="background:#ecfdf5;border:1px solid #10b981;border-radius:4px;padding:3px 8px;margin:2px 0 3px 0;display:flex;align-items:center;justify-content:space-between;font-size:9.5px;color:#065f46;font-weight:700;">
+      <span>⚡ <strong>10 तारीख के पहले जमा करें और पाएं 10% OFF!</strong> (चालू माह ट्यूशन फीस पर विशेष छूट)</span>
+      <span style="background:#059669;color:#ffffff;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:800;white-space:nowrap;">10 तारीख तक 10% OFF</span>
+    </div>
+    ` : (data.earlyDiscount && data.earlyDiscount > 0) || totalConcession > 0 ? `
+    <div class="dps-early-bird-strip" style="background:#ecfdf5;border:1px solid #10b981;border-radius:4px;padding:3px 8px;margin:2px 0 3px 0;display:flex;align-items:center;justify-content:space-between;font-size:9.5px;color:#065f46;font-weight:700;">
+      <span>✓ <strong>10% अर्ली बर्ड छूट स्वीकृत (बचत: ₹${(data.earlyDiscount || totalConcession).toLocaleString("en-IN")})</strong> • 10 तारीख के पहले पूर्ण भुगतान</span>
+      <span style="background:#059669;color:#ffffff;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:800;white-space:nowrap;">10% OFF APPLIED</span>
+    </div>
+    ` : ""}
 
     <!-- Student & Slip Metadata Grid (Clear, High-Contrast 2-Column Layout) -->
     <div class="dps-meta-grid">
@@ -3097,6 +3112,16 @@ export function generatePosSlipHtml(
         </span>
       </div>
 
+      ${totalPaid === 0 ? `
+      <div style="text-align:center;font-size:9px;font-weight:900;border:1px dashed #000;padding:1mm;margin:1mm 0;background:#f4fdf8;">
+        ⚡ 10 तारीख के पहले जमा करें और पाएं 10% OFF!
+      </div>
+      ` : (data.earlyDiscount && data.earlyDiscount > 0) || totalConcession > 0 ? `
+      <div style="text-align:center;font-size:8.5px;font-weight:900;border:1px solid #10b981;padding:1mm;margin:1mm 0;background:#ecfdf5;color:#065f46;">
+        ✓ 10% अर्ली बर्ड छूट स्वीकृत (-₹${(data.earlyDiscount || totalConcession).toLocaleString("en-IN")})
+      </div>
+      ` : ""}
+
       <div class="pos-divider-single"></div>
 
       <!-- Receipt Meta -->
@@ -3185,6 +3210,13 @@ export function generatePosSlipHtml(
           `).join("")}
         </tbody>
       </table>
+
+      ${(totalConcession > 0 || (data.earlyDiscount && data.earlyDiscount > 0)) ? `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:1mm 0;font-size:9.5px;font-weight:800;border-top:1px dashed #444;color:#047857;">
+        <span>10% Early Bird Discount:</span>
+        <span>-₹${(data.earlyDiscount || totalConcession).toLocaleString("en-IN")}</span>
+      </div>
+      ` : ""}
 
       <!-- Grand Total Bar -->
       <div class="pos-grand-paid">

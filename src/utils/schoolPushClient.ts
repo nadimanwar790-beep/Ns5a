@@ -181,7 +181,7 @@ export async function sendSchoolPushNotification(payload: {
   userId?: string;
   title: string;
   body: string;
-  type?: "MONTHLY_FEE" | "FEE_RECEIPT" | "SCHOOL_NOTICE" | "SCHOOL_HOLIDAY" | "HOMEWORK";
+  type?: "MONTHLY_FEE" | "FEE_RECEIPT" | "SCHOOL_NOTICE" | "SCHOOL_HOLIDAY" | "HOMEWORK" | "DEFAULT" | "NSTA_MESSAGE";
   url?: string;
   urgent?: boolean;
 }): Promise<{ delivered: number; matchedDevices: number }> {

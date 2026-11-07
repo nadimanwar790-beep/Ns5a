@@ -153,6 +153,11 @@ async function dispatchWebPush(
           title: payload.title,
           body: payload.body,
           icon: "/icons/icon-192.png?v=3",
+          badge: "/icons/badge-monochrome.png?v=4",
+          silent: false,
+          renotify: true,
+          requireInteraction: true,
+          vibrate: [300, 150, 300, 150, 300],
         },
         data: {
           title: payload.title,
@@ -277,7 +282,7 @@ async function dispatchFcmToUsers(
   const cleanSet = new Set(recipientIds.map((id) => String(id).trim().replace(/[.#$[\]/]/g, "_")));
   const rawSet = new Set(recipientIds.map((id) => String(id).trim()));
 
-  const targets: string[] = [];
+  const targets: { key: string; token: string }[] = [];
   for (const [key, entry] of Object.entries(allTokens)) {
     if (!entry?.token) continue;
     if (filter?.schoolId && entry.schoolId && entry.schoolId !== filter.schoolId) continue;
@@ -294,57 +299,108 @@ async function dispatchFcmToUsers(
       (entryStudentId && (rawSet.has(entryStudentId) || cleanSet.has(entryStudentId.replace(/[.#$[\]/]/g, "_"))));
 
     if (isMatch) {
-      targets.push(entry.token);
+      targets.push({ key, token: entry.token });
     }
+  }
+
+  // Deduplicate by token and track all associated RTDB keys for pruning stale tokens
+  const tokenToKeysMap = new Map<string, string[]>();
+  for (const item of targets) {
+    const list = tokenToKeysMap.get(item.token) || [];
+    list.push(item.key);
+    tokenToKeysMap.set(item.token, list);
   }
 
   let sent = 0;
   await Promise.allSettled(
-    Array.from(new Set(targets)).map(async (fcmToken) => {
-      const res = await fetch(
-        `https://fcm.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/messages:send`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            message: {
-              token: fcmToken,
-              notification: {
-                title: payload.title,
-                body: payload.body,
-              },
-              data: {
-                title: payload.title,
-                body: payload.body,
-                type: String(payload.type || "DEFAULT"),
-                url: String(payload.url || "/"),
-                icon: String(payload.icon || "/icons/icon-192.png?v=3"),
-                urgent: "1",
-              },
-              webpush: {
-                headers: {
-                  Urgency: "high",
-                  TTL: "604800",
-                },
+    Array.from(tokenToKeysMap.entries()).map(async ([fcmToken, keys]) => {
+      try {
+        const res = await fetch(
+          `https://fcm.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/messages:send`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              message: {
+                token: fcmToken,
                 notification: {
                   title: payload.title,
                   body: payload.body,
-                  icon: payload.icon || "/icons/icon-192.png?v=3",
-                  badge: "/icons/icon-192.png?v=3",
-                  requireInteraction: true,
                 },
-                fcm_options: {
-                  link: payload.url || "/",
+                data: {
+                  title: payload.title,
+                  body: payload.body,
+                  type: String(payload.type || "DEFAULT"),
+                  url: String(payload.url || "/"),
+                  icon: String(payload.icon || "/icons/icon-192.png?v=3"),
+                  urgent: "1",
+                },
+                android: {
+                  priority: "HIGH",
+                  notification: {
+                    channel_id: "high_importance_channel",
+                    notification_priority: "PRIORITY_MAX",
+                    default_sound: true,
+                    default_vibrate_timings: true,
+                    visibility: "PUBLIC",
+                  },
+                },
+                webpush: {
+                  headers: {
+                    Urgency: "high",
+                    TTL: "604800",
+                  },
+                  notification: {
+                    title: payload.title,
+                    body: payload.body,
+                    icon: payload.icon || "/icons/icon-192.png?v=3",
+                    badge: "/icons/badge-monochrome.png?v=4",
+                    requireInteraction: true,
+                    silent: false,
+                    vibrate: [300, 150, 300, 150, 300],
+                    renotify: true,
+                  },
+                  fcm_options: {
+                    link: payload.url || "/",
+                  },
                 },
               },
-            },
-          }),
+            }),
+          }
+        );
+        if (res.ok) {
+          sent++;
+        } else {
+          const errText = await res.text().catch(() => "");
+          const isDeadToken =
+            res.status === 404 ||
+            res.status === 410 ||
+            res.status === 403 ||
+            res.status === 400 ||
+            errText.includes("UNREGISTERED") ||
+            errText.includes("THIRD_PARTY_PERMISSION_DENIED") ||
+            errText.includes("SENDER_ID_MISMATCH") ||
+            errText.includes("INVALID_ARGUMENT") ||
+            errText.includes("NOT_FOUND") ||
+            errText.includes("Device unregistered") ||
+            errText.includes("NotRegistered");
+
+          if (isDeadToken) {
+            // Automatically prune dead/unregistered/rejected tokens from RTDB so subsequent dispatches succeed cleanly
+            console.info("[FCM] Auto-pruning invalid token for keys:", keys);
+            await Promise.allSettled(
+              keys.map((k) => rtdbDelete(`fcm_tokens/${k}`))
+            );
+          } else {
+            console.warn("[FCM Send Error]", res.status, errText);
+          }
         }
-      );
-      if (res.ok) sent++;
+      } catch (err) {
+        // Suppress transient network fetch error
+      }
     })
   );
   return sent;

@@ -17,6 +17,7 @@ import {
   deleteSchoolHoliday,
   subscribeToSchoolHolidays,
   saveSchoolCommunityPost,
+  deleteSchoolCommunityPost,
 } from "../../school-firebase";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 
@@ -152,9 +153,16 @@ export const HolidayManager: React.FC<Props> = ({ schoolId, adminUid, schoolName
   const handleDeleteHoliday = async (id: string, name: string) => {
     removeCustomHoliday(id);
     await deleteSchoolHoliday(schoolId, id);
+    try {
+      await deleteSchoolCommunityPost(schoolId, `holpost_${id}`);
+      await deleteSchoolCommunityPost(schoolId, `holiday_${id}`);
+      await deleteSchoolCommunityPost(schoolId, id);
+    } catch {}
+    setHolidays(prev => prev.filter(h => h.id !== id));
+    setLiveFbHolidays(prev => prev.filter(h => h.id !== id));
     loadHolidays();
-    setNotification(`🗑️ "${name}" holiday hata di gayi.`);
-    setTimeout(() => setNotification(null), 3000);
+    setNotification(`🗑️ "${name}" holiday safaltapoorvak hata di gayi.`);
+    setTimeout(() => setNotification(null), 3500);
   };
 
   // Filter logic
@@ -403,18 +411,14 @@ export const HolidayManager: React.FC<Props> = ({ schoolId, adminUid, schoolName
                       <CheckCircle2 className="w-3.5 h-3.5" /> School Closed
                     </span>
 
-                    {!holiday.isPreloaded ? (
-                      <button
-                        onClick={() => handleDeleteHoliday(holiday.id, holiday.name)}
-                        className="text-xs text-rose-500 hover:text-rose-700 p-1 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/30 font-bold flex items-center gap-1 transition-colors"
-                        title="Delete this holiday"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Delete</span>
-                      </button>
-                    ) : (
-                      <span className="text-[10px] text-slate-400 font-bold">Gazetted</span>
-                    )}
+                    <button
+                      onClick={() => handleDeleteHoliday(holiday.id, holiday.name)}
+                      className="text-xs text-rose-500 hover:text-rose-700 p-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/30 font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                      title="Delete this holiday"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete</span>
+                    </button>
                   </div>
                 </div>
               );

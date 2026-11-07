@@ -175,7 +175,7 @@ try {
 }
 export const VAPID_KEY =
   (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_FIREBASE_VAPID_KEY) ||
-  'BJjsBS8tulWMWugfwVKPDAGECy2ZhJKXPNOcTbPBDI1xpOzUGduKbsRgrwEvsZ4DKl-Gnn_k2wwY_pnqQAroAA4';
+  'BO9sQDyvl5zcrHVLBA_pa-9-ExFLSb9NESz3aWk61G6rmUMbTnjeJ3cL-R-JjvWg-RS0P3KFd3C4rqPJe0GozAs';
 
 let _messagingInstance: any = null;
 export const getFirebaseMessaging = async () => {

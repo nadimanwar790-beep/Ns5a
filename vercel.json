@@ -5,7 +5,7 @@
       "destination": "/api/push-router?__path=$1"
     },
     {
-      "source": "/((?!api/|assets/|icons/|branding/|sw\\.js|firebase-messaging-sw\\.js|manifest\\.webmanifest|favicon\\.svg|opengraph\\.jpg|robots\\.txt).*)",
+      "source": "/((?!api/|assets/|icons/|branding/|\\.well-known/|sw\\.js|firebase-messaging-sw\\.js|manifest\\.webmanifest|favicon\\.svg|opengraph\\.jpg|robots\\.txt).*)",
       "destination": "/index.html"
     }
   ],
@@ -29,6 +29,23 @@
         {
           "key": "Content-Type",
           "value": "application/manifest+json"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=0, must-revalidate"
+        }
+      ]
+    },
+    {
+      "source": "/.well-known/assetlinks.json",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/json"
+        },
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "*"
         },
         {
           "key": "Cache-Control",

@@ -11,16 +11,19 @@ process.on("uncaughtException", (err: any) => {
   if (
     err?.code === "EPIPE" ||
     err?.code === "ECONNRESET" ||
-    (err?.code === "EADDRINUSE" && String(err?.message || "").includes("24678")) ||
-    String(err?.message || "").includes("WebSocket")
+    err?.code === "EADDRINUSE" ||
+    String(err?.message || "").includes("24678") ||
+    String(err?.message || "").includes("WebSocket") ||
+    String(err?.message || "").includes("EADDRINUSE")
   ) {
+    console.warn("[Server] Suppressed transient socket/port notice:", err?.message || err);
     return;
   }
   console.error("[Server] Uncaught exception:", err?.message || err);
 });
 
 process.on("unhandledRejection", (reason: any) => {
-  console.error("[Server] Unhandled rejection:", reason?.message || reason);
+  console.warn("[Server] Unhandled rejection notice:", reason?.message || reason);
 });
 
 function resolvePort(): number {
@@ -193,6 +196,9 @@ async function dispatchFcmToUsers(
                 icon: String(payload.icon || "/icons/icon-192.png?v=3"),
                 urgent: "1",
               },
+              android: {
+                priority: "HIGH",
+              },
               webpush: {
                 headers: {
                   Urgency: "high",
@@ -213,7 +219,12 @@ async function dispatchFcmToUsers(
           }),
         }
       );
-      if (res.ok) sent++;
+      if (res.ok) {
+        sent++;
+      } else {
+        const errText = await res.text().catch(() => "");
+        console.warn("[Server FCM Send Error]", res.status, errText);
+      }
     })
   );
   return sent;
@@ -461,7 +472,12 @@ async function dispatchWebPush(
         notification: {
           title: payload.title,
           body: payload.body,
-          icon: "/icons/icon-192.png",
+          icon: "/icons/icon-192.png?v=3",
+          badge: "/icons/icon-192.png?v=3",
+          silent: false,
+          renotify: true,
+          requireInteraction: true,
+          vibrate: [300, 150, 300, 150, 300],
         },
         data: {
           title: payload.title,
@@ -952,10 +968,24 @@ async function startServer() {
   if (!isProduction) {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
-      server: { middlewareMode: true, hmr: false },
+      server: { middlewareMode: true, hmr: false, ws: false },
       appType: "spa",
     });
     app.use(vite.middlewares);
+    // Dev SPA fallback so any route or query loads index.html seamlessly
+    app.use(async (req, res, next) => {
+      if (req.method !== "GET" || req.path.startsWith("/api/") || req.path.includes(".")) {
+        return next();
+      }
+      try {
+        const template = fs.readFileSync(path.join(ROOT_DIR, "index.html"), "utf-8");
+        const html = await vite.transformIndexHtml(req.originalUrl, template);
+        res.status(200).set({ "Content-Type": "text/html" }).end(html);
+      } catch (e: any) {
+        if (vite?.ssrFixStacktrace) vite.ssrFixStacktrace(e);
+        next(e);
+      }
+    });
   } else {
     const distPath = path.join(ROOT_DIR, "dist");
     app.use(express.static(distPath));
@@ -981,10 +1011,36 @@ async function startServer() {
     void hydrateRemotePushEngine();
   });
 
+  httpServer.on("error", (err: any) => {
+    if (err?.code === "EADDRINUSE") {
+      console.warn(`[Server] Port ${PORT} temporarily busy, will retry listening...`);
+      setTimeout(() => {
+        try {
+          httpServer.close();
+          httpServer.listen(PORT, "0.0.0.0");
+        } catch {}
+      }, 1000);
+      return;
+    }
+    console.error("[Server] HTTP server error:", err?.message || err);
+  });
+
   httpServer.on("clientError", (err: any, socket) => {
     if (err?.code === "ECONNRESET" || !socket.writable) return;
     socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
   });
+
+  const handleTermination = () => {
+    try {
+      httpServer.close(() => {
+        process.exit(0);
+      });
+    } catch {
+      process.exit(0);
+    }
+  };
+  process.on("SIGTERM", handleTermination);
+  process.on("SIGINT", handleTermination);
 }
 
 void startServer();

@@ -329,6 +329,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
 
   // Layout Mode: Standard 1-Page Portrait, 2-Page Part 1 & Part 2, or Landscape Wide
   const [layoutMode, setLayoutMode] = useState<"portrait_compact" | "two_pages" | "landscape_wide">("landscape_wide");
+  const isLandscapeView = marksheetStyle !== "portrait" && (marksheetStyle === "visual_charts" || marksheetStyle === "classic_table" || layoutMode === "landscape_wide");
 
   // 3 Official Signatures: Class Teacher, Exam Controller, Principal (with Round Stamp)
   const [teacherName, setTeacherName] = useState("Class Teacher");
@@ -1390,7 +1391,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
       return (
         <div key={targetStudent?.id || "single"} className="marksheet-print-page w-full flex justify-center">
           <div
-            className="marksheet-sheet-box w-full max-w-[1080px] bg-white rounded-xl border-4 border-slate-900 shadow-2xl p-5 text-slate-900 print:shadow-none print:m-0 print:border-2 print:border-black print:max-w-none print:p-3 relative overflow-hidden flex flex-col justify-between"
+            className="marksheet-sheet-box w-full min-w-[760px] max-w-[1080px] bg-white rounded-xl border-4 border-slate-900 shadow-2xl p-5 text-slate-900 print:shadow-none print:m-0 print:border-2 print:border-black print:max-w-none print:min-w-0 print:p-3 relative overflow-hidden flex flex-col justify-between"
             style={{ fontFamily: "'Inter', sans-serif" }}
           >
             {/* Watermark */}
@@ -1642,7 +1643,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
     return (
       <div key={targetStudent?.id || "single"} className="marksheet-print-page w-full flex justify-center">
         <div
-          className={`marksheet-sheet-box w-full ${isLandscapeView ? "max-w-[1100px]" : "max-w-[840px]"} bg-white rounded-xl border-4 border-slate-900 shadow-2xl ${isCompact ? "p-4" : "p-6"} text-slate-900 print:shadow-none print:m-0 print:border-2 print:border-black print:max-w-none print:p-4 print:rounded-none relative overflow-hidden flex flex-col justify-between`}
+          className={`marksheet-sheet-box w-full ${isLandscapeView ? "min-w-[880px] max-w-[1100px]" : "min-w-[720px] max-w-[840px]"} bg-white rounded-xl border-4 border-slate-900 shadow-2xl ${isCompact ? "p-4" : "p-6"} text-slate-900 print:shadow-none print:m-0 print:border-2 print:border-black print:max-w-none print:min-w-0 print:p-4 print:rounded-none relative overflow-hidden flex flex-col justify-between`}
           style={{ fontFamily: "'Inter', sans-serif" }}
         >
           {/* Decorative Watermark */}
@@ -2574,7 +2575,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
     })();
 
     return (
-      <div className="min-h-screen bg-slate-100 dark:bg-slate-900 pb-16 print:min-h-0 print:pb-0 print:bg-white">
+      <div className="min-h-screen bg-slate-100 dark:bg-slate-900 pb-16 print:min-h-0 print:pb-0 print:bg-white w-full max-w-full overflow-x-hidden print:overflow-visible">
         <style>{`
           @media print {
             @page {
@@ -2619,8 +2620,8 @@ export const MarksheetGenerator: React.FC<Props> = ({
         }
       `}</style>
       {/* Top Navbar */}
-      <div className="bg-slate-950/95 backdrop-blur-md px-3 sm:px-4 py-2 text-white shadow-xl sticky top-0 z-30 print:hidden border-b border-white/10">
-        <div className="max-w-6xl mx-auto flex items-center justify-between gap-1.5 overflow-x-auto no-scrollbar py-0.5 flex-nowrap">
+      <div className="bg-slate-950/95 backdrop-blur-md px-3 sm:px-4 py-2 text-white shadow-xl sticky top-0 z-30 print:hidden border-b border-white/10 w-full">
+        <div className="max-w-6xl mx-auto flex items-center justify-between gap-2 w-full">
           <button
             onClick={onBack}
             className="flex items-center gap-1 text-slate-300 hover:text-white text-xs font-bold transition-colors py-1 cursor-pointer shrink-0 mr-1"
@@ -2630,7 +2631,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
             <span className="sm:hidden">Dashboard</span>
           </button>
 
-          <div className="flex items-center gap-1.5 shrink-0 flex-nowrap">
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 flex-nowrap min-w-0">
             <button
               onClick={() => setShowSchoolHeaderModal(true)}
               className="px-2 py-1 bg-slate-900/90 hover:bg-slate-800 text-amber-200/90 border border-amber-400/25 rounded-lg text-[11px] font-bold flex items-center gap-1 shrink-0 transition cursor-pointer"
@@ -3609,19 +3610,35 @@ export const MarksheetGenerator: React.FC<Props> = ({
         </div>
 
         {/* Display Marksheet Preview (Print-ready) */}
-        {bulkMode ? (
-          <div className="space-y-8 print:space-y-0">
-            <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-200 p-3 rounded-xl text-xs text-amber-900 dark:text-amber-200 print:hidden flex items-center justify-between">
-              <span>Bulk Class Mode: Poore <strong>{currentClass?.name}</strong> ke sabhi {classStudents.length} bacchon ki marksheet print hogi.</span>
-              <span className="font-bold">Total: {classStudents.length} Students</span>
+        <div className="w-full max-w-full my-6 print:my-0">
+          <div className="flex items-center justify-between gap-2 mb-2.5 px-1 print:hidden">
+            <div className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="text-xs font-black text-slate-800 dark:text-slate-200 uppercase tracking-wider">
+                A4 Marksheet Live Preview ({isLandscapeView ? "A4 Landscape 297×210mm" : "A4 Portrait 210×297mm"})
+              </span>
             </div>
-            {classStudents.map(student => renderMarksheetSheet(student))}
+            <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold bg-slate-200/70 dark:bg-slate-800 px-2.5 py-0.5 rounded-full">
+              📱 Swipe to inspect full sheet
+            </span>
           </div>
-        ) : (
-          <div className="flex justify-center print:block">
-            {renderMarksheetSheet(currentStudent || undefined)}
+
+          <div className="w-full max-w-full overflow-x-auto pb-6 pt-1 px-1 rounded-2xl scrollbar-thin bg-slate-200/40 dark:bg-slate-950/40 border border-slate-300/60 dark:border-slate-800 shadow-inner print:bg-transparent print:border-none print:p-0 print:overflow-visible">
+            {bulkMode ? (
+              <div className="space-y-8 print:space-y-0 min-w-fit flex flex-col items-center">
+                <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-200 p-3 rounded-xl text-xs text-amber-900 dark:text-amber-200 print:hidden flex items-center justify-between w-full max-w-[1100px]">
+                  <span>Bulk Class Mode: Poore <strong>{currentClass?.name}</strong> ke sabhi {classStudents.length} bacchon ki marksheet print hogi.</span>
+                  <span className="font-bold">Total: {classStudents.length} Students</span>
+                </div>
+                {classStudents.map(student => renderMarksheetSheet(student))}
+              </div>
+            ) : (
+              <div className="min-w-fit flex justify-center print:block mx-auto">
+                {renderMarksheetSheet(currentStudent || undefined)}
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
 
       {/* School Header Customizer Modal */}

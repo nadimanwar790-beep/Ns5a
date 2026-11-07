@@ -491,10 +491,48 @@ export const SchoolEcosystem: React.FC<Props> = ({
             const t = u.searchParams.get("schoolTab");
             if (t) setRequestedTab(t);
           } catch {}
-        } else if (data.notifType === "MONTHLY_FEE" || data.notifType === "FEE_RECEIPT") {
+        } else if (data.schoolTab || data.tab) {
+          setRequestedTab(data.schoolTab || data.tab);
+        } else if (
+          data.notifType === "MONTHLY_FEE" ||
+          data.notifType === "FEE_RECEIPT" ||
+          data.notifType === "FEE_DEMAND" ||
+          data.notifType === "FEES"
+        ) {
           setRequestedTab("fees");
+        } else if (
+          data.notifType === "MESSENGER" ||
+          data.notifType === "CHAT" ||
+          data.notifType === "NSTA_MESSENGER" ||
+          data.notifType === "CLASS_GROUP" ||
+          data.notifType === "SCHOOL_DESK" ||
+          data.notifType === "TEACHER_CHAT"
+        ) {
+          setRequestedTab("channel");
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(
+              new CustomEvent("nsta-messenger-open-thread", {
+                detail: {
+                  threadType: data.threadType || (data.notifType === "SCHOOL_DESK" ? "school" : data.notifType === "TEACHER_CHAT" ? "teacher" : "class"),
+                  classId: data.classId,
+                  teacherId: data.teacherId,
+                  studentId: data.studentId
+                }
+              })
+            );
+          }
+        } else if (data.notifType === "HOMEWORK") {
+          setRequestedTab("homework");
+        } else if (
+          data.notifType === "ATTENDANCE" ||
+          data.notifType === "ABSENTEE" ||
+          data.notifType === "SCANNER_ATTENDANCE"
+        ) {
+          setRequestedTab("attendance");
+        } else if (data.notifType === "MARKS" || data.notifType === "EXAM_RESULT" || data.notifType === "MARKSHEET") {
+          setRequestedTab("exams");
         } else if (data.notifType === "SCHOOL_NOTICE" || data.notifType === "SCHOOL_HOLIDAY") {
-          setRequestedTab("community");
+          setRequestedTab("holidays");
         }
       }
     };

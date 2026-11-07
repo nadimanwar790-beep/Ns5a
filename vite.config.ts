@@ -2,8 +2,12 @@ import tailwindcss from '@tailwindcss/vite';
 import { buildSync } from 'esbuild';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 function getPrebundledLucidePath(rootDir: string): string {
   const cacheDir = path.resolve(rootDir, 'node_modules/.vite-build-cache');
@@ -142,6 +146,7 @@ export default defineConfig(({ command }) => {
       host: '0.0.0.0',
       allowedHosts: true,
       hmr: false,
+      ws: false,
       watch: {
         ignored: [
           '**/.aistudio/**',

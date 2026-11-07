@@ -32,7 +32,9 @@ import {
   addSchoolCommunityComment,
   deleteSchoolCommunityComment,
   saveSchoolHoliday,
+  deleteSchoolHoliday,
   saveNotice,
+  deleteNotice,
   type SchoolCommunityPost,
   type SchoolCommunityComment,
 } from "../../school-firebase";
@@ -40,7 +42,7 @@ import { uploadImageToImgBB } from "../../services/imgbbService";
 import { uploadToCloudinary, getOptimizedVideoUrl } from "../../services/cloudinaryService";
 import { resolveTelegramUrl } from "../../services/telegramStorageService";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
-import { getDemoSchoolDataset, isDemoDataEnabled } from "./demoDataStore";
+import { getDemoSchoolDataset, isDemoDataEnabled, removeCustomHoliday } from "./demoDataStore";
 
 export interface SchoolCommunityFeedProps {
   schoolId: string;
@@ -487,6 +489,44 @@ export const SchoolCommunityFeed: React.FC<SchoolCommunityFeedProps> = ({
     });
   };
 
+  const handleDeletePost = async (post: SchoolCommunityPost) => {
+    try {
+      // 1. Delete from community_posts
+      await deleteSchoolCommunityPost(schoolId, post.id);
+
+      // 2. If it is a holiday, remove from school holidays calendar & custom holidays
+      if (
+        post.category === "HOLIDAY" ||
+        post.id.startsWith("holiday_") ||
+        post.id.startsWith("holpost_") ||
+        post.id.startsWith("hol_")
+      ) {
+        const cleanHolidayId = post.id.replace(/^(holiday_|holpost_|hol_)/, "");
+        await deleteSchoolHoliday(schoolId, cleanHolidayId);
+        await deleteSchoolHoliday(schoolId, post.id);
+        removeCustomHoliday(cleanHolidayId);
+        removeCustomHoliday(post.id);
+      }
+
+      // 3. If it is a notice, remove from notices
+      if (post.id.startsWith("notice_") || post.id.startsWith("ntc_")) {
+        const cleanNoticeId = post.id.replace(/^(notice_|ntc_)/, "");
+        await deleteNotice(schoolId, cleanNoticeId);
+        await deleteNotice(schoolId, post.id);
+      }
+
+      // Immediate optimistic update
+      setCommunityPosts((prev) => prev.filter((p) => p.id !== post.id));
+      setLiveNotices((prev) => prev.filter((n) => n.id !== post.id && `notice_${n.id}` !== post.id));
+      setLiveHolidays((prev) => prev.filter((h) => h.id !== post.id && `holiday_${h.id}` !== post.id));
+
+      setConfirmDeleteId(null);
+      showToast("ok", "पोस्ट / अवकाश सफलतापूर्वक हटा दिया गया (Deleted successfully)");
+    } catch (err: any) {
+      showToast("err", err?.message || "Delete karne me samasya aayi.");
+    }
+  };
+
   const formatPostTime = (iso?: string) => {
     if (!iso) return "";
     const d = new Date(iso);
@@ -883,7 +923,8 @@ export const SchoolCommunityFeed: React.FC<SchoolCommunityFeedProps> = ({
             const commentsOpen = Boolean(openCommentsMap[post.id]);
             const canDelete =
               currentUserRole === "ADMIN" ||
-              (currentUserRole === "TEACHER" && post.authorId === currentUserId);
+              (currentUserRole === "TEACHER" && (post.authorId === currentUserId || post.authorRole === "TEACHER")) ||
+              post.authorId === currentUserId;
 
             return (
               <article
@@ -935,12 +976,12 @@ export const SchoolCommunityFeed: React.FC<SchoolCommunityFeedProps> = ({
                   </div>
 
                   {/* Admin / Author Controls */}
-                  {canDelete && !post.id.startsWith("notice_") && !post.id.startsWith("holiday_") && (
-                    <div className="flex items-center gap-1 shrink-0">
+                  {canDelete && (
+                    <div className="flex items-center gap-1.5 shrink-0">
                       <button
                         type="button"
                         onClick={() => handleToggleCommentsAllowed(post)}
-                        className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+                        className="p-1.5 sm:p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
                         title={post.commentsEnabled === false ? "Enable Comments" : "Disable Comments"}
                       >
                         {post.commentsEnabled === false ? (
@@ -951,21 +992,19 @@ export const SchoolCommunityFeed: React.FC<SchoolCommunityFeedProps> = ({
                       </button>
 
                       {confirmDeleteId === post.id ? (
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1.5 animate-in fade-in">
                           <button
                             type="button"
-                            onClick={() => {
-                              void deleteSchoolCommunityPost(schoolId, post.id);
-                              setConfirmDeleteId(null);
-                            }}
-                            className="px-2.5 py-1 rounded-lg bg-rose-600 text-white text-xs font-bold cursor-pointer"
+                            onClick={() => handleDeletePost(post)}
+                            className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold cursor-pointer transition shadow-xs flex items-center gap-1 active:scale-95"
                           >
-                            Delete
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>{post.category === "HOLIDAY" ? "Delete Holiday" : "Delete"}</span>
                           </button>
                           <button
                             type="button"
                             onClick={() => setConfirmDeleteId(null)}
-                            className="px-2 py-1 rounded-lg bg-slate-800 text-slate-300 text-xs cursor-pointer"
+                            className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs cursor-pointer transition"
                           >
                             Cancel
                           </button>
@@ -974,10 +1013,17 @@ export const SchoolCommunityFeed: React.FC<SchoolCommunityFeedProps> = ({
                         <button
                           type="button"
                           onClick={() => setConfirmDeleteId(post.id)}
-                          className="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition cursor-pointer"
-                          title="Delete Post"
+                          className={`p-1.5 sm:p-2 rounded-lg transition cursor-pointer flex items-center gap-1 ${
+                            post.category === "HOLIDAY"
+                              ? "bg-rose-500/15 text-rose-300 hover:bg-rose-500/25 border border-rose-500/30"
+                              : "text-slate-400 hover:text-rose-400 hover:bg-rose-950/30"
+                          }`}
+                          title={post.category === "HOLIDAY" ? "Delete Holiday Announcement" : "Delete Post"}
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <Trash2 className="w-4 h-4 text-rose-400" />
+                          {post.category === "HOLIDAY" && (
+                            <span className="text-[11px] font-bold text-rose-300 hidden sm:inline">Delete Holiday</span>
+                          )}
                         </button>
                       )}
                     </div>

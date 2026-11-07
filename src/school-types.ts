@@ -279,6 +279,7 @@ export interface SchoolStudent {
   sessionId: string;
   classId: string;
   className?: string;
+  section?: string;
   name: string;
   email?: string;
   phone?: string;
@@ -588,6 +589,8 @@ export interface MonthlyFee {
   lastDueDate?: string;
   balanceDue?: number;
   concession?: number;
+  earlyDiscount?: number;
+  isEarlyBirdEligible?: boolean;
   feeType?: 'monthly' | 'admission';
   receiptCategory?: 'monthly' | 'admission';
   includeAdmissionFee?: boolean;
@@ -1148,6 +1151,11 @@ export type NstaThreadType = "CLASS_GROUP" | "SCHOOL_DESK" | "TEACHER_CHAT";
 
 export interface NstaFeeSlipData {
   type: "A6_DEMAND_SLIP" | "FEE_RECEIPT";
+  studentName?: string;
+  className?: string;
+  rollNo?: string;
+  admissionNo?: string;
+  feeItems?: any[];
   month?: string;
   monthLabel?: string;
   amount?: number;
@@ -1179,8 +1187,47 @@ export interface NstaMessage {
   senderRole: "ADMIN" | "TEACHER" | "STUDENT";
   text: string;
   attachmentUrl?: string;
-  attachmentType?: "IMAGE" | "VIDEO" | "PDF" | "NOTICE" | "AUDIO";
+  attachmentType?: "IMAGE" | "VIDEO" | "PDF" | "NOTICE" | "AUDIO" | "DOCUMENT" | "ZIP" | "FILE" | "CONTACT" | "LOCATION";
+  fileName?: string;
+  fileSize?: number;
+  audioDuration?: number;
+  contactData?: {
+    name: string;
+    phone?: string;
+    role?: string;
+    designation?: string;
+    avatarUrl?: string;
+  };
+  locationData?: {
+    name?: string;
+    address?: string;
+    latitude: number;
+    longitude: number;
+  };
   feeSlip?: NstaFeeSlipData;
   createdAt: string;      // ISO string
   status?: "sent" | "delivered" | "read";
+  deletedFor?: string[];  // User IDs for whom this message is deleted (Delete for me)
+  deletedForEveryone?: boolean;
+  deletedForEveryoneAt?: string;
+  replyTo?: {
+    id: string;
+    senderName: string;
+    text: string;
+    attachmentType?: "IMAGE" | "VIDEO" | "PDF" | "NOTICE" | "AUDIO" | "DOCUMENT" | "ZIP" | "FILE" | "CONTACT" | "LOCATION";
+  };
+  reactions?: Record<string, string[]>; // e.g. { "❤️": ["uid1"], "👍": ["uid2"] }
+  deliveredTo?: Array<{
+    userId: string;
+    userName: string;
+    deliveredAt: string;
+    role?: string;
+  }>;
+  readBy?: Array<{
+    userId: string;
+    userName: string;
+    readAt: string;
+    role?: string;
+  }>;
+  isForwarded?: boolean;
 }

@@ -246,10 +246,19 @@ export const ClassFeeAlertBroadcastModal: React.FC<ClassFeeAlertBroadcastModalPr
         const earlyDiscount = isBeforeOrOn10th && currentMonthFee > 0 ? Math.round(currentMonthFee * 0.10) : 0;
         const netPayableWithDiscount = earlyDiscount > 0 ? (currentMonthFee - earlyDiscount) + oldArrears : dueBalance;
 
+        const studentClass = studentObj?.className || targetClassName || (studentObj?.classId ? `Class ${studentObj.classId}` : "Class");
+        const studentRoll = studentObj?.rollNo || defItem?.rollNo || "";
+        const studentAdmission = studentObj?.admissionNo || "";
+        const feeBreakdown = (feeObj as any)?.items || (feeObj as any)?.breakdown || undefined;
+
         autoSendFeeSlipToSchoolDesk({
           schoolId: school?.id || "school",
           studentId: stId,
           studentName: studentObj?.name || defItem?.studentName || "Student",
+          className: studentClass,
+          rollNo: studentRoll,
+          admissionNo: studentAdmission,
+          feeItems: feeBreakdown,
           slipType: "A6_DEMAND_SLIP",
           month: currentMonth,
           monthLabel,

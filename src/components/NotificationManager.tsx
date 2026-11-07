@@ -492,7 +492,7 @@ export const listenToForegroundMessages = async (onMessageReceived?: (payload: a
               reg.showNotification(title, {
                 body,
                 icon,
-                badge: '/favicon.svg',
+                badge: '/icons/badge-monochrome.png?v=4',
                 tag: 'fcm-foreground-' + Date.now(),
                 data: payload.data,
               });
@@ -552,7 +552,7 @@ export const dispatchSmartNotification = async (payload: SmartNotificationPayloa
         showNotification(reg, {
           body,
           icon: '/icons/icon-192.png',
-          badge: '/favicon.svg',
+          badge: '/icons/badge-monochrome.png?v=4',
           tag: 'community-silent',
           silent: true,
           data: { url, category }
@@ -582,7 +582,7 @@ export const dispatchSmartNotification = async (payload: SmartNotificationPayloa
         showNotification(reg, {
           body,
           icon: '/icons/icon-192.png',
-          badge: '/favicon.svg',
+          badge: '/icons/badge-monochrome.png?v=4',
           tag: senderId ? `req-${senderId}` : 'friend-request',
           vibrate: [200, 100, 200],
           data: { url, category, senderId }
@@ -604,7 +604,7 @@ export const dispatchSmartNotification = async (payload: SmartNotificationPayloa
         showNotification(reg, {
           body,
           icon: '/icons/icon-192.png',
-          badge: '/favicon.svg',
+          badge: '/icons/badge-monochrome.png?v=4',
           tag: 'streak-reminder',
           vibrate: [80],
           renotify: false,
@@ -636,7 +636,7 @@ export const testDelayedBackgroundNotification = async (delaySeconds = 5): Promi
         reg.showNotification('🎉 Background Notification Test!', {
           body: 'Aapki app band hone par bhi notification bilkul sahi kaam kar raha hai! (Lock Screen Test Successful)',
           icon: '/icons/icon-192.png',
-          badge: '/favicon.svg',
+          badge: '/icons/badge-monochrome.png?v=4',
           tag: 'bg-test-' + Date.now(),
           renotify: true,
           requireInteraction: true,
@@ -980,7 +980,7 @@ export const subscribeToUserNotifications = (
           reg.showNotification(item.title, {
             body: item.body,
             icon: item.icon || item.senderPhoto || '/icons/icon-192.png',
-            badge: '/icons/icon-192.png',
+            badge: '/icons/badge-monochrome.png?v=4',
             tag: item.senderId ? `nst-${item.type}-${item.senderId}` : `nst-${item.type}-${item.id}`,
             vibrate: isUrgent ? [250, 100, 250] : [100, 50, 100],
             renotify: true,
