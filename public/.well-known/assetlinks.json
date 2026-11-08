@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "app.vercel.sms2027.twa",
+      "sha256_cert_fingerprints": [
+        "6A:E1:82:0D:45:BB:8F:02:B9:D6:E4:6A:70:8E:20:83:2F:9D:7A:0C:88:2E:36:77:96:80:97:D7:35:84:2A:1D"
+      ]
+    }
+  }
+]
