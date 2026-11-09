@@ -1,13 +1,15 @@
 // @ts-nocheck
 import React, { useState, useEffect, useCallback } from "react";
 import {
-  saveAttendance, subscribeToAttendance, getAttendance, getMonthlyAttendance, getStudents, todayStr, currentMonthStr
+  saveAttendance, subscribeToAttendance, getAttendance, getMonthlyAttendance, getStudents, todayStr, currentMonthStr,
+  isStudentBirthdayToday, dispatchOfficialSchoolBirthdayWish
 } from "../../school-firebase";
 import type { SchoolStudent, AttendanceRecord } from "../../school-types";
 import {
   CheckCircle, XCircle, Download, Calendar, Users, ChevronLeft, ChevronRight,
   Camera, QrCode, Phone, PhoneCall, Bell, Send, AlertTriangle, AlertCircle,
-  CheckCircle2, MessageCircle, ShieldAlert, Sparkles, PhoneOutgoing, Loader2
+  CheckCircle2, MessageCircle, ShieldAlert, Sparkles, PhoneOutgoing, Loader2,
+  Cake, Gift, Heart
 } from "lucide-react";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 import { QrAttendanceScannerModal } from "./QrAttendanceScannerModal";
@@ -51,6 +53,61 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
       return {};
     }
   });
+
+  // Birthday Detection for No-Punishment Policy & Greetings
+  const birthdayStudentsInClass = React.useMemo(() => {
+    return students.filter(s => isStudentBirthdayToday(s.dateOfBirth));
+  }, [students]);
+
+  const [wishingBirthdayId, setWishingBirthdayId] = useState<string | null>(null);
+  const [wishingClassBirthdays, setWishingClassBirthdays] = useState(false);
+  const [birthdayNoticeToast, setBirthdayNoticeToast] = useState<string | null>(null);
+
+  const handleWishSingleStudent = async (student: SchoolStudent) => {
+    setWishingBirthdayId(student.id);
+    try {
+      await dispatchOfficialSchoolBirthdayWish({
+        schoolId,
+        studentId: student.id,
+        studentName: student.name,
+        rollNo: student.rollNo,
+        className: className || "Class",
+        photoUrl: student.photoUrl,
+        dateOfBirth: student.dateOfBirth,
+        parentPhone: student.phone
+      });
+      setBirthdayNoticeToast(`🎉 ${student.name} को जन्मदिन की बधाई व शुभाशीर्वाद भेजा गया!`);
+      setTimeout(() => setBirthdayNoticeToast(null), 4000);
+    } catch (e: any) {
+      alert("Birthday wish error: " + (e?.message || "Error"));
+    } finally {
+      setWishingBirthdayId(null);
+    }
+  };
+
+  const handleWishAllClassBirthdays = async (list: SchoolStudent[]) => {
+    setWishingClassBirthdays(true);
+    try {
+      for (const st of list) {
+        await dispatchOfficialSchoolBirthdayWish({
+          schoolId,
+          studentId: st.id,
+          studentName: st.name,
+          rollNo: st.rollNo,
+          className: className || "Class",
+          photoUrl: st.photoUrl,
+          dateOfBirth: st.dateOfBirth,
+          parentPhone: st.phone
+        });
+      }
+      setBirthdayNoticeToast(`🎉 सभी ${list.length} छात्रों को जन्मदिन की शुभकामनाएं प्रेषित की गईं!`);
+      setTimeout(() => setBirthdayNoticeToast(null), 4000);
+    } catch (e: any) {
+      alert("Birthday wish error: " + (e?.message || "Error"));
+    } finally {
+      setWishingClassBirthdays(false);
+    }
+  };
 
   // Calculate previous working day date
   const getPreviousWorkingDateStr = (dateStr: string) => {
@@ -332,6 +389,56 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
             </div>
           )}
 
+          {/* Birthday Wish Sent Toast */}
+          {birthdayNoticeToast && (
+            <div className="p-3 bg-gradient-to-r from-pink-500 to-rose-600 text-white text-xs font-bold rounded-xl flex items-center justify-between gap-2 shadow-lg animate-in fade-in">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-amber-200" />
+                <span>{birthdayNoticeToast}</span>
+              </div>
+              <button type="button" onClick={() => setBirthdayNoticeToast(null)} className="p-1 hover:bg-white/20 rounded">
+                <XCircle className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {/* ── TEACHER NOTICE: TODAY'S BIRTHDAYS & NO PUNISHMENT POLICY ── */}
+          {birthdayStudentsInClass.length > 0 && (
+            <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500 via-rose-500 to-pink-500 text-white shadow-xl border-2 border-white/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in slide-in-from-top-2">
+              <div className="flex items-start sm:items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center text-2xl shadow-inner shrink-0">
+                  🎂
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-white text-rose-700 shadow-xs">
+                      🛡️ NO PUNISHMENT POLICY
+                    </span>
+                    <span className="text-xs text-rose-100 font-bold">
+                      आज {birthdayStudentsInClass.length} छात्र का जन्मदिन है!
+                    </span>
+                  </div>
+                  <p className="text-xs sm:text-sm font-black text-white mt-1">
+                    🎉 आज {birthdayStudentsInClass.map(s => s.name).join(", ")} का जन्मदिन है!
+                  </p>
+                  <p className="text-[11px] text-rose-100/95 font-medium leading-relaxed mt-0.5">
+                    शिक्षकों से विनम्र अनुरोध: आज जन्मदिन के शुभ अवसर पर इन छात्रों को डांटें या किसी कारण दंडित (punish) न करें। स्कूल की ओर से इन्हें शुभकामनाएं व शुभाशीर्वाद दें।
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handleWishAllClassBirthdays(birthdayStudentsInClass)}
+                disabled={wishingClassBirthdays}
+                className="px-3.5 py-2 rounded-xl bg-white text-rose-700 hover:bg-rose-50 text-xs font-black shadow-md transition active:scale-95 cursor-pointer flex items-center justify-center gap-1.5 shrink-0 self-stretch sm:self-center"
+              >
+                {wishingClassBirthdays ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Gift className="w-3.5 h-3.5" />}
+                <span>{wishingClassBirthdays ? "भेज रहे हैं..." : "🎁 Send Birthday Blessing"}</span>
+              </button>
+            </div>
+          )}
+
           {/* Date Picker */}
           <div className="bg-white dark:bg-slate-800 rounded-xl p-4 flex items-center gap-3 shadow-sm">
             <Calendar className="w-5 h-5 text-blue-500" />
@@ -430,13 +537,18 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
               const outTime = stEntry?.outTime;
               const duration = stEntry?.stayDuration;
               const isLate = stEntry?.status === "late";
+              const isBirthday = isStudentBirthdayToday(s.dateOfBirth);
 
               return (
                 <div
                   key={s.id}
                   onClick={() => toggleStudent(s.id)}
                   className={`flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-4 py-3 cursor-pointer transition-colors border-b dark:border-slate-700 last:border-0 ${
-                    attendance[s.id] ? "bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-750" : "bg-red-50/70 dark:bg-red-950/20"
+                    isBirthday
+                      ? "bg-rose-50/80 dark:bg-rose-950/30 border-l-4 border-l-pink-500 shadow-xs"
+                      : attendance[s.id]
+                      ? "bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-750"
+                      : "bg-red-50/70 dark:bg-red-950/20"
                   }`}
                 >
                   <div className="flex items-center gap-3">
@@ -444,10 +556,22 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
                       #{s.rollNo}
                     </span>
                     <div>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 flex-wrap">
                         <span className="text-slate-800 dark:text-white font-bold text-sm leading-tight">
                           {s.name}
                         </span>
+
+                        {isBirthday && (
+                          <div className="flex items-center gap-1 flex-wrap">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gradient-to-r from-pink-500 to-rose-600 text-white text-[10px] font-black shadow-xs animate-pulse">
+                              <span>🎂 Happy Birthday!</span>
+                            </span>
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-700 dark:text-amber-300 text-[9px] font-black">
+                              <span>🛡️ No Punishment</span>
+                            </span>
+                          </div>
+                        )}
+
                         <button
                           type="button"
                           onClick={(e) => {
@@ -489,6 +613,26 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
                   </div>
 
                   <div className="flex items-center gap-2 self-end sm:self-auto">
+                    {isBirthday && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleWishSingleStudent(s);
+                        }}
+                        disabled={wishingBirthdayId === s.id}
+                        className="px-2.5 py-1 rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-600 hover:to-pink-700 text-white text-[11px] font-black flex items-center gap-1 shadow-sm transition active:scale-95 cursor-pointer"
+                        title="Send Official Birthday Blessing Card to Student"
+                      >
+                        {wishingBirthdayId === s.id ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Gift className="w-3 h-3" />
+                        )}
+                        <span>{wishingBirthdayId === s.id ? "भेज रहे हैं..." : "🎁 Wish"}</span>
+                      </button>
+                    )}
+
                     {attendance[s.id]
                       ? <CheckCircle className="w-6 h-6 text-green-500 shrink-0" />
                       : <XCircle className="w-6 h-6 text-red-400 shrink-0" />}

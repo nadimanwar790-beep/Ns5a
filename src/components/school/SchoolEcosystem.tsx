@@ -97,8 +97,8 @@ function lazyWithRetry<T extends React.ComponentType<any>>(
   });
 }
 
+import { SchoolAdminPanel } from "./SchoolAdminPanel";
 const SuperAdminPanel = lazyWithRetry(() => import("./SuperAdminPanel"), "SuperAdminPanel");
-const SchoolAdminPanel = lazyWithRetry(() => import("./SchoolAdminPanel"), "SchoolAdminPanel");
 const TeacherPanel = lazyWithRetry(() => import("./TeacherPanel"), "TeacherPanel");
 const StudentSchoolPanel = lazyWithRetry(() => import("./StudentSchoolPanel"), "StudentSchoolPanel");
 const AccountantPanel = lazyWithRetry(
@@ -1166,8 +1166,9 @@ export const SchoolEcosystem: React.FC<Props> = ({
               key={effectiveSchoolId}
               schoolId={effectiveSchoolId}
               adminUid={uid}
+              isSuperAdmin={isSuperAdmin}
               onBack={isSuperAdmin ? (onOpenAdminDashboard || onBack) : undefined}
-              onLeaveSchool={handleLeaveSchoolForAdmin}
+              onLeaveSchool={isSuperAdmin ? handleLeaveSchoolForAdmin : undefined}
               onOpenPlatformContent={onOpenPlatformContent}
               onLogout={onLogout}
               onPreviewTeacher={() => setAdminPreviewRole("TEACHER")}

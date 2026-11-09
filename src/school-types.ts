@@ -88,8 +88,17 @@ export const TIER_CONFIG: Record<SubscriptionTier, { name: string; maxStudents: 
 };
 
 export const isSchoolEliteCurriculum = (school?: School | null): boolean => {
-  if (!school) return false;
-  if ((school as any).isElite === true || (school as any).customCurriculumEnabled === true) return true;
+  if (!school) return true;
+  if (
+    school.id === 'demo_school' ||
+    school.id?.startsWith('demo') ||
+    school.id?.includes('demo') ||
+    (school as any).isDemo === true ||
+    (school as any).isElite === true ||
+    (school as any).customCurriculumEnabled === true
+  ) {
+    return true;
+  }
   const sub = school.subscription;
   if (!sub) return false;
   // If explicitly active with isElite or customCurriculumEnabled
@@ -665,8 +674,10 @@ export interface MonthlyFee {
   studentName: string;
   rollNo: string;
   classId: string;
+  className?: string;
   month: string; // "YYYY-MM"
   amount: number;
+  paymentMode?: string;
   monthlyAmount?: number;
   arrearsAmount?: number;
   arrearsMonths?: string[];
@@ -825,6 +836,31 @@ export interface SchoolHoliday {
   description?: string;
   createdAt: string;
   createdBy: string;
+}
+
+export type SchoolEventType =
+  | 'MEETING'        // मीटिंग (Staff Meeting / PTA)
+  | 'EXAM'           // परीक्षा (Unit Test / Term Exam)
+  | 'RESULT_DAY'     // रिजल्ट डे (Result Declaration Day / PTM)
+  | 'OFFICIAL_WORK'  // स्कूल कार्य (Inspection / Audit / Administrative Work)
+  | 'CELEBRATION'    // वार्षिकोत्सव / खेलकूद / फंक्शन
+  | 'HOLIDAY'        // अवकाश (Holiday)
+  | 'OTHER';         // अन्य महत्वपूर्ण कार्य
+
+export interface SchoolEvent {
+  id: string;
+  schoolId: string;
+  title: string;
+  type: SchoolEventType;
+  date: string; // YYYY-MM-DD
+  time?: string; // e.g. "09:30 AM"
+  venue?: string; // e.g. "Principal Office / Assembly Hall"
+  description?: string;
+  targetAudience: 'ALL_TEACHERS' | 'ALL_STUDENTS' | 'WHOLE_SCHOOL';
+  createdBy?: string;
+  createdAt: string;
+  notifiedTeachers?: boolean;
+  notifiedAt?: string;
 }
 
 export interface SchoolCertificate {
@@ -1468,6 +1504,38 @@ export interface NstaFeeSlipData {
   particulars?: { head: string; amount: number }[];
 }
 
+export interface NstaWelcomeData {
+  studentId: string;
+  studentName: string;
+  admissionNo: string;
+  rollNo?: string;
+  classId?: string;
+  className?: string;
+  schoolName: string;
+  schoolLogo?: string;
+  fatherName?: string;
+  mobile?: string;
+  session?: string;
+  verificationBadge?: string;
+  issuedAt: string;
+}
+
+export interface NstaBirthdayData {
+  studentId: string;
+  studentName: string;
+  admissionNo?: string;
+  rollNo?: string;
+  classId?: string;
+  className?: string;
+  schoolName: string;
+  schoolLogo?: string;
+  dateOfBirth: string;
+  age?: number;
+  wishedYear: number;
+  blessingQuote?: string;
+  issuedAt: string;
+}
+
 export interface NstaMessage {
   id: string;
   schoolId: string;
@@ -1483,7 +1551,9 @@ export interface NstaMessage {
   senderPhoto?: string;   // ID Card / DP photo URL of the sender
   text: string;
   attachmentUrl?: string;
-  attachmentType?: "IMAGE" | "VIDEO" | "PDF" | "NOTICE" | "AUDIO" | "DOCUMENT" | "ZIP" | "FILE" | "CONTACT" | "LOCATION";
+  attachmentType?: "IMAGE" | "VIDEO" | "PDF" | "NOTICE" | "AUDIO" | "DOCUMENT" | "ZIP" | "FILE" | "CONTACT" | "LOCATION" | "WELCOME" | "BIRTHDAY";
+  welcomeData?: NstaWelcomeData;
+  birthdayData?: NstaBirthdayData;
   fileName?: string;
   fileSize?: number;
   audioDuration?: number;

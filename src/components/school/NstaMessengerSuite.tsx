@@ -67,7 +67,9 @@ import type {
   MonthlyFee,
   NstaMessage,
   NstaThreadType,
-  NstaFeeSlipData
+  NstaFeeSlipData,
+  NstaWelcomeData,
+  NstaBirthdayData
 } from "../../school-types";
 import {
   saveNstaMessage,
@@ -86,6 +88,8 @@ import { uploadToCloudinary } from "../../services/cloudinaryService";
 import { formatMonthLabel } from "../../utils/feeFifoAllocation";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 import { OfficialFeeReceiptModal } from "./OfficialFeeReceiptModal";
+import { SchoolWelcomeModal } from "./SchoolWelcomeModal";
+import { SchoolBirthdayModal } from "./SchoolBirthdayModal";
 
 interface Props {
   school: School;
@@ -342,6 +346,9 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     if (teacher?.id) return teacher.id;
     return safeTeachers[0]?.id || "";
   });
+
+  const [selectedWelcomeData, setSelectedWelcomeData] = useState<NstaWelcomeData | null>(null);
+  const [selectedBirthdayData, setSelectedBirthdayData] = useState<NstaBirthdayData | null>(null);
 
   // Sender's DP / ID Card Photo resolution (so recipient sees sender photo in right-side of push notification)
   const currentSenderPhoto = useMemo(() => {
@@ -1028,14 +1035,43 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     return safeStudents;
   }, [safeStudents, activeClass, activeStudent]);
 
-  // Daily message quota for student in Teacher Chat (Max 5)
-  const todayStr = useMemo(() => new Date().toISOString().split("T")[0], []);
-  const studentTeacherQueryCount = useMemo(() => {
-    if (currentUserRole !== "STUDENT" || !student) return 0;
-    return getStudentDailyTeacherQueryCount(school?.id || "default", student.id, todayStr);
-  }, [school?.id, student, todayStr, messages]);
+  // Daily message limit per student-teacher pair based on school subscription plan & student count
+  const dailyTeacherStudentLimit = useMemo(() => {
+    const isElite = Boolean(
+      school?.subscription?.isElite ||
+      school?.subscription?.customCurriculumEnabled ||
+      ((school?.subscription?.monthlyAmount || 0) >= 1999 && school?.subscription?.status === 'active')
+    );
+    const studentCount = safeStudents.length;
 
-  const isTeacherQuotaExceeded = currentUserRole === "STUDENT" && studentTeacherQueryCount >= 5;
+    if (isElite) {
+      if (studentCount <= 200) return 15;
+      if (studentCount <= 500) return 30; // 500 me 30 messages/day
+      return 50; // 2000+ me 50 messages/day
+    } else {
+      if (studentCount <= 200) return 10; // lite 200 me 10 messages/day
+      if (studentCount <= 500) return 15; // lite 500 me 15 messages/day
+      return 20; // lite 2000+ me 20 messages/day
+    }
+  }, [school?.subscription, safeStudents.length]);
+
+  const todayStr = useMemo(() => new Date().toISOString().split("T")[0], []);
+  const messagesTodayCount = useMemo(() => {
+    if (activeTab !== "teacher") return 0;
+    const sId = student?.id || activeStudent?.id;
+    const tId = teacher?.id || activeTeacher?.id;
+    if (!sId || !tId) return 0;
+
+    return messages.filter(m => {
+      if (m.threadType !== "TEACHER_CHAT") return false;
+      const isMatch = (m.studentId === sId && m.teacherId === tId);
+      if (!isMatch) return false;
+      const mDate = (m.createdAt || "").split("T")[0];
+      return mDate === todayStr;
+    }).length;
+  }, [activeTab, student?.id, activeStudent?.id, teacher?.id, activeTeacher?.id, messages, todayStr]);
+
+  const isTeacherQuotaExceeded = activeTab === "teacher" && messagesTodayCount >= dailyTeacherStudentLimit;
 
   // Real-time message subscription based on activeTab
   useEffect(() => {
@@ -1186,9 +1222,9 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     const cleanText = inputText.trim();
     if (!cleanText || isSending) return;
 
-    // Quota check for students in teacher chat
-    if (activeTab === "teacher" && currentUserRole === "STUDENT" && isTeacherQuotaExceeded) {
-      alert("Aapka daily limit (5 messages) poora ho chuka hai. Agla sawal kal bhej sakenge!");
+    // Quota check for teacher chat (both student and teacher)
+    if (activeTab === "teacher" && isTeacherQuotaExceeded) {
+      alert(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
       return;
     }
 
@@ -1405,8 +1441,8 @@ export const NstaMessengerSuite: React.FC<Props> = ({
   const handleSendImage = async () => {
     if (!selectedImageFile || isUploadingMedia) return;
 
-    if (activeTab === "teacher" && currentUserRole === "STUDENT" && isTeacherQuotaExceeded) {
-      alert("Aapka daily limit (5 messages) poora ho chuka hai. Agla sawal kal bhej sakenge!");
+    if (activeTab === "teacher" && isTeacherQuotaExceeded) {
+      alert(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
       return;
     }
 
@@ -1482,8 +1518,8 @@ export const NstaMessengerSuite: React.FC<Props> = ({
   const handleSendVideo = async () => {
     if (!selectedVideoFile || isUploadingMedia) return;
 
-    if (activeTab === "teacher" && currentUserRole === "STUDENT" && isTeacherQuotaExceeded) {
-      alert("Aapka daily limit (5 messages) poora ho chuka hai. Agla sawal kal bhej sakenge!");
+    if (activeTab === "teacher" && isTeacherQuotaExceeded) {
+      alert(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
       return;
     }
 
@@ -1552,8 +1588,8 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (activeTab === "teacher" && currentUserRole === "STUDENT" && isTeacherQuotaExceeded) {
-      alert("Aapka daily limit (5 messages) poora ho chuka hai. Agla sawal kal bhej sakenge!");
+    if (activeTab === "teacher" && isTeacherQuotaExceeded) {
+      alert(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
       return;
     }
 
@@ -1703,8 +1739,8 @@ export const NstaMessengerSuite: React.FC<Props> = ({
   };
 
   const handleStartVoiceRecording = async () => {
-    if (activeTab === "teacher" && currentUserRole === "STUDENT" && isTeacherQuotaExceeded) {
-      alert("Aapka daily limit (5 messages) poora ho chuka hai. Agla sawal kal bhej sakenge!");
+    if (activeTab === "teacher" && isTeacherQuotaExceeded) {
+      alert(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
       return;
     }
 
@@ -1794,8 +1830,8 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (activeTab === "teacher" && currentUserRole === "STUDENT" && isTeacherQuotaExceeded) {
-      alert("Aapka daily limit (5 messages) poora ho chuka hai. Agla sawal kal bhej sakenge!");
+    if (activeTab === "teacher" && isTeacherQuotaExceeded) {
+      alert(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
       return;
     }
 
@@ -2000,8 +2036,8 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     designation?: string;
     photoUrl?: string;
   }) => {
-    if (activeTab === "teacher" && currentUserRole === "STUDENT" && isTeacherQuotaExceeded) {
-      alert("Aapka daily limit (5 messages) poora ho chuka hai. Agla sawal kal bhej sakenge!");
+    if (activeTab === "teacher" && isTeacherQuotaExceeded) {
+      alert(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
       return;
     }
     if (currentUserRole === "STUDENT" && activeTab !== "teacher") {
@@ -2052,8 +2088,8 @@ export const NstaMessengerSuite: React.FC<Props> = ({
 
   // 9. Location Sharing Handler
   const handleSendLocation = async (locName: string, locAddress: string, lat: number, lng: number) => {
-    if (activeTab === "teacher" && currentUserRole === "STUDENT" && isTeacherQuotaExceeded) {
-      alert("Aapka daily limit (5 messages) poora ho chuka hai. Agla sawal kal bhej sakenge!");
+    if (activeTab === "teacher" && isTeacherQuotaExceeded) {
+      alert(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
       return;
     }
     if (currentUserRole === "STUDENT" && activeTab !== "teacher") {
@@ -2178,6 +2214,22 @@ export const NstaMessengerSuite: React.FC<Props> = ({
               </span>
               <span className="text-xs text-slate-400 font-medium">selected</span>
             </div>
+            {/* SELECT ALL / DESELECT ALL BUTTON IN SELECTION BAR */}
+            <button
+              type="button"
+              onClick={() => {
+                if (selectedMessageIds.length === filteredMessages.length) {
+                  setSelectedMessageIds([]);
+                } else {
+                  setSelectedMessageIds(filteredMessages.map((m) => m.id));
+                }
+              }}
+              className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-bold transition cursor-pointer active:scale-95 flex items-center gap-1"
+              title={selectedMessageIds.length === filteredMessages.length ? "Sabhi Deselect Karein" : "Sabhi Message Select Karein"}
+            >
+              <CheckCheck className="w-3.5 h-3.5" />
+              <span>{selectedMessageIds.length === filteredMessages.length ? "Deselect All" : "Select All (सभी चुनें)"}</span>
+            </button>
           </div>
 
           {/* Right: Actions (Info, Reply, Forward, Copy, Delete) */}
@@ -2371,8 +2423,24 @@ export const NstaMessengerSuite: React.FC<Props> = ({
               </select>
             )}
 
+            {/* Student Selector for Teacher (1-to-1 Personal Chat) */}
+            {activeTab === "teacher" && currentUserRole === "TEACHER" && safeStudents.length > 0 && (
+              <select
+                value={selectedStudentId || safeStudents[0]?.id || ""}
+                onChange={e => setSelectedStudentId(e.target.value)}
+                className="px-2 py-1.5 rounded-xl bg-purple-900/60 text-purple-100 border border-purple-500/60 text-xs font-bold cursor-pointer max-w-[130px] sm:max-w-[180px] truncate"
+                title="Chhatra Chunein (1-to-1 Chat)"
+              >
+                {safeStudents.map(s => (
+                  <option key={s.id} value={s.id}>
+                    🎓 {s.name} ({s.className || (s.rollNo ? `Roll ${s.rollNo}` : "Std")})
+                  </option>
+                ))}
+              </select>
+            )}
+
             {/* Teacher Selector for Student Doubt Desk */}
-            {activeTab === "teacher" && safeTeachers.length > 0 && (
+            {activeTab === "teacher" && currentUserRole === "STUDENT" && safeTeachers.length > 0 && (
               <select
                 value={selectedTeacherId}
                 onChange={e => setSelectedTeacherId(e.target.value)}
@@ -2383,6 +2451,21 @@ export const NstaMessengerSuite: React.FC<Props> = ({
                   <option key={t.id} value={t.id}>{t.name}</option>
                 ))}
               </select>
+            )}
+
+            {/* Quick 'Select All' messages toggle shortcut in default header */}
+            {filteredMessages.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedMessageIds(filteredMessages.map((m) => m.id));
+                }}
+                title="Sabhi Messages Ek Saath Select Karein (Select All)"
+                className="p-1.5 px-2 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-emerald-400 hover:text-emerald-300 transition cursor-pointer border border-emerald-500/30 flex items-center gap-1 active:scale-95 shadow-sm text-xs font-bold"
+              >
+                <CheckCheck className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Select All</span>
+              </button>
             )}
 
             {/* Theme / Wallpaper Option moved to Row 1 (Admin Only) */}
@@ -2473,7 +2556,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
               ? "Official Class Notice & Announcements Group"
               : activeTab === "school"
               ? "Direct Communication Desk • Fees, Receipts & Official Alerts"
-              : "Teacher-Student Academic Doubt Session (5 messages daily quota)"}
+              : `Teacher-Student 1-to-1 Chat (${dailyTeacherStudentLimit} messages daily quota)`}
           </div>
         </div>
 
@@ -2712,6 +2795,150 @@ export const NstaMessengerSuite: React.FC<Props> = ({
                     </div>
                   ) : (
                     <>
+                      {/* ── SPECIAL RENDER: OFFICIAL SCHOOL WELCOME CARD ── */}
+                      {(msg.attachmentType === "WELCOME" || msg.welcomeData) && (
+                        <div className="space-y-2.5 pb-2 mb-2.5 p-3 sm:p-4 rounded-2xl bg-gradient-to-br from-amber-950/80 via-slate-900 to-emerald-950/80 border border-amber-500/40 shadow-xl text-slate-100">
+                          {/* Official Header */}
+                          <div className="flex items-center justify-between pb-2 border-b border-amber-500/30">
+                            <div className="flex items-center gap-2">
+                              <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center justify-center text-sm shadow-sm shrink-0">
+                                🎓
+                              </div>
+                              <div className="min-w-0">
+                                <span className="font-black text-xs uppercase tracking-wider block text-amber-300 truncate">
+                                  Official Welcome &amp; ID Activation
+                                </span>
+                                <span className="text-[10px] text-emerald-300 block font-semibold truncate">
+                                  {msg.welcomeData?.schoolName || school?.name || "Official School Desk"}
+                                </span>
+                              </div>
+                            </div>
+                            <span className="text-[10px] font-mono bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full font-bold uppercase shrink-0">
+                              Active ID
+                            </span>
+                          </div>
+
+                          {/* Student Info Box */}
+                          <div className="p-2.5 rounded-xl bg-black/40 border border-white/10 space-y-1.5 text-xs">
+                            <div className="flex items-center justify-between">
+                              <span className="font-black text-white text-sm flex items-center gap-1.5 truncate">
+                                <span>{msg.welcomeData?.studentName || msg.studentName || "Student"}</span>
+                                <span className="text-emerald-400 text-xs">✅</span>
+                              </span>
+                              <span className="text-[10px] font-mono text-emerald-300 bg-emerald-950/80 border border-emerald-500/30 px-2 py-0.5 rounded font-bold shrink-0">
+                                {msg.welcomeData?.className || "Class 10"}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between text-[11px] text-slate-300 font-mono pt-1 border-t border-white/10">
+                              <span>Adm No: <strong className="text-white">{msg.welcomeData?.admissionNo || "ADM-001"}</strong></span>
+                              <span>Roll No: <strong className="text-white">{msg.welcomeData?.rollNo || "01"}</strong></span>
+                            </div>
+                          </div>
+
+                          {/* Quick Highlights Badge */}
+                          <div className="grid grid-cols-2 gap-1.5 text-[10px] text-slate-200">
+                            <div className="p-1.5 rounded-lg bg-emerald-950/60 border border-emerald-500/30 flex items-center gap-1.5">
+                              <span>📚</span>
+                              <span className="font-bold text-emerald-300">100% Free Notes</span>
+                            </div>
+                            <div className="p-1.5 rounded-lg bg-blue-950/60 border border-blue-500/30 flex items-center gap-1.5">
+                              <span>⏱️</span>
+                              <span className="font-bold text-blue-300">Live Attendance</span>
+                            </div>
+                          </div>
+
+                          {/* Action Button: View Full Welcome Letter */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const wd: NstaWelcomeData = msg.welcomeData || {
+                                studentId: msg.studentId || "std",
+                                studentName: msg.studentName || "Student",
+                                admissionNo: "ADM-001",
+                                rollNo: "01",
+                                className: "Class 10",
+                                schoolName: school?.name || "Official School Desk",
+                                issuedAt: msg.createdAt,
+                              };
+                              setSelectedWelcomeData(wd);
+                            }}
+                            className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-md shadow-amber-950/30 transition cursor-pointer active:scale-95"
+                          >
+                            <Sparkles className="w-3.5 h-3.5" />
+                            <span>स्वागत पत्र व विवरण देखें (Welcome Letter)</span>
+                          </button>
+                        </div>
+                      )}
+
+                      {/* ── SPECIAL RENDER: OFFICIAL SCHOOL BIRTHDAY CARD ── */}
+                      {(msg.attachmentType === "BIRTHDAY" || msg.birthdayData) && (
+                        <div className="space-y-2.5 pb-2 mb-2.5 p-3 sm:p-4 rounded-2xl bg-gradient-to-br from-rose-950/80 via-slate-900 to-amber-950/80 border border-amber-500/50 shadow-xl text-slate-100">
+                          {/* Header */}
+                          <div className="flex items-center justify-between pb-2 border-b border-rose-500/30">
+                            <div className="flex items-center gap-2">
+                              <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-rose-500 to-amber-500 text-white flex items-center justify-center text-sm shadow-sm shrink-0">
+                                🎂
+                              </div>
+                              <div className="min-w-0">
+                                <span className="font-black text-xs uppercase tracking-wider block text-amber-300 truncate">
+                                  Official Birthday Greetings
+                                </span>
+                                <span className="text-[10px] text-rose-300 block font-semibold truncate">
+                                  {msg.birthdayData?.schoolName || school?.name || "Official School Desk"}
+                                </span>
+                              </div>
+                            </div>
+                            <span className="text-[10px] font-mono bg-rose-500/20 text-rose-300 border border-rose-500/30 px-2 py-0.5 rounded-full font-bold uppercase shrink-0">
+                              Birthday VIP 🎉
+                            </span>
+                          </div>
+
+                          {/* Student Info Box */}
+                          <div className="p-2.5 rounded-xl bg-black/40 border border-white/10 space-y-1.5 text-xs">
+                            <div className="flex items-center justify-between">
+                              <span className="font-black text-white text-sm flex items-center gap-1.5 truncate">
+                                <span>{msg.birthdayData?.studentName || msg.studentName || "Student"}</span>
+                                <span className="text-amber-400 text-xs">👑</span>
+                              </span>
+                              <span className="text-[10px] font-mono text-rose-300 bg-rose-950/80 border border-rose-500/30 px-2 py-0.5 rounded font-bold shrink-0">
+                                {msg.birthdayData?.className || "Class 10"}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between text-[11px] text-slate-300 font-mono pt-1 border-t border-white/10">
+                              <span>Adm No: <strong className="text-white">{msg.birthdayData?.admissionNo || "ADM-001"}</strong></span>
+                              <span>DOB: <strong className="text-amber-300">{msg.birthdayData?.dateOfBirth || "Today"}</strong></span>
+                            </div>
+                          </div>
+
+                          {/* Principal Blessing Quote */}
+                          <div className="p-2 rounded-xl bg-rose-950/40 border border-rose-500/20 text-[11px] text-slate-300 italic leading-snug">
+                            "विद्यालय परिवार की ओर से जन्मदिवस पर असीम स्नेह व मंगलकामनाएं। आपका भविष्य ज्ञान, उत्तम स्वास्थ्य और सफलता से जगमगाए!"
+                          </div>
+
+                          {/* Action Button: View Full Birthday Card */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const bd: NstaBirthdayData = msg.birthdayData || {
+                                studentId: msg.studentId || "std",
+                                studentName: msg.studentName || "Student",
+                                admissionNo: "ADM-001",
+                                rollNo: "01",
+                                className: "Class 10",
+                                schoolName: school?.name || "Official School Desk",
+                                dateOfBirth: "Today",
+                                wishedYear: new Date().getFullYear(),
+                                issuedAt: msg.createdAt,
+                              };
+                              setSelectedBirthdayData(bd);
+                            }}
+                            className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-rose-600 via-rose-500 to-amber-600 hover:opacity-95 text-white font-black text-xs flex items-center justify-center gap-1.5 shadow-md shadow-rose-950/40 transition cursor-pointer active:scale-95"
+                          >
+                            <span>🎉 जन्मदिन शुभकामना पत्र देखें (Birthday Greetings)</span>
+                          </button>
+                        </div>
+                      )}
+
                       {/* ── SPECIAL RENDER: AUTOMATED A6 FEE SLIP OR RECEIPT CARD ── */}
                       {isFeeSlip && msg.feeSlip && (
                         <div className="space-y-2.5 pb-1">
@@ -3179,28 +3406,34 @@ export const NstaMessengerSuite: React.FC<Props> = ({
               Keval School Admin hi is School Desk par official sandesh bhej sakte hain.
             </span>
           </div>
-        ) : activeTab === "teacher" && currentUserRole === "STUDENT" && isTeacherQuotaExceeded ? (
-          /* 2. Teacher Chat: Quota Limit Exceeded (5/5) */
+        ) : activeTab === "teacher" && isTeacherQuotaExceeded ? (
+          /* 2. Teacher Chat: Quota Limit Exceeded */
           <div className="flex items-center justify-between gap-3 p-2.5 rounded-2xl bg-amber-950/40 border border-amber-600/40 text-amber-300 text-xs">
             <div className="flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
               <span>
-                Aapka aaj ka daily quota (<strong>5 messages</strong>) poora ho chuka hai. Agla message kal bhej sakenge.
+                {currentUserRole === "TEACHER"
+                  ? `Is student ke sath aaj ka daily message quota (${dailyTeacherStudentLimit} messages) poora ho chuka hai.`
+                  : `Aapka aaj ka daily quota (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge.`}
               </span>
             </div>
             <span className="font-mono text-[10px] font-black px-2 py-0.5 rounded bg-amber-500/20">
-              5/5 Used
+              {dailyTeacherStudentLimit}/{dailyTeacherStudentLimit} Used
             </span>
           </div>
         ) : (
           /* 3. Standard Interactive WhatsApp Input */
           <form onSubmit={handleSendMessage} className="space-y-1.5">
-            {/* Quota Counter for Student in Teacher Chat */}
-            {activeTab === "teacher" && currentUserRole === "STUDENT" && (
+            {/* Quota Counter for Student/Teacher in Teacher Chat */}
+            {activeTab === "teacher" && (
               <div className="flex items-center justify-between text-[11px] text-purple-300 px-1 font-semibold">
-                <span>Doubt Session with {activeTeacher?.name || "Teacher"}:</span>
-                <span className="font-mono bg-purple-500/20 px-2 py-0.5 rounded-full border border-purple-500/30">
-                  {5 - studentTeacherQueryCount} / 5 messages remaining today
+                <span>
+                  {currentUserRole === "TEACHER"
+                    ? `Chat with ${activeStudent?.name || "Student"}:`
+                    : `Doubt Session with ${activeTeacher?.name || "Teacher"}:`}
+                </span>
+                <span className="font-mono bg-purple-500/20 px-2 py-0.5 rounded-full border border-purple-500/30 text-purple-200">
+                  {Math.max(0, dailyTeacherStudentLimit - messagesTodayCount)} / {dailyTeacherStudentLimit} messages remaining today
                 </span>
               </div>
             )}
@@ -3490,7 +3723,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
                       ? "Class group me official notice ya sandesh likhein..."
                       : activeTab === "school"
                       ? "School desk ke liye sandesh ya enquiry likhein..."
-                      : `Shikshak se sawal poochhein (${5 - studentTeacherQueryCount} baaki)...`
+                      : `Sandesh likhein (${Math.max(0, dailyTeacherStudentLimit - messagesTodayCount)} baaki)...`
                   }
                   className="flex-1 px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-2xl bg-slate-800 border border-slate-700 text-white placeholder-slate-400 text-xs sm:text-sm focus:outline-none focus:border-emerald-500 transition min-w-0"
                 />
@@ -4559,6 +4792,22 @@ export const NstaMessengerSuite: React.FC<Props> = ({
           </div>
         </div>
       )}
+
+      {/* ── OFFICIAL SCHOOL WELCOME MODAL ── */}
+      <SchoolWelcomeModal
+        isOpen={Boolean(selectedWelcomeData)}
+        onClose={() => setSelectedWelcomeData(null)}
+        welcomeData={selectedWelcomeData}
+        onOpenSchoolDesk={() => setActiveTab("school")}
+      />
+
+      {/* ── OFFICIAL SCHOOL BIRTHDAY MODAL ── */}
+      <SchoolBirthdayModal
+        isOpen={Boolean(selectedBirthdayData)}
+        onClose={() => setSelectedBirthdayData(null)}
+        birthdayData={selectedBirthdayData}
+        onOpenSchoolDesk={() => setActiveTab("school")}
+      />
     </div>
   );
 };

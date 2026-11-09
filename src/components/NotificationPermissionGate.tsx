@@ -40,10 +40,60 @@ export const NotificationPermissionGate: React.FC<Props> = ({ userId, onUnlocked
       return false;
     }
   });
+
+  // Bypass Mode State — Default is TRUE ("defuot me bypass rahega", managed by Super Admin)
+  const [bypassAllowed, setBypassAllowed] = useState<boolean>(() => {
+    try {
+      const sysRaw = localStorage.getItem('nst_system_settings');
+      if (sysRaw) {
+        const parsed = JSON.parse(sysRaw);
+        if (typeof parsed?.notificationGateBypass === 'boolean') {
+          return parsed.notificationGateBypass;
+        }
+      }
+      const direct = localStorage.getItem('nst_notification_gate_bypass');
+      if (direct !== null) return direct === 'true';
+    } catch {}
+    return true; // Default is bypass enabled
+  });
+
+  // Skipped State — Allows user to skip and turn on later
+  const [isSkipped, setIsSkipped] = useState<boolean>(() => {
+    try {
+      return (
+        localStorage.getItem('nst_notif_gate_skipped') === 'true' ||
+        sessionStorage.getItem('nst_notif_gate_skipped') === 'true'
+      );
+    } catch {
+      return false;
+    }
+  });
+
   const [forceShowGuide, setForceShowGuide] = useState<boolean>(false);
   const [activeBrandTab, setActiveBrandTab] = useState<'samsung' | 'redmi' | 'vivo' | 'oppo' | 'chrome'>('samsung');
   const [testSent, setTestSent] = useState<boolean>(false);
   const [schoolName, setSchoolName] = useState<string>('');
+
+  // Sync Super Admin policy changes in real time
+  useEffect(() => {
+    const handleSettingsUpdated = () => {
+      try {
+        const sysRaw = localStorage.getItem('nst_system_settings');
+        if (sysRaw) {
+          const parsed = JSON.parse(sysRaw);
+          if (typeof parsed?.notificationGateBypass === 'boolean') {
+            setBypassAllowed(parsed.notificationGateBypass);
+          }
+        }
+        const direct = localStorage.getItem('nst_notification_gate_bypass');
+        if (direct !== null) {
+          setBypassAllowed(direct === 'true');
+        }
+      } catch {}
+    };
+    window.addEventListener('nst_system_settings_updated', handleSettingsUpdated);
+    return () => window.removeEventListener('nst_system_settings_updated', handleSettingsUpdated);
+  }, []);
 
   useEffect(() => {
     // 1. Detect if Notification API is supported
@@ -74,13 +124,15 @@ export const NotificationPermissionGate: React.FC<Props> = ({ userId, onUnlocked
       }
     } catch {}
 
-    // 3. Listen for manual reopen event
+    // 3. Listen for manual reopen event (e.g. user or Super Admin wants to turn on or test)
     const handleReopen = () => {
       setForceShowGuide(true);
     };
     window.addEventListener('open-popup-settings-guide', handleReopen);
+    window.addEventListener('request-notification-permission', handleReopen);
     return () => {
       window.removeEventListener('open-popup-settings-guide', handleReopen);
+      window.removeEventListener('request-notification-permission', handleReopen);
     };
   }, [userId, onUnlocked, isHeadsUpVerified]);
 
@@ -112,6 +164,15 @@ export const NotificationPermissionGate: React.FC<Props> = ({ userId, onUnlocked
         } catch (_) {}
 
         // Proceed to Heads-up / Show as Pop-up guide
+        try {
+          localStorage.removeItem('nst_notif_gate_skipped');
+          sessionStorage.removeItem('nst_notif_gate_skipped');
+        } catch {}
+        setIsSkipped(false);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('nst_notification_skipped_updated', { detail: { skipped: false } }));
+        }
+
         setTimeout(() => {
           setIsSuccess(false);
           setPermission('granted');
@@ -121,6 +182,25 @@ export const NotificationPermissionGate: React.FC<Props> = ({ userId, onUnlocked
       console.warn('[NotificationGate] Permission request error:', err);
     } finally {
       setIsRequesting(false);
+    }
+  };
+
+  // Handle Skip Button — Bypass mode allows users to freely skip and turn on later
+  const handleSkip = () => {
+    try {
+      localStorage.setItem('nst_notif_gate_skipped', 'true');
+      sessionStorage.setItem('nst_notif_gate_skipped', 'true');
+    } catch {}
+    setIsSkipped(true);
+    setForceShowGuide(false);
+    if (onUnlocked) onUnlocked();
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('nst_notification_skipped_updated', {
+          detail: { skipped: true },
+        })
+      );
     }
   };
 
@@ -154,10 +234,16 @@ export const NotificationPermissionGate: React.FC<Props> = ({ userId, onUnlocked
   const handleCompleteSetup = () => {
     try {
       localStorage.setItem('nst_popup_heads_up_verified', 'true');
+      localStorage.removeItem('nst_notif_gate_skipped');
+      sessionStorage.removeItem('nst_notif_gate_skipped');
     } catch {}
+    setIsSkipped(false);
     setIsHeadsUpVerified(true);
     setForceShowGuide(false);
     if (onUnlocked) onUnlocked();
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('nst_notification_skipped_updated', { detail: { skipped: false } }));
+    }
   };
 
   // Re-check permission if user went to phone settings
@@ -167,6 +253,11 @@ export const NotificationPermissionGate: React.FC<Props> = ({ userId, onUnlocked
       setPermission(p);
       if (p === 'granted') {
         subscribeUserToPush(userId).catch(() => {});
+        try {
+          localStorage.removeItem('nst_notif_gate_skipped');
+          sessionStorage.removeItem('nst_notif_gate_skipped');
+        } catch {}
+        setIsSkipped(false);
       }
     }
   };
@@ -181,6 +272,11 @@ export const NotificationPermissionGate: React.FC<Props> = ({ userId, onUnlocked
     return null;
   }
 
+  // If bypass is allowed AND user chose to skip (and not explicitly reopened), do not block!
+  if (bypassAllowed && isSkipped && !forceShowGuide) {
+    return null;
+  }
+
   return (
     <div
       role="dialog"
@@ -191,14 +287,16 @@ export const NotificationPermissionGate: React.FC<Props> = ({ userId, onUnlocked
         {/* Top Gold Accent Bar */}
         <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500" />
 
-        {/* Close Button when force-opened as a helper */}
-        {forceShowGuide && (
+        {/* Close / Skip Button: Available if bypass is active or manually reopened */}
+        {(bypassAllowed || forceShowGuide) && (
           <button
             type="button"
-            onClick={() => setForceShowGuide(false)}
-            className="absolute top-4 right-4 p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
+            onClick={handleSkip}
+            className="absolute top-4 right-4 py-1.5 px-3 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer flex items-center gap-1.5 text-xs font-bold border border-slate-700/60 shadow-sm"
+            title="अभी छोड़ें • बाद में चालू कर सकते हैं (Skip for now)"
           >
-            <X className="w-5 h-5" />
+            <span>छोड़ें (Skip)</span>
+            <X className="w-4 h-4" />
           </button>
         )}
 
@@ -249,13 +347,19 @@ export const NotificationPermissionGate: React.FC<Props> = ({ userId, onUnlocked
               <span>मैंने चालू कर दिया, पुनः जाँचें (Verify &amp; Open)</span>
             </button>
 
-            <button
-              type="button"
-              onClick={handleCompleteSetup}
-              className="w-full mt-3 py-2 text-center text-[11px] text-slate-500 hover:text-slate-400 transition cursor-pointer"
-            >
-              परीक्षण मोड में जारी रखें (Continue in Preview Mode)
-            </button>
+            {bypassAllowed ? (
+              <button
+                type="button"
+                onClick={handleSkip}
+                className="w-full mt-3 py-2.5 text-center text-xs font-bold text-slate-400 hover:text-amber-300 rounded-xl hover:bg-slate-800/60 transition cursor-pointer"
+              >
+                बाद में चालू करेंगे • अभी छोड़ें (Skip for now)
+              </button>
+            ) : (
+              <div className="w-full mt-3 py-2 text-center text-[11px] text-amber-400 font-semibold">
+                🔒 सुपर एडमिन नीति: ऐप का उपयोग करने के लिए नोटिफिकेशन अनुमति अनिवार्य है
+              </div>
+            )}
           </div>
         ) : permission !== 'granted' ? (
           /* ── STAGE 3: INITIAL NOTIFICATION ALLOW PROMPT ───────────────── */
@@ -273,7 +377,7 @@ export const NotificationPermissionGate: React.FC<Props> = ({ userId, onUnlocked
 
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[11px] font-black uppercase tracking-wider mb-2">
               <Sparkles className="w-3.5 h-3.5" />
-              <span>सूचना अनुमति अनिवार्य है</span>
+              <span>{bypassAllowed ? "स्मार्ट लाइव सूचनाएँ" : "सूचना अनुमति अनिवार्य है"}</span>
             </div>
 
             <h2 className="text-xl font-black text-white leading-tight mb-2">
@@ -328,13 +432,21 @@ export const NotificationPermissionGate: React.FC<Props> = ({ userId, onUnlocked
               )}
             </button>
 
-            <button
-              type="button"
-              onClick={handleCompleteSetup}
-              className="mt-3 text-[11px] text-slate-500 hover:text-slate-400 transition cursor-pointer"
-            >
-              डेमो / प्रीव्यू मोड में जारी रखें
-            </button>
+            {bypassAllowed ? (
+              <button
+                type="button"
+                onClick={handleSkip}
+                className="mt-3 w-full py-2.5 px-3 rounded-xl text-xs font-bold text-slate-400 hover:text-amber-300 hover:bg-slate-800/70 transition cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <span>बाद में चालू करेंगे • अभी छोड़ें (Skip for now)</span>
+                <ChevronRight className="w-4 h-4 text-slate-500" />
+              </button>
+            ) : (
+              <div className="mt-3 w-full py-2 px-3 rounded-xl text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/30 flex items-center justify-center gap-2">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span>सुपर एडमिन नीति: बिना नोटिफिकेशन अनुमति के आगे नहीं बढ़ा जा सकता</span>
+              </div>
+            )}
           </>
         ) : (
           /* ── STAGE 4: SHOW AS POP-UP / FLOATING NOTIFICATION SETUP ────── */
@@ -520,10 +632,10 @@ export const NotificationPermissionGate: React.FC<Props> = ({ userId, onUnlocked
 
             <button
               type="button"
-              onClick={handleCompleteSetup}
-              className="w-full mt-2.5 text-center text-[11px] text-slate-500 hover:text-slate-400 transition cursor-pointer"
+              onClick={handleSkip}
+              className="w-full mt-2.5 text-center text-xs text-slate-400 hover:text-amber-300 transition cursor-pointer font-bold py-1.5 rounded-lg hover:bg-slate-800/60"
             >
-              बाद में सेट करेंगे (Skip for now)
+              बाद में सेट करेंगे • अभी छोड़ें (Skip for now)
             </button>
           </div>
         )}

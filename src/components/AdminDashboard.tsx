@@ -7483,6 +7483,42 @@ const AdminDashboardInner: React.FC<Props> = ({ onNavigate, settings, onUpdateSe
                   </button>
               </div>
 
+              {/* NOTIFICATION PERMISSION GATE BYPASS SETTING */}
+              <div id="setting-notification-gate-bypass" className="mt-4 p-4 rounded-2xl border border-indigo-200 bg-gradient-to-r from-indigo-50/70 to-blue-50/70 flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center text-lg shrink-0 shadow-sm shadow-indigo-300">
+                          🔔
+                      </div>
+                      <div>
+                          <h4 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+                              Notification Permission Gate Bypass
+                              <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${localSettings.notificationGateBypass !== false ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-rose-100 text-rose-800 border border-rose-300'}`}>
+                                  {localSettings.notificationGateBypass !== false ? 'BYPASS ACTIVE (DEFAULT)' : 'MANDATORY LOCK'}
+                              </span>
+                          </h4>
+                          <p className="text-[11px] text-slate-600 mt-0.5">
+                              ON (डिफ़ॉल्ट): छात्र/अभिभावक नोटिफिकेशन स्किप कर सकते हैं और बाद में चालू कर सकते हैं। OFF: नोटिफिकेशन अनुमति 100% अनिवार्य होगी।
+                          </p>
+                      </div>
+                  </div>
+                  <button
+                      type="button"
+                      id="toggle-notification-gate-bypass"
+                      onClick={() => {
+                          const currentVal = localSettings.notificationGateBypass !== false;
+                          const nextVal = !currentVal;
+                          setLocalSettings({ ...localSettings, notificationGateBypass: nextVal });
+                          try {
+                              localStorage.setItem('nst_notification_gate_bypass', String(nextVal));
+                          } catch {}
+                      }}
+                      className={`w-12 h-6 rounded-full transition-colors relative shrink-0 p-0.5 ${localSettings.notificationGateBypass !== false ? 'bg-emerald-600' : 'bg-slate-300'}`}
+                      title={localSettings.notificationGateBypass !== false ? 'Click to Set Mandatory' : 'Click to Enable Bypass'}
+                  >
+                      <div className={`w-5 h-5 rounded-full bg-white shadow-md transition-transform ${localSettings.notificationGateBypass !== false ? 'translate-x-6' : 'translate-x-0'}`} />
+                  </button>
+              </div>
+
               {/* HOME SCREEN ASSEMBLY ANIMATION TOGGLE */}
               <div id="setting-home-assembly-animation" className="mt-4 p-4 rounded-2xl border border-blue-200 bg-gradient-to-r from-blue-50/70 to-indigo-50/70 flex items-center justify-between gap-4">
                   <div className="flex items-center gap-3">

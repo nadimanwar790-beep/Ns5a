@@ -6,10 +6,14 @@ import {
 } from "../../school-firebase";
 import { isSchoolEliteCurriculum, type School, type SchoolSubscription } from "../../school-types";
 import { SchoolAdminPanel } from "./SchoolAdminPanel";
+import { db, rtdb } from "../../firebase";
+import { ref, set } from "firebase/database";
+import { doc, setDoc } from "firebase/firestore";
 import {
   School as SchoolIcon, Plus, Pause, Play,
   Users, IndianRupee, Settings, X, Zap, Tag, Lock, Eye, EyeOff, Shield, Trash2, Unlock, ArrowLeft,
-  CreditCard, CheckCircle, AlertCircle, Clock, ChevronRight, FileText, StickyNote, Calendar, Crown
+  CreditCard, CheckCircle, AlertCircle, Clock, ChevronRight, FileText, StickyNote, Calendar, Crown,
+  Bell, Sliders, Smartphone, Check, Sparkles
 } from "lucide-react";
 
 interface Props {
@@ -837,7 +841,68 @@ export const SuperAdminPanel: React.FC<Props> = ({ adminUid, onBack }) => {
   const [selectedSchool, setSelectedSchool] = useState<School | null>(null);
   const [directManageSchool, setDirectManageSchool] = useState<School | null>(null);
   const [saving, setSaving]             = useState(false);
-  const [dashTab, setDashTab]           = useState<"schools" | "subscriptions">("schools");
+  const [dashTab, setDashTab]           = useState<"schools" | "subscriptions" | "policies">("schools");
+
+  // Notification Gate Bypass Policy (Default: true — "defuot me bypass rahega", managed by Super Admin)
+  const [notificationGateBypass, setNotificationGateBypass] = useState<boolean>(() => {
+    try {
+      const sysRaw = localStorage.getItem('nst_system_settings');
+      if (sysRaw) {
+        const parsed = JSON.parse(sysRaw);
+        if (typeof parsed?.notificationGateBypass === 'boolean') {
+          return parsed.notificationGateBypass;
+        }
+      }
+      const direct = localStorage.getItem('nst_notification_gate_bypass');
+      if (direct !== null) return direct === 'true';
+    } catch {}
+    return true; // Default is bypass enabled
+  });
+  const [savingPolicy, setSavingPolicy] = useState(false);
+  const [policyFeedback, setPolicyFeedback] = useState<string | null>(null);
+
+  const handleToggleNotificationPolicy = async (newVal: boolean) => {
+    setSavingPolicy(true);
+    setNotificationGateBypass(newVal);
+    try {
+      // 1. Direct local storage key
+      localStorage.setItem('nst_notification_gate_bypass', String(newVal));
+      
+      // 2. Sync inside system settings cache
+      try {
+        const raw = localStorage.getItem('nst_system_settings');
+        const parsed = raw ? JSON.parse(raw) : {};
+        parsed.notificationGateBypass = newVal;
+        localStorage.setItem('nst_system_settings', JSON.stringify(parsed));
+      } catch {}
+
+      // 3. Sync to RTDB and Firestore
+      try {
+        if (rtdb) {
+          await set(ref(rtdb, 'system_settings/notificationGateBypass'), newVal).catch(() => {});
+        }
+        if (db) {
+          await setDoc(doc(db, 'config', 'system_settings'), { notificationGateBypass: newVal }, { merge: true }).catch(() => {});
+        }
+      } catch (e) {
+        console.warn('Firebase policy sync error:', e);
+      }
+
+      // 4. Dispatch event so active app components update immediately
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('nst_system_settings_updated', {
+          detail: { notificationGateBypass: newVal }
+        }));
+      }
+
+      setPolicyFeedback(newVal
+        ? '✅ बाईपास चालू: छात्र व अभिभावक अब नोटिफिकेशन अनुमति स्किप कर सकते हैं और बाद में ऑन कर सकते हैं।'
+        : '🔒 अनिवार्य मोड: बिना नोटिफिकेशन अनुमति दिए कोई यूजर आगे नहीं बढ़ सकेगा।');
+      setTimeout(() => setPolicyFeedback(null), 5000);
+    } finally {
+      setSavingPolicy(false);
+    }
+  };
 
   // Lock code state
   const [lockCodeInput, setLockCodeInput]       = useState('');
@@ -1402,7 +1467,158 @@ export const SuperAdminPanel: React.FC<Props> = ({ adminUid, onBack }) => {
               </span>
             )}
           </button>
+          <button
+            onClick={() => setDashTab("policies")}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-bold transition-all relative ${
+              dashTab === "policies" ? "bg-amber-600 text-white shadow" : "text-slate-500 dark:text-slate-400 hover:text-slate-700"
+            }`}
+          >
+            <Bell className="w-4 h-4" /> नोटिफिकेशन नीति
+            <span className={`text-[9px] px-1.5 py-0.2 rounded-full font-black ${notificationGateBypass ? "bg-emerald-500/20 text-emerald-400" : "bg-red-500/20 text-red-400"}`}>
+              {notificationGateBypass ? "Bypass ON" : "Lock"}
+            </span>
+          </button>
         </div>
+
+        {/* Policies & Notification Bypass Tab */}
+        {dashTab === "policies" && (
+          <div className="space-y-4 animate-in fade-in duration-200">
+            {/* Feedback notification toast if saved */}
+            {policyFeedback && (
+              <div className="p-3.5 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-800 dark:text-emerald-300 text-xs font-bold flex items-center gap-2">
+                <Check className="w-4 h-4 shrink-0 text-emerald-500" />
+                <span>{policyFeedback}</span>
+              </div>
+            )}
+
+            {/* Notification Gate Bypass Policy Management Card */}
+            <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-5 shadow-sm">
+              <div className="flex items-start gap-3.5 mb-4 pb-4 border-b border-slate-100 dark:border-slate-700/60">
+                <div className="w-12 h-12 rounded-2xl bg-amber-500/15 text-amber-500 flex items-center justify-center shrink-0 border border-amber-500/30">
+                  <Bell className="w-6 h-6 animate-[wiggle_1s_ease-in-out_infinite]" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-base font-black text-slate-800 dark:text-white">
+                      नोटिफिकेशन परमिशन गेट बाईपास नियंत्रण (Bypass Control)
+                    </h3>
+                    <span className={`text-[11px] font-black px-2.5 py-0.5 rounded-full border ${
+                      notificationGateBypass
+                        ? "bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-700"
+                        : "bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-700"
+                    }`}>
+                      {notificationGateBypass ? "🟢 बाईपास चालू (Bypass Active - Default)" : "🔒 अनिवार्य लॉक (Mandatory Mode)"}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+                    यह तय करें कि छात्र या अभिभावक जब ऐप खोलें तो क्या वे नोटिफिकेशन अनुमति को <strong>स्किप (Skip)</strong> करके बाद में चालू कर सकते हैं, या इसे चालू करना 100% अनिवार्य रहेगा।
+                  </p>
+                </div>
+              </div>
+
+              {/* Mode Selection Options */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 mb-5">
+                {/* Option 1: Bypass Mode (Default) */}
+                <div
+                  onClick={() => !savingPolicy && handleToggleNotificationPolicy(true)}
+                  className={`p-4 rounded-2xl border-2 transition-all cursor-pointer relative ${
+                    notificationGateBypass
+                      ? "border-emerald-500 bg-emerald-50/70 dark:bg-emerald-950/20 shadow-md"
+                      : "border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 hover:border-slate-300"
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-black text-sm text-slate-800 dark:text-white flex items-center gap-1.5">
+                      <span>🟢 बाईपास चालू (अनुशंसित / डिफ़ॉल्ट)</span>
+                    </span>
+                    <input
+                      type="radio"
+                      name="notifBypassRadio"
+                      checked={notificationGateBypass}
+                      onChange={() => handleToggleNotificationPolicy(true)}
+                      className="w-4 h-4 accent-emerald-600"
+                    />
+                  </div>
+                  <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                    <strong>डिफ़ॉल्ट मोड:</strong> यूज़र को नोटिफिकेशन का प्रॉम्प्ट दिखेगा, लेकिन वे &quot;बाद में चालू करेंगे / अभी छोड़ें&quot; दबाकर सीधे ऐप उपयोग कर सकेंगे। वे बाद में सेटिंग्स या ऊपर घंटी आइकॉन से कभी भी नोटिफिकेशन चालू कर सकेंगे।
+                  </p>
+                  <div className="mt-2.5 inline-flex items-center gap-1 text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+                    <Check className="w-3.5 h-3.5" /> यूज़र फ्रेंडली • कोई रुकावट नहीं
+                  </div>
+                </div>
+
+                {/* Option 2: Mandatory Lock Mode */}
+                <div
+                  onClick={() => !savingPolicy && handleToggleNotificationPolicy(false)}
+                  className={`p-4 rounded-2xl border-2 transition-all cursor-pointer relative ${
+                    !notificationGateBypass
+                      ? "border-rose-500 bg-rose-50/70 dark:bg-rose-950/20 shadow-md"
+                      : "border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 hover:border-slate-300"
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-black text-sm text-slate-800 dark:text-white flex items-center gap-1.5">
+                      <span>🔒 अनिवार्य लॉक (Strict Mandatory)</span>
+                    </span>
+                    <input
+                      type="radio"
+                      name="notifBypassRadio"
+                      checked={!notificationGateBypass}
+                      onChange={() => handleToggleNotificationPolicy(false)}
+                      className="w-4 h-4 accent-rose-600"
+                    />
+                  </div>
+                  <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                    <strong>कठोर मोड:</strong> स्किप करने का विकल्प छिपा दिया जाएगा। जब तक छात्र/अभिभावक फोन में नोटिफिकेशन अनुमति &quot;Allow&quot; नहीं करेंगे, तब तक वे ऐप के किसी भी पेज को नहीं खोल सकेंगे।
+                  </p>
+                  <div className="mt-2.5 inline-flex items-center gap-1 text-[11px] font-bold text-rose-600 dark:text-rose-400">
+                    <Lock className="w-3.5 h-3.5" /> 100% सूचना डिलीवरी अनिवार्य
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons for Super Admin */}
+              <div className="flex flex-wrap items-center gap-2.5 pt-3 border-t border-slate-100 dark:border-slate-700/60">
+                <button
+                  type="button"
+                  onClick={() => handleToggleNotificationPolicy(!notificationGateBypass)}
+                  disabled={savingPolicy}
+                  className={`px-4 py-2 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-1.5 shadow-sm ${
+                    notificationGateBypass
+                      ? "bg-slate-800 text-white hover:bg-slate-700 dark:bg-slate-700"
+                      : "bg-emerald-600 text-white hover:bg-emerald-500"
+                  }`}
+                >
+                  <Sliders className="w-3.5 h-3.5" />
+                  <span>{notificationGateBypass ? "अनिवार्य मोड में बदलें (Set Mandatory)" : "डिफ़ॉल्ट बाईपास चालू करें (Enable Bypass)"}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    window.dispatchEvent(new CustomEvent('open-popup-settings-guide'));
+                  }}
+                  className="px-4 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-xs font-bold transition cursor-pointer flex items-center gap-1.5"
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  <span>👁️ परमिशन गेट का लाइव टेस्ट/प्रीव्यू देखें</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    localStorage.removeItem('nst_notif_gate_skipped');
+                    sessionStorage.removeItem('nst_notif_gate_skipped');
+                    alert("स्किप स्थिति रीसेट कर दी गई है! नए यूज़र की तरह परमिशन गेट देखने के लिए पेज रीफ्रेश करें।");
+                  }}
+                  className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-medium transition cursor-pointer flex items-center gap-1"
+                >
+                  <span>🔄 टेस्ट हेतु स्किप रीसेट करें</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Subscriptions Tab */}
         {dashTab === "subscriptions" && (

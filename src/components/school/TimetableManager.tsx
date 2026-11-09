@@ -22,6 +22,7 @@ import {
 } from "../../school-firebase";
 import { YouTubeLectureModal } from "./YouTubeLectureModal";
 import { ClassroomVideoArchive } from "./ClassroomVideoArchive";
+import { getDemoSchoolDataset } from "./demoDataStore";
 
 interface Props {
   school: School;
@@ -164,8 +165,15 @@ export const TimetableManager: React.FC<Props> = ({
   const [allTimetables, setAllTimetables] = useState<Record<string, Record<string, TimetablePeriod[]>>>(() => {
     try {
       const saved = localStorage.getItem(storageKey);
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && Object.keys(parsed).length > 0) return parsed;
+      }
     } catch {}
+    const demo = getDemoSchoolDataset();
+    if (demo && demo.timetables && Object.keys(demo.timetables).length > 0) {
+      return demo.timetables;
+    }
     return {};
   });
 
@@ -213,14 +221,46 @@ export const TimetableManager: React.FC<Props> = ({
     return `${selectedClass.id}__sec_${selectedSection || "A"}`;
   }, [selectedClass, selectedSection]);
 
-  // Current class & section schedule with backward compatibility
+  // Current class & section schedule with backward compatibility and demo fallback
   const classSchedule = useMemo(() => {
     if (!selectedClass) return {};
-    // 1. Direct section-specific match
-    if (allTimetables[activeScheduleKey]) return allTimetables[activeScheduleKey];
-    // 2. Fallback to legacy classId key for default Section A
-    if ((selectedSection === "A" || !selectedSection) && allTimetables[selectedClass.id]) {
-      return allTimetables[selectedClass.id];
+    const cleanName = (selectedClass.name || "").replace(/\s*-\s*Section\s*[AB]/i, "").trim();
+    const shortKey = (selectedClass.id || "").replace(/^demo_cls_[^_]+_|^demo_class_|^cls_/i, "").replace(/_sec_[ab]$/i, "").toLowerCase();
+
+    const lookupSchedule = (dict: Record<string, any>) => {
+      if (!dict) return null;
+      if (dict[activeScheduleKey] && Object.keys(dict[activeScheduleKey]).length > 0) return dict[activeScheduleKey];
+      if (dict[selectedClass.id] && Object.keys(dict[selectedClass.id]).length > 0) return dict[selectedClass.id];
+      if (dict[selectedClass.name] && Object.keys(dict[selectedClass.name]).length > 0) return dict[selectedClass.name];
+      const secKey = `${selectedClass.name}__sec_${selectedSection || "A"}`;
+      if (dict[secKey] && Object.keys(dict[secKey]).length > 0) return dict[secKey];
+      if (cleanName && dict[cleanName] && Object.keys(dict[cleanName]).length > 0) return dict[cleanName];
+      const cleanSecKey = `${cleanName}__sec_${selectedSection || "A"}`;
+      if (cleanName && dict[cleanSecKey] && Object.keys(dict[cleanSecKey]).length > 0) return dict[cleanSecKey];
+      if (shortKey && dict[shortKey] && Object.keys(dict[shortKey]).length > 0) return dict[shortKey];
+      if (shortKey && dict[`demo_class_${shortKey}`] && Object.keys(dict[`demo_class_${shortKey}`]).length > 0) return dict[`demo_class_${shortKey}`];
+      // Search partial match in keys
+      for (const [k, v] of Object.entries(dict)) {
+        if (v && Object.keys(v).length > 0) {
+          const kLower = k.toLowerCase();
+          if (cleanName && kLower.includes(cleanName.toLowerCase())) return v;
+          if (shortKey && (kLower.includes(`_${shortKey}_`) || kLower.endsWith(`_${shortKey}`))) return v;
+        }
+      }
+      return null;
+    };
+
+    // 1. Check local/state allTimetables
+    const localMatch = lookupSchedule(allTimetables);
+    if (localMatch) return localMatch;
+
+    // 2. Check demo dataset timetables
+    const demo = getDemoSchoolDataset();
+    if (demo && demo.timetables) {
+      const demoMatch = lookupSchedule(demo.timetables);
+      if (demoMatch) return demoMatch;
+      const anySchedule = Object.values(demo.timetables)[0];
+      if (anySchedule && Object.keys(anySchedule).length > 0) return anySchedule;
     }
     return {};
   }, [allTimetables, selectedClass, activeScheduleKey, selectedSection]);

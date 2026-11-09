@@ -29,6 +29,21 @@ class RootErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState
     if (typeof (window as any).hidePreReactSplash === 'function') {
       (window as any).hidePreReactSplash();
     }
+    // Auto-recover from stale chunks / dual React instance when dev server was restarted
+    const errStr = String(error?.message || error || '');
+    if (
+      errStr.includes("reading 'useState'") ||
+      errStr.includes("Invalid hook call") ||
+      errStr.includes("Failed to fetch dynamically imported module")
+    ) {
+      const reloadKey = '__nsta_stale_chunk_reload';
+      const lastReload = Number(sessionStorage.getItem(reloadKey) || 0);
+      if (Date.now() - lastReload > 8000) {
+        sessionStorage.setItem(reloadKey, String(Date.now()));
+        console.warn('[RootErrorBoundary] Detected stale dev module mismatch, performing clean reload...');
+        window.location.reload();
+      }
+    }
   }
 
   handleReload = () => {

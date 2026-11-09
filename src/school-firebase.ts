@@ -32,9 +32,10 @@ import type {
   School, SchoolSession, SchoolClass, SchoolSubject, SchoolLesson,
   SchoolTeacher, SchoolStudent, AttendanceRecord, ExamEntry, MonthlyFee,
   SchoolHomework, SchoolMCQResult, SchoolUserProfile, DailyClassLecture,
-  NstaMessage, NstaThreadType, NstaFeeSlipData,
+  NstaMessage, NstaThreadType, NstaFeeSlipData, NstaWelcomeData, NstaBirthdayData,
   SchoolAccountant, AccountantPermissions, SchoolExpenseVoucher,
-  StudentAcknowledgedLeave, StudentAbsenteeCallLog
+  StudentAcknowledgedLeave, StudentAbsenteeCallLog,
+  SchoolEvent, SchoolEventType
 } from "./school-types";
 import { sortSchoolClasses } from "./school-types";
 import { getDemoSchoolDataset, isDemoDataEnabled, setDemoDataEnabled } from "./components/school/demoDataStore";
@@ -50,10 +51,11 @@ import {
 import { uploadImageToImgBB } from "./services/imgbbService";
 
 // Only use the 910-student demo fallback for the default demo school when Demo Mode is ON.
-// Newly created schools always get a 100% clean, isolated database!
 export const shouldUseDemoForSchool = (schoolId?: string): boolean => {
-  if (!isDemoDataEnabled()) return false;
-  return !schoolId || schoolId === "dps_gurgaon_sector45" || schoolId === "demo_school";
+  if (!schoolId || schoolId === "demo_school" || schoolId.startsWith("demo_") || schoolId.includes("demo")) {
+    return isDemoDataEnabled();
+  }
+  return isDemoDataEnabled();
 };
 
 // Automatically converts heavy Base64 data:image strings into lightweight Cloud CDN URLs (~80 bytes)
@@ -829,6 +831,7 @@ export const getSessions = async (schoolId: string): Promise<SchoolSession[]> =>
 
   if (useDemo) {
     const demo = getDemoSchoolDataset();
+    if (demo && demo.sessions && demo.sessions.length > 0) return demo.sessions;
     if (demo && demo.session) return [demo.session];
   }
 
@@ -852,9 +855,10 @@ export const subscribeToSessions = (schoolId: string, cb: (sessions: SchoolSessi
 
   if (useDemo) {
     const demo = getDemoSchoolDataset();
-    if (demo && demo.session) {
+    if (demo) {
       deliveredAny = true;
-      cb([demo.session]);
+      const allSess = demo.sessions && demo.sessions.length > 0 ? demo.sessions : (demo.session ? [demo.session] : []);
+      cb(allSess);
     }
   }
 
@@ -1384,6 +1388,12 @@ export const saveStudent = async (student: SchoolStudent) => {
   if (db) {
     try { await withTimeout(setDoc(d(`schools/${student.schoolId}/students/${student.id}`), sanitized), 3000); } catch {}
   }
+
+  // Auto-dispatch official welcome message to NSTA Messenger School Desk when ID is created
+  try {
+    void dispatchOfficialSchoolWelcomeMessage(sanitized, { triggerPopup: true });
+  } catch {}
+
   return sanitized;
 };
 
@@ -1906,6 +1916,13 @@ const LOCAL_ATTENDANCE_PREFIX = "nst_school_attendance_";
 export const getLocalAttendance = (schoolId: string): AttendanceRecord[] => {
   try {
     const list = getSchoolCacheSync<AttendanceRecord[]>(`${LOCAL_ATTENDANCE_PREFIX}${schoolId}`, []);
+    if (Array.isArray(list) && list.length > 0) return list;
+    if (shouldUseDemoForSchool(schoolId)) {
+      const demo = getDemoSchoolDataset();
+      if (demo && demo.attendanceRecords && demo.attendanceRecords.length > 0) {
+        return demo.attendanceRecords;
+      }
+    }
     return Array.isArray(list) ? list : [];
   } catch {
     return [];
@@ -2176,7 +2193,15 @@ export const getLocalExams = (schoolId: string): ExamEntry[] => {
   try {
     const list = getSchoolCacheSync<ExamEntry[]>(`${LOCAL_EXAMS_PREFIX}${schoolId}`, []);
     const arr = Array.isArray(list) ? list : [];
-    return !shouldUseDemoForSchool(schoolId) ? arr.filter(e => !isDemoRecord(e)) : arr;
+    const filtered = !shouldUseDemoForSchool(schoolId) ? arr.filter(e => !isDemoRecord(e)) : arr;
+    if (filtered.length > 0) return filtered;
+    if (shouldUseDemoForSchool(schoolId)) {
+      const demo = getDemoSchoolDataset();
+      if (demo && demo.exams && demo.exams.length > 0) {
+        return demo.exams;
+      }
+    }
+    return filtered;
   } catch {
     return [];
   }
@@ -2304,6 +2329,13 @@ const LOCAL_FEES_PREFIX = "nst_school_fees_";
 
 export const getLocalFees = (schoolId: string): MonthlyFee[] => {
   const useDemo = shouldUseDemoForSchool(schoolId);
+  if (useDemo) {
+    const demo = getDemoSchoolDataset();
+    if (demo && demo.fees && Array.isArray(demo.fees) && demo.fees.length > 0) {
+      return demo.fees;
+    }
+  }
+
   try {
     const parsed = getSchoolCacheSync<MonthlyFee[]>(`${LOCAL_FEES_PREFIX}${schoolId}`, []);
     if (Array.isArray(parsed) && parsed.length > 0) {
@@ -2447,9 +2479,37 @@ export const getMonthlyFees = async (schoolId: string, month: string, classId?: 
   const useDemo = shouldUseDemoForSchool(schoolId);
   const local = getLocalFees(schoolId).filter(f => f.month === month && (!classId || isStudentInClass(f, classId)));
   const demo = useDemo ? getDemoSchoolDataset() : null;
-  const demoFees = (demo && demo.fees && demo.fees.length > 0)
+  let demoFees = (demo && demo.fees && demo.fees.length > 0)
     ? demo.fees.filter(f => f.month === month && (!classId || isStudentInClass(f, classId)))
     : [];
+
+  if (useDemo && demoFees.length === 0 && demo && demo.students && demo.students.length > 0) {
+    const relevantStudents = classId ? demo.students.filter(s => isStudentInClass(s, classId)) : demo.students;
+    demoFees = relevantStudents.map((st, idx) => {
+      const isPaid = (idx % 4) !== 3; // 75% paid, 25% due
+      const amount = st.monthlyFee || 2000;
+      return {
+        schoolId,
+        sessionId: st.sessionId || "demo_session_2026_27",
+        studentId: st.id,
+        studentName: st.name,
+        rollNo: st.rollNo,
+        classId: st.classId,
+        className: st.className,
+        month,
+        amount,
+        monthlyAmount: amount,
+        arrearsAmount: isPaid ? 0 : amount,
+        arrearsMonths: isPaid ? [] : [month],
+        paid: isPaid,
+        paidDate: isPaid ? `${month}-${String(5 + (idx % 15)).padStart(2, "0")}` : undefined,
+        paidBy: isPaid ? "Admin / Cashier" : undefined,
+        receiptNo: isPaid ? `RCP-${month.replace("-", "")}-${(st.rollNo || "01").padStart(2, "0")}` : undefined,
+        paymentMode: isPaid ? (idx % 2 === 0 ? "Cash" : "online_upi") : undefined,
+        note: isPaid ? "Monthly tuition fee received" : `Fee pending for ${month}`,
+      } as MonthlyFee;
+    });
+  }
 
   const map = new Map<string, MonthlyFee>();
   demoFees.forEach(f => map.set(f.studentId, f));
@@ -3177,9 +3237,19 @@ export const saveStaffEmployee = async (staff: import('./school-types').StaffEmp
 };
 
 export const getStaffEmployees = async (schoolId: string): Promise<import('./school-types').StaffEmployee[]> => {
-  const snap = await getDocs(col(`schools/${schoolId}/staff`));
-  const list = snap.docs.map(doc => doc.data() as import('./school-types').StaffEmployee);
-  return !isDemoDataEnabled() ? list.filter(s => !isDemoRecord(s)) : list;
+  try {
+    const snap = await getDocs(col(`schools/${schoolId}/staff`));
+    const list = snap.docs.map(doc => doc.data() as import('./school-types').StaffEmployee);
+    const filtered = !isDemoDataEnabled() ? list.filter(s => !isDemoRecord(s)) : list;
+    if (filtered.length > 0) return filtered;
+  } catch {}
+  if (shouldUseDemoForSchool(schoolId)) {
+    const demo = getDemoSchoolDataset();
+    if (demo && demo.staffEmployees && demo.staffEmployees.length > 0) {
+      return demo.staffEmployees;
+    }
+  }
+  return [];
 };
 
 export const deleteStaffEmployee = async (schoolId: string, staffId: string) => {
@@ -3191,8 +3261,18 @@ export const saveStaffLeave = async (leave: import('./school-types').StaffLeave)
 };
 
 export const getStaffLeaves = async (schoolId: string): Promise<import('./school-types').StaffLeave[]> => {
-  const snap = await getDocs(col(`schools/${schoolId}/leaves`));
-  return snap.docs.map(doc => doc.data() as import('./school-types').StaffLeave).sort((a, b) => b.appliedAt.localeCompare(a.appliedAt));
+  try {
+    const snap = await getDocs(col(`schools/${schoolId}/leaves`));
+    const list = snap.docs.map(doc => doc.data() as import('./school-types').StaffLeave).sort((a, b) => b.appliedAt.localeCompare(a.appliedAt));
+    if (list.length > 0) return list;
+  } catch {}
+  if (shouldUseDemoForSchool(schoolId)) {
+    const demo = getDemoSchoolDataset();
+    if (demo && demo.staffLeaves && demo.staffLeaves.length > 0) {
+      return demo.staffLeaves;
+    }
+  }
+  return [];
 };
 
 export const updateStaffLeaveStatus = async (schoolId: string, leaveId: string, status: 'approved' | 'rejected', remarks?: string) => {
@@ -3285,6 +3365,13 @@ export const getAdmissionApplications = async (schoolId: string): Promise<import
   const finalApps = Array.from(mergedMap.values()).sort((a, b) => (b.appliedAt || "").localeCompare(a.appliedAt || ""));
   if (finalApps.length > 0) {
     setSchoolCacheSync(LOCAL_ADMISSIONS_KEY(schoolId), finalApps);
+    return finalApps;
+  }
+  if (shouldUseDemoForSchool(schoolId)) {
+    const demo = getDemoSchoolDataset();
+    if (demo && demo.admissions && demo.admissions.length > 0) {
+      return demo.admissions;
+    }
   }
   return finalApps;
 };
@@ -3370,23 +3457,6 @@ export const saveSchoolGalleryItem = async (schoolId: string, item: import('./sc
 
 export const deleteSchoolGalleryItem = async (schoolId: string, itemId: string): Promise<void> => {
   await deleteDoc(d(`schools/${schoolId}/gallery/${itemId}`));
-};
-
-export const getSchoolEvents = async (schoolId: string): Promise<import('./school-types').SchoolEventItem[]> => {
-  try {
-    const snap = await getDocs(col(`schools/${schoolId}/events`));
-    return snap.docs.map(doc => doc.data() as import('./school-types').SchoolEventItem).sort((a, b) => a.startDate.localeCompare(b.startDate));
-  } catch (e) {
-    return [];
-  }
-};
-
-export const saveSchoolEvent = async (schoolId: string, event: import('./school-types').SchoolEventItem): Promise<void> => {
-  await setDoc(d(`schools/${schoolId}/events/${event.id}`), sanitizeForFirestore(event));
-};
-
-export const deleteSchoolEvent = async (schoolId: string, eventId: string): Promise<void> => {
-  await deleteDoc(d(`schools/${schoolId}/events/${eventId}`));
 };
 
 // ── HOLIDAYS & FESTIVALS (LIVE REALTIME SYNC) ────────────────────────────────
@@ -4201,8 +4271,18 @@ export const saveClassLecture = async (lecture: DailyClassLecture): Promise<void
 };
 
 export const getClassLectures = async (schoolId: string, classId?: string, date?: string): Promise<DailyClassLecture[]> => {
+  const useDemo = shouldUseDemoForSchool(schoolId);
   let local = getSchoolCacheSync<DailyClassLecture[]>(`nst_school_lectures_${schoolId}`, []);
   if (!Array.isArray(local)) local = [];
+
+  if (useDemo) {
+    const demo = getDemoSchoolDataset();
+    if (demo && demo.videoLectures && demo.videoLectures.length > 0) {
+      // Merge demo lectures with local edits
+      const mergedDemo = [...local, ...demo.videoLectures.filter(dl => !local.some(l => l.id === dl.id))];
+      local = mergedDemo;
+    }
+  }
 
   if (db) {
     try {
@@ -4218,10 +4298,28 @@ export const getClassLectures = async (schoolId: string, classId?: string, date?
 
   let filtered = local;
   if (classId) {
-    filtered = filtered.filter(l => l.classId === classId);
+    const cleanCid = classId.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const classFiltered = filtered.filter(l => {
+      if (l.classId === classId || l.className === classId) return true;
+      const cleanLCid = (l.classId || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const cleanLName = (l.className || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      return cleanLCid === cleanCid ||
+             cleanLName === cleanCid ||
+             cleanLCid.includes(cleanCid) ||
+             cleanCid.includes(cleanLCid) ||
+             cleanLName.includes(cleanCid) ||
+             cleanCid.includes(cleanLName);
+    });
+    if (classFiltered.length > 0) {
+      filtered = classFiltered;
+    }
   }
+
   if (date) {
-    filtered = filtered.filter(l => l.date === date);
+    const dateFiltered = filtered.filter(l => l.date === date);
+    if (dateFiltered.length > 0) {
+      filtered = dateFiltered;
+    }
   }
   return filtered.sort((a, b) => (b.date || "").localeCompare(a.date || "") || (a.periodNumber - b.periodNumber));
 };
@@ -4762,12 +4860,708 @@ export const autoSendFeeSlipToSchoolDesk = async (payload: {
   await saveNstaMessage(msg);
 };
 
+// ── OFFICIAL SCHOOL WELCOME MESSAGE (नया आईडी बनते ही आधिकारिक स्वागत संदेश) ──
+export const dispatchOfficialSchoolWelcomeMessage = async (
+  student: {
+    id: string;
+    name: string;
+    admissionNo?: string;
+    rollNo?: string;
+    classId?: string;
+    className?: string;
+    schoolId?: string;
+    schoolName?: string;
+    fatherName?: string;
+    mobile?: string;
+    phone?: string;
+    photoUrl?: string;
+    photoURL?: string;
+  },
+  options?: {
+    force?: boolean;
+    schoolName?: string;
+    schoolLogo?: string;
+    triggerPopup?: boolean;
+  }
+): Promise<NstaMessage | null> => {
+  if (!student || !student.id || !student.name) return null;
+  const targetSchoolId = student.schoolId || "dps_gurgaon_sector45";
+  const sentKey = `nst_welcome_sent_${targetSchoolId}_${student.id}`;
+
+  const cleanAdmNo = student.admissionNo || `ADM-${student.id.slice(-6).toUpperCase()}`;
+  const cleanRollNo = student.rollNo || "01";
+  const cleanClassName =
+    student.className ||
+    (student.classId ? student.classId.replace(/^cls_/i, "Class ") : "Class 10");
+
+  // Determine school name & branding
+  let resolvedSchoolName = options?.schoolName || student.schoolName || "";
+  let resolvedSchoolLogo = options?.schoolLogo || "";
+
+  if (!resolvedSchoolName) {
+    try {
+      const schools = getLocalSchools();
+      const matched = schools.find((s) => s.id === targetSchoolId);
+      if (matched?.name) {
+        resolvedSchoolName = matched.name;
+        resolvedSchoolLogo = matched.logoUrl || "";
+      }
+    } catch {}
+  }
+  if (!resolvedSchoolName) {
+    resolvedSchoolName = targetSchoolId === "dps_gurgaon_sector45" ? "Delhi Public School" : "NSTA Digital School";
+  }
+
+  const welcomePayload: NstaWelcomeData = {
+    studentId: student.id,
+    studentName: student.name,
+    admissionNo: cleanAdmNo,
+    rollNo: cleanRollNo,
+    classId: student.classId,
+    className: cleanClassName,
+    schoolName: resolvedSchoolName,
+    schoolLogo: resolvedSchoolLogo,
+    fatherName: student.fatherName,
+    mobile: student.phone || student.mobile,
+    session: "2026-27",
+    verificationBadge: "VERIFIED_STUDENT_ID",
+    issuedAt: new Date().toISOString(),
+  };
+
+  // Set popup flags so the student sees the celebratory Welcome Modal on login/scan
+  try {
+    localStorage.setItem(`nst_show_welcome_popup_${student.id}`, JSON.stringify(welcomePayload));
+    localStorage.setItem("nst_pending_welcome_student", JSON.stringify(welcomePayload));
+  } catch {}
+
+  // Prevent duplicate chat messages in School Desk if already delivered
+  try {
+    if (!options?.force && localStorage.getItem(sentKey)) {
+      return null;
+    }
+  } catch {}
+
+  const welcomeText = `🌟 *आधिकारिक स्वागत संदेश | OFFICIAL WELCOME LETTER* 🌟
+
+प्रिय विद्यार्थी *${student.name}*,
+*${resolvedSchoolName}* के डिजिटल शैक्षणिक पोर्टल में आपका हार्दिक स्वागत एवं अभिनंदन है! 🎓
+
+📋 *विद्यार्थी पहचान पत्र विवरण (Verified Student Identity)*:
+• **विद्यार्थी का नाम (Student Name):** ${student.name}
+• **प्रवेश संख्या (Admission No):** ${cleanAdmNo}
+• **कक्षा (Class & Section):** ${cleanClassName}
+• **रोल नंबर (Roll No):** ${cleanRollNo}
+• **सत्र (Academic Session):** 2026-27
+• **आईडी स्थिति:** ✅ सक्रिय व प्रमाणित (Digital ID Card Active)
+
+🚀 *पोर्टल पर उपलब्ध मुख्य सुविधाएं (Digital Campus Facilities)*:
+1. 📚 *डिजिटल पाठ्यक्रम एवं नोट्स* - सभी विषयों के सम्पूर्ण अध्यायवार नोट्स व व्याख्या (100% Free)।
+2. 🎯 *दैनिक MCQ अभ्यास व टेस्ट* - वस्तुनिष्ठ प्रश्नोत्तरी, तत्काल स्कोर व लाइव लीडरबोर्ड।
+3. ⏱️ *डिजिटल हाजिरी व लाइव अलर्ट्स* - स्कूल आगमन/प्रस्थान की रीयल-टाइम सूचना आपके अभिभावक तक।
+4. 🧾 *शुल्क पर्ची व आधिकारिक रसीदें* - पारदर्शी ऑनलाइन फीस लेजर, पासबुक और POS रसीदें।
+5. 💬 *NSTA मैसेंजर स्कूल डेस्क* - स्कूल के सभी सर्कुलर, नोटिस, गृहकार्य व शिक्षक मार्गदर्शन।
+
+📌 *महत्वपूर्ण निर्देश (Guidelines)*:
+• आपकी डिजिटल आईडी सक्रिय है। आप इसे स्कूल QR कोड स्कैनर द्वारा कभी भी 1-टैप में लॉगिन कर सकते हैं।
+• सभी आवश्यक स्कूल सर्कुलर व अवकाश सूचना इसी स्कूल डेस्क पर प्राप्त होंगी।
+• किसी भी समस्या हेतु विद्यालय कार्यालय अथवा कक्षा शिक्षक से संपर्क करें।
+
+विद्यालय परिवार आपके उज्ज्वल भविष्य और उच्चतम शैक्षणिक सफलता की मंगलकामना करता है!
+
+सादर,
+*प्रधानाचार्य एवं विद्यालय प्रशासन (Principal & Academic Administration)*
+🏛️ *${resolvedSchoolName}*
+📞 हेल्पलाइन: 9811023450 | ✉️ support@nsta.app`;
+
+  const welcomeMsg: NstaMessage = {
+    id: `msg_welcome_${student.id}_${Date.now()}`,
+    schoolId: targetSchoolId,
+    threadType: "SCHOOL_DESK",
+    studentId: student.id,
+    studentName: student.name,
+    senderId: `admin_${targetSchoolId}`,
+    senderName: `${resolvedSchoolName} (Principal Desk)`,
+    senderRole: "ADMIN",
+    senderPhoto: resolvedSchoolLogo,
+    text: welcomeText,
+    attachmentType: "WELCOME",
+    welcomeData: welcomePayload,
+    createdAt: new Date().toISOString(),
+    status: "sent",
+  };
+
+  try {
+    await saveNstaMessage(welcomeMsg);
+    localStorage.setItem(sentKey, "true");
+  } catch {}
+
+  // Send push notification
+  try {
+    const { sendSchoolPushNotification } = await import("./utils/schoolPushClient");
+    void sendSchoolPushNotification({
+      schoolId: targetSchoolId,
+      studentIds: [student.id],
+      title: `🎓 Welcome to ${resolvedSchoolName}!`,
+      body: `प्रिय ${student.name}, आपका डिजिटल आईडी कार्ड व पोर्टल सक्रिय कर दिया गया है।`,
+      type: "SCHOOL_NOTICE",
+      icon: resolvedSchoolLogo,
+      senderPhoto: resolvedSchoolLogo,
+      url: "/?schoolPortal=1&schoolTab=messenger&subTab=school",
+      urgent: true,
+    });
+  } catch {}
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("nst-school-welcome-received", { detail: welcomePayload })
+    );
+  }
+
+  return welcomeMsg;
+};
+
+// ── STUDENT BIRTHDAY UTILITIES (स्वचालित जन्मदिन शुभकामना इंजन) ──
+export const getStudentBirthdayInfo = (dob?: string): { month: number; day: number; birthYear?: number } | null => {
+  if (!dob) return null;
+  try {
+    const clean = dob.trim();
+    // Support formats: YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY, YYYY/MM/DD
+    const parts = clean.split(/[-/]/).map(Number);
+    if (parts.length >= 3) {
+      if (parts[0] > 1000) {
+        // YYYY-MM-DD
+        return { birthYear: parts[0], month: parts[1], day: parts[2] };
+      }
+      // DD-MM-YYYY (or DD/MM/YYYY)
+      return { birthYear: parts[2], month: parts[1], day: parts[0] };
+    } else if (parts.length === 2) {
+      return { month: parts[1], day: parts[0] };
+    }
+  } catch {}
+  return null;
+};
+
+export const isStudentBirthdayOnDate = (dob: string | undefined | null, targetMonth: number, targetDay: number): boolean => {
+  const info = getStudentBirthdayInfo(dob || undefined);
+  if (!info) return false;
+  return info.month === targetMonth && info.day === targetDay;
+};
+
+export const isStudentBirthdayToday = (dob?: string): boolean => {
+  if (!dob) return false;
+  const today = new Date();
+  return isStudentBirthdayOnDate(dob, today.getMonth() + 1, today.getDate());
+};
+
+export const dispatchOfficialSchoolBirthdayWish = async (
+  student: {
+    id: string;
+    name: string;
+    admissionNo?: string;
+    rollNo?: string;
+    classId?: string;
+    className?: string;
+    schoolId?: string;
+    schoolName?: string;
+    dateOfBirth?: string;
+    phone?: string;
+    photoUrl?: string;
+  },
+  options?: {
+    force?: boolean;
+    schoolName?: string;
+    schoolLogo?: string;
+    triggerPopup?: boolean;
+  }
+): Promise<NstaMessage | null> => {
+  if (!student || !student.id || !student.name) return null;
+  const targetSchoolId = student.schoolId || "dps_gurgaon_sector45";
+  const currentYear = new Date().getFullYear();
+  const sentKey = `nst_birthday_wish_sent_${targetSchoolId}_${student.id}_${currentYear}`;
+
+  const cleanAdmNo = student.admissionNo || `ADM-${student.id.slice(-6).toUpperCase()}`;
+  const cleanRollNo = student.rollNo || "01";
+  const cleanClassName =
+    student.className ||
+    (student.classId ? student.classId.replace(/^cls_/i, "Class ") : "Class 10");
+  const cleanDob = student.dateOfBirth || "Today";
+
+  // Determine school name & branding
+  let resolvedSchoolName = options?.schoolName || student.schoolName || "";
+  let resolvedSchoolLogo = options?.schoolLogo || "";
+
+  if (!resolvedSchoolName) {
+    try {
+      const schools = getLocalSchools();
+      const matched = schools.find((s) => s.id === targetSchoolId);
+      if (matched?.name) {
+        resolvedSchoolName = matched.name;
+        resolvedSchoolLogo = matched.logoUrl || "";
+      }
+    } catch {}
+  }
+  if (!resolvedSchoolName) {
+    resolvedSchoolName =
+      targetSchoolId === "dps_gurgaon_sector45"
+        ? "Delhi Public School"
+        : "NSTA Digital School";
+  }
+
+  const birthdayPayload: NstaBirthdayData = {
+    studentId: student.id,
+    studentName: student.name,
+    admissionNo: cleanAdmNo,
+    rollNo: cleanRollNo,
+    classId: student.classId,
+    className: cleanClassName,
+    schoolName: resolvedSchoolName,
+    schoolLogo: resolvedSchoolLogo,
+    dateOfBirth: cleanDob,
+    wishedYear: currentYear,
+    issuedAt: new Date().toISOString(),
+  };
+
+  // Set popup flags so student sees the celebratory Birthday Modal
+  try {
+    localStorage.setItem(
+      `nst_show_birthday_popup_${student.id}`,
+      JSON.stringify(birthdayPayload)
+    );
+    localStorage.setItem(
+      "nst_pending_birthday_student",
+      JSON.stringify(birthdayPayload)
+    );
+  } catch {}
+
+  // Prevent duplicate chat messages in School Desk if already delivered this year
+  try {
+    if (!options?.force && localStorage.getItem(sentKey)) {
+      return null;
+    }
+  } catch {}
+
+  const birthdayText = `🎂 *जन्मदिन की हार्दिक शुभकामनाएं एवं शुभाशीर्वाद!* 🎂
+✨ *OFFICIAL BIRTHDAY BLESSINGS & GREETINGS* ✨
+
+प्रिय विद्यार्थी *${student.name}*,
+*${resolvedSchoolName}* परिवार की ओर से आपके जन्मदिवस के इस मंगलमय अवसर पर आपको हार्दिक बधाई, असीम स्नेह और मंगलमय शुभकामनाएं! 🌟🎉
+
+📋 *विद्यार्थी पहचान विवरण (Student Profile)*:
+• **विद्यार्थी का नाम (Student Name):** ${student.name}
+• **प्रवेश संख्या (Admission No):** ${cleanAdmNo}
+• **कक्षा (Class & Section):** ${cleanClassName}
+• **रोल नंबर (Roll No):** ${cleanRollNo}
+• **जन्म तिथि (Date of Birth):** ${cleanDob}
+• **विद्यालय (School):** ${resolvedSchoolName}
+
+💐 *प्रधानाचार्य व विद्यालय प्रबंधन का संदेश (Principal's Blessing)*:
+"विद्यार्थी जीवन स्वर्णिम भविष्य की मजबूत नींव होता है। ईश्वर से प्रार्थना है कि यह नया वर्ष आपके जीवन में उत्तम स्वास्थ्य, प्रखर बुद्धि, एकाग्रता और नित-नई शैक्षणिक उपलब्धियां लेकर आए। आप अपनी कड़ी मेहनत, अनुशासन और श्रेष्ठ आचरण से अपने माता-पिता, गुरुजनों और विद्यालय का नाम पूरे देश में रोशन करें।"
+
+🌟 *जन्मदिवस पर आपके लिए विशेष (Birthday Highlights)*:
+1. 📚 ज्ञान और अनुशासन के साथ अपने लक्ष्यों की ओर अग्रसर रहें।
+2. 🎯 अपने दैनिक अध्ययन, अभ्यास और सीखने की ललक को सदैव जीवित रखें।
+3. 🏆 विद्यालय का संपूर्ण डिजिटल लर्निंग कैंपस व शिक्षक मार्गदर्शन सदैव आपके साथ है।
+
+विद्यालय परिवार आपके सुखद, स्वस्थ, यशस्वी एवं उज्ज्वल भविष्य की कामना करता है। ईश्वर आपको सदैव प्रगति के मार्ग पर प्रशस्त रखें।
+
+सस्नेह व शुभाशीर्वाद,
+*प्रधानाचार्य एवं समस्त शिक्षकगण (Principal & Faculty Members)*
+🏛️ *${resolvedSchoolName}*
+📞 हेल्पलाइन: 9811023450 | ✉️ support@nsta.app`;
+
+  const birthdayMsg: NstaMessage = {
+    id: `msg_bday_${student.id}_${currentYear}_${Date.now()}`,
+    schoolId: targetSchoolId,
+    threadType: "SCHOOL_DESK",
+    studentId: student.id,
+    studentName: student.name,
+    senderId: `admin_${targetSchoolId}`,
+    senderName: `${resolvedSchoolName} (Principal Desk)`,
+    senderRole: "ADMIN",
+    senderPhoto: resolvedSchoolLogo,
+    text: birthdayText,
+    attachmentType: "BIRTHDAY",
+    birthdayData: birthdayPayload,
+    createdAt: new Date().toISOString(),
+    status: "sent",
+  };
+
+  try {
+    await saveNstaMessage(birthdayMsg);
+    localStorage.setItem(sentKey, "true");
+  } catch {}
+
+  // Send real-time push notification
+  try {
+    const { sendSchoolPushNotification } = await import("./utils/schoolPushClient");
+    void sendSchoolPushNotification({
+      schoolId: targetSchoolId,
+      studentIds: [student.id],
+      title: `🎂 जन्मदिन की हार्दिक शुभकामनाएं! | Happy Birthday!`,
+      body: `प्रिय ${student.name}, ${resolvedSchoolName} की ओर से जन्मदिवस पर हार्दिक बधाई व शुभाशीर्वाद।`,
+      type: "SCHOOL_NOTICE",
+      icon: resolvedSchoolLogo,
+      senderPhoto: resolvedSchoolLogo,
+      url: "/?schoolPortal=1&schoolTab=messenger&subTab=school",
+      urgent: true,
+    });
+  } catch {}
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("nst-school-birthday-received", { detail: birthdayPayload })
+    );
+  }
+
+  return birthdayMsg;
+};
+
+// Automatic daily check for any student whose birthday is today in the given school
+export const checkAndDispatchTodaysBirthdays = async (
+  schoolId: string = "dps_gurgaon_sector45"
+): Promise<number> => {
+  try {
+    const students = getLocalStudents(schoolId);
+    if (!Array.isArray(students) || students.length === 0) return 0;
+
+    let dispatchedCount = 0;
+    for (const st of students) {
+      if (st && st.dateOfBirth && isStudentBirthdayToday(st.dateOfBirth)) {
+        const msg = await dispatchOfficialSchoolBirthdayWish(st, {
+          force: false,
+          triggerPopup: true,
+        });
+        if (msg) dispatchedCount++;
+      }
+    }
+    return dispatchedCount;
+  } catch {
+    return 0;
+  }
+};
+
+// ── SCHOOL EVENTS & MORNING 6:00 AM TEACHER NOTIFICATIONS ──────────────────
+const LOCAL_EVENTS_PREFIX = "nst_school_events_";
+
+export const getLocalSchoolEvents = (schoolId: string): SchoolEvent[] => {
+  try {
+    const list = getSchoolCacheSync<SchoolEvent[]>(`${LOCAL_EVENTS_PREFIX}${schoolId}`, []);
+    if (Array.isArray(list) && list.length > 0) return list;
+    if (shouldUseDemoForSchool(schoolId)) {
+      const demo = getDemoSchoolDataset();
+      if (demo && demo.events && demo.events.length > 0) {
+        return demo.events;
+      }
+    }
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+};
+
+export const setLocalSchoolEvents = (schoolId: string, events: SchoolEvent[]) => {
+  try {
+    setSchoolCacheSync(`${LOCAL_EVENTS_PREFIX}${schoolId}`, Array.isArray(events) ? events : []);
+  } catch {}
+};
+
+const getDefaultInitialEvents = (schoolId: string): SchoolEvent[] => {
+  const today = new Date();
+  const y = today.getFullYear();
+  const m = String(today.getMonth() + 1).padStart(2, "0");
+  const d = String(today.getDate()).padStart(2, "0");
+  const todayDate = `${y}-${m}-${d}`;
+
+  return [
+    {
+      id: `evt_staff_meet_${schoolId}`,
+      schoolId,
+      title: "मासिक शिक्षक समीक्षा बैठक (Staff Monthly Meeting)",
+      type: "MEETING",
+      date: todayDate,
+      time: "09:30 AM",
+      venue: "Principal Office / Conference Room",
+      description: "मासिक शैक्षणिक प्रगति, उपस्थिति सुधार, कमजोर छात्रों की रेमेडियल क्लास व अनुशासन समीक्षा हेतु बैठक।",
+      targetAudience: "ALL_TEACHERS",
+      createdAt: new Date().toISOString()
+    },
+    {
+      id: `evt_exam_pa2_${schoolId}`,
+      schoolId,
+      title: "PA-2 आवधिक मूल्यांकन परीक्षा (Periodic Assessment Exam)",
+      type: "EXAM",
+      date: todayDate,
+      time: "10:00 AM - 01:00 PM",
+      venue: "All Classrooms",
+      description: "कक्षा 1 से 10 तक के सभी छात्रों की परीक्षा आयोजित की जाएगी। वीक्षक शिक्षक समय पर ड्यूटी संभालें।",
+      targetAudience: "WHOLE_SCHOOL",
+      createdAt: new Date().toISOString()
+    },
+    {
+      id: `evt_ptm_result_${schoolId}`,
+      schoolId,
+      title: "अभिभावक-शिक्षक बैठक व रिजल्ट डे (PTM & Result Day)",
+      type: "RESULT_DAY",
+      date: todayDate,
+      time: "08:30 AM - 12:30 PM",
+      venue: "Main School Auditorium",
+      description: "अभिभावकों के समक्ष छात्र प्रगति पत्रक (Report Card) वितरण व फीडबैक सत्र।",
+      targetAudience: "WHOLE_SCHOOL",
+      createdAt: new Date().toISOString()
+    }
+  ];
+};
+
+export const getSchoolEvents = async (schoolId: string): Promise<SchoolEvent[]> => {
+  const local = getLocalSchoolEvents(schoolId);
+  if (local.length > 0) return local;
+
+  if (rtdb) {
+    try {
+      const snap = await withTimeout(get(ref(rtdb, `schools/${schoolId}/events`)), 2000);
+      const val = (snap as any)?.val?.();
+      if (val && typeof val === "object") {
+        const list = Object.values(val) as SchoolEvent[];
+        setLocalSchoolEvents(schoolId, list);
+        return list;
+      }
+    } catch {}
+  }
+
+  const defEvents = getDefaultInitialEvents(schoolId);
+  setLocalSchoolEvents(schoolId, defEvents);
+  return defEvents;
+};
+
+export const saveSchoolEvent = async (event: SchoolEvent): Promise<void> => {
+  const sanitized = sanitizeForFirestore(event);
+  const current = getLocalSchoolEvents(event.schoolId);
+  const updated = [sanitized, ...current.filter(e => e.id !== event.id)];
+  setLocalSchoolEvents(event.schoolId, updated);
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("school-events-updated", { detail: { schoolId: event.schoolId, event: sanitized } }));
+  }
+
+  if (rtdb) {
+    try {
+      await withTimeout(set(ref(rtdb, `schools/${event.schoolId}/events/${event.id}`), sanitized), 2000);
+    } catch {}
+  }
+  if (db) {
+    try {
+      await withTimeout(setDoc(d(`schools/${event.schoolId}/events/${event.id}`), sanitized), 2500);
+    } catch {}
+  }
+};
+
+export const deleteSchoolEvent = async (schoolId: string, eventId: string): Promise<void> => {
+  const current = getLocalSchoolEvents(schoolId);
+  const updated = current.filter(e => e.id !== eventId);
+  setLocalSchoolEvents(schoolId, updated);
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("school-events-updated", { detail: { schoolId, eventId, action: "DELETE" } }));
+  }
+
+  if (rtdb) {
+    try {
+      await withTimeout(remove(ref(rtdb, `schools/${schoolId}/events/${eventId}`)), 2000);
+    } catch {}
+  }
+  if (db) {
+    try {
+      await withTimeout(deleteDoc(d(`schools/${schoolId}/events/${eventId}`)), 2500);
+    } catch {}
+  }
+};
+
+export const subscribeToSchoolEvents = (schoolId: string, cb: (events: SchoolEvent[]) => void) => {
+  const local = getLocalSchoolEvents(schoolId);
+  if (local.length > 0) {
+    cb(local);
+  } else {
+    cb(getDefaultInitialEvents(schoolId));
+  }
+
+  let unsubRtdb = () => {};
+  if (rtdb) {
+    try {
+      const q = ref(rtdb, `schools/${schoolId}/events`);
+      unsubRtdb = onValue(q, (snap) => {
+        const val = snap.val();
+        if (val && typeof val === "object") {
+          const list = Object.values(val) as SchoolEvent[];
+          setLocalSchoolEvents(schoolId, list);
+          cb(list);
+        }
+      });
+    } catch {}
+  }
+
+  const handleEvt = (e: any) => {
+    if (e.detail?.schoolId === schoolId) {
+      cb(getLocalSchoolEvents(schoolId));
+    }
+  };
+  if (typeof window !== "undefined") {
+    window.addEventListener("school-events-updated", handleEvt);
+  }
+
+  return () => {
+    unsubRtdb();
+    if (typeof window !== "undefined") {
+      window.removeEventListener("school-events-updated", handleEvt);
+    }
+  };
+};
+
+export const dispatchTeacherEventNotification = async (
+  schoolId: string,
+  event: SchoolEvent,
+  options?: { force?: boolean }
+): Promise<{ delivered: number }> => {
+  if (!event || !event.title) return { delivered: 0 };
+  const targetSchoolId = schoolId || event.schoolId;
+  const sentKey = `nst_morning_event_sent_${targetSchoolId}_${event.id}_${event.date}`;
+
+  if (!options?.force && typeof window !== "undefined") {
+    try {
+      if (localStorage.getItem(sentKey)) {
+        return { delivered: 0 };
+      }
+    } catch {}
+  }
+
+  let schoolName = "School";
+  try {
+    const s = await getSchool(targetSchoolId);
+    if (s?.name) schoolName = s.name;
+  } catch {}
+
+  const typeLabels: Record<SchoolEventType, string> = {
+    MEETING: "🤝 स्टाफ मीटिंग / परामर्श",
+    EXAM: "📝 परीक्षा (Exam Day)",
+    RESULT_DAY: "📊 रिजल्ट डे / PTM",
+    OFFICIAL_WORK: "💼 स्कूल महत्वपूर्ण कार्य (Inspection/Audit)",
+    CELEBRATION: "🎉 वार्षिकोत्सव / उत्सव",
+    HOLIDAY: "🏖️ स्कूल अवकाश",
+    OTHER: "📌 आवश्यक सूचना"
+  };
+  const typeLabel = typeLabels[event.type] || "📌 आधिकारिक कार्यक्रम";
+
+  const teachers = await getTeachers(targetSchoolId);
+  let delivered = 0;
+
+  const notificationText =
+    `🔔 **[${schoolName}] — आवश्यक शिक्षक सूचना व कार्यक्रम**\n\n` +
+    `📌 **कार्यक्रम**: ${event.title}\n` +
+    `🏷️ **प्रकार**: ${typeLabel}\n` +
+    `🗓️ **तारीख**: ${event.date}\n` +
+    (event.time ? `⏰ **समय**: ${event.time}\n` : "") +
+    (event.venue ? `📍 **स्थान**: ${event.venue}\n` : "") +
+    (event.description ? `📝 **विवरण**: ${event.description}\n\n` : "\n") +
+    `*समस्त शिक्षकगण कृपया समय पर संज्ञान लें व आवश्यक तैयारी सुनिश्चित करें।* — प्रधानाचार्य व प्रशासन`;
+
+  for (const t of teachers) {
+    try {
+      const msg: NstaMessage = {
+        id: `evt_msg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        schoolId: targetSchoolId,
+        threadType: "SCHOOL_DESK",
+        teacherId: t.id,
+        teacherName: t.name,
+        senderId: "admin",
+        senderName: `${schoolName} Administration`,
+        senderRole: "ADMIN",
+        text: notificationText,
+        createdAt: new Date().toISOString(),
+        status: "delivered"
+      };
+      await saveNstaMessage(msg);
+      delivered++;
+    } catch {}
+  }
+
+  // Dual dispatch real-time web push alert with sound
+  try {
+    const { sendSchoolPushNotification } = await import("./utils/schoolPushClient");
+    await sendSchoolPushNotification({
+      schoolId: targetSchoolId,
+      title: `🔔 [${schoolName}] आज का कार्यक्रम: ${event.title}`,
+      body: `तारीख: ${event.date}${event.time ? ` • समय: ${event.time}` : ""} — ${typeLabel}. सभी शिक्षक कृपया संज्ञान लें।`,
+      type: "SCHOOL_NOTICE",
+      urgent: true
+    });
+  } catch {}
+
+  // Mark notified
+  try {
+    if (typeof window !== "undefined") {
+      localStorage.setItem(sentKey, new Date().toISOString());
+    }
+  } catch {}
+
+  // Update event state
+  await saveSchoolEvent({
+    ...event,
+    notifiedTeachers: true,
+    notifiedAt: new Date().toISOString()
+  });
+
+  return { delivered };
+};
+
+export const checkAndDispatchMorningEventAlerts = async (schoolId: string): Promise<number> => {
+  try {
+    const now = new Date();
+    const currentHour = now.getHours(); // 0-23
+    // Morning 6 AM or later
+    if (currentHour < 6) return 0;
+
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, "0");
+    const d = String(now.getDate()).padStart(2, "0");
+    const todayStr = `${y}-${m}-${d}`;
+
+    const events = await getSchoolEvents(schoolId);
+    const todaysEvents = events.filter(e => e.date === todayStr);
+    let count = 0;
+
+    for (const evt of todaysEvents) {
+      const sentKey = `nst_morning_event_sent_${schoolId}_${evt.id}_${todayStr}`;
+      let alreadySent = false;
+      try {
+        if (typeof window !== "undefined" && localStorage.getItem(sentKey)) {
+          alreadySent = true;
+        }
+      } catch {}
+
+      if (!alreadySent) {
+        const res = await dispatchTeacherEventNotification(schoolId, evt);
+        if (res.delivered > 0) count++;
+      }
+    }
+    return count;
+  } catch {
+    return 0;
+  }
+};
+
+
 // ── ACCOUNTANTS (कैशियर / वित्तीय प्रबंधन) ──────────────────────────────────────────────
 const LOCAL_ACCOUNTANTS_PREFIX = "nst_school_accountants_";
 
 export const getLocalAccountants = (schoolId: string): SchoolAccountant[] => {
   try {
     const list = getSchoolCacheSync<SchoolAccountant[]>(`${LOCAL_ACCOUNTANTS_PREFIX}${schoolId}`, []);
+    if (Array.isArray(list) && list.length > 0) return list;
+    if (shouldUseDemoForSchool(schoolId)) {
+      const demo = getDemoSchoolDataset();
+      if (demo && demo.accountants && demo.accountants.length > 0) {
+        return demo.accountants;
+      }
+    }
     return Array.isArray(list) ? list : [];
   } catch {
     return [];
@@ -4859,6 +5653,13 @@ const LOCAL_EXPENSES_PREFIX = "nst_school_expenses_";
 export const getLocalExpenseVouchers = (schoolId: string): SchoolExpenseVoucher[] => {
   try {
     const list = getSchoolCacheSync<SchoolExpenseVoucher[]>(`${LOCAL_EXPENSES_PREFIX}${schoolId}`, []);
+    if (Array.isArray(list) && list.length > 0) return list;
+    if (shouldUseDemoForSchool(schoolId)) {
+      const demo = getDemoSchoolDataset();
+      if (demo && demo.expenseVouchers && demo.expenseVouchers.length > 0) {
+        return demo.expenseVouchers;
+      }
+    }
     return Array.isArray(list) ? list : [];
   } catch {
     return [];

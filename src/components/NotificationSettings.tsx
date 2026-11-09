@@ -83,11 +83,17 @@ export const NotificationSettings: React.FC<Props> = ({ userId, placement = 'flo
           ? "relative p-1.5 rounded-xl transition-all text-white hover:bg-white/10 active:scale-95 shrink-0"
           : "fixed bottom-28 right-3 z-40 flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white/95 text-slate-700 shadow-lg transition hover:scale-105 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"}
         aria-label="Notification settings"
-        title="Notification settings"
+        title={permissionStatus === 'granted' && preferences.enabled ? "नोटिफिकेशन सेटिंग्स" : "नोटिफिकेशन बंद है • चालू करने के लिए क्लिक करें"}
       >
-        {preferences.enabled
+        {preferences.enabled && permissionStatus === 'granted'
           ? <Bell size={17} className={isTopbar ? "text-amber-200" : undefined} />
           : <BellOff size={17} className={isTopbar ? "text-slate-300" : undefined} />}
+        {(!preferences.enabled || permissionStatus !== 'granted') && (
+          <span className="absolute -top-0.5 -right-0.5 flex h-2.5 w-2.5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
+          </span>
+        )}
       </button>
 
       {open && typeof document !== 'undefined' && createPortal(
@@ -107,6 +113,71 @@ export const NotificationSettings: React.FC<Props> = ({ userId, placement = 'flo
                 <X size={18} />
               </button>
             </div>
+
+            {/* Quick Turn ON Banner if notification is not granted or skipped */}
+            {permissionStatus !== 'granted' && (
+              <div className="mb-5 rounded-2xl border border-amber-500/40 bg-gradient-to-r from-amber-500/10 via-yellow-500/10 to-amber-500/10 p-4 text-slate-800 dark:text-slate-100 shadow-xs">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-500 flex items-center justify-center shrink-0">
+                    <Bell size={20} className="animate-bounce" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="font-black text-sm text-slate-950 dark:text-white">
+                        नोटिफिकेशन अभी बंद (ऑफ) है
+                      </h3>
+                      <span className="text-[10px] bg-amber-500/20 text-amber-700 dark:text-amber-400 font-black px-2 py-0.5 rounded-full border border-amber-500/30">
+                        {permissionStatus === 'denied' ? 'ब्लॉक' : 'स्किप मोड'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
+                      {permissionStatus === 'denied'
+                        ? 'ब्राउज़र में सूचना अनुमति ब्लॉक है। सेटिंग्स गाइड देखकर इसे 1 मिनट में चालू करें।'
+                        : 'स्कूल नोटिस, होमवर्क, अटेंडेंस व फीस रसीद के लाइव अलर्ट पाने के लिए अभी चालू करें।'}
+                    </p>
+                    <div className="mt-3 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (permissionStatus === 'denied') {
+                            setOpen(false);
+                            window.dispatchEvent(new CustomEvent('open-popup-settings-guide'));
+                          } else {
+                            setSaving(true);
+                            try {
+                              const granted = await requestNotificationPermission();
+                              if (typeof window !== 'undefined' && 'Notification' in window) {
+                                setPermissionStatus(Notification.permission);
+                              }
+                              if (granted) {
+                                await subscribeUserToPush(userId);
+                                try {
+                                  localStorage.removeItem('nst_notif_gate_skipped');
+                                  sessionStorage.removeItem('nst_notif_gate_skipped');
+                                } catch {}
+                                update({ enabled: true });
+                                setSaved(true);
+                                window.dispatchEvent(new CustomEvent('nst_notification_skipped_updated', { detail: { skipped: false } }));
+                              } else {
+                                setOpen(false);
+                                window.dispatchEvent(new CustomEvent('open-popup-settings-guide'));
+                              }
+                            } finally {
+                              setSaving(false);
+                            }
+                          }
+                        }}
+                        disabled={saving}
+                        className="px-4 py-2 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 text-slate-950 font-black text-xs rounded-xl shadow-md shadow-amber-500/20 active:scale-95 transition cursor-pointer flex items-center gap-1.5"
+                      >
+                        <Bell size={14} />
+                        <span>{permissionStatus === 'denied' ? '⚙️ सेटिंग्स गाइड खोलें' : '🔔 1-क्लिक में अभी चालू करें (Turn ON)'}</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <label className="mb-5 flex cursor-pointer items-center justify-between rounded-2xl border border-indigo-100 bg-indigo-50 p-4 dark:border-indigo-900/50 dark:bg-indigo-950/30">
               <span>

@@ -117,6 +117,12 @@ export const QrLoginApprovalModal: React.FC<Props> = ({ challenge, userId, onDis
           </button>
         </div>
 
+        {/* Messenger delivery badge */}
+        <div className="flex items-center gap-2 bg-indigo-950/50 border border-indigo-500/30 rounded-xl px-3 py-1.5 mb-3 text-[11px] text-indigo-200 w-full text-left">
+          <Smartphone size={13} className="text-indigo-400 shrink-0" />
+          <span>NSTA Messenger में <strong>NSTA Official Desk</strong> द्वारा भी यह OTP भेजा गया है</span>
+        </div>
+
         {/* Notice description */}
         <div className="bg-rose-950/30 border border-rose-500/30 rounded-xl p-3 mb-4 w-full text-left flex items-start gap-2.5">
           <AlertTriangle size={16} className="text-rose-400 shrink-0 mt-0.5" />
@@ -125,10 +131,10 @@ export const QrLoginApprovalModal: React.FC<Props> = ({ challenge, userId, onDis
           </p>
         </div>
 
-        {/* Expiry countdown bar */}
+        {/* Expiry countdown bar (10 min expiry) */}
         <div className="flex items-center gap-1.5 text-xs text-slate-400 mb-4 font-mono">
           <Clock size={13} className="text-amber-400" />
-          <span>Expire hone me samay: <strong className="text-amber-300 font-bold">{timeLeft}s</strong></span>
+          <span>OTP Expire hone me samay: <strong className="text-amber-300 font-bold">{Math.floor(timeLeft / 60)}m {(timeLeft % 60).toString().padStart(2, '0')}s</strong></span>
         </div>
 
         {/* Deny button */}

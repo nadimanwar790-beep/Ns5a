@@ -8,7 +8,8 @@ import {
   generateId, getSchool, getSessions, setSchoolLockCode,
   assignSchoolSubAdminByEmail, getSchoolAdmins, removeSchoolUserByUid,
   getAllMonthlyFees, currentMonthStr, saveFee, markFeePaid, isStudentInClass, isDemoRecord,
-  shouldUseDemoForSchool, getLocalAttendance, getLocalFees
+  shouldUseDemoForSchool, getLocalAttendance, getLocalFees,
+  isStudentBirthdayToday, dispatchOfficialSchoolBirthdayWish, checkAndDispatchTodaysBirthdays
 } from "../../school-firebase";
 import { COMMON_BOOK_PRESETS, PRESET_BOOK_BUNDLES } from "./TeacherPanel";
 import type { SchoolUserProfile } from "../../school-types";
@@ -20,7 +21,7 @@ import {
   SeniorStream, SENIOR_STREAMS, isSeniorClass, getDefaultSubjectsForClass, sortSchoolClasses
 } from "../../school-types";
 import { DEMO_SESSION_ID, seedDemoSchoolData } from "./demoSchoolData";
-import { isDemoDataEnabled, setDemoDataEnabled } from "./demoDataStore";
+import { getDemoSchoolDataset, isDemoDataEnabled, setDemoDataEnabled } from "./demoDataStore";
 import { ContentManager } from "./ContentManager";
 import { SmartClass } from "./SmartClass";
 import { AttendanceManager } from "./AttendanceManager";
@@ -65,7 +66,8 @@ import {
   ClipboardList, Globe, UserPlus, QrCode, GraduationCap, CheckCircle2,
   Printer, Search, Sparkles, Mail, PenTool, Loader2, AlertCircle, LogOut,
   Home, Image as ImageIcon, Clock, Book, Package, MessageSquare, Bell, ArrowRight,
-  Youtube, Check, Menu, BarChart3, PieChart, Camera, Share2, Film, CheckCheck, RefreshCw, Upload, ExternalLink, Filter, Send, RotateCw, Bus, Sliders
+  Youtube, Check, Menu, BarChart3, PieChart, Camera, Share2, Film, CheckCheck, RefreshCw, Upload, ExternalLink, Filter, Send, RotateCw, Bus, Sliders,
+  Cake, Gift
 } from "lucide-react";
 import { SchoolStore } from "./SchoolStore";
 import { SchoolPlanView } from "./SchoolPlanView";
@@ -77,10 +79,12 @@ import { AdmissionFormPrintModal } from "./AdmissionFormPrintModal";
 import { BusTransportModal } from "./BusTransportModal";
 import { ClassCurriculumNotesManager } from "./ClassCurriculumNotesManager";
 import { isSchoolEliteCurriculum } from "../../school-types";
+import { SchoolBirthdayCalendar } from "./SchoolBirthdayCalendar";
 
 interface Props {
   schoolId: string;
   adminUid: string;
+  isSuperAdmin?: boolean;
   onBack?: () => void;
   onOpenPlatformContent?: () => void;
   onLogout?: () => void;
@@ -101,13 +105,14 @@ type AdminView =
   | "store" | "subscription"
   | "id_cards" | "admit_cards" | "certificates" | "marksheet_hub" | "promotion" | "notices" | "holidays" | "staff_hrm" | "reports_hub"
   | "public_website" | "online_admissions" | "online_admission_fee"
-  | "timetable" | "homework" | "library" | "parent_queries" | "inventory_store"
-  | "nsta_broadcast" | "video_lectures" | "classroom_videos" | "school_study_room";
+  | "nsta_broadcast" | "video_lectures" | "classroom_videos" | "school_study_room"
+  | "account_hub";
 
 
 export const SchoolAdminPanel: React.FC<Props> = ({
   schoolId,
   adminUid,
+  isSuperAdmin = false,
   onBack,
   onOpenPlatformContent,
   onLogout,
@@ -116,6 +121,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   onPreviewStudent,
   onPreviewAccountant
 }) => {
+  // School Admin and Teacher cannot exit school: Only SuperAdmin can exit
+  const canExitSchool = Boolean(isSuperAdmin && onLeaveSchool);
+
   const handleExploreFullApp = () => {
     try {
       localStorage.setItem("nst_app_view_mode", "STUDENT");
@@ -540,24 +548,71 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     }
   };
 
-  const isDefaultDemoSchool = schoolId === "dps_gurgaon_sector45" || schoolId === "demo_school";
-  const schoolDemoActive = demoEnabled && shouldUseDemoForSchool(schoolId);
+  const schoolDemoActive = Boolean(demoEnabled && shouldUseDemoForSchool(schoolId));
 
   const displayedStudents = React.useMemo(() => {
-    return schoolDemoActive ? students : students.filter(s => !isDemoRecord(s));
+    if (schoolDemoActive) {
+      const demo = getDemoSchoolDataset();
+      return demo?.students && demo.students.length > 0 ? demo.students : students;
+    }
+    return students.filter(s => !isDemoRecord(s));
   }, [students, schoolDemoActive]);
 
   const displayedClasses = React.useMemo(() => {
-    return schoolDemoActive ? classes : classes.filter(c => !isDemoRecord(c));
+    if (schoolDemoActive) {
+      const demo = getDemoSchoolDataset();
+      return demo?.classes && demo.classes.length > 0 ? demo.classes : classes;
+    }
+    return classes.filter(c => !isDemoRecord(c));
   }, [classes, schoolDemoActive]);
 
   const displayedTeachers = React.useMemo(() => {
-    return schoolDemoActive ? teachers : teachers.filter(t => !isDemoRecord(t));
+    if (schoolDemoActive) {
+      const demo = getDemoSchoolDataset();
+      return demo?.teachers && demo.teachers.length > 0 ? demo.teachers : teachers;
+    }
+    return teachers.filter(t => !isDemoRecord(t));
   }, [teachers, schoolDemoActive]);
 
   const displayedSessions = React.useMemo(() => {
-    return schoolDemoActive ? sessions : sessions.filter(s => !isDemoRecord(s));
+    if (schoolDemoActive) {
+      const demo = getDemoSchoolDataset();
+      const realSess = sessions.filter(s => !isDemoRecord(s));
+      return demo?.session ? [demo.session, ...realSess] : sessions;
+    }
+    return sessions.filter(s => !isDemoRecord(s));
   }, [sessions, schoolDemoActive]);
+
+  // Today's Birthdays automated detection
+  const todaysBirthdayStudents = React.useMemo(() => {
+    return displayedStudents.filter(s => isStudentBirthdayToday(s.dateOfBirth));
+  }, [displayedStudents]);
+
+  const [birthdayWishSending, setBirthdayWishSending] = useState<string | null>(null);
+  const [birthdayWishToast, setBirthdayWishToast] = useState<string | null>(null);
+
+  const handleSendManualBirthdayWish = async (student: SchoolStudent) => {
+    setBirthdayWishSending(student.id);
+    try {
+      const className = displayedClasses.find(c => c.id === student.classId)?.name || "Class Student";
+      await dispatchOfficialSchoolBirthdayWish({
+        schoolId,
+        studentId: student.id,
+        studentName: student.name,
+        rollNo: student.rollNo,
+        className,
+        photoUrl: student.photoUrl,
+        dateOfBirth: student.dateOfBirth,
+        parentPhone: student.phone
+      });
+      setBirthdayWishToast(`🎉 ${student.name} को जन्मदिन की आधिकारिक बधाई व आशीर्वाद पत्र सफलतापूर्वक भेजा गया!`);
+      setTimeout(() => setBirthdayWishToast(null), 4000);
+    } catch (e: any) {
+      alert("Birthday wish bhejne me samasya aayi: " + (e?.message || "Error"));
+    } finally {
+      setBirthdayWishSending(null);
+    }
+  };
 
   // Advanced Class Card states
   const [expandedToolsClassId, setExpandedToolsClassId] = useState<string | null>(null);
@@ -626,7 +681,12 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       setActiveSession(active);
     });
     const unsubTeachers = subscribeToTeachers(schoolId, setTeachers);
-    const unsubStudents = subscribeToAllStudents(schoolId, setStudents);
+    const unsubStudents = subscribeToAllStudents(schoolId, (stList) => {
+      setStudents(stList);
+      if (stList && stList.length > 0) {
+        checkAndDispatchTodaysBirthdays(schoolId).catch(() => {});
+      }
+    });
     return () => { unsubSessions(); unsubTeachers(); unsubStudents(); };
   }, [schoolId]);
 
@@ -1103,10 +1163,31 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     getSchoolAdmins(schoolId).then(list => setSubAdmins(list)).catch(() => {});
   };
 
+  const getMaxAdminsForSchool = (studentCount: number = 0): number => {
+    // Subscription Plan Quota: 200 students -> 1 admin; 500 students -> 3 admins; 2000+ -> unlimited (9999)
+    if (studentCount <= 200) return 1;
+    if (studentCount <= 500) return 3;
+    return 9999; // Unlimited
+  };
+
   const handleAssignSubAdmin = async () => {
     if (!subAdminEmail.trim()) return;
     setAssigningSubAdmin(true);
     setSubAdminResult(null);
+
+    const studentCount = displayedStudents.length;
+    const maxAllowed = getMaxAdminsForSchool(studentCount);
+    const currentSubAdminCount = subAdmins.filter(p => p.role === 'SCHOOL_SUB_ADMIN').length;
+
+    if (currentSubAdminCount >= maxAllowed) {
+      setSubAdminResult({
+        ok: false,
+        msg: `❌ स्कूल सब्सक्रिप्शन सीमा: कुल ${studentCount} छात्रों के अनुसार अधिकतम ${maxAllowed === 9999 ? 'अनलिमिटेड' : maxAllowed} सब-एडमिन की अनुमति है (200 छात्र = 1, 500 = 3, 2000+ = Unlimited)। अधिक एडमिन जोड़ने हेतु प्लान अपग्रेड करें।`
+      });
+      setAssigningSubAdmin(false);
+      return;
+    }
+
     try {
       const profile = await assignSchoolSubAdminByEmail(schoolId, subAdminEmail.trim());
       setSubAdminResult({ ok: true, msg: `✅ ${profile.name} ab is school ka sub-admin hai!` });
@@ -1607,85 +1688,37 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           ))}
         </div>
 
-        {/* Bottom Sidebar Action Footer */}
-        <div className="p-2.5 border-t border-slate-800 bg-slate-950/80 space-y-2 shrink-0">
-          {/* Explore Full NSTA Learning App */}
+        {/* Bottom Sidebar Action Footer: Unified Account & Switch Hub */}
+        <div className="p-2.5 border-t border-slate-800 bg-slate-950/80 shrink-0">
           <button
             type="button"
-            onClick={handleExploreFullApp}
-            className="w-full p-2 rounded-xl bg-gradient-to-r from-indigo-900/70 via-purple-900/60 to-slate-900 border border-indigo-500/40 hover:border-indigo-400 text-left transition flex items-center justify-between gap-2 shadow-md group cursor-pointer active:scale-95"
+            onClick={() => setView("account_hub")}
+            className={`w-full p-2.5 rounded-xl border text-left transition flex items-center justify-between gap-2 shadow-md group cursor-pointer active:scale-95 ${
+              view === "account_hub"
+                ? "bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 border-blue-400 text-white shadow-blue-500/25 ring-2 ring-blue-400/40"
+                : "bg-gradient-to-r from-slate-900 via-indigo-950/70 to-slate-900 border-indigo-500/30 hover:border-indigo-400/60 text-slate-100"
+            }`}
+            title="अकाउंट, रोल स्विच व ऐप विकल्प खोलें"
           >
-            <div className="flex items-center gap-2 min-w-0">
-              <div className="w-7 h-7 rounded-lg bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center shrink-0 text-amber-300">
-                <Sparkles className="w-3.5 h-3.5 animate-spin" />
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center shrink-0 text-amber-300 group-hover:scale-105 transition-transform">
+                <User className="w-4 h-4 text-indigo-300" />
               </div>
               <div className="min-w-0">
-                <p className="text-xs font-black text-white group-hover:text-indigo-200 truncate">
-                  Explore Full NSTA App
-                </p>
-                <p className="text-[9.5px] text-indigo-300/80 truncate">
-                  53+ Books, MCQs &amp; Study Room
+                <div className="flex items-center gap-1.5">
+                  <p className="text-xs font-black text-white group-hover:text-indigo-200 truncate">
+                    अकाउंट व स्विच
+                  </p>
+                  <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-indigo-500/30 text-indigo-200 font-bold border border-indigo-400/30">
+                    Hub
+                  </span>
+                </div>
+                <p className="text-[9.5px] text-slate-400 truncate">
+                  Teacher, Accountant, App &amp; Logout
                 </p>
               </div>
             </div>
-            <ArrowRight className="w-3.5 h-3.5 text-indigo-400 group-hover:translate-x-1 transition-transform shrink-0" />
-          </button>
-
-          <div className="space-y-1">
-            <div className="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-0.5 flex items-center justify-between">
-              <span>डैशबोर्ड व्यू (Dashboard View)</span>
-            </div>
-            <div className="grid grid-cols-3 gap-1">
-              <button
-                type="button"
-                onClick={() => {
-                  if (onPreviewTeacher) onPreviewTeacher();
-                }}
-                className="py-1.5 px-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 hover:text-emerald-200 text-[9px] font-bold transition flex items-center justify-center gap-0.5 truncate cursor-pointer active:scale-95 shadow-xs"
-                title="Teacher Dashboard View"
-              >
-                <span>👨‍🏫 Teacher</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (onPreviewAccountant) onPreviewAccountant();
-                }}
-                className="py-1.5 px-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 hover:text-amber-200 text-[9px] font-bold transition flex items-center justify-center gap-0.5 truncate cursor-pointer active:scale-95 shadow-xs"
-                title="Accountant Dashboard View"
-              >
-                <span>💼 Accountant</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (onPreviewStudent) onPreviewStudent();
-                }}
-                className="py-1.5 px-1 rounded-lg bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/30 text-purple-300 hover:text-purple-200 text-[9px] font-bold transition flex items-center justify-center gap-0.5 truncate cursor-pointer active:scale-95 shadow-xs"
-                title="Student Dashboard View"
-              >
-                <span>🎓 Student</span>
-              </button>
-            </div>
-          </div>
-          {onLeaveSchool && (
-            <button
-              type="button"
-              onClick={() => setShowLeaveConfirmModal(true)}
-              className="w-full mb-1.5 py-1.5 px-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 hover:text-amber-100 text-[11px] font-bold flex items-center justify-center gap-1.5 transition cursor-pointer active:scale-95 shadow-xs"
-              title="Leave this school / Detach account from this school"
-            >
-              <Building2 className="w-3.5 h-3.5 text-amber-400" />
-              <span>Leave School (स्कूल छोड़ें)</span>
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={handlePerformLogout}
-            className="w-full py-1.5 px-2 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 hover:text-rose-100 text-[11px] font-bold flex items-center justify-center gap-1.5 transition cursor-pointer active:scale-95"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            <span>Admin Logout</span>
+            <ArrowRight className="w-4 h-4 text-indigo-400 group-hover:translate-x-1 transition-transform shrink-0" />
           </button>
         </div>
       </aside>
@@ -1782,94 +1815,40 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             ))}
           </div>
 
-          {/* Footer */}
-          <div className="p-2.5 border-t border-slate-800 bg-slate-950/80 space-y-2 shrink-0">
-            {/* Explore Full NSTA Learning App */}
+          {/* Footer: Unified Account & Switch Hub */}
+          <div className="p-2.5 border-t border-slate-800 bg-slate-950/80 shrink-0">
             <button
               type="button"
               onClick={() => {
                 setIsSidebarOpen(false);
-                handleExploreFullApp();
+                setView("account_hub");
               }}
-              className="w-full p-2 rounded-xl bg-gradient-to-r from-indigo-900/70 via-purple-900/60 to-slate-900 border border-indigo-500/40 hover:border-indigo-400 text-left transition flex items-center justify-between gap-2 shadow-md group cursor-pointer active:scale-95"
+              className={`w-full p-2.5 rounded-xl border text-left transition flex items-center justify-between gap-2 shadow-md group cursor-pointer active:scale-95 ${
+                view === "account_hub"
+                  ? "bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 border-blue-400 text-white shadow-blue-500/25 ring-2 ring-blue-400/40"
+                  : "bg-gradient-to-r from-slate-900 via-indigo-950/70 to-slate-900 border-indigo-500/30 hover:border-indigo-400/60 text-slate-100"
+              }`}
+              title="अकाउंट, रोल स्विच व ऐप विकल्प खोलें"
             >
-              <div className="flex items-center gap-2 min-w-0">
-                <div className="w-7 h-7 rounded-lg bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center shrink-0 text-amber-300">
-                  <Sparkles className="w-3.5 h-3.5 animate-spin" />
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center shrink-0 text-amber-300 group-hover:scale-105 transition-transform">
+                  <User className="w-4 h-4 text-indigo-300" />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-xs font-black text-white group-hover:text-indigo-200 truncate">
-                    Explore Full NSTA App
-                  </p>
-                  <p className="text-[9.5px] text-indigo-300/80 truncate">
-                    53+ Books, MCQs &amp; Study Room
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-xs font-black text-white group-hover:text-indigo-200 truncate">
+                      अकाउंट व स्विच
+                    </p>
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-indigo-500/30 text-indigo-200 font-bold border border-indigo-400/30">
+                      Hub
+                    </span>
+                  </div>
+                  <p className="text-[9.5px] text-slate-400 truncate">
+                    Teacher, Accountant, App &amp; Logout
                   </p>
                 </div>
               </div>
-              <ArrowRight className="w-3.5 h-3.5 text-indigo-400 group-hover:translate-x-1 transition-transform shrink-0" />
-            </button>
-
-            <div className="space-y-1">
-              <div className="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-0.5 flex items-center justify-between">
-                <span>डैशबोर्ड व्यू (Dashboard View)</span>
-              </div>
-              <div className="grid grid-cols-3 gap-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsSidebarOpen(false);
-                    if (onPreviewTeacher) onPreviewTeacher();
-                  }}
-                  className="py-1.5 px-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 hover:text-emerald-200 text-[9px] font-bold transition flex items-center justify-center gap-0.5 truncate cursor-pointer active:scale-95 shadow-xs"
-                  title="Teacher Dashboard View"
-                >
-                  <span>👨‍🏫 Teacher</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsSidebarOpen(false);
-                    if (onPreviewAccountant) onPreviewAccountant();
-                  }}
-                  className="py-1.5 px-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 hover:text-amber-200 text-[9px] font-bold transition flex items-center justify-center gap-0.5 truncate cursor-pointer active:scale-95 shadow-xs"
-                  title="Accountant Dashboard View"
-                >
-                  <span>💼 Accountant</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsSidebarOpen(false);
-                    if (onPreviewStudent) onPreviewStudent();
-                  }}
-                  className="py-1.5 px-1 rounded-lg bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/30 text-purple-300 hover:text-purple-200 text-[9px] font-bold transition flex items-center justify-center gap-0.5 truncate cursor-pointer active:scale-95 shadow-xs"
-                  title="Student Dashboard View"
-                >
-                  <span>🎓 Student</span>
-                </button>
-              </div>
-            </div>
-            {onLeaveSchool && (
-              <button
-                type="button"
-                onClick={() => {
-                  setIsSidebarOpen(false);
-                  setShowLeaveConfirmModal(true);
-                }}
-                className="w-full mb-1.5 py-1.5 px-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 hover:text-amber-100 text-[11px] font-bold flex items-center justify-center gap-1.5 transition cursor-pointer active:scale-95 shadow-xs"
-                title="Leave this school / Detach account from this school"
-              >
-                <Building2 className="w-3.5 h-3.5 text-amber-400" />
-                <span>Leave School (स्कूल छोड़ें)</span>
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={handlePerformLogout}
-              className="w-full py-1.5 px-2 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 hover:text-rose-100 text-[11px] font-bold flex items-center justify-center gap-1.5 transition cursor-pointer active:scale-95"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-              <span>Admin Logout</span>
+              <ArrowRight className="w-4 h-4 text-indigo-400 group-hover:translate-x-1 transition-transform shrink-0" />
             </button>
           </div>
         </div>
@@ -1880,106 +1859,146 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   // ── UNIFIED TOP BAR (DESKTOP & MOBILE) ─────────────────────────────────
   const renderTopHeader = () => {
     return (
-      <header className="sticky top-0 z-20 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 py-2.5 flex items-center justify-between gap-3 shadow-xs">
-        {/* Left: Mobile Toggle Menu Button & Title */}
-        <div className="flex items-center gap-2.5 min-w-0">
-          {!isNativeLandscape && (
-            <button
-              type="button"
-              onClick={() => setIsSidebarOpen(true)}
-              className="md:hidden flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black text-xs shadow-md shadow-blue-600/30 cursor-pointer active:scale-95 transition"
-              aria-label="Open Left Menu Drawer"
-            >
-              <Menu className="w-4 h-4 stroke-[2.5]" />
-              <span>Menu</span>
-            </button>
-          )}
-
-          {isNativeLandscape && isSidebarHidden && (
-            <button
-              type="button"
-              onClick={() => {
-                setIsSidebarHidden(false);
-                try { localStorage.setItem("school_erp_sidebar_hidden", "false"); } catch {}
-              }}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs border border-slate-750 cursor-pointer transition shadow-xs"
-              title="मेनू दिखाएं (Swipe Right)"
-            >
-              <Menu className="w-3.5 h-3.5 text-indigo-400" />
-              <span className="hidden sm:inline">Menu</span>
-            </button>
-          )}
-
-          <div className="min-w-0 flex items-center gap-2">
-            {view !== "dashboard" && (
+      <>
+        <header className="sticky top-0 z-20 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 py-2.5 flex items-center justify-between gap-3 shadow-xs">
+          {/* Left: Mobile Toggle Menu Button & Title */}
+          <div className="flex items-center gap-2.5 min-w-0">
+            {!isNativeLandscape && (
               <button
                 type="button"
-                onClick={() => setView("dashboard")}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition cursor-pointer"
+                onClick={() => setIsSidebarOpen(true)}
+                className="md:hidden flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black text-xs shadow-md shadow-blue-600/30 cursor-pointer active:scale-95 transition"
+                aria-label="Open Left Menu Drawer"
               >
-                <ChevronLeft className="w-3.5 h-3.5" />
-                <span>Home</span>
+                <Menu className="w-4 h-4 stroke-[2.5]" />
+                <span>Menu</span>
               </button>
             )}
-            <h1 className="text-xs sm:text-sm font-black text-slate-800 dark:text-white capitalize truncate">
-              {view === "dashboard"
-                ? "Home Dashboard (कंट्रोल सेंटर)"
-                : view === "school_profile"
-                ? "School Profile & Settings (स्कूल सेटिंग्स)"
-                : view === "memories"
-                ? "School Memories & Events (यादें)"
-                : view.replace(/_/g, " ")}
-            </h1>
+
+            {isNativeLandscape && isSidebarHidden && (
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSidebarHidden(false);
+                  try { localStorage.setItem("school_erp_sidebar_hidden", "false"); } catch {}
+                }}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs border border-slate-750 cursor-pointer transition shadow-xs"
+                title="मेनू दिखाएं (Swipe Right)"
+              >
+                <Menu className="w-3.5 h-3.5 text-indigo-400" />
+                <span className="hidden sm:inline">Menu</span>
+              </button>
+            )}
+
+            <div className="min-w-0 flex items-center gap-2">
+              {view !== "dashboard" && (
+                <button
+                  type="button"
+                  onClick={() => setView("dashboard")}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition cursor-pointer"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  <span>Home</span>
+                </button>
+              )}
+              <h1 className="text-xs sm:text-sm font-black text-slate-800 dark:text-white capitalize truncate">
+                {view === "dashboard"
+                  ? "Home Dashboard (कंट्रोल सेंटर)"
+                  : view === "account_hub"
+                  ? "अकाउंट, रोल स्विच व ऐप विकल्प (Account Hub)"
+                  : view === "school_profile"
+                  ? "School Profile & Settings (स्कूल सेटिंग्स)"
+                  : view === "memories"
+                  ? "School Memories & Events (यादें)"
+                  : view.replace(/_/g, " ")}
+              </h1>
+            </div>
           </div>
-        </div>
 
-        {/* Center / Right: Screen Rotate & Actions */}
-        <div className="flex items-center gap-2 shrink-0">
-          {/* Screen Rotate Toggle */}
-          <button
-            type="button"
-            onClick={handleToggleScreenRotate}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl font-black text-xs transition cursor-pointer active:scale-95 shadow-md ${
-              isNativeLandscape
-                ? "bg-gradient-to-r from-emerald-400 via-teal-400 to-emerald-500 text-slate-950 ring-2 ring-emerald-300 shadow-emerald-500/30"
-                : "bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/30"
-            }`}
-            title={isNativeLandscape ? "Portrait Mode me wapas layein" : "Screen Rotate karein (Landscape Computer Mode)"}
-          >
-            <RotateCw className={`w-3.5 h-3.5 transition-transform duration-300 ${isNativeLandscape ? "rotate-90 text-slate-950 stroke-[2.5]" : "text-white"}`} />
-            <span className="hidden xs:inline">{isNativeLandscape ? "📱 Portrait" : "🔄 Screen Rotate"}</span>
-            <span className="xs:hidden">{isNativeLandscape ? "📱" : "🔄 Rotate"}</span>
-          </button>
-
-          <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 text-[11px] font-bold">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            <span>सत्र: {activeSession?.name || "2026-27"}</span>
-          </span>
-
-          {onLeaveSchool && (
+          {/* Center / Right: Screen Rotate & Actions */}
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Dummy Session (1-Year Model) Toggle */}
             <button
               type="button"
-              onClick={() => setShowLeaveConfirmModal(true)}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-xs font-bold transition cursor-pointer active:scale-95"
-              title="Leave School / स्कूल छोड़ें"
+              onClick={() => handleToggleDemoData(!schoolDemoActive)}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl font-black text-xs transition cursor-pointer active:scale-95 shadow-md border ${
+                schoolDemoActive
+                  ? "bg-gradient-to-r from-amber-400 via-orange-400 to-amber-500 text-slate-950 border-amber-300 ring-2 ring-amber-300/40 shadow-amber-500/20"
+                  : "bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-700"
+              }`}
+              title={schoolDemoActive ? "डमी सत्र बंद करें (असली स्कूल डेटा देखें)" : "डमी सत्र चालू करें (1-Year Full Model • 10 छात्र/क्लास)"}
             >
-              <Building2 className="w-3.5 h-3.5 text-amber-500" />
-              <span className="hidden sm:inline">Leave School</span>
+              <span>{schoolDemoActive ? "🧪 डमी सत्र: ON" : "🧪 डमी सत्र: OFF"}</span>
+              <span className="hidden sm:inline text-[10px] font-bold opacity-85">
+                {schoolDemoActive ? "(10 छात्र/क्लास)" : "(असली डेटा)"}
+              </span>
             </button>
-          )}
 
-          <button
-            type="button"
-            onClick={() => setView("school_profile")}
-            className="hidden lg:inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition cursor-pointer"
-            title="School Settings"
-          >
-            <Settings className="w-3.5 h-3.5 text-blue-500" />
-            <span>Settings</span>
-          </button>
+            {/* Screen Rotate Toggle */}
+            <button
+              type="button"
+              onClick={handleToggleScreenRotate}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl font-black text-xs transition cursor-pointer active:scale-95 shadow-md ${
+                isNativeLandscape
+                  ? "bg-gradient-to-r from-emerald-400 via-teal-400 to-emerald-500 text-slate-950 ring-2 ring-emerald-300 shadow-emerald-500/30"
+                  : "bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/30"
+              }`}
+              title={isNativeLandscape ? "Portrait Mode me wapas layein" : "Screen Rotate karein (Landscape Computer Mode)"}
+            >
+              <RotateCw className={`w-3.5 h-3.5 transition-transform duration-300 ${isNativeLandscape ? "rotate-90 text-slate-950 stroke-[2.5]" : "text-white"}`} />
+              <span className="hidden xs:inline">{isNativeLandscape ? "📱 Portrait" : "🔄 Screen Rotate"}</span>
+              <span className="xs:hidden">{isNativeLandscape ? "📱" : "🔄 Rotate"}</span>
+            </button>
 
-        </div>
-      </header>
+            <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 text-[11px] font-bold">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span>सत्र: {activeSession?.name || "2026-27"}</span>
+            </span>
+
+            {canExitSchool && (
+              <button
+                type="button"
+                onClick={() => setShowLeaveConfirmModal(true)}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-xs font-bold transition cursor-pointer active:scale-95"
+                title="Leave School / स्कूल छोड़ें"
+              >
+                <Building2 className="w-3.5 h-3.5 text-amber-500" />
+                <span className="hidden sm:inline">Leave School</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setView("school_profile")}
+              className="hidden lg:inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition cursor-pointer"
+              title="School Settings"
+            >
+              <Settings className="w-3.5 h-3.5 text-blue-500" />
+              <span>Settings</span>
+            </button>
+
+          </div>
+        </header>
+
+        {/* ── DUMMY SESSION ACTIVE NOTICE BAR ── */}
+        {schoolDemoActive && (
+          <div className="bg-gradient-to-r from-amber-500/20 via-orange-500/15 to-amber-500/20 border-b border-amber-500/40 px-4 sm:px-6 py-2.5 flex items-center justify-between gap-3 text-xs text-amber-950 dark:text-amber-200 font-bold shrink-0">
+            <div className="flex items-center gap-2">
+              <span className="text-base animate-pulse">🧪</span>
+              <span>
+                <strong>डमी सत्र सक्रिय है (Dummy Session ON):</strong> सभी 13 क्लास, 10 छात्र प्रति क्लास, 1-साल की फीस, हाजिरी, 6 परीक्षा अंक व स्टाफ सैलरी डमी मॉडल में दिखाया जा रहा है।
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => handleToggleDemoData(false)}
+              className="px-3 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-[11px] shrink-0 transition active:scale-95 cursor-pointer shadow-xs"
+            >
+              असली स्कूल पर लौटें (Turn OFF) →
+            </button>
+          </div>
+        )}
+      </>
     );
   };
 
@@ -2070,6 +2089,94 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             <p className="text-[10px] text-teal-500 font-medium mt-0.5">Average weekly rate →</p>
           </button>
         </div>
+
+        {/* ── BIRTHDAY WISH SENT TOAST ── */}
+        {birthdayWishToast && (
+          <div className="p-3.5 rounded-2xl bg-gradient-to-r from-rose-500 via-pink-600 to-purple-600 text-white text-xs sm:text-sm font-bold shadow-xl flex items-center justify-between gap-3 animate-in slide-in-from-top-2">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-amber-200" />
+              <span>{birthdayWishToast}</span>
+            </div>
+            <button type="button" onClick={() => setBirthdayWishToast(null)} className="p-1 hover:bg-white/20 rounded">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* ── TODAY'S BIRTHDAYS SPECIAL NSTA CELEBRATION SECTION (WHEN STUDENTS HAVE BIRTHDAY TODAY) ── */}
+        {todaysBirthdayStudents.length > 0 && (
+          <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-rose-500 via-pink-600 to-amber-500 text-white shadow-xl relative overflow-hidden border border-white/20">
+            <div className="absolute top-0 right-0 translate-x-4 -translate-y-4 opacity-15 pointer-events-none text-9xl">
+              🎂
+            </div>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-10">
+              <div className="flex items-center gap-3.5">
+                <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center text-2xl shadow-inner shrink-0">
+                  🎂
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-white text-rose-700 shadow-xs">
+                      स्वतः NSTA मॉनिटरिंग सक्रिय
+                    </span>
+                    <span className="text-xs text-rose-100 font-bold">
+                      {new Date().toLocaleDateString("en-IN", { day: "numeric", month: "long" })}
+                    </span>
+                  </div>
+                  <h3 className="text-base sm:text-lg font-black text-white mt-0.5">
+                    🎉 आज के जन्मदिन ({todaysBirthdayStudents.length} Students Having Birthday Today)
+                  </h3>
+                  <p className="text-xs text-rose-100/90 font-medium">
+                    School Principal व प्रशासन की तरफ से छात्र के NSTA Messenger School Desk पर आधिकारिक शुभकामना कार्ड व नोटिफिकेशन स्वतः भेज दिया गया है।
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Students List */}
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 relative z-10">
+              {todaysBirthdayStudents.map(st => {
+                const cName = displayedClasses.find(c => c.id === st.classId)?.name || "Class Student";
+                return (
+                  <div key={st.id} className="bg-white/15 backdrop-blur-md rounded-2xl p-3 border border-white/20 flex items-center justify-between gap-2.5">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-9 h-9 rounded-xl bg-white/30 flex items-center justify-center font-black text-xs text-white shrink-0 shadow-xs overflow-hidden">
+                        {st.photoUrl ? (
+                          <img src={st.photoUrl} alt={st.name} className="w-full h-full object-cover" />
+                        ) : (
+                          st.name.charAt(0)
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-black text-xs text-white truncate">{st.name}</p>
+                        <p className="text-[10px] text-rose-100 truncate">{cName} • Roll {st.rollNo || "N/A"}</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleSendManualBirthdayWish(st)}
+                      disabled={birthdayWishSending === st.id}
+                      className="px-2.5 py-1 rounded-xl bg-white text-rose-700 hover:bg-rose-50 text-[11px] font-black shrink-0 transition active:scale-95 shadow-xs cursor-pointer flex items-center gap-1"
+                      title="Send / Resend Official Birthday Blessing Card"
+                    >
+                      {birthdayWishSending === st.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Gift className="w-3 h-3" />}
+                      <span>{birthdayWishSending === st.id ? "भेज रहे हैं..." : "Wish Again"}</span>
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ── SCHOOL BIRTHDAY & EVENTS INTERACTIVE CALENDAR ── */}
+        <SchoolBirthdayCalendar
+          schoolId={schoolId}
+          schoolName={school?.name}
+          students={displayedStudents}
+          classes={displayedClasses}
+          onOpenMessenger={() => setView("nsta_broadcast")}
+        />
 
         {/* ── ROW 1: 7-DAY ATTENDANCE CHART & 7-DAY FEE COLLECTION CHART ────── */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -2646,11 +2753,16 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
         {/* Sub-Admin Authorization Management */}
         <div className="bg-white dark:bg-slate-800 rounded-3xl p-6 border border-slate-200 dark:border-slate-700 shadow-sm space-y-4">
-          <div className="flex items-center gap-2.5">
-            <Users className="w-4 h-4 text-purple-600" />
-            <div>
-              <h4 className="font-bold text-sm text-slate-800 dark:text-white">Sub-Admin Access (सह-प्रशासक अनुमति)</h4>
-              <p className="text-xs text-slate-400">अपने स्कूल के किसी अन्य स्टाफ को सब-एडमिन बनाएं ताकि वह भी प्रबंधन में सहयोग कर सके।</p>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <Users className="w-4 h-4 text-purple-600" />
+              <div>
+                <h4 className="font-bold text-sm text-slate-800 dark:text-white">Sub-Admin Access (सह-प्रशासक अनुमति)</h4>
+                <p className="text-xs text-slate-400">एक स्कूल खाते से कई Gmail जोड़ें (बिना लॉगआउट हुए एक साथ काम कर सकेंगे)।</p>
+              </div>
+            </div>
+            <div className="px-2.5 py-1 rounded-full bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 text-[11px] font-bold self-start sm:self-auto">
+              प्लान कोटा: {subAdmins.filter(p => p.role === 'SCHOOL_SUB_ADMIN').length} / {getMaxAdminsForSchool(displayedStudents.length) === 9999 ? 'Unlimited' : getMaxAdminsForSchool(displayedStudents.length)} एडमिन ({displayedStudents.length} छात्र)
             </div>
           </div>
 
@@ -3998,8 +4110,301 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     { label: "Online Admissions", subtitle: "New Enquiries", icon: <UserPlus className="w-5 h-5 text-amber-500" />, view: "online_admissions", count: "Portal", locked: false },
   ];
 
+  // ── ACCOUNT & SWITCH HUB PAGE (Dedicated screen for role switch, app explore & account actions) ──
+  const renderAccountHubPage = () => {
+    const displaySchoolLogo = school ? getSavedSchoolLogo(school.logoUrl, schoolId) : "";
+    return (
+      <div className="space-y-6 max-w-4xl mx-auto pb-12 animate-in fade-in duration-200">
+        {/* Top Header Card with Back Button */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setView("dashboard")}
+              className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition cursor-pointer active:scale-95"
+              title="डैशबोर्ड पर वापस जाएँ"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
+                  अकाउंट व स्विच हब (Account Hub)
+                </h2>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 font-bold">
+                  All-in-One
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Teacher, Accountant, Student व्यू, NSTA लर्निंग ऐप व लॉगआउट विकल्प
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setView("dashboard")}
+            className="w-full sm:w-auto px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-blue-500/20 cursor-pointer active:scale-95 transition"
+          >
+            <ChevronLeft className="w-4 h-4" />
+            <span>वापस डैशबोर्ड (Back to Dashboard)</span>
+          </button>
+        </div>
+
+        {/* School & Admin Profile Summary Card */}
+        <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white border border-indigo-500/30 shadow-lg">
+          <div className="flex flex-col sm:flex-row items-center sm:items-start justify-between gap-4">
+            <div className="flex flex-col sm:flex-row items-center sm:items-center gap-3.5 text-center sm:text-left">
+              {displaySchoolLogo ? (
+                <img
+                  src={displaySchoolLogo}
+                  alt={school?.name}
+                  className="w-16 h-16 rounded-2xl object-contain bg-white/10 p-1.5 border border-white/20 shadow-md"
+                />
+              ) : (
+                <div className="w-16 h-16 rounded-2xl bg-indigo-600/40 border border-indigo-400/40 flex items-center justify-center text-amber-300 shadow-md">
+                  <Building2 className="w-8 h-8" />
+                </div>
+              )}
+              <div>
+                <h3 className="text-lg font-black text-white">{school?.name || "School Ecosystem"}</h3>
+                <p className="text-xs text-indigo-200 mt-0.5">
+                  {school?.code ? `Code: ${school.code} • ` : ""}
+                  सत्र: {activeSession?.name || "2026-27"}
+                </p>
+                <div className="flex flex-wrap items-center justify-center sm:justify-start gap-1.5 mt-2">
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold">
+                    🛡️ स्कूल एडमिनिस्ट्रेटर (Active Admin)
+                  </span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30 font-bold">
+                    🏛️ डायरेक्ट स्कूल पोर्टल
+                  </span>
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setView("school_profile")}
+              className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold border border-white/20 flex items-center gap-1.5 transition cursor-pointer active:scale-95"
+            >
+              <Settings className="w-3.5 h-3.5" />
+              <span>स्कूल सेटिंग्स (Settings)</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Section 1: Explore Full NSTA Learning App */}
+        <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-indigo-900/40 via-purple-900/30 to-slate-900/50 border border-indigo-500/30 shadow-md">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-amber-400 to-indigo-600 p-0.5 shrink-0 shadow-lg">
+                <div className="w-full h-full rounded-2xl bg-slate-950 flex items-center justify-center text-amber-300">
+                  <Sparkles className="w-6 h-6 animate-pulse" />
+                </div>
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-black text-slate-900 dark:text-white">
+                    Explore Full NSTA App
+                  </h3>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-300 border border-amber-500/30">
+                    53+ Books &amp; MCQs
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 max-w-xl">
+                  मुख्य NSTA स्टूडेंट लर्निंग ऐप खोलें: NCERT किताबें, डेली क्विज, टेस्ट सीरीज, डिजिटल लाइब्रेरी व कॉम्पिटिटिव स्टडी रूम।
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleExploreFullApp}
+              className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:from-indigo-500 hover:to-pink-500 text-white font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30 cursor-pointer active:scale-95 transition shrink-0"
+            >
+              <span>मुख्य ऐप खोलें (Open App)</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Section 2: Role & Dashboard View Switcher */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs sm:text-sm font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              डैशबोर्ड व्यू स्विच करें (Dashboard Role Views)
+            </h3>
+            <span className="text-[11px] text-slate-400">पोर्टल को अन्य रोल के नजरिए से देखें</span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {/* Teacher View */}
+            <div className="p-4 rounded-2xl bg-white dark:bg-slate-800 border border-emerald-500/30 hover:border-emerald-500 shadow-sm transition flex flex-col justify-between gap-3 group">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-xl">
+                    👨‍🏫
+                  </div>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                    शिक्षक पैनल
+                  </span>
+                </div>
+                <h4 className="text-sm font-black text-slate-900 dark:text-white">
+                  Teacher View
+                </h4>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                  दैनिक अटेंडेंस, होमवर्क डायरी, क्लास नोट्स व मार्क्स एंट्री इंटरफेस।
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (onPreviewTeacher) onPreviewTeacher();
+                }}
+                className="w-full py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/20 cursor-pointer active:scale-95 transition"
+              >
+                <span>Teacher View खोलें</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Accountant View */}
+            <div className="p-4 rounded-2xl bg-white dark:bg-slate-800 border border-amber-500/30 hover:border-amber-500 shadow-sm transition flex flex-col justify-between gap-3 group">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-xl">
+                    💼
+                  </div>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                    लेखापाल पैनल
+                  </span>
+                </div>
+                <h4 className="text-sm font-black text-slate-900 dark:text-white">
+                  Accountant View
+                </h4>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                  फीस वसूली, रसीद जनरेशन, डे-बुक, पेंडिंग ड्यूज व फाइनेंशियल रिपोर्ट्स।
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (onPreviewAccountant) onPreviewAccountant();
+                }}
+                className="w-full py-2 px-3 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-amber-600/20 cursor-pointer active:scale-95 transition"
+              >
+                <span>Accountant View खोलें</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Student View */}
+            <div className="p-4 rounded-2xl bg-white dark:bg-slate-800 border border-purple-500/30 hover:border-purple-500 shadow-sm transition flex flex-col justify-between gap-3 group">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="w-10 h-10 rounded-xl bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-xl">
+                    🎓
+                  </div>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-600 dark:text-purple-400">
+                    छात्र / पैरेंट
+                  </span>
+                </div>
+                <h4 className="text-sm font-black text-slate-900 dark:text-white">
+                  Student View
+                </h4>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                  रिजल्ट मार्कशीट, उपस्थिति रिकॉर्ड, डिजिटल नोटिस बोर्ड व फीस स्लिप।
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (onPreviewStudent) onPreviewStudent();
+                }}
+                className="w-full py-2 px-3 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-purple-600/20 cursor-pointer active:scale-95 transition"
+              >
+                <span>Student View खोलें</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Section 3: School Management & Session Actions */}
+        <div className="space-y-3">
+          <h3 className="text-xs sm:text-sm font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            स्कूल व सत्र विकल्प (Session &amp; School Actions)
+          </h3>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {canExitSchool && (
+              <div className="p-4 rounded-2xl bg-white dark:bg-slate-800 border border-amber-500/30 shadow-sm flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/15 flex items-center justify-center text-amber-600 shrink-0">
+                    <Building2 className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                      Leave School (स्कूल छोड़ें)
+                    </h4>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      इस स्कूल से अपना खाता अलग (detach) करें
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowLeaveConfirmModal(true)}
+                  className="px-3.5 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-700 dark:text-amber-300 font-bold text-xs cursor-pointer active:scale-95 transition shrink-0"
+                >
+                  Leave
+                </button>
+              </div>
+            )}
+
+            <div className="p-4 rounded-2xl bg-white dark:bg-slate-800 border border-rose-500/30 shadow-sm flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-500/15 flex items-center justify-center text-rose-600 shrink-0">
+                  <LogOut className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                    Admin Logout (एडमिन लॉगआउट)
+                  </h4>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    स्कूल एडमिन सत्र सुरक्षित रूप से समाप्त करें
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handlePerformLogout}
+                className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs cursor-pointer active:scale-95 transition shrink-0 shadow-md shadow-rose-600/20"
+              >
+                Logout
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Bottom Back Button */}
+        <div className="pt-4 flex justify-center">
+          <button
+            type="button"
+            onClick={() => setView("dashboard")}
+            className="px-6 py-3 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white dark:bg-slate-800 dark:hover:bg-slate-700 font-bold text-sm flex items-center gap-2 shadow-lg cursor-pointer active:scale-95 transition"
+          >
+            <ChevronLeft className="w-4 h-4" />
+            <span>डैशबोर्ड पर वापस लौटें (Back to Dashboard)</span>
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   // List views
   const renderListView = () => {
+    if (view === "account_hub") {
+      return renderAccountHubPage();
+    }
     if (view === "sessions") {
       return (
         <div className="p-4 space-y-3 max-w-2xl mx-auto">
@@ -5960,6 +6365,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   return renderErpShell(
     view === "dashboard" ? (
       renderHomeDashboard()
+    ) : view === "account_hub" ? (
+      renderAccountHubPage()
     ) : (
       <div>
         <div className="bg-white dark:bg-slate-800 border-b dark:border-slate-700 px-4 py-3 rounded-2xl mb-4 flex items-center justify-between shadow-xs">

@@ -265,6 +265,7 @@ import {
   Edit3,
   Image as ImageIcon,
   QrCode,
+  School,
 } from "lucide-react";
 
 const FaWhatsapp = ({ size = 18 }: { size?: number }) => (
@@ -398,6 +399,9 @@ import html2canvas from "html2canvas";
 import { SchoolHomeCard } from './school/SchoolHomeCard';
 import { QrAttendanceScannerModal } from './school/QrAttendanceScannerModal';
 import { SchoolNotebookReader } from './school/SchoolNotebookReader';
+import { SchoolWelcomeModal } from './school/SchoolWelcomeModal';
+import { SchoolBirthdayModal } from './school/SchoolBirthdayModal';
+import type { NstaWelcomeData, NstaBirthdayData } from '../school-types';
 import { HomeAssemblyAnimation } from './HomeAssemblyAnimation';
 import {
   getSchool as getSchoolById,
@@ -407,6 +411,8 @@ import {
   getLocalSchoolCurriculumNotes,
   getAllAvailableSchoolCurriculumNotes,
   subscribeToSchoolCurriculumNotes,
+  isStudentBirthdayToday,
+  dispatchOfficialSchoolBirthdayWish,
 } from '../school-firebase';
 import { getActiveCoachings, getCoachingUserProfile } from '../coaching-firebase';
 import { SlidePageTransition } from './SlidePageTransition';
@@ -820,6 +826,135 @@ export const StudentDashboard: React.FC<Props> = ({
   const [levelAnimOff, setLevelAnimOff] = useState(() => {
     try { return localStorage.getItem('nst_level_anim_off') === '1'; } catch { return false; }
   });
+
+  // Student School vs Default Content Switcher ("student sab ko school or defult ka option milega")
+  const [studentContentMode, setStudentContentMode] = useState<'SCHOOL' | 'DEFAULT'>(() => {
+    try {
+      const saved = localStorage.getItem('nst_student_content_mode');
+      if (saved === 'SCHOOL' || saved === 'DEFAULT') return saved;
+    } catch {}
+    return 'SCHOOL';
+  });
+
+  // School state for current user (declared early so birthday/welcome effects can access it safely)
+  const [userSchool, setUserSchool] = useState<any>(null);
+
+  const [schoolWelcomeData, setSchoolWelcomeData] = useState<NstaWelcomeData | null>(null);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    try {
+      const pendingKey = `nst_show_welcome_popup_${user.id}`;
+      const hasPopup = localStorage.getItem(pendingKey);
+      if (hasPopup) {
+        localStorage.removeItem(pendingKey);
+        let parsed: NstaWelcomeData | null = null;
+        try {
+          parsed = JSON.parse(hasPopup);
+        } catch {}
+        if (!parsed || typeof parsed !== 'object') {
+          try {
+            const rawStored = localStorage.getItem('nst_pending_welcome_student');
+            if (rawStored) parsed = JSON.parse(rawStored);
+          } catch {}
+        }
+        if (!parsed || !parsed.studentName) {
+          parsed = {
+            studentId: user.id,
+            studentName: user.name || 'Student',
+            admissionNo: (user as any).admissionNo || 'ADM-001',
+            rollNo: (user as any).rollNo || '01',
+            className: (user as any).className || `Class ${user.classLevel || '10'}`,
+            schoolName: (user as any).schoolName || 'NSTA Digital School',
+            issuedAt: new Date().toISOString(),
+          };
+        }
+        setSchoolWelcomeData(parsed);
+      }
+    } catch {}
+  }, [user?.id, user?.name]);
+
+  useEffect(() => {
+    const handleWelcomeEv = (e: any) => {
+      if (e?.detail) setSchoolWelcomeData(e.detail);
+    };
+    window.addEventListener('nst-school-welcome-received', handleWelcomeEv);
+    return () => window.removeEventListener('nst-school-welcome-received', handleWelcomeEv);
+  }, []);
+
+  const [schoolBirthdayData, setSchoolBirthdayData] = useState<NstaBirthdayData | null>(null);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    const currentYear = new Date().getFullYear();
+    const sentKey = `nst_birthday_wish_sent_${userSchool?.id || (user as any).schoolId || "dps_gurgaon_sector45"}_${user.id}_${currentYear}`;
+    const pendingKey = `nst_show_birthday_popup_${user.id}`;
+
+    // 1. Check if pending birthday popup was stored
+    try {
+      const hasPopup = localStorage.getItem(pendingKey);
+      if (hasPopup) {
+        localStorage.removeItem(pendingKey);
+        let parsed: NstaBirthdayData | null = null;
+        try {
+          parsed = JSON.parse(hasPopup);
+        } catch {}
+        if (parsed && parsed.studentName) {
+          setSchoolBirthdayData(parsed);
+          return;
+        }
+      }
+    } catch {}
+
+    // 2. Check if today is student's birthday!
+    const userDob = (user as any).dateOfBirth || (user as any).dob;
+    if (userDob && isStudentBirthdayToday(userDob)) {
+      try {
+        const alreadyWished = localStorage.getItem(sentKey);
+        void dispatchOfficialSchoolBirthdayWish(
+          {
+            id: user.id,
+            name: user.name || "Student",
+            admissionNo: (user as any).admissionNo,
+            rollNo: (user as any).rollNo,
+            className: (user as any).className || `Class ${user.classLevel || '10'}`,
+            schoolId: userSchool?.id || (user as any).schoolId || "dps_gurgaon_sector45",
+            schoolName: userSchool?.name || (user as any).schoolName || "NSTA Digital School",
+            dateOfBirth: userDob,
+          },
+          {
+            force: false,
+            triggerPopup: true,
+            schoolName: userSchool?.name || (user as any).schoolName || undefined,
+          }
+        ).then((msg) => {
+          if (msg?.birthdayData) {
+            setSchoolBirthdayData(msg.birthdayData);
+          } else if (!alreadyWished) {
+            setSchoolBirthdayData({
+              studentId: user.id,
+              studentName: user.name || "Student",
+              admissionNo: (user as any).admissionNo,
+              rollNo: (user as any).rollNo,
+              className: (user as any).className || `Class ${user.classLevel || '10'}`,
+              schoolName: userSchool?.name || (user as any).schoolName || "NSTA Digital School",
+              dateOfBirth: userDob,
+              wishedYear: currentYear,
+              issuedAt: new Date().toISOString(),
+            });
+          }
+        });
+      } catch {}
+    }
+  }, [user?.id, user?.name, userSchool?.id, userSchool?.name]);
+
+  useEffect(() => {
+    const handleBirthdayEv = (e: any) => {
+      if (e?.detail) setSchoolBirthdayData(e.detail);
+    };
+    window.addEventListener('nst-school-birthday-received', handleBirthdayEv);
+    return () => window.removeEventListener('nst-school-birthday-received', handleBirthdayEv);
+  }, []);
 
   const analysisLogs = (() => { try { return JSON.parse(localStorage.getItem("nst_universal_analysis_logs") || "[]"); } catch { return []; } })();
   const isGameEnabled = settings?.isGameEnabled !== false;
@@ -1779,9 +1914,6 @@ export const StudentDashboard: React.FC<Props> = ({
     settings?.isGroupStudyEnabled === false ||
     (settings?.hiddenFeatures || []).includes('GROUP_STUDY') ||
     (settings?.hiddenHomeButtons || []).includes('GROUP_STUDY');
-
-  // School state for current user
-  const [userSchool, setUserSchool] = useState<any>(null);
 
   const isSchoolStaffOrAdmin =
     Boolean(_isAdminUser) ||
@@ -14284,6 +14416,86 @@ export const StudentDashboard: React.FC<Props> = ({
       return (
         <PullToRefresh onRefresh={() => window.location.reload()}>
         <div className="flex flex-col gap-2 pb-4">
+          {/* Top School Hero Card: School vs Default Content Hub */}
+          <div className="order-0 mb-1 p-3 sm:p-4 rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white border border-indigo-500/30 shadow-lg">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-indigo-600/30 border border-indigo-400/40 flex items-center justify-center text-amber-300 shrink-0 shadow-md">
+                  <Building2 className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm sm:text-base font-black text-white truncate">
+                      {userSchool?.name || (resolvedStudentSchoolId ? `School ID: ${resolvedStudentSchoolId}` : "NSTA Learning Academy")}
+                    </h3>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shrink-0">
+                      {resolvedStudentSchoolId || userSchool?.id ? `ID: ${userSchool?.code || resolvedStudentSchoolId}` : "Default SuperAdmin"}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-indigo-200/80 truncate mt-0.5">
+                    {studentContentMode === 'SCHOOL'
+                      ? "आपके स्कूल का ऑफिशियल सिलेबस, होमवर्क, डायरी व रिपोर्ट्स सक्रिय हैं"
+                      : "सुपरएडमिन रिपोजिटरी: 53+ किताबें, ऑल-इंडिया MCQs व स्टडी रूम सक्रिय हैं"}
+                  </p>
+                </div>
+              </div>
+
+              {/* Dual Toggle Pill Buttons: School Content vs Default */}
+              <div className="flex items-center gap-1 bg-black/40 p-1 rounded-xl border border-white/10 w-full sm:w-auto shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStudentContentMode('SCHOOL');
+                    try { localStorage.setItem('nst_student_content_mode', 'SCHOOL'); } catch {}
+                  }}
+                  className={`flex-1 sm:flex-none px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 ${
+                    studentContentMode === 'SCHOOL'
+                      ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md shadow-blue-500/30 ring-1 ring-blue-400"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                  title="अपने स्कूल का कंटेंट देखें"
+                >
+                  <School className="w-3.5 h-3.5" />
+                  <span>🏫 स्कूल कंटेंट (School)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStudentContentMode('DEFAULT');
+                    try { localStorage.setItem('nst_student_content_mode', 'DEFAULT'); } catch {}
+                  }}
+                  className={`flex-1 sm:flex-none px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 ${
+                    studentContentMode === 'DEFAULT'
+                      ? "bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-md shadow-amber-500/30 ring-1 ring-amber-400"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                  title="सुपरएडमिन का पूरा NSTA कंटेंट देखें"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>🌐 Default (सुपरएडमिन)</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Action when School mode is active */}
+            {studentContentMode === 'SCHOOL' && (userSchool || resolvedStudentSchoolId) && (
+              <div className="mt-2.5 pt-2 border-t border-white/10 flex items-center justify-between text-xs">
+                <span className="text-[11px] text-slate-300">
+                  📋 स्कूल डिजिटल नोटिस, उपस्थिति व डायरी देखने के लिए:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onOpenSchool) onOpenSchool();
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-indigo-500/30 hover:bg-indigo-500/50 text-indigo-200 hover:text-white font-bold text-[11px] flex items-center gap-1 transition cursor-pointer active:scale-95 border border-indigo-400/30"
+                >
+                  <span>स्कूल पोर्टल खोलें →</span>
+                </button>
+              </div>
+            )}
+          </div>
+
           {/* RESUME READING — page-wise (chapters + ALL homework notes), sorted by latest activity */}
           <div className="order-1">
           {isHomeSectionVisible('home_continue_reading', settings) && (() => {
@@ -35275,6 +35487,28 @@ Explanation: Yahan explanation...`}</p>
           className: (user as any).className || `Class ${activeSessionClass || user.classLevel || '10'}`,
           schoolId: userSchool?.id || (user as any).schoolId || "",
           schoolName: userSchool?.name || "My School",
+        }}
+      />
+
+      {/* ── CELEBRATORY SCHOOL WELCOME MODAL ── */}
+      <SchoolWelcomeModal
+        isOpen={Boolean(schoolWelcomeData)}
+        onClose={() => setSchoolWelcomeData(null)}
+        welcomeData={schoolWelcomeData}
+        onOpenSchoolDesk={() => {
+          setSchoolWelcomeData(null);
+          onOpenSchool?.();
+        }}
+      />
+
+      {/* ── CELEBRATORY SCHOOL OFFICIAL BIRTHDAY MODAL ── */}
+      <SchoolBirthdayModal
+        isOpen={Boolean(schoolBirthdayData)}
+        onClose={() => setSchoolBirthdayData(null)}
+        birthdayData={schoolBirthdayData}
+        onOpenSchoolDesk={() => {
+          setSchoolBirthdayData(null);
+          onOpenSchool?.();
         }}
       />
 

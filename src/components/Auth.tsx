@@ -62,7 +62,7 @@ import {
 } from '../services/sessionManager';
 import { getDemoSchoolDataset } from './school/demoDataStore';
 import { INITIAL_STUDENTS } from './school/feeReceiptUtils';
-import { saveSchoolUserProfile, getStudent, getLocalStudents, setLocalStudents, getStudentOrAdmissionRecord } from '../school-firebase';
+import { saveSchoolUserProfile, getStudent, getLocalStudents, setLocalStudents, getStudentOrAdmissionRecord, dispatchOfficialSchoolWelcomeMessage } from '../school-firebase';
 
 interface Props {
   onLogin: (user: User) => void;
@@ -1021,7 +1021,17 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
         // 3. Complete login INSTANTLY in UI
         triggerLoginSuccess(matchedStudentUser);
 
-        // 4. Non-blocking background sync (any permission warning is silently ignored)
+        // 4. Dispatch or ensure official welcome message in NSTA Messenger School Desk & set celebratory popup
+        try {
+          void dispatchOfficialSchoolWelcomeMessage(matchedStudentUser, {
+            force: false,
+            triggerPopup: true,
+            schoolName: realSchoolName || undefined,
+          });
+          localStorage.setItem(`nst_show_welcome_popup_${matchedStudentUser.id}`, 'true');
+        } catch {}
+
+        // 5. Non-blocking background sync (any permission warning is silently ignored)
         saveUserToLive(matchedStudentUser).catch(() => {});
         saveSchoolUserProfile({
           uid: matchedStudentUser.id,
@@ -1478,6 +1488,13 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
 
       await saveUserToLive(newUser, { immediate: true });
       localStorage.setItem('nst_last_registered_id', newId);
+
+      // Auto-dispatch official welcome message & set welcome celebratory popup flag
+      try {
+        void dispatchOfficialSchoolWelcomeMessage(newUser, { force: true, triggerPopup: true });
+        localStorage.setItem(`nst_show_welcome_popup_${newUser.id}`, 'true');
+      } catch {}
+
       // Direct navigation: User account creation instantly transitions to the School ID Card gateway screen
       triggerLoginSuccess(newUser);
     } catch (err: any) {

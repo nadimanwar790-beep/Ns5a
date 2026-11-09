@@ -11,6 +11,7 @@ import type {
 } from "../../school-types";
 import { DirectUploadButton } from "../DirectUploadButton";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
+import { getDemoSchoolDataset } from "./demoDataStore";
 
 interface Props {
   school: School;

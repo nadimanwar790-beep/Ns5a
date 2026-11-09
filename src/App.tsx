@@ -235,18 +235,32 @@ const getInitialSettings = () => {
 
 export function App() {
   const [user, setUser] = useState<any>(getInitialUser);
-  // Default view mode: STUDENT by default
+  // Default view mode: School accounts direct to SCHOOL_ERP ("School wala account direct login hoga to school profile pe open hoga")
   const [view, setView] = useState<AppViewMode>(() => {
     try {
-      const saved = localStorage.getItem('nst_app_view_mode') as AppViewMode;
-      if (saved === 'ADMIN' || saved === 'STUDENT') {
-        return saved;
-      }
-      if (saved === 'SCHOOL_ERP') {
-        const u = getInitialUser();
-        if (isSchoolAdminEmail(u?.email) || u?.role === 'SCHOOL_ADMIN' || u?.role === 'TEACHER') {
+      const u = getInitialUser();
+      if (u) {
+        if (isAdminUser(u)) return 'ADMIN';
+        const r = (u?.role || '').toString().trim().toUpperCase();
+        const isSchoolAccount = Boolean(
+          u?.schoolId ||
+          r === 'SCHOOL_ADMIN' ||
+          r === 'SCHOOLADMIN' ||
+          r === 'TEACHER' ||
+          r === 'PRINCIPAL' ||
+          r === 'ACCOUNTANT' ||
+          isSchoolAdminEmail(u?.email) ||
+          (u?.email && u.email.toLowerCase().endsWith('.edu.in')) ||
+          localStorage.getItem('nst_active_school_id')
+        );
+        if (isSchoolAccount) {
           return 'SCHOOL_ERP';
         }
+      }
+
+      const saved = localStorage.getItem('nst_app_view_mode') as AppViewMode;
+      if (saved === 'ADMIN' || saved === 'STUDENT' || saved === 'SCHOOL_ERP') {
+        return saved;
       }
     } catch {}
     return 'STUDENT';
@@ -357,11 +371,38 @@ export function App() {
     // 1. App ka Super Admin / Admin -> Direct to Admin Dashboard ("Admin Console")
     if (isAdminUser(newUser)) {
       setView('ADMIN');
+      try {
+        localStorage.setItem('nst_app_view_mode', 'ADMIN');
+      } catch {}
       return;
     }
 
-    // 2. Direct Routing: User jab login kare to School ERP
-    setView('SCHOOL_ERP');
+    // 2. Direct Routing: School Account check
+    const r = (newUser?.role || '').toString().trim().toUpperCase();
+    const isSchoolAccount = Boolean(
+      newUser?.schoolId ||
+      r === 'SCHOOL_ADMIN' ||
+      r === 'SCHOOLADMIN' ||
+      r === 'TEACHER' ||
+      r === 'PRINCIPAL' ||
+      r === 'ACCOUNTANT' ||
+      isSchoolAdminEmail(newUser?.email) ||
+      (newUser?.email && newUser.email.toLowerCase().endsWith('.edu.in')) ||
+      localStorage.getItem('nst_active_school_id')
+    );
+
+    if (isSchoolAccount) {
+      setView('SCHOOL_ERP');
+      try {
+        localStorage.setItem('nst_app_view_mode', 'SCHOOL_ERP');
+      } catch {}
+      return;
+    }
+
+    setView('STUDENT');
+    try {
+      localStorage.setItem('nst_app_view_mode', 'STUDENT');
+    } catch {}
   };
 
   const handleLogout = async () => {

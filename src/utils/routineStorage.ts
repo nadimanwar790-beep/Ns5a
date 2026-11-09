@@ -274,6 +274,44 @@ function migrateSlotsToCats(slots: RoutineSlot[]): RoutineCategory[] {
   return Array.from(map.values());
 }
 
+export function getDefaultRoutineCategories(): RoutineCategory[] {
+  return [
+    {
+      id: "SCIENCE",
+      categoryName: "Science & Mathematics",
+      emoji: "🔬",
+      currentSubjectIndex: 0,
+      subjects: [
+        { subjectId: "physics", bookName: "NCERT Physics", classLevel: "10", displayName: "Physics (भौतिक विज्ञान)", emoji: "⚡", currentLessonIndex: 1, totalLessons: 14 },
+        { subjectId: "chemistry", bookName: "NCERT Chemistry", classLevel: "10", displayName: "Chemistry (रसायन विज्ञान)", emoji: "🧪", currentLessonIndex: 1, totalLessons: 12 },
+        { subjectId: "biology", bookName: "NCERT Biology", classLevel: "10", displayName: "Biology (जीव विज्ञान)", emoji: "🧬", currentLessonIndex: 0, totalLessons: 15 },
+        { subjectId: "mathematics", bookName: "NCERT Mathematics", classLevel: "10", displayName: "Mathematics (गणित)", emoji: "📐", currentLessonIndex: 2, totalLessons: 15 },
+      ]
+    },
+    {
+      id: "SOCIAL_SCIENCE",
+      categoryName: "Social Science",
+      emoji: "🌍",
+      currentSubjectIndex: 0,
+      subjects: [
+        { subjectId: "history", bookName: "NCERT History", classLevel: "10", displayName: "History (इतिहास)", emoji: "🏛️", currentLessonIndex: 1, totalLessons: 10 },
+        { subjectId: "polity", bookName: "Democratic Politics", classLevel: "10", displayName: "Civics & Polity (नागरिक शास्त्र)", emoji: "⚖️", currentLessonIndex: 0, totalLessons: 8 },
+        { subjectId: "geography", bookName: "Contemporary India", classLevel: "10", displayName: "Geography (भूगोल)", emoji: "🗺️", currentLessonIndex: 1, totalLessons: 7 },
+      ]
+    },
+    {
+      id: "LANGUAGES",
+      categoryName: "Languages & Literature",
+      emoji: "📚",
+      currentSubjectIndex: 0,
+      subjects: [
+        { subjectId: "english", bookName: "First Flight", classLevel: "10", displayName: "English Literature", emoji: "📖", currentLessonIndex: 1, totalLessons: 11 },
+        { subjectId: "hindi", bookName: "Kshitij Bhag-2", classLevel: "10", displayName: "Hindi (क्षितिज)", emoji: "🇮🇳", currentLessonIndex: 1, totalLessons: 14 },
+      ]
+    }
+  ];
+}
+
 export function loadRoutineData(userId: string): RoutineData {
   try {
     const raw = localStorage.getItem(`${STORAGE_KEY}_${userId}`);
@@ -285,15 +323,19 @@ export function loadRoutineData(userId: string): RoutineData {
         parsed.routineCategories?.length
           ? parsed.routineCategories
           : migrateSlotsToCats(slots);
-      const cats: RoutineCategory[] = sanitizeRoutineCategories(rawCats);
+      let cats: RoutineCategory[] = sanitizeRoutineCategories(rawCats);
+      if (!cats || cats.length === 0) {
+        cats = getDefaultRoutineCategories();
+      }
       return {
         ...parsed,
+        enabled: parsed.enabled !== false,
         revisionUnlockedLessons: parsed.revisionUnlockedLessons || {},
-        routineMode: parsed.routineMode ?? null,
-        selectedBoard: parsed.selectedBoard ?? null,
-        selectedClass: parsed.selectedClass ?? null,
-        selectedBook: parsed.selectedBook ?? null,
-        selectedBooks: parsed.selectedBooks ?? [],
+        routineMode: parsed.routineMode ?? "SCHOOL",
+        selectedBoard: parsed.selectedBoard ?? "CBSE",
+        selectedClass: parsed.selectedClass ?? "10",
+        selectedBook: parsed.selectedBook ?? "NCERT",
+        selectedBooks: parsed.selectedBooks?.length ? parsed.selectedBooks : ["NCERT Physics", "NCERT Chemistry", "NCERT Mathematics"],
         routineSlots: slots,
         routineCategories: cats,
         routineCategoriesByClass: parsed.routineCategoriesByClass ?? {},
@@ -305,23 +347,23 @@ export function loadRoutineData(userId: string): RoutineData {
     }
   } catch {}
   return {
-    enabled: false,
+    enabled: true,
     subjects: getDefaultSubjects(),
     lessonProgress: {},
     dailyTasks: {},
     coins: 100,
-    yesterdayTaskComplete: false,
+    yesterdayTaskComplete: true,
     lastResetDate: getTodayStr(),
     dailyClaims: {},
     trackingHistory: [],
     revisionUnlockedLessons: {},
-    routineMode: null,
-    selectedBoard: null,
-    selectedClass: null,
-    selectedBook: null,
-    selectedBooks: [],
+    routineMode: "SCHOOL",
+    selectedBoard: "CBSE",
+    selectedClass: "10",
+    selectedBook: "NCERT",
+    selectedBooks: ["NCERT Physics", "NCERT Chemistry", "NCERT Mathematics"],
     routineSlots: [],
-    routineCategories: [],
+    routineCategories: getDefaultRoutineCategories(),
     routineCategoriesByClass: {},
     unlockedCompetitionBooks: {},
     unlockedTierSlot: false,

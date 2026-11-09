@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   Bell,
   Send,
@@ -75,10 +75,23 @@ export const SchoolMessengerBroadcastStudio: React.FC<Props> = ({
   }, [classes, selectedClassId]);
 
   // Target students count
-  const targetStudents = useMemo(() => {
+  const availableStudentsForClass = useMemo(() => {
     if (selectedClassId === "all") return students;
     return students.filter((s) => s.classId === selectedClassId);
   }, [students, selectedClassId]);
+
+  // Specific student targeting with SELECT ALL capability
+  const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
+
+  // Keep selected students in sync when class changes (default to all selected)
+  useEffect(() => {
+    setSelectedStudentIds(availableStudentsForClass.map((s) => s.id));
+  }, [availableStudentsForClass]);
+
+  const targetStudents = useMemo(() => {
+    if (selectedStudentIds.length === 0) return availableStudentsForClass;
+    return availableStudentsForClass.filter((s) => selectedStudentIds.includes(s.id));
+  }, [availableStudentsForClass, selectedStudentIds]);
 
   // Channel Storage
   const storageKey = `nst_school_broadcast_channel_${school?.id || "default"}`;
@@ -310,6 +323,70 @@ export const SchoolMessengerBroadcastStudio: React.FC<Props> = ({
                         }`}
                       >
                         {c.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Student Multi-Select with "SELECT ALL" / "DESELECT ALL" (Ek-ek karke na chunna pade) */}
+              <div className="space-y-2 p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <Users className="w-4 h-4 text-indigo-500" />
+                    <span className="text-xs font-black text-slate-800 dark:text-slate-200 uppercase tracking-wide">
+                      Recipients ({targetStudents.length} / {availableStudentsForClass.length} Selected)
+                    </span>
+                  </div>
+                  {/* SELECT ALL / DESELECT ALL ACTION BUTTON */}
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedStudentIds(availableStudentsForClass.map((s) => s.id));
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-black transition cursor-pointer active:scale-95 shadow-xs"
+                    >
+                      ☑️ Select All (सभी चुनें)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedStudentIds([]);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 text-slate-700 dark:text-slate-300 text-[11px] font-bold transition cursor-pointer active:scale-95"
+                    >
+                      Deselect All
+                    </button>
+                  </div>
+                </div>
+
+                {/* Horizontal scrollable or wrap student chips */}
+                <div className="flex items-center gap-1.5 flex-wrap max-h-36 overflow-y-auto pt-1">
+                  {availableStudentsForClass.map((s) => {
+                    const isChecked = selectedStudentIds.includes(s.id);
+                    return (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => {
+                          if (isChecked) {
+                            setSelectedStudentIds(selectedStudentIds.filter((id) => id !== s.id));
+                          } else {
+                            setSelectedStudentIds([...selectedStudentIds, s.id]);
+                          }
+                        }}
+                        className={`px-2.5 py-1 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 border active:scale-95 ${
+                          isChecked
+                            ? "bg-indigo-50 dark:bg-indigo-950/80 border-indigo-400 dark:border-indigo-600 text-indigo-800 dark:text-indigo-200 shadow-xs"
+                            : "bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:border-slate-400"
+                        }`}
+                      >
+                        <span className={`w-3.5 h-3.5 rounded flex items-center justify-center text-[10px] ${isChecked ? "bg-indigo-600 text-white" : "border border-slate-400"}`}>
+                          {isChecked ? "✓" : ""}
+                        </span>
+                        <span>{s.name}</span>
+                        {s.rollNo && <span className="opacity-60 text-[10px]">({s.rollNo})</span>}
                       </button>
                     );
                   })}

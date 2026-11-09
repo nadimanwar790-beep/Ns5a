@@ -180,7 +180,7 @@ export function printHtmlInIframe(htmlDocument: string, title = "Print Document"
 }
 
 const ADMISSION_PRINT_CSS = `
-  @page { size: A4 portrait; margin: 7mm; }
+  @page { size: A4 portrait; margin: 6mm 7mm; }
   * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
   body { margin: 0; padding: 0; background: #ffffff; font-family: 'Segoe UI', Arial, sans-serif; color: #0f172a; }
   .a4-sheet {
@@ -193,6 +193,29 @@ const ADMISSION_PRINT_CSS = `
     display: flex;
     flex-direction: column;
     justify-content: space-between;
+    box-sizing: border-box;
+  }
+  .page-break {
+    page-break-after: always;
+    break-after: page;
+    height: 0;
+    margin: 0;
+    padding: 0;
+    display: block;
+    clear: both;
+  }
+  @media print {
+    .a4-sheet {
+      page-break-inside: avoid !important;
+      break-inside: avoid !important;
+      min-height: 284mm !important;
+      margin: 0 auto !important;
+    }
+    .page-break {
+      page-break-after: always !important;
+      break-after: page !important;
+      visibility: hidden !important;
+    }
   }
   .adm-box {
     border: 1.5px solid #1e3a8a;
@@ -520,6 +543,7 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
   const [principalTitle, setPrincipalTitle] = useState<string>(() => `${school?.principalName || "Principal"} (Sign & Seal)`);
   const previewRef = useRef<HTMLDivElement | null>(null);
   const [zoomLevel, setZoomLevel] = useState<number>(() => (isStudentView ? 0.536 : 1));
+  const [previewPage, setPreviewPage] = useState<1 | 2 | "all">(1);
 
   React.useEffect(() => {
     if (school?.principalName) {
@@ -656,7 +680,7 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
   );
   const qrImgUrl = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&margin=2&data=${qrPayload}`;
 
-  const buildSheetInnerHtml = (targetMode: AdmissionPrintMode): string => {
+  const buildSheetInnerHtmlPage = (targetMode: AdmissionPrintMode, pageNum: 1 | 2 = 1): string => {
     const renderReceiptSignatures = () => {
       const cashierSigImg = showDigitalSig && (school?.directorSignatureUrl || (school as any)?.cashierSignatureUrl);
       const principalSigImg = showDigitalSig && school?.principalSignatureUrl;
@@ -711,6 +735,28 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
       </div>
     `;
 
+    const page2CompactHeaderHtml = `
+      <div class="inst-header" style="border-bottom:1.5px solid #1e3a8a;padding-bottom:1.8mm;margin-bottom:2mm;">
+        <div class="inst-logo" style="width:13mm;height:13mm;">
+          ${logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="Logo" crossorigin="anonymous" />` : `<span>${escapeHtml((school?.name || "SC").slice(0, 2).toUpperCase())}</span>`}
+        </div>
+        <div class="inst-title-wrap" style="text-align:left;padding-left:2mm;">
+          <div class="inst-name" style="font-size:11pt;line-height:1.1;">${escapeHtml(school?.name || "Institutional Campus")}</div>
+          <div class="inst-sub" style="font-size:6.9pt;">
+            STUDENT: <strong style="color:#0f172a;text-transform:uppercase;">${escapeHtml(fullName)}</strong> • ADM NO: <strong style="color:#1e3a8a;">${escapeHtml(admNo)}</strong> • CLASS: <strong>${escapeHtml(clsLabel)}</strong> (ROLL: <strong>${escapeHtml(rollNo)}</strong>)
+          </div>
+        </div>
+        <div style="text-align:right;min-width:32mm;">
+          <div style="display:inline-block;padding:1mm 2.4mm;background:#1e3a8a;color:#ffffff;font-size:6.8pt;font-weight:900;border-radius:3px;letter-spacing:0.3px;">
+            📄 PAGE 2 OF 2 (भाग - 2)
+          </div>
+          <div style="font-size:6.5pt;font-weight:800;color:#64748b;margin-top:1mm;">
+            SESSION: ${escapeHtml(sessLabel)}
+          </div>
+        </div>
+      </div>
+    `;
+
     const admissionTypeBarHtml = `
       <div style="display:flex;align-items:center;justify-content:space-between;background:#f8fafc;border:1px solid #cbd5e1;border-radius:4px;padding:1.2mm 2.5mm;margin-bottom:2mm;font-size:7.2pt;font-weight:800;color:#1e3a8a;">
         <span>ADMISSION CATEGORY / प्रवेश प्रकार:</span>
@@ -744,6 +790,9 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
       </div>
     `;
 
+    // -------------------------------------------------------------
+    // CLASSIC BOX GRID FORM (2-PAGE SYSTEM)
+    // -------------------------------------------------------------
     if (targetMode === "classic_box_grid") {
       const renderBoxCells = (text: string, count: number): string => {
         const clean = (!isBlankForm && text ? text.toUpperCase().replace(/[^A-Z0-9 ]/g, "") : "").slice(0, count);
@@ -801,144 +850,242 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
       const schoolDisplayName = school?.name || "LIFE MAKER PUBLIC SCHOOL";
       const schoolDisplayAddr = school?.address || "Near Affour Yogi Baba Petrol Pump, Affour Nagra";
 
+      // PAGE 1 OF CLASSIC BOX GRID
+      if (pageNum === 1) {
+        return `
+          <div class="adm-box" style="flex:1;display:flex;flex-direction:column;justify-content:space-between;padding:3.5mm 4mm;font-family:Arial,Helvetica,sans-serif;color:#000;">
+            <div>
+              <!-- HEADER -->
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:1.5mm;">
+                <div style="width:24mm;text-align:center;flex-shrink:0;">
+                  ${logoUrl
+                    ? `<img src="${escapeHtml(logoUrl)}" alt="Logo" crossorigin="anonymous" style="width:20mm;height:20mm;object-fit:contain;" />`
+                    : `<div style="width:19mm;height:19mm;border:1.5px solid #000;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;margin:0 auto;font-weight:900;font-size:7pt;text-align:center;">
+                        <span>${escapeHtml(schoolDisplayName.slice(0, 10))}</span>
+                       </div>`
+                  }
+                  <div style="background:#000;color:#fff;font-size:6pt;font-weight:bold;padding:0.8px 2px;margin-top:1mm;border-radius:2px;display:inline-block;">
+                    Session ${escapeHtml(sessLabel)}
+                  </div>
+                </div>
+
+                <div style="flex:1;text-align:center;padding:0 2mm;">
+                  <div style="font-size:17pt;font-weight:900;letter-spacing:0.3px;font-family:'Comic Sans MS',Impact,Arial,sans-serif;line-height:1.1;color:#000;">
+                    ${escapeHtml(schoolDisplayName)}
+                  </div>
+                  <div style="font-size:8pt;font-weight:700;margin-top:1mm;color:#000;">
+                    ${escapeHtml(schoolDisplayAddr)}
+                  </div>
+                  <div style="font-size:10pt;font-weight:900;letter-spacing:0.8px;margin-top:1.2mm;text-transform:uppercase;color:#000;">
+                    REGISTRATION CUM ADMISSION FORM (PAGE 1)
+                  </div>
+                  <div style="font-size:8.5pt;font-weight:800;margin-top:0.8mm;letter-spacing:0.5px;color:#000;">
+                    ${isBlankForm ? "SESSION 20...... - 20........" : `SESSION ${escapeHtml(sessLabel)}`}
+                  </div>
+                </div>
+
+                <div style="width:27mm;height:32mm;border:1.2px solid #000;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;font-size:7.2pt;font-weight:600;line-height:1.2;padding:1mm;flex-shrink:0;">
+                  ${!isBlankForm && photoUrl
+                    ? `<img src="${escapeHtml(photoUrl)}" alt="Photo" crossorigin="anonymous" style="width:100%;height:100%;object-fit:cover;" />`
+                    : `Affix<br/>a recent<br/>Passport Size<br/>Photograph<br/>Here`
+                  }
+                </div>
+              </div>
+
+              <!-- META NUMBERS & SECTION A -->
+              <div style="font-size:7.6pt;margin-bottom:1.5mm;">
+                <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:1mm;">
+                  <div>
+                    <span>Form No. <span class="c-dotted-line" style="min-width:28mm;">${!isBlankForm && admNo !== "—" ? escapeHtml(admNo) : "&nbsp;"}</span></span>
+                  </div>
+                  <div>
+                    <span>Admission No. <span class="c-dotted-line" style="min-width:32mm;">${!isBlankForm && admNo !== "—" ? escapeHtml(admNo) : "&nbsp;"}</span></span>
+                  </div>
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:baseline;">
+                  <div>
+                    <span>Registration / PEN: <span class="c-dotted-line" style="min-width:30mm;">${!isBlankForm && (student?.apaarId || application?.applicationNo) ? escapeHtml(student?.apaarId || application?.applicationNo) : "&nbsp;"}</span></span>
+                  </div>
+                  <div style="text-align:center;">
+                    <span style="font-size:8.5pt;font-weight:900;text-decoration:underline;">A. Student Profile</span>
+                  </div>
+                  <div>
+                    <span>Receipt No : <span class="c-dotted-line" style="min-width:26mm;">${!isBlankForm && resolvedFee?.receiptNo ? escapeHtml(resolvedFee.receiptNo) : "&nbsp;"}</span></span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- SECTION A: STUDENT PROFILE -->
+              <div style="font-size:7.5pt;line-height:1.3;">
+                <div style="margin-bottom:1.8mm;">
+                  <div style="font-weight:700;margin-bottom:0.8mm;">1. Name (In CAPITAL Letters)</div>
+                  <div style="margin-bottom:0.6mm;">${renderBoxCells(row1Name, 24)}</div>
+                  <div>${renderBoxCells(row2Name, 24)}</div>
+                </div>
+
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:2mm;margin-bottom:1.8mm;flex-wrap:wrap;">
+                  <div style="display:flex;align-items:center;gap:1.5mm;">
+                    <span style="font-weight:700;">2. Date of Birth</span>
+                    <span style="font-weight:700;margin-left:1mm;">DD</span>
+                    <span class="c-char-box">${d1}</span><span class="c-char-box">${d2}</span>
+                    <span style="font-weight:700;margin-left:1mm;">MM</span>
+                    <span class="c-char-box">${m1}</span><span class="c-char-box">${m2}</span>
+                    <span style="font-weight:700;margin-left:1mm;">YYYY</span>
+                    <span class="c-char-box">${y1}</span><span class="c-char-box">${y2}</span><span class="c-char-box">${y3}</span><span class="c-char-box">${y4}</span>
+                  </div>
+
+                  <div style="display:flex;align-items:center;gap:1.5mm;">
+                    <span style="font-weight:700;">3. Age as on 1st April</span>
+                    <span style="font-weight:700;margin-left:1mm;">Y</span>
+                    <span class="c-char-box" style="width:7mm;">${ageYears}</span>
+                    <span style="font-weight:700;">M</span>
+                    <span class="c-char-box" style="width:7mm;">${ageMonths}</span>
+                    <span style="font-weight:700;">D</span>
+                    <span class="c-char-box" style="width:7mm;">${ageDays}</span>
+                  </div>
+                </div>
+
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.8mm;">
+                  <div>
+                    <span style="font-weight:700;">4. Seeking Admission to</span>
+                    <span style="margin-left:3mm;font-weight:700;">Class</span>
+                    <span class="c-dotted-line" style="min-width:32mm;">${!isBlankForm ? escapeHtml(clsLabel) : "&nbsp;"}</span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:3mm;">
+                    <span style="font-weight:700;">5. Gender</span>
+                    <span>Male <span class="c-check-box">${isMale ? "✓" : "&nbsp;"}</span></span>
+                    <span>Female <span class="c-check-box">${isFemale ? "✓" : "&nbsp;"}</span></span>
+                  </div>
+                </div>
+
+                <div style="display:flex;align-items:center;gap:4mm;margin-bottom:1.8mm;">
+                  <span style="font-weight:700;">6. Caste</span>
+                  <span>Gen. <span class="c-check-box">${isGen ? "✓" : "&nbsp;"}</span></span>
+                  <span>SC <span class="c-check-box">${isSc ? "✓" : "&nbsp;"}</span></span>
+                  <span>ST <span class="c-check-box">${isSt ? "✓" : "&nbsp;"}</span></span>
+                  <span>OBC <span class="c-check-box">${isObc ? "✓" : "&nbsp;"}</span></span>
+                  <span style="margin-left:auto;font-weight:700;">Blood Group: <span class="c-dotted-line" style="min-width:18mm;">${!isBlankForm ? escapeHtml(bloodGroup) : "&nbsp;"}</span></span>
+                </div>
+
+                <div style="display:flex;align-items:center;gap:4mm;margin-bottom:1.8mm;">
+                  <div style="display:flex;align-items:center;gap:2mm;">
+                    <span style="font-weight:700;">7. Religion</span>
+                    ${renderBoxCells(religion, 6)}
+                  </div>
+                  <div style="display:flex;align-items:center;gap:2mm;">
+                    <span style="font-weight:700;">Nationality</span>
+                    ${renderBoxCells(nationality || "INDIAN", 8)}
+                  </div>
+                </div>
+
+                <div style="margin-bottom:2mm;">
+                  <span style="font-weight:700;">8. Name of School Last Attended</span>
+                  <span class="c-dotted-line" style="width:122mm;">${!isBlankForm && prevSchool !== "—" ? escapeHtml(prevSchool) : "&nbsp;"}</span>
+                </div>
+              </div>
+
+              <!-- SECTION B: PARENT'S PROFILE -->
+              <div style="text-align:center;font-weight:900;text-decoration:underline;font-size:8.5pt;margin:2.5mm 0 1.5mm 0;">
+                B. Parent's Profile
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:4mm;margin-bottom:2mm;font-size:7.5pt;">
+                <!-- Father -->
+                <div>
+                  <div style="font-weight:800;text-align:center;margin-bottom:1.2mm;">Father Details</div>
+                  <div style="margin-bottom:1.2mm;">
+                    <span style="font-weight:700;display:inline-block;width:34mm;">1. Name</span>
+                    <span class="c-dotted-line" style="width:calc(100% - 36mm);">${!isBlankForm && fatherName !== "—" ? escapeHtml(fatherName) : "&nbsp;"}</span>
+                  </div>
+                  <div style="margin-bottom:1.2mm;">
+                    <span style="font-weight:700;display:inline-block;width:34mm;">2. Qualification</span>
+                    <span class="c-dotted-line" style="width:calc(100% - 36mm);">${!isBlankForm ? escapeHtml(student?.fatherQualification || application?.fatherQualification || "") : "&nbsp;"}</span>
+                  </div>
+                  <div style="margin-bottom:1.2mm;">
+                    <span style="font-weight:700;display:inline-block;width:34mm;">3. Occupation</span>
+                    <span class="c-dotted-line" style="width:calc(100% - 36mm);">${!isBlankForm ? escapeHtml(fatherOcc) : "&nbsp;"}</span>
+                  </div>
+                  <div>
+                    <span style="font-weight:700;display:inline-block;width:34mm;">4. Contact No.</span>
+                    <span class="c-dotted-line" style="width:calc(100% - 36mm);">${!isBlankForm && phone !== "—" ? escapeHtml(phone) : "&nbsp;"}</span>
+                  </div>
+                </div>
+
+                <!-- Mother -->
+                <div>
+                  <div style="font-weight:800;text-align:center;margin-bottom:1.2mm;">Mother Details</div>
+                  <div style="margin-bottom:1.2mm;">
+                    <span style="font-weight:700;display:inline-block;width:34mm;">1. Name</span>
+                    <span class="c-dotted-line" style="width:calc(100% - 36mm);">${!isBlankForm && motherName !== "—" ? escapeHtml(motherName) : "&nbsp;"}</span>
+                  </div>
+                  <div style="margin-bottom:1.2mm;">
+                    <span style="font-weight:700;display:inline-block;width:34mm;">2. Qualification</span>
+                    <span class="c-dotted-line" style="width:calc(100% - 36mm);">${!isBlankForm ? escapeHtml(student?.motherQualification || application?.motherQualification || "") : "&nbsp;"}</span>
+                  </div>
+                  <div style="margin-bottom:1.2mm;">
+                    <span style="font-weight:700;display:inline-block;width:34mm;">3. Occupation</span>
+                    <span class="c-dotted-line" style="width:calc(100% - 36mm);">${!isBlankForm ? escapeHtml(motherOcc) : "&nbsp;"}</span>
+                  </div>
+                  <div>
+                    <span style="font-weight:700;display:inline-block;width:34mm;">4. Contact No.</span>
+                    <span class="c-dotted-line" style="width:calc(100% - 36mm);">${!isBlankForm ? escapeHtml(whatsappNo || phone !== "—" ? whatsappNo || phone : "") : "&nbsp;"}</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 11. Only Child & Sibling Profile -->
+              <div style="margin-bottom:1.8mm;font-size:7.4pt;">
+                <div style="display:flex;align-items:center;gap:4mm;margin-bottom:1.2mm;">
+                  <span style="font-weight:700;">11. Is candidate only child of parents</span>
+                  <span>Yes <span class="c-check-box">${isOnlyChildVal === true ? "✓" : "&nbsp;"}</span></span>
+                  <span>No <span class="c-check-box">${isOnlyChildVal === false ? "✓" : "&nbsp;"}</span></span>
+                </div>
+                <div style="font-weight:700;margin-bottom:0.8mm;">
+                  If no, Sibling Profile :- (If studying in this school)
+                </div>
+                <table class="c-table">
+                  <thead>
+                    <tr style="background:#f1f5f9;">
+                      <th style="width:14mm;">Sl. No.</th>
+                      <th>Name</th>
+                      <th style="width:34mm;">Brother/Sister</th>
+                      <th style="width:24mm;">Class</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${[0, 1, 2].map((idx) => {
+                      const sib = !isBlankForm && siblings[idx] ? siblings[idx] : null;
+                      return `
+                        <tr>
+                          <td style="text-align:center;">${idx + 1}.</td>
+                          <td>${sib ? escapeHtml(sib.name) : "&nbsp;"}</td>
+                          <td>${sib ? escapeHtml(sib.relation || "Brother") : "&nbsp;"}</td>
+                          <td>${sib ? escapeHtml(sib.className) : "&nbsp;"}</td>
+                        </tr>
+                      `;
+                    }).join("")}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Page 1 Footer -->
+            <div style="display:flex;justify-content:space-between;align-items:center;border-top:1.2px solid #cbd5e1;padding-top:1.8mm;margin-top:auto;font-size:6.8pt;color:#64748b;font-weight:700;">
+              <span>📄 पृष्ठ 1 / 2 (Page 1 of 2)</span>
+              <span style="color:#1e3a8a;">* कृपया स्थायी पता, परिवहन, शुल्क व घोषणा हेतु पृष्ठ 2 देखें</span>
+              <span>${escapeHtml(schoolDisplayName)}</span>
+            </div>
+          </div>
+        `;
+      }
+
+      // PAGE 2 OF CLASSIC BOX GRID
       return `
-        <div class="a4-sheet" style="padding:1mm 2mm;font-family:Arial,Helvetica,sans-serif;color:#000;">
-          <!-- HEADER -->
-          <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:1.5mm;">
-            <div style="width:24mm;text-align:center;flex-shrink:0;">
-              ${logoUrl
-                ? `<img src="${escapeHtml(logoUrl)}" alt="Logo" crossorigin="anonymous" style="width:20mm;height:20mm;object-fit:contain;" />`
-                : `<div style="width:19mm;height:19mm;border:1.5px solid #000;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;margin:0 auto;font-weight:900;font-size:7pt;text-align:center;">
-                    <span>LIFE MAKER</span>
-                    <span style="font-size:5pt;">PUBLIC SCHOOL</span>
-                   </div>`
-              }
-              <div style="background:#000;color:#fff;font-size:6pt;font-weight:bold;padding:0.8px 2px;margin-top:1mm;border-radius:2px;display:inline-block;">
-                Session 2027-28
-              </div>
-            </div>
-
-            <div style="flex:1;text-align:center;padding:0 2mm;">
-              <div style="font-size:18.5pt;font-weight:900;letter-spacing:0.3px;font-family:'Comic Sans MS',Impact,Arial,sans-serif;line-height:1.1;color:#000;">
-                ${escapeHtml(schoolDisplayName)}
-              </div>
-              <div style="font-size:8.2pt;font-weight:700;margin-top:1mm;color:#000;">
-                ${escapeHtml(schoolDisplayAddr)}
-              </div>
-              <div style="font-size:10.5pt;font-weight:900;letter-spacing:0.8px;margin-top:1.2mm;text-transform:uppercase;color:#000;">
-                REGISTRATION CUM ADMISSION FORM
-              </div>
-              <div style="font-size:9pt;font-weight:800;margin-top:0.8mm;letter-spacing:0.5px;color:#000;">
-                ${isBlankForm ? "SESSION 20...... - 20........" : `SESSION ${escapeHtml(sessLabel)}`}
-              </div>
-            </div>
-
-            <div style="width:27mm;height:32mm;border:1.2px solid #000;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;font-size:7.2pt;font-weight:600;line-height:1.2;padding:1mm;flex-shrink:0;">
-              ${!isBlankForm && photoUrl
-                ? `<img src="${escapeHtml(photoUrl)}" alt="Photo" crossorigin="anonymous" style="width:100%;height:100%;object-fit:cover;" />`
-                : `Affix<br/>a recent<br/>Passport Size<br/>Photograph<br/>Here`
-              }
-            </div>
-          </div>
-
-          <!-- META NUMBERS & SECTION A -->
-          <div style="font-size:7.6pt;margin-bottom:1.5mm;">
-            <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:1mm;">
-              <div style="display:flex;gap:4mm;align-items:baseline;">
-                <span>Form No. <span class="c-dotted-line" style="min-width:28mm;">${!isBlankForm && admNo !== "—" ? escapeHtml(admNo) : "&nbsp;"}</span></span>
-              </div>
-              <div>
-                <span>Admission No. <span class="c-dotted-line" style="min-width:32mm;">${!isBlankForm && admNo !== "—" ? escapeHtml(admNo) : "&nbsp;"}</span></span>
-              </div>
-            </div>
-            <div style="display:flex;justify-content:space-between;align-items:baseline;">
-              <div>
-                <span>Registration No. <span class="c-dotted-line" style="min-width:30mm;">${!isBlankForm && (student?.apaarId || application?.applicationNo) ? escapeHtml(student?.apaarId || application?.applicationNo) : "&nbsp;"}</span></span>
-              </div>
-              <div style="text-align:center;">
-                <span style="font-size:8.5pt;font-weight:900;text-decoration:underline;">A. Student Profile</span>
-              </div>
-              <div>
-                <span>Receipt No : <span class="c-dotted-line" style="min-width:26mm;">${!isBlankForm && resolvedFee?.receiptNo ? escapeHtml(resolvedFee.receiptNo) : "&nbsp;"}</span></span>
-              </div>
-            </div>
-          </div>
-
-          <!-- SECTION A: STUDENT PROFILE -->
-          <div style="font-size:7.5pt;line-height:1.25;">
-            <!-- 1. Name -->
-            <div style="margin-bottom:1.8mm;">
-              <div style="font-weight:700;margin-bottom:0.8mm;">1. Name (In CAPITAL Letters)</div>
-              <div style="margin-bottom:0.6mm;">${renderBoxCells(row1Name, 24)}</div>
-              <div>${renderBoxCells(row2Name, 24)}</div>
-            </div>
-
-            <!-- 2. DOB & 3. Age on 1st April -->
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:2mm;margin-bottom:1.8mm;flex-wrap:wrap;">
-              <div style="display:flex;align-items:center;gap:1.5mm;">
-                <span style="font-weight:700;">2. Date of Birth</span>
-                <span style="font-weight:700;margin-left:1mm;">DD</span>
-                <span class="c-char-box">${d1}</span><span class="c-char-box">${d2}</span>
-                <span style="font-weight:700;margin-left:1mm;">MM</span>
-                <span class="c-char-box">${m1}</span><span class="c-char-box">${m2}</span>
-                <span style="font-weight:700;margin-left:1mm;">YYYY</span>
-                <span class="c-char-box">${y1}</span><span class="c-char-box">${y2}</span><span class="c-char-box">${y3}</span><span class="c-char-box">${y4}</span>
-              </div>
-
-              <div style="display:flex;align-items:center;gap:1.5mm;">
-                <span style="font-weight:700;">3. Age as on 1st April of Current year</span>
-                <span style="font-weight:700;margin-left:1mm;">Years</span>
-                <span class="c-char-box" style="width:8mm;">${ageYears}</span>
-                <span style="font-weight:700;">Months</span>
-                <span class="c-char-box" style="width:8mm;">${ageMonths}</span>
-                <span style="font-weight:700;">Days</span>
-                <span class="c-char-box" style="width:8mm;">${ageDays}</span>
-              </div>
-            </div>
-
-            <!-- 4. Class & 5. Gender -->
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.8mm;">
-              <div>
-                <span style="font-weight:700;">4. Seeking Admission to</span>
-                <span style="margin-left:3mm;font-weight:700;">Class</span>
-                <span class="c-dotted-line" style="min-width:32mm;">${!isBlankForm ? escapeHtml(clsLabel) : "&nbsp;"}</span>
-              </div>
-              <div style="display:flex;align-items:center;gap:3mm;">
-                <span style="font-weight:700;">5. Gender</span>
-                <span>Male <span class="c-check-box">${isMale ? "✓" : "&nbsp;"}</span></span>
-                <span>Female <span class="c-check-box">${isFemale ? "✓" : "&nbsp;"}</span></span>
-              </div>
-            </div>
-
-            <!-- 6. Caste -->
-            <div style="display:flex;align-items:center;gap:4mm;margin-bottom:1.8mm;">
-              <span style="font-weight:700;">6. Caste</span>
-              <span>Gen. <span class="c-check-box">${isGen ? "✓" : "&nbsp;"}</span></span>
-              <span>SC <span class="c-check-box">${isSc ? "✓" : "&nbsp;"}</span></span>
-              <span>ST <span class="c-check-box">${isSt ? "✓" : "&nbsp;"}</span></span>
-              <span>OBC <span class="c-check-box">${isObc ? "✓" : "&nbsp;"}</span></span>
-            </div>
-
-            <!-- 7. Religion & Nationality -->
-            <div style="display:flex;align-items:center;gap:4mm;margin-bottom:1.8mm;">
-              <div style="display:flex;align-items:center;gap:2mm;">
-                <span style="font-weight:700;">7. Religion</span>
-                ${renderBoxCells(religion, 6)}
-              </div>
-              <div style="display:flex;align-items:center;gap:2mm;">
-                <span style="font-weight:700;">Nationality</span>
-                ${renderBoxCells(nationality || "INDIAN", 8)}
-              </div>
-            </div>
-
-            <!-- 8. Last School -->
-            <div style="margin-bottom:1.8mm;">
-              <span style="font-weight:700;">8. Name of the School Last Attended</span>
-              <span class="c-dotted-line" style="width:125mm;">${!isBlankForm && prevSchool !== "—" ? escapeHtml(prevSchool) : "&nbsp;"}</span>
-            </div>
+        <div class="adm-box" style="flex:1;display:flex;flex-direction:column;justify-content:space-between;padding:3.5mm 4mm;font-family:Arial,Helvetica,sans-serif;color:#000;">
+          <div>
+            ${page2CompactHeaderHtml}
 
             <!-- 9. Permanent Address & 10. Correspondence Address -->
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:4mm;margin-bottom:1.8mm;">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:4mm;margin-bottom:2mm;font-size:7.5pt;">
               <div>
                 <div style="font-weight:700;margin-bottom:0.8mm;">9. Permanent Address</div>
                 <div class="c-dotted-line" style="width:100%;margin-bottom:1mm;">${!isBlankForm ? escapeHtml(permanentAddress.slice(0, 50)) : "&nbsp;"}</div>
@@ -951,91 +1098,8 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
               </div>
             </div>
 
-            <!-- 11. Only Child & Sibling Profile -->
-            <div style="margin-bottom:1.8mm;">
-              <div style="display:flex;align-items:center;gap:4mm;margin-bottom:1.2mm;">
-                <span style="font-weight:700;">11. Is the candidate only child of the parents</span>
-                <span>Yes <span class="c-check-box">${isOnlyChildVal === true ? "✓" : "&nbsp;"}</span></span>
-                <span>No <span class="c-check-box">${isOnlyChildVal === false ? "✓" : "&nbsp;"}</span></span>
-              </div>
-              <div style="font-weight:700;margin-bottom:0.8mm;">
-                If no, Sibling Profile :- (If studying in this school)
-              </div>
-              <table class="c-table">
-                <thead>
-                  <tr style="background:#f1f5f9;">
-                    <th style="width:14mm;">Sl. No.</th>
-                    <th>Name</th>
-                    <th style="width:34mm;">Brother/Sister</th>
-                    <th style="width:24mm;">Class</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${[0, 1, 2].map((idx) => {
-                    const sib = !isBlankForm && siblings[idx] ? siblings[idx] : null;
-                    return `
-                      <tr>
-                        <td style="text-align:center;">${idx + 1}.</td>
-                        <td>${sib ? escapeHtml(sib.name) : "&nbsp;"}</td>
-                        <td>${sib ? escapeHtml(sib.relation || "Brother") : "&nbsp;"}</td>
-                        <td>${sib ? escapeHtml(sib.className) : "&nbsp;"}</td>
-                      </tr>
-                    `;
-                  }).join("")}
-                </tbody>
-              </table>
-            </div>
-
-            <!-- SECTION B: PARENT'S PROFILE -->
-            <div style="text-align:center;font-weight:900;text-decoration:underline;font-size:8.5pt;margin:2mm 0 1.2mm 0;">
-              B. Parent's Profile
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:4mm;margin-bottom:1.8mm;">
-              <!-- Father -->
-              <div>
-                <div style="font-weight:800;text-align:center;margin-bottom:1.2mm;">Father</div>
-                <div style="margin-bottom:1.2mm;">
-                  <span style="font-weight:700;display:inline-block;width:34mm;">1. Name</span>
-                  <span class="c-dotted-line" style="width:calc(100% - 36mm);">${!isBlankForm && fatherName !== "—" ? escapeHtml(fatherName) : "&nbsp;"}</span>
-                </div>
-                <div style="margin-bottom:1.2mm;">
-                  <span style="font-weight:700;display:inline-block;width:34mm;">2. Educational Qualification</span>
-                  <span class="c-dotted-line" style="width:calc(100% - 36mm);">${!isBlankForm ? escapeHtml(student?.fatherQualification || application?.fatherQualification || "") : "&nbsp;"}</span>
-                </div>
-                <div style="margin-bottom:1.2mm;">
-                  <span style="font-weight:700;display:inline-block;width:34mm;">3. Occupation</span>
-                  <span class="c-dotted-line" style="width:calc(100% - 36mm);">${!isBlankForm ? escapeHtml(fatherOcc) : "&nbsp;"}</span>
-                </div>
-                <div>
-                  <span style="font-weight:700;display:inline-block;width:34mm;">4. Contact No.</span>
-                  <span class="c-dotted-line" style="width:calc(100% - 36mm);">${!isBlankForm && phone !== "—" ? escapeHtml(phone) : "&nbsp;"}</span>
-                </div>
-              </div>
-
-              <!-- Mother -->
-              <div>
-                <div style="font-weight:800;text-align:center;margin-bottom:1.2mm;">Mother</div>
-                <div style="margin-bottom:1.2mm;">
-                  <span style="font-weight:700;display:inline-block;width:34mm;">1. Name</span>
-                  <span class="c-dotted-line" style="width:calc(100% - 36mm);">${!isBlankForm && motherName !== "—" ? escapeHtml(motherName) : "&nbsp;"}</span>
-                </div>
-                <div style="margin-bottom:1.2mm;">
-                  <span style="font-weight:700;display:inline-block;width:34mm;">2. Educational Qualification</span>
-                  <span class="c-dotted-line" style="width:calc(100% - 36mm);">${!isBlankForm ? escapeHtml(student?.motherQualification || application?.motherQualification || "") : "&nbsp;"}</span>
-                </div>
-                <div style="margin-bottom:1.2mm;">
-                  <span style="font-weight:700;display:inline-block;width:34mm;">3. Occupation</span>
-                  <span class="c-dotted-line" style="width:calc(100% - 36mm);">${!isBlankForm ? escapeHtml(motherOcc) : "&nbsp;"}</span>
-                </div>
-                <div>
-                  <span style="font-weight:700;display:inline-block;width:34mm;">4. Contact No.</span>
-                  <span class="c-dotted-line" style="width:calc(100% - 36mm);">${!isBlankForm ? escapeHtml(whatsappNo || phone !== "—" ? whatsappNo || phone : "") : "&nbsp;"}</span>
-                </div>
-              </div>
-            </div>
-
             <!-- TRANSPORT & CHILD SENSITIVITY BOX -->
-            <div style="border:1.2px solid #000;padding:1.6mm 2.2mm;margin-bottom:1.8mm;font-size:7.4pt;line-height:1.35;">
+            <div style="border:1.2px solid #000;padding:1.6mm 2.2mm;margin-bottom:2.2mm;font-size:7.4pt;line-height:1.35;">
               <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1mm;flex-wrap:wrap;">
                 <div>
                   <span style="font-weight:700;">Want to avail Transport Facility</span>
@@ -1053,8 +1117,8 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
               <div style="margin-bottom:1mm;">
                 <span style="font-weight:700;">If yes, specify the Location</span>
                 <span class="c-dotted-line" style="width:65mm;">${!isBlankForm ? escapeHtml(busRoute || "") : "&nbsp;"}</span>
-                <span style="font-weight:700;margin-left:2mm;">Distance from School in Km</span>
-                <span class="c-dotted-line" style="width:25mm;">${!isBlankForm ? escapeHtml(student?.transportDistanceKm || application?.transportDistanceKm || "") : "&nbsp;"}</span>
+                <span style="font-weight:700;margin-left:2mm;">Distance from School</span>
+                <span class="c-dotted-line" style="width:25mm;">${!isBlankForm ? `${escapeHtml(student?.transportDistanceKm || application?.transportDistanceKm || "—")} Km` : "&nbsp;"}</span>
               </div>
 
               <div style="display:flex;align-items:center;margin-bottom:1mm;">
@@ -1069,12 +1133,42 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
               </div>
             </div>
 
+            <!-- FEE PARTICULARS AT ADMISSION -->
+            <div style="margin-bottom:2.2mm;">
+              <div style="font-weight:800;font-size:7.6pt;margin-bottom:1mm;color:#1e3a8a;">
+                FEE PARTICULARS AT ADMISSION (प्रारंभिक शुल्क एवं रसीद विवरण)
+              </div>
+              <table class="bio-table" style="font-size:7.6pt;">
+                <thead>
+                  <tr style="background:#f1f5f9;font-weight:800;color:#1e3a8a;">
+                    <td style="width:25%;">Admission Fee (प्रवेश शुल्क)</td>
+                    <td style="width:25%;">Registration / Form Fee</td>
+                    <td style="width:25%;">Monthly Tuition Fee</td>
+                    <td style="width:25%;">Total Paid at Admission</td>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td class="val">₹${(feeItems.find(i => /admission/i.test(i.description))?.due || 0).toLocaleString("en-IN")}</td>
+                    <td class="val">₹${(feeItems.find(i => /registration|form/i.test(i.description))?.due || 0).toLocaleString("en-IN")}</td>
+                    <td class="val">₹${Number(monthlyFee || 0).toLocaleString("en-IN")} / mo</td>
+                    <td class="val" style="font-weight:900;color:${totalPaid > 0 ? "#166534" : "#92400e"};">
+                      ${totalPaid > 0 ? `₹${totalPaid.toLocaleString("en-IN")} (${resolvedFee?.payModeInfo?.payMode || "Cash"}) • Rcpt #${resolvedFee?.receiptNo || "ADM-01"}` : "Pending at Counter"}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- DOCUMENTS CHECKLIST -->
+            ${docsChecklistHtml}
+
             <!-- DECLARATION -->
-            <div style="margin-bottom:3mm;font-size:7.2pt;line-height:1.3;">
+            <div style="margin-top:2.5mm;margin-bottom:3mm;font-size:7.2pt;line-height:1.35;">
               <p style="margin:0 0 2mm 0;text-align:justify;">
                 I/We declare that the above mentioned information provided by me/us is true to the best of my/our knowledge and I/we shall be responsible for any misleading information.
               </p>
-              <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-top:3.5mm;">
+              <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-top:4mm;">
                 <div style="text-align:center;min-width:48mm;">
                   <div class="c-dotted-line" style="width:100%;margin-bottom:1mm;">&nbsp;</div>
                   <div style="font-weight:700;">Signature of Father/Guardian</div>
@@ -1087,7 +1181,7 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
             </div>
 
             <!-- FOR OFFICE USE -->
-            <div style="border-top:1.2px solid #000;padding-top:1.5mm;font-size:7.3pt;">
+            <div style="border-top:1.2px solid #000;padding-top:1.8mm;font-size:7.3pt;">
               <div style="text-align:center;font-weight:900;text-decoration:underline;margin-bottom:1.2mm;">
                 FOR OFFICE USE
               </div>
@@ -1114,12 +1208,7 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div style="margin-bottom:3mm;">
-                <span style="font-weight:700;">Fee Deposit on</span>
-                <span class="c-dotted-line" style="min-width:45mm;">${!isBlankForm && resolvedFee ? escapeHtml(resolvedFee.payModeInfo?.date || admDateRaw) : "&nbsp;"}</span>
-              </div>
-
-              <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-top:2mm;">
+              <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-top:2.5mm;">
                 <div style="text-align:center;min-width:44mm;">
                   <div style="font-weight:700;">Signature of Accountant</div>
                 </div>
@@ -1129,465 +1218,35 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
               </div>
             </div>
           </div>
+
+          <!-- Page 2 Footer -->
+          <div style="display:flex;justify-content:space-between;align-items:center;border-top:1.2px solid #cbd5e1;padding-top:1.8mm;margin-top:auto;font-size:6.8pt;color:#64748b;font-weight:700;">
+            <span>📄 पृष्ठ 2 / 2 (Page 2 of 2)</span>
+            <span style="color:#15803d;font-weight:800;">✓ आधिकारिक विद्यालय दस्तावेज (Official School Record)</span>
+            <span>${escapeHtml(schoolDisplayName)}</span>
+          </div>
         </div>
       `;
     }
 
-    if (targetMode === "combined" && resolvedFee) {
+    // -------------------------------------------------------------
+    // COMBINED HALF-FORM + RECEIPT
+    // -------------------------------------------------------------
+    // -------------------------------------------------------------
+    // STANDALONE OFFICIAL ADMISSION FORM (2-PAGE SYSTEM)
+    // -------------------------------------------------------------
+    if (pageNum === 1) {
       return `
-        <div class="a4-sheet">
-          <!-- TOP HALF: OFFICIAL ADMISSION BIO-DATA & CONFIRMATION -->
-          <div class="adm-box">
-            <div class="inst-header">
-              <div class="inst-logo">
-                ${logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="Logo" crossorigin="anonymous" />` : `<span>${escapeHtml((school?.name || "SC").slice(0, 2).toUpperCase())}</span>`}
-              </div>
-              <div class="inst-title-wrap">
-                <div class="inst-name">${escapeHtml(school?.name || "Institutional Campus")}</div>
-                ${school?.tagline ? `<div class="inst-sub" style="font-style:italic;">"${escapeHtml(school.tagline)}"</div>` : ""}
-                ${school?.address ? `<div class="inst-sub">Address / Campus: ${escapeHtml(school.address)}</div>` : ""}
-                <div class="inst-sub">
-                  ${school?.phone || school?.mobile ? `Helpline: ${escapeHtml(school.phone || school.mobile)}` : ""}
-                  ${school?.email ? `${school?.phone || school?.mobile ? " • " : ""}Email: ${escapeHtml(school.email)}` : ""}
-                  ${school?.code && school.code !== (school as any).lockCode && school.code !== "0002" ? ` • Reg. No: ${escapeHtml(school.code)}` : ""}
-                  ${school?.phone || school?.mobile || school?.email ? " • " : ""}Office Timings: 08:00 AM – 02:00 PM
-                </div>
-              </div>
-              <div style="text-align:right;min-width:38mm;">
-                <div style="display:inline-block;padding:1.2mm 2.6mm;background:#b91c1c;color:#ffffff;font-size:7pt;font-weight:900;border-radius:3px;letter-spacing:0.3px;">
-                  🏫 SCHOOL / OFFICE COPY
-                </div>
-                <div style="font-size:6.3pt;color:#991b1b;font-weight:800;margin-top:0.8mm;">
-                  (रसीद/फॉर्म स्कूल रखेगा • विद्यालय रिकॉर्ड)
-                </div>
-                <div style="font-size:6.8pt;font-weight:800;color:#0f172a;margin-top:1.2mm;">
-                  SESSION: ${escapeHtml(sessLabel)}
-                </div>
-              </div>
-            </div>
-
-            ${admissionTypeBarHtml}
-            <div class="doc-badge-bar" style="background:#1e3a8a;display:flex;align-items:center;justify-content:space-between;">
-              <span>OFFICIAL ADMISSION CONFIRMATION &amp; STUDENT BIO-DATA (प्रवेश विवरण प्रपत्र)</span>
-              <span style="background:#dc2626;color:#ffffff;padding:0.6mm 2.2mm;border-radius:3px;font-size:6.8pt;font-weight:900;">
-                📌 रसीद/फॉर्म स्कूल रखेगा • SCHOOL OFFICE RECORD
-              </span>
-            </div>
-
-            <div class="meta-strip">
-              <div class="meta-item">
-                <span class="meta-lbl">Admission / App No.</span>
-                <span class="meta-val">${escapeHtml(admNo)}</span>
-              </div>
-              <div class="meta-item">
-                <span class="meta-lbl">Admission Date</span>
-                <span class="meta-val">${escapeHtml(admDateRaw)}</span>
-              </div>
-              <div class="meta-item">
-                <span class="meta-lbl">Class &amp; Section</span>
-                <span class="meta-val">${escapeHtml(clsLabel)}</span>
-              </div>
-              <div class="meta-item">
-                <span class="meta-lbl">Assigned Roll No.</span>
-                <span class="meta-val">${escapeHtml(rollNo)}</span>
-              </div>
-            </div>
-
-            <div class="bio-layout">
-              <table class="bio-table">
-                <tbody>
-                  <tr>
-                    <td class="lbl">Student Name</td>
-                    <td class="val" style="text-transform:uppercase;font-size:8.2pt;font-weight:bold;">${escapeHtml(fullName)}</td>
-                    <td class="lbl">DOB &amp; Age (1 Apr)</td>
-                    <td class="val">${escapeHtml(dob)} (${escapeHtml(genderLabel)}) • <strong style="color:#1e3a8a;">${escapeHtml(ageDisplay)}</strong></td>
-                  </tr>
-                  <tr>
-                    <td class="lbl">Religion &amp; Nationality</td>
-                    <td class="val">${escapeHtml(religion)} • ${escapeHtml(nationality)}</td>
-                    <td class="lbl">Blood Grp &amp; Cat.</td>
-                    <td class="val">${escapeHtml(bloodGroup)} | ${escapeHtml(category)}</td>
-                  </tr>
-                  <tr>
-                    <td class="lbl">Student Aadhaar (UIDAI)</td>
-                    <td class="val" style="font-family:monospace;">${escapeHtml(maskAadhaar(studentAadhaar))}</td>
-                    <td class="lbl">UDISE+ APAAR / PEN</td>
-                    <td class="val" style="font-family:monospace;font-weight:bold;color:#1e3a8a;">${escapeHtml(apaarId)}</td>
-                  </tr>
-                  <tr>
-                    <td class="lbl">Primary Mobile (कॉलिंग)</td>
-                    <td class="val" style="font-weight:900;color:#1e3a8a;font-size:8.8pt;">📞 ${escapeHtml(phone || "—")}</td>
-                    <td class="lbl">WhatsApp No. (व्हाट्सएप)</td>
-                    <td class="val" style="font-weight:900;color:#047857;font-size:8.8pt;">💬 ${escapeHtml(whatsappNo || phone || "—")}</td>
-                  </tr>
-                  <tr>
-                    <td class="lbl">Father's Name &amp; Contact</td>
-                    <td class="val"><strong>${escapeHtml(fatherName)}</strong>${fatherQualification ? ` (${escapeHtml(fatherQualification)})` : ""}${fatherOcc ? ` • ${escapeHtml(fatherOcc)}` : ""}${fatherPhone ? `<br/><span style="font-size:7.5pt;color:#1e3a8a;">📞 <strong>${escapeHtml(fatherPhone)}</strong></span>` : ""}${fatherWhatsapp ? ` <span style="font-size:7.5pt;color:#047857;">| 💬 WA: <strong>${escapeHtml(fatherWhatsapp)}</strong></span>` : ""}</td>
-                    <td class="lbl">Father Aadhaar</td>
-                    <td class="val" style="font-family:monospace;">${escapeHtml(maskAadhaar(fatherAadhaar))}</td>
-                  </tr>
-                  <tr>
-                    <td class="lbl">Mother's Name &amp; Contact</td>
-                    <td class="val"><strong>${escapeHtml(motherName)}</strong>${motherQualification ? ` (${escapeHtml(motherQualification)})` : ""}${motherOcc ? ` • ${escapeHtml(motherOcc)}` : ""}${motherPhone ? `<br/><span style="font-size:7.5pt;color:#be185d;">📱 <strong>${escapeHtml(motherPhone)}</strong></span>` : ""}${motherWhatsapp ? ` <span style="font-size:7.5pt;color:#047857;">| 💬 WA: <strong>${escapeHtml(motherWhatsapp)}</strong></span>` : ""}</td>
-                    <td class="lbl">Mother Aadhaar</td>
-                    <td class="val" style="font-family:monospace;">${escapeHtml(maskAadhaar(motherAadhaar))}</td>
-                  </tr>
-                  <tr>
-                    <td class="lbl">Family &amp; Sibling Profile</td>
-                    <td class="val" colspan="3">Only Child: <strong>${isOnlyChild ? "Yes" : "No"}</strong> ${siblings.length > 0 ? `• Siblings in school: ${siblings.map(s => `${escapeHtml(s.name)} (${escapeHtml(s.className || 'Class')})`).join(", ")}` : ""} | Income: ${annualIncome && annualIncome !== "—" ? `₹${Number(annualIncome).toLocaleString("en-IN")}/yr` : "—"}</td>
-                  </tr>
-                  <tr>
-                    <td class="lbl">Emergency Contact</td>
-                    <td class="val">${escapeHtml(emergencyPerson)}: <strong>${escapeHtml(emergencyPhone)}</strong> (${escapeHtml(emergencyRelation)})${emergencyWhatsapp ? ` | <span style="color:#047857;">💬 WA: <strong>${escapeHtml(emergencyWhatsapp)}</strong></span>` : ""}</td>
-                    <td class="lbl">Medical &amp; Fitness</td>
-                    <td class="val">${escapeHtml(childSensitivityRemarks || medicalCondition || "Normal / Fit")}</td>
-                  </tr>
-                  <tr>
-                    <td class="lbl">Transport &amp; Tuition</td>
-                    <td class="val" colspan="3">${usesBus ? `Bus YES (Route: ${escapeHtml(busRoute || "Assigned Stop")}, Dist: ${escapeHtml(transportDistanceKm || "—")} Km, ₹${busFee}/mo ${driverName ? `| Driver: ${escapeHtml(driverName)}` : ""})` : `NO (${transportModeIfNo === "Walking" ? "Walking" : "Guardian / Own"})`} | Monthly Tuition: ₹${Number(monthlyFee || 0).toLocaleString("en-IN")}/mo</td>
-                  </tr>
-                  <tr>
-                    <td class="lbl">Residential Address</td>
-                    <td class="val" colspan="3">${escapeHtml(fullAddress)}</td>
-                  </tr>
-                </tbody>
-              </table>
-
-              <div class="photo-frame">
-                ${
-                  photoUrl
-                    ? `<img src="${escapeHtml(photoUrl)}" alt="${escapeHtml(fullName)}" crossorigin="anonymous" />`
-                    : `<div style="font-size:6.5pt;color:#64748b;padding:2mm;">PASSPORT<br/>PHOTO<br/><strong style="font-size:12pt;color:#1e3a8a;">${escapeHtml(fullName.charAt(0).toUpperCase())}</strong></div>`
-                }
-              </div>
-            </div>
-
-            ${docsChecklistHtml}
-
-            <div class="sig-row">
-              <div class="sig-block">
-                <div style="font-size:6pt;color:#64748b;margin-bottom:0.8mm;">Date: ____/____/20__</div>
-                <div class="sig-line">Signature of Student</div>
-              </div>
-              <div class="sig-block">
-                <div style="font-size:6pt;color:#64748b;margin-bottom:0.8mm;">Date: ____/____/20__</div>
-                <div class="sig-line">Parent / Guardian Signature</div>
-              </div>
-              <div class="sig-block">
-                <div style="font-size:6pt;color:#64748b;margin-bottom:0.8mm;">Date: ____/____/20__</div>
-                <div class="sig-line">Admission In-Charge</div>
-              </div>
-              <div class="sig-block">
-                ${school?.principalSignatureUrl ? `<img src="${escapeHtml(school.principalSignatureUrl)}" alt="Sign" crossorigin="anonymous" style="height:8mm;max-width:30mm;object-fit:contain;display:block;margin:0 auto 0.5mm;" />` : `<div style="height:6mm;"></div>`}
-                <div class="sig-line">${escapeHtml(school?.principalName || "Principal")} (Seal &amp; Sign)</div>
-              </div>
-            </div>
-          </div>
-
-          <!-- SCISSOR TEAR LINE -->
-          <div class="cut-divider" style="margin:2.2mm 0;background:#f8fafc;border:1.5px dashed #64748b;padding:1.2mm 2.5mm;border-radius:4px;display:flex;align-items:center;justify-content:space-between;">
-            <span style="font-size:9.5pt;">✂</span>
-            <div class="cut-line"></div>
-            <span style="font-size:7.2pt;font-weight:900;color:#0f172a;letter-spacing:0.3px;padding:0 2mm;">
-              ✂ CUT HERE / यहाँ से अलग करें ── 🏫 ऊपर: स्कूल कार्यालय रिकॉर्ड (School Copy) ── 👨‍👩‍👦 नीचे: छात्र / अभिभावक रसीद (Parent Copy) ── ✂
-            </span>
-            <div class="cut-line"></div>
-            <span style="font-size:9.5pt;">✂</span>
-          </div>
-
-          <!-- BOTTOM HALF: OFFICIAL ADMISSION FEE RECEIPT -->
-          <div class="adm-box">
-            <div class="inst-header" style="padding-bottom:1.5mm;margin-bottom:1.8mm;">
-              <div class="inst-logo" style="width:11mm;height:11mm;">
-                ${logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="Logo" crossorigin="anonymous" />` : `<span>${escapeHtml((school?.name || "SC").slice(0, 2).toUpperCase())}</span>`}
-              </div>
-              <div class="inst-title-wrap">
-                <div class="inst-name" style="font-size:11.5pt;">${escapeHtml(school?.name || "Institutional Campus")}</div>
-                <div class="inst-sub">
-                  ${school?.address ? `Address: ${escapeHtml(school.address)}` : ""}
-                  ${school?.phone || school?.mobile ? `${school?.address ? " • " : ""}Helpline: ${escapeHtml(school.phone || school.mobile)}` : ""}
-                  ${school?.code && school.code !== (school as any).lockCode && school.code !== "0002" ? ` • Reg. No: ${escapeHtml(school.code)}` : ""}
-                </div>
-              </div>
-              <div style="text-align:right;min-width:38mm;">
-                <div style="display:inline-block;padding:1.2mm 2.6mm;background:#15803d;color:#ffffff;font-size:7pt;font-weight:900;border-radius:3px;letter-spacing:0.3px;">
-                  👨‍👩‍👦 PARENT / STUDENT COPY
-                </div>
-                <div style="font-size:6.3pt;color:#166534;font-weight:800;margin-top:0.8mm;">
-                  (अभिभावक प्रति • भुगतान रसीद)
-                </div>
-                <div style="margin-top:1.2mm;">
-                  <span style="display:inline-block;padding:0.8mm 2mm;border-radius:3px;font-size:6.8pt;font-weight:900;background:${balanceDue <= 0 ? "#dcfce7" : "#fef3c7"};color:${balanceDue <= 0 ? "#166534" : "#92400e"};border:1px solid ${balanceDue <= 0 ? "#86efac" : "#fcd34d"};">
-                    ${balanceDue <= 0 ? "✓ FULL PAID" : "PARTIAL PAID"}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <div class="doc-badge-bar" style="background:#0f172a;margin-bottom:1.8mm;display:flex;align-items:center;justify-content:space-between;">
-              <span>OFFICIAL ADMISSION FEE PAYMENT RECEIPT (प्रवेश शुल्क भुगतान रसीद)</span>
-              <span style="background:#16a34a;color:#ffffff;padding:0.6mm 2.2mm;border-radius:3px;font-size:6.8pt;font-weight:900;">
-                🎁 भुगतान रसीद अभिभावक को दी जाएगी • PARENT COPY
-              </span>
-            </div>
-
-            <div class="meta-strip" style="margin-bottom:1.5mm;">
-              <div class="meta-item">
-                <span class="meta-lbl">Student Name</span>
-                <span class="meta-val">${escapeHtml(fullName)}</span>
-              </div>
-              <div class="meta-item">
-                <span class="meta-lbl">Adm No / Class / Roll</span>
-                <span class="meta-val">${escapeHtml(admNo)} • ${escapeHtml(clsLabel)} (#${escapeHtml(rollNo)})</span>
-              </div>
-              <div class="meta-item">
-                <span class="meta-lbl">Father's Name</span>
-                <span class="meta-val">${escapeHtml(fatherName)}</span>
-              </div>
-              <div class="meta-item">
-                <span class="meta-lbl">Contact / Mobile</span>
-                <span class="meta-val" style="font-weight:900;color:#1e3a8a;">📞 ${escapeHtml(phone || "—")}</span>
-              </div>
-              <div class="meta-item">
-                <span class="meta-lbl">Date &amp; Pay Mode</span>
-                <span class="meta-val">${escapeHtml(resolvedFee.payModeInfo?.date || admDateRaw)} (${escapeHtml(resolvedFee.payModeInfo?.payMode || "Cash")})</span>
-              </div>
-            </div>
-
-            <table class="fee-table">
-              <thead>
-                <tr>
-                  <th style="width:8%;">#</th>
-                  <th>Fee Particulars / शुल्क विवरण</th>
-                  <th class="num" style="width:18%;">Fee Amount (₹)</th>
-                  <th class="num" style="width:16%;">Concession (₹)</th>
-                  <th class="num" style="width:18%;">Net Amount (₹)</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${feeItems
-                  .map(
-                    (it, idx) => `
-                  <tr>
-                    <td>${idx + 1}</td>
-                    <td>${escapeHtml(it.description)}</td>
-                    <td class="num">₹${Number(it.due || 0).toLocaleString("en-IN")}</td>
-                    <td class="num">${Number(it.con || 0) > 0 ? `-₹${Number(it.con).toLocaleString("en-IN")}` : "—"}</td>
-                    <td class="num" style="font-weight:800;">₹${Math.max(0, Number(it.due || 0) - Number(it.con || 0)).toLocaleString("en-IN")}</td>
-                  </tr>
-                `
-                  )
-                  .join("")}
-              </tbody>
-            </table>
-
-            <div class="receipt-footer-grid">
-              <div class="totals-box">
-                <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:2mm;border-bottom:1px solid #cbd5e1;padding-bottom:1mm;margin-bottom:1mm;">
-                  <span>Total Fee: <strong>₹${totalDue.toLocaleString("en-IN")}</strong></span>
-                  ${totalCon > 0 ? `<span style="color:#047857;">Concession: <strong>-₹${totalCon.toLocaleString("en-IN")}</strong></span>` : ""}
-                  <span style="color:#1e3a8a;font-size:8.5pt;">PAID NOW: <strong>₹${totalPaid.toLocaleString("en-IN")}</strong></span>
-                  <span style="color:${balanceDue > 0 ? "#b91c1c" : "#15803d"};">Balance Due: <strong>₹${balanceDue.toLocaleString("en-IN")}</strong></span>
-                </div>
-                <div style="font-size:6.9pt;color:#334155;">
-                  <strong>Amount in Words:</strong> ${escapeHtml(paidWords)}
-                </div>
-                <div style="font-size:6.3pt;color:#64748b;margin-top:0.8mm;line-height:1.2;">
-                  * Note: Admission &amp; Registration fees once paid are non-refundable. Computer generated official receipt.
-                </div>
-                <div style="font-size:6.6pt;color:#15803d;font-weight:800;margin-top:0.8mm;border-top:1px dashed #cbd5e1;padding-top:0.8mm;">
-                  ✓ यह आधिकारिक भुगतान रसीद अभिभावक को दी जाएगी (Parent Copy)। कृपया इसे सुरक्षित रखें।
-                </div>
-              </div>
-
-              <div class="qr-mini">
-                <img src="${qrImgUrl}" alt="QR" crossorigin="anonymous" />
-              </div>
-
-              ${renderReceiptSignatures()}
-            </div>
-          </div>
-        </div>
-      `;
-    }
-
-    if (targetMode === "receipt_only") {
-      const effectiveReceiptItems =
-        feeItems.length > 0
-          ? feeItems
-          : [
-              {
-                id: "1",
-                slNo: 1,
-                description: "Admission & Registration Fee (प्रवेश एवं नामांकन शुल्क)",
-                due: Number(monthlyFee) || 0,
-                con: 0,
-                paid: Number(monthlyFee) || 0,
-              },
-            ];
-      const rcptDue = effectiveReceiptItems.reduce((s, i) => s + Number(i.due || 0), 0);
-      const rcptCon = resolvedFee ? totalCon : 0;
-      const rcptNet = Math.max(0, rcptDue - rcptCon);
-      const rcptPaid = resolvedFee ? totalPaid : rcptNet;
-      const rcptBal = resolvedFee ? balanceDue : Math.max(0, rcptNet - rcptPaid);
-      const rcptWords = numberToIndianWords(rcptPaid);
-      const rcptNo = resolvedFee?.receiptNo || student?.admissionReceiptNo || "ADM-RCPT";
-      const rcptDate = resolvedFee?.payModeInfo?.date || admDateRaw;
-      const rcptPayMode = resolvedFee?.payModeInfo?.payMode || "Cash";
-      const rcptPayRef = resolvedFee?.payModeInfo?.number && resolvedFee.payModeInfo.number !== "-" ? ` • Ref: ${resolvedFee.payModeInfo.number}` : "";
-
-      const renderReceiptCopyBox = (copyLabel: string) => `
-        <div class="adm-box" style="flex:1;display:flex;flex-direction:column;justify-content:space-between;padding:3.4mm 4mm;">
-          <div>
-            <div class="inst-header" style="padding-bottom:2mm;margin-bottom:2mm;">
-              <div class="inst-logo" style="width:13mm;height:13mm;">
-                ${logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="Logo" crossorigin="anonymous" />` : `<span>${escapeHtml((school?.name || "SC").slice(0, 2).toUpperCase())}</span>`}
-              </div>
-              <div class="inst-title-wrap">
-                <div class="inst-name" style="font-size:12.5pt;">${escapeHtml(school?.name || "Institutional Campus")}</div>
-                ${school?.address ? `<div class="inst-sub">Address / Campus: ${escapeHtml(school.address)}</div>` : ""}
-                <div class="inst-sub">
-                  ${school?.phone || school?.mobile ? `Helpline: ${escapeHtml(school.phone || school.mobile)}` : ""}
-                  ${school?.email ? `${school?.phone || school?.mobile ? " • " : ""}Email: ${escapeHtml(school.email)}` : ""}
-                  ${school?.code && school.code !== (school as any).lockCode && school.code !== "0002" ? ` • Reg. No: ${escapeHtml(school.code)}` : ""}
-                  • Office Timings: 08:00 AM – 02:00 PM
-                </div>
-              </div>
-              <div style="text-align:right;min-width:34mm;">
-                <div style="display:inline-block;padding:1mm 2.4mm;background:#1e3a8a;color:#ffffff;font-size:7pt;font-weight:900;border-radius:3px;letter-spacing:0.3px;">
-                  ${escapeHtml(copyLabel)}
-                </div>
-                <div style="margin-top:1.2mm;">
-                  <span style="display:inline-block;padding:0.8mm 2mm;border-radius:3px;font-size:6.8pt;font-weight:900;background:${rcptBal <= 0 ? "#dcfce7" : "#fef3c7"};color:${rcptBal <= 0 ? "#166534" : "#92400e"};border:1px solid ${rcptBal <= 0 ? "#86efac" : "#fcd34d"};">
-                    ${rcptBal <= 0 ? "✓ FULL PAID" : "PARTIAL PAID"}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <div class="doc-badge-bar" style="background:#0f172a;margin-bottom:2mm;padding:1.5mm 3mm;">
-              <span>OFFICIAL ADMISSION FEE RECEIPT • प्रवेश शुल्क रसीद (${admissionType === "READMISSION" ? "RE-ADMISSION" : "NEW ADMISSION"})</span>
-              <span>RECEIPT NO: ${escapeHtml(rcptNo)}</span>
-            </div>
-
-            <div style="display:flex;gap:3mm;align-items:stretch;margin-bottom:2mm;">
-              <div style="flex:1;">
-                <table class="bio-table" style="font-size:7.6pt;">
-                  <tbody>
-                    <tr>
-                      <td class="lbl">Student Name</td>
-                      <td class="val" style="text-transform:uppercase;font-weight:900;">${escapeHtml(fullName)}</td>
-                      <td class="lbl">Session</td>
-                      <td class="val">${escapeHtml(sessLabel)}</td>
-                    </tr>
-                    <tr>
-                      <td class="lbl">Admission No.</td>
-                      <td class="val" style="font-family:monospace;">${escapeHtml(admNo)}</td>
-                      <td class="lbl">Class &amp; Roll No.</td>
-                      <td class="val">${escapeHtml(clsLabel)} (Roll: ${escapeHtml(rollNo)})</td>
-                    </tr>
-                    <tr>
-                      <td class="lbl">Father's Name</td>
-                      <td class="val">${escapeHtml(fatherName)}</td>
-                      <td class="lbl">Mobile Number</td>
-                      <td class="val">${escapeHtml(phone)}</td>
-                    </tr>
-                    <tr>
-                      <td class="lbl">Payment Date</td>
-                      <td class="val">${escapeHtml(rcptDate)}</td>
-                      <td class="lbl">Payment Mode</td>
-                      <td class="val">${escapeHtml(rcptPayMode)}${escapeHtml(rcptPayRef)}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-              ${
-                photoUrl
-                  ? `<div class="photo-frame" style="width:21mm;height:25mm;"><img src="${escapeHtml(photoUrl)}" alt="${escapeHtml(fullName)}" crossorigin="anonymous" /></div>`
-                  : ""
-              }
-            </div>
-
-            <table class="fee-table" style="font-size:7.8pt;">
-              <thead>
-                <tr>
-                  <th style="width:8%;text-align:center;">Sl.</th>
-                  <th>Admission Fee Particulars / प्रवेश शुल्क विवरण</th>
-                  <th class="num" style="width:18%;">Fee Amount (₹)</th>
-                  <th class="num" style="width:16%;">Concession (₹)</th>
-                  <th class="num" style="width:18%;">Net Paid (₹)</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${effectiveReceiptItems
-                  .map(
-                    (it, idx) => `
-                  <tr>
-                    <td style="text-align:center;">${idx + 1}</td>
-                    <td>${escapeHtml(it.description)}</td>
-                    <td class="num">₹${Number(it.due || 0).toLocaleString("en-IN")}</td>
-                    <td class="num">${Number(it.con || 0) > 0 ? `-₹${Number(it.con).toLocaleString("en-IN")}` : "—"}</td>
-                    <td class="num" style="font-weight:800;">₹${Math.max(0, Number(it.due || 0) - Number(it.con || 0)).toLocaleString("en-IN")}</td>
-                  </tr>
-                `
-                  )
-                  .join("")}
-              </tbody>
-            </table>
-          </div>
-
-          <div class="receipt-footer-grid" style="margin-top:2.5mm;">
-            <div class="totals-box" style="padding:2mm 2.8mm;">
-              <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:2.5mm;border-bottom:1px solid #cbd5e1;padding-bottom:1.2mm;margin-bottom:1.2mm;">
-                <span>Gross Total: <strong>₹${rcptDue.toLocaleString("en-IN")}</strong></span>
-                ${rcptCon > 0 ? `<span style="color:#047857;">Concession: <strong>-₹${rcptCon.toLocaleString("en-IN")}</strong></span>` : ""}
-                <span style="color:#1e3a8a;font-size:9pt;">TOTAL PAID: <strong>₹${rcptPaid.toLocaleString("en-IN")}</strong></span>
-                <span style="color:${rcptBal > 0 ? "#b91c1c" : "#15803d"};">Balance Due: <strong>₹${rcptBal.toLocaleString("en-IN")}</strong></span>
-              </div>
-              <div style="font-size:7.1pt;color:#334155;">
-                <strong>Amount in Words:</strong> ${escapeHtml(rcptWords)}
-              </div>
-              <div style="font-size:6.4pt;color:#64748b;margin-top:0.8mm;">
-                * Note: Admission &amp; Registration fees once paid are non-refundable. Computer generated official receipt.
-              </div>
-            </div>
-
-            <div class="qr-mini" style="width:18mm;height:18mm;">
-              <img src="${qrImgUrl}" alt="QR" crossorigin="anonymous" />
-            </div>
-
-            ${renderReceiptSignatures()}
-          </div>
-        </div>
-      `;
-
-      return `
-        <div class="a4-sheet">
-          ${renderReceiptCopyBox("STUDENT / PARENT COPY")}
-          <div class="cut-divider" style="margin:2.8mm 0;">
-            <span>✂</span>
-            <div class="cut-line"></div>
-            <span>CUT HERE • यहाँ से फाड़ें (SCHOOL OFFICE &amp; ACCOUNTS COPY BELOW)</span>
-            <div class="cut-line"></div>
-          </div>
-          ${renderReceiptCopyBox("SCHOOL OFFICE COPY")}
-        </div>
-      `;
-    }
-
-    // STANDALONE FULL A4 ADMISSION FORM
-    return `
-      <div class="a4-sheet">
-        <div class="adm-box" style="flex:1;display:flex;flex-direction:column;justify-content:space-between;padding:4mm;">
+        <div class="adm-box" style="flex:1;display:flex;flex-direction:column;justify-content:space-between;padding:3.5mm 4mm;">
           <div>
             ${headerHtml}
             ${admissionTypeBarHtml}
-            <div class="doc-badge-bar" style="padding:1.8mm 3.2mm;font-size:8.5pt;">
-              <span>OFFICIAL STUDENT ADMISSION &amp; REGISTRATION FORM (नामांकन आवेदन पत्र)</span>
+            <div class="doc-badge-bar" style="padding:1.6mm 3mm;font-size:8.2pt;">
+              <span>OFFICIAL STUDENT ADMISSION &amp; REGISTRATION FORM • पृष्ठ 1/2 (छात्र व परिवार विवरण)</span>
               <span>FORM NO: ${escapeHtml(admNo)}</span>
             </div>
 
-            <div class="meta-strip" style="padding:2mm 2.8mm;">
+            <div class="meta-strip" style="padding:1.8mm 2.6mm;margin-bottom:2mm;">
               <div class="meta-item">
                 <span class="meta-lbl">Admission / Reg No.</span>
                 <span class="meta-val">${escapeHtml(admNo)}</span>
@@ -1601,18 +1260,18 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
                 <span class="meta-val">${escapeHtml(clsLabel)}</span>
               </div>
               <div class="meta-item">
-                <span class="meta-lbl">Roll Number</span>
+                <span class="meta-lbl">Assigned Roll Number</span>
                 <span class="meta-val">${escapeHtml(rollNo)}</span>
               </div>
             </div>
 
             <div class="section-heading">1. Student Personal &amp; Identification Details (छात्र का व्यक्तिगत विवरण)</div>
             <div class="bio-layout">
-              <table class="bio-table" style="font-size:7.8pt;">
+              <table class="bio-table" style="font-size:7.7pt;">
                 <tbody>
                   <tr>
                     <td class="lbl">Full Name of Student</td>
-                    <td class="val" colspan="3" style="font-size:9.2pt;text-transform:uppercase;">${!isBlankForm ? escapeHtml(fullName) : "&nbsp;"}</td>
+                    <td class="val" colspan="3" style="font-size:9.2pt;text-transform:uppercase;color:#0f172a;font-weight:900;">${!isBlankForm ? escapeHtml(fullName) : "&nbsp;"}</td>
                   </tr>
                   <tr>
                     <td class="lbl">Date of Birth</td>
@@ -1636,19 +1295,19 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
                     <td class="lbl">Student Aadhaar (UIDAI)</td>
                     <td class="val" style="font-family:monospace;">${!isBlankForm ? escapeHtml(maskAadhaar(studentAadhaar)) : "&nbsp;"}</td>
                     <td class="lbl">Primary Mobile (कॉलिंग)</td>
-                    <td class="val" style="font-weight:900;color:#1e3a8a;font-size:9pt;">${!isBlankForm && phone !== "—" ? `📞 ${escapeHtml(phone)}` : "&nbsp;"}</td>
+                    <td class="val" style="font-weight:900;color:#1e3a8a;font-size:8.8pt;">${!isBlankForm && phone !== "—" ? `📞 ${escapeHtml(phone)}` : "&nbsp;"}</td>
                   </tr>
                   <tr>
                     <td class="lbl">WhatsApp Contact (व्हाट्सएप)</td>
-                    <td class="val" style="font-weight:900;color:#047857;font-size:9pt;">${!isBlankForm && (whatsappNo || phone !== "—") ? `💬 ${escapeHtml(whatsappNo || phone)}` : "&nbsp;"}</td>
-                    <td class="lbl">Medical &amp; Fitness Care</td>
-                    <td class="val">${!isBlankForm ? escapeHtml(childSensitivityRemarks || medicalCondition || "Normal / Fit") : "&nbsp;"}</td>
+                    <td class="val" style="font-weight:900;color:#047857;font-size:8.8pt;">${!isBlankForm && (whatsappNo || phone !== "—") ? `💬 ${escapeHtml(whatsappNo || phone)}` : "&nbsp;"}</td>
+                    <td class="lbl">Identification Mark</td>
+                    <td class="val">${!isBlankForm ? escapeHtml(identificationMark) : "&nbsp;"}</td>
                   </tr>
                   <tr>
                     <td class="lbl">Emergency Contact Person</td>
                     <td class="val">${!isBlankForm ? `${escapeHtml(emergencyPerson || "Parent")} (${escapeHtml(emergencyRelation || "Guardian")})` : "&nbsp;"}</td>
                     <td class="lbl">Emergency Calling Phone</td>
-                    <td class="val" style="font-weight:900;color:#b91c1c;font-size:9pt;">${!isBlankForm && emergencyPhone !== "—" ? `🚨 ${escapeHtml(emergencyPhone)}` : "&nbsp;"}</td>
+                    <td class="val" style="font-weight:900;color:#b91c1c;font-size:8.8pt;">${!isBlankForm && emergencyPhone !== "—" ? `🚨 ${escapeHtml(emergencyPhone)}` : "&nbsp;"}</td>
                   </tr>
                 </tbody>
               </table>
@@ -1663,13 +1322,13 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
             </div>
 
             <div class="section-heading">2. Parents &amp; Guardian Information (माता-पिता / अभिभावक का विवरण)</div>
-            <table class="bio-table" style="font-size:7.8pt;">
+            <table class="bio-table" style="font-size:7.7pt;">
               <tbody>
                 <tr>
                   <td class="lbl">Father's Name &amp; Phone</td>
-                  <td class="val" style="font-weight:bold;">${!isBlankForm ? `${escapeHtml(fatherName)} ${fatherPhone ? `<br/><span style="font-size:7.5pt;color:#1e3a8a;">📞 ${escapeHtml(fatherPhone)}</span>` : ""}` : "&nbsp;"}</td>
+                  <td class="val" style="font-weight:bold;">${!isBlankForm ? `${escapeHtml(fatherName)} ${fatherPhone ? `<br/><span style="font-size:7.2pt;color:#1e3a8a;">📞 ${escapeHtml(fatherPhone)}</span>` : ""}` : "&nbsp;"}</td>
                   <td class="lbl">Father Edu. &amp; WhatsApp</td>
-                  <td class="val">${!isBlankForm ? `${escapeHtml(fatherQualification || "Matric / Graduate")} ${fatherWhatsapp ? `<br/><span style="font-size:7.5pt;color:#047857;">💬 WA: ${escapeHtml(fatherWhatsapp)}</span>` : ""}` : "&nbsp;"}</td>
+                  <td class="val">${!isBlankForm ? `${escapeHtml(fatherQualification || "Matric / Graduate")} ${fatherWhatsapp ? `<br/><span style="font-size:7.2pt;color:#047857;">💬 WA: ${escapeHtml(fatherWhatsapp)}</span>` : ""}` : "&nbsp;"}</td>
                 </tr>
                 <tr>
                   <td class="lbl">Father Occupation &amp; Income</td>
@@ -1679,9 +1338,9 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
                 </tr>
                 <tr>
                   <td class="lbl">Mother's Name &amp; Phone</td>
-                  <td class="val" style="font-weight:bold;">${!isBlankForm ? `${escapeHtml(motherName)} ${motherPhone ? `<br/><span style="font-size:7.5pt;color:#be185d;">📱 ${escapeHtml(motherPhone)}</span>` : ""}` : "&nbsp;"}</td>
+                  <td class="val" style="font-weight:bold;">${!isBlankForm ? `${escapeHtml(motherName)} ${motherPhone ? `<br/><span style="font-size:7.2pt;color:#be185d;">📱 ${escapeHtml(motherPhone)}</span>` : ""}` : "&nbsp;"}</td>
                   <td class="lbl">Mother Edu. &amp; WhatsApp</td>
-                  <td class="val">${!isBlankForm ? `${escapeHtml(motherQualification || "Matric / Intermediate")} ${motherWhatsapp ? `<br/><span style="font-size:7.5pt;color:#047857;">💬 WA: ${escapeHtml(motherWhatsapp)}</span>` : ""}` : "&nbsp;"}</td>
+                  <td class="val">${!isBlankForm ? `${escapeHtml(motherQualification || "Matric / Intermediate")} ${motherWhatsapp ? `<br/><span style="font-size:7.2pt;color:#047857;">💬 WA: ${escapeHtml(motherWhatsapp)}</span>` : ""}` : "&nbsp;"}</td>
                 </tr>
                 <tr>
                   <td class="lbl">Mother Occupation &amp; Calling</td>
@@ -1690,118 +1349,219 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
                   <td class="val" style="font-family:monospace;">${!isBlankForm ? escapeHtml(maskAadhaar(motherAadhaar)) : "&nbsp;"}</td>
                 </tr>
                 <tr>
-                  <td class="lbl">Family Status &amp; Sibling Profile</td>
-                  <td class="val" colspan="3">
-                    ${!isBlankForm ? `
-                      <strong>Only Child (इकलौती संतान):</strong> ${isOnlyChild ? "Yes (हाँ)" : "No (नहीं)"} &nbsp;•&nbsp;
-                      <strong>Siblings in School (सहोदर):</strong> ${siblings.length > 0 ? siblings.map(s => `${escapeHtml(s.name)} (${escapeHtml(s.className || 'Class')})`).join(", ") : "None / कोई नहीं"}
-                    ` : "&nbsp;"}
-                  </td>
-                </tr>
-                <tr>
-                  <td class="lbl">Emergency Contact &amp; Guardian</td>
-                  <td class="val" colspan="3">${!isBlankForm ? `${escapeHtml(emergencyPerson)} — Mobile: <strong style="color:#b91c1c;font-size:8.8pt;">${escapeHtml(emergencyPhone)}</strong> (${escapeHtml(emergencyRelation)}) ${emergencyWhatsapp ? `| <strong style="color:#047857;font-size:8.8pt;">💬 WA: ${escapeHtml(emergencyWhatsapp)}</strong>` : ""} | Local Guardian: ${escapeHtml(guardianName)}` : "&nbsp;"}</td>
+                  <td class="lbl">Local Guardian Details</td>
+                  <td class="val" colspan="3">${!isBlankForm ? `${escapeHtml(guardianName)} (Relation: ${escapeHtml(guardianRelation)}) | Emergency Mobile: 📞 ${escapeHtml(emergencyPhone)}` : "&nbsp;"}</td>
                 </tr>
               </tbody>
             </table>
 
-            <div class="section-heading">3. Residential Address &amp; Transport Facility (स्थायी एवं वर्तमान पता)</div>
-            <table class="bio-table" style="font-size:7.8pt;">
-              <tbody>
-                <tr>
-                  <td class="lbl">Present / Local Address</td>
-                  <td class="val" colspan="3">${!isBlankForm ? escapeHtml(fullAddress) : "&nbsp;"}</td>
-                </tr>
-                <tr>
-                  <td class="lbl">Permanent Native Address</td>
-                  <td class="val" colspan="3">${!isBlankForm ? escapeHtml(permanentAddress) : "&nbsp;"}</td>
-                </tr>
-                <tr>
-                  <td class="lbl">School Bus / Transport Facility</td>
-                  <td class="val" colspan="3">
-                    ${!isBlankForm ? (
-                      usesBus
-                        ? `<strong>YES (बस/वैन उपलब्ध)</strong> — Route: ${escapeHtml(busRoute || "Main Route")} | Pickup Stop: ${escapeHtml(student?.busStop || busRoute || "Assigned Stop")} | Distance: ${escapeHtml(transportDistanceKm || "—")} Km | Vehicle: ${escapeHtml(busNumber || "School Bus")} | Bus Fee: ₹${busFee}/mo ${driverName ? `| Driver: ${escapeHtml(driverName)} (📞 ${escapeHtml(driverPhone || "—")})` : ""}`
-                        : `<strong>NO</strong> — Mode: ${transportModeIfNo === "Walking" ? "Walking (पैदल)" : "Guardian / Own Arrangement (अभिभावक स्वयं)"}`
-                    ) : "&nbsp;"}
-                  </td>
-                </tr>
-                <tr>
-                  <td class="lbl">Monthly Tuition Fee</td>
-                  <td class="val" style="font-weight:800;color:#1e3a8a;">${!isBlankForm ? `₹${Number(monthlyFee || 0).toLocaleString("en-IN")} / month` : "&nbsp;"}</td>
-                  <td class="lbl">Child Sensitivity / Health</td>
-                  <td class="val">${!isBlankForm ? escapeHtml(childSensitivityRemarks || medicalCondition || "Normal / Fit") : "&nbsp;"}</td>
-                </tr>
-              </tbody>
-            </table>
-
-            <div class="section-heading">4. Fee Structure &amp; Initial Payment Record (प्रारंभिक शुल्क एवं रसीद विवरण)</div>
-            <table class="bio-table" style="font-size:7.8pt;">
+            <div class="section-heading">3. Family Status &amp; Sibling Profile (सहोदर विवरण - यदि इसी विद्यालय में पढ़ते हों)</div>
+            <div style="font-size:7.5pt;margin-bottom:1.5mm;font-weight:700;">
+              Only Child of Parents (इकलौती संतान): <span style="color:#1e3a8a;">${isOnlyChild ? "YES (हाँ)" : "NO (नहीं)"}</span>
+            </div>
+            <table class="bio-table" style="font-size:7.5pt;">
               <thead>
                 <tr style="background:#f1f5f9;font-weight:800;color:#1e3a8a;">
-                  <td style="width:25%;">Admission Fee (प्रवेश शुल्क)</td>
-                  <td style="width:25%;">Registration / Form Fee</td>
-                  <td style="width:25%;">Monthly Tuition Fee</td>
-                  <td style="width:25%;">Total Paid at Admission</td>
+                  <td style="width:12mm;text-align:center;">Sl.</td>
+                  <td>Sibling Name (भाई/बहन का नाम)</td>
+                  <td style="width:32mm;">Relation (भाई / बहन)</td>
+                  <td style="width:30mm;">Class &amp; Section</td>
+                  <td style="width:25mm;">Roll Number</td>
                 </tr>
               </thead>
               <tbody>
-                <tr>
-                  <td class="val">₹${(feeItems.find(i => /admission/i.test(i.description))?.due || 0).toLocaleString("en-IN")}</td>
-                  <td class="val">₹${(feeItems.find(i => /registration|form/i.test(i.description))?.due || 0).toLocaleString("en-IN")}</td>
-                  <td class="val">₹${Number(monthlyFee || 0).toLocaleString("en-IN")} / mo</td>
-                  <td class="val" style="font-weight:900;color:${totalPaid > 0 ? "#166534" : "#92400e"};">
-                    ${totalPaid > 0 ? `₹${totalPaid.toLocaleString("en-IN")} (${resolvedFee?.payModeInfo?.payMode || "Cash"}) • Rcpt #${resolvedFee?.receiptNo || "ADM-01"}` : "Pending at Counter"}
-                  </td>
-                </tr>
+                ${[0, 1, 2].map((idx) => {
+                  const sib = !isBlankForm && siblings[idx] ? siblings[idx] : null;
+                  return `
+                    <tr>
+                      <td style="text-align:center;">${idx + 1}.</td>
+                      <td style="font-weight:700;">${sib ? escapeHtml(sib.name) : "&nbsp;"}</td>
+                      <td>${sib ? escapeHtml(sib.relation || "Brother") : "&nbsp;"}</td>
+                      <td>${sib ? escapeHtml(sib.className) : "&nbsp;"}</td>
+                      <td>${sib ? escapeHtml((sib as any).rollNo || "—") : "&nbsp;"}</td>
+                    </tr>
+                  `;
+                }).join("")}
               </tbody>
             </table>
-
-            <div class="section-heading">5. Enclosures &amp; Documents Checklist (जमा किए गए दस्तावेज)</div>
-            ${docsChecklistHtml}
-
-            <div class="section-heading">6. Declaration by Parent / Guardian (अभिभावक द्वारा घोषणा)</div>
-            <div style="font-size:7pt;color:#334155;line-height:1.4;border:1px solid #cbd5e1;border-radius:4px;padding:2mm 2.8mm;background:#f8fafc;">
-              मैं प्रमाणित करता/करती हूँ कि ऊपर दिया गया छात्र का नाम, जन्मतिथि एवं अन्य सभी विवरण पूर्णतः सत्य हैं। मैं विद्यालय के अनुशासन, उपस्थिति एवं शुल्क संबंधी सभी नियमों का पालन करने के लिए सहमत हूँ।<br/>
-              <em>I hereby declare that the particulars furnished above are true and correct to the best of my knowledge, and I agree to abide by the rules, fee schedule, and discipline regulations of the institution.</em>
-            </div>
           </div>
 
-          <div>
-            <div style="display:flex;justify-content:space-between;align-items:center;border:1.2px solid #1e3a8a;border-radius:4px;padding:1.8mm 2.8mm;margin-top:2.5mm;background:#f8fafc;font-size:7.2pt;">
-              <div>
-                <strong style="color:#1e3a8a;">FOR OFFICE USE ONLY:</strong> Enrollment Status: <strong style="color:#166534;">CONFIRMED &amp; APPROVED BY AUTHORITY</strong> • Class: <strong>${escapeHtml(clsLabel)}</strong> • Roll No: <strong>${escapeHtml(rollNo)}</strong>
-                ${resolvedFee ? ` • Adm. Receipt: <strong>${escapeHtml(resolvedFee.receiptNo)} (Paid ₹${totalPaid.toLocaleString("en-IN")})</strong>` : ""}
-              </div>
-              <img src="${qrImgUrl}" alt="QR" crossorigin="anonymous" style="width:13mm;height:13mm;object-fit:contain;" />
-            </div>
+          <!-- Page 1 Bottom Note -->
+          <div style="display:flex;justify-content:space-between;align-items:center;border-top:1.2px solid #cbd5e1;padding-top:1.8mm;margin-top:auto;font-size:6.8pt;color:#64748b;font-weight:700;">
+            <span>📄 पृष्ठ 1 / 2 (Page 1 of 2)</span>
+            <span style="color:#1e3a8a;">* कृपया स्थायी पता, अकादमिक, परिवहन, शुल्क, घोषणा व हस्ताक्षर हेतु पृष्ठ 2 देखें</span>
+            <span>${escapeHtml(school?.name || "School Campus")}</span>
+          </div>
+        </div>
+      `;
+    }
 
-            <div class="sig-row" style="margin-top:5mm;">
-              <div class="sig-block">
-                <div style="font-size:6.2pt;color:#64748b;margin-bottom:0.8mm;">Date: ____/____/20__</div>
-                <div class="sig-line">Signature of Student</div>
-              </div>
-              <div class="sig-block">
-                <div style="font-size:6.2pt;color:#64748b;margin-bottom:0.8mm;">Date: ____/____/20__</div>
-                <div class="sig-line">Signature of Parent / Guardian</div>
-              </div>
-              <div class="sig-block">
-                <div style="font-size:6.2pt;color:#64748b;margin-bottom:0.8mm;">Date: ____/____/20__</div>
-                <div class="sig-line">Admission Clerk</div>
-              </div>
-              <div class="sig-block">
-                ${school?.principalSignatureUrl ? `<img src="${escapeHtml(school.principalSignatureUrl)}" alt="Sign" crossorigin="anonymous" style="height:9mm;max-width:32mm;object-fit:contain;display:block;margin:0 auto 0.5mm;" />` : `<div style="height:7mm;"></div>`}
-                <div class="sig-line">${escapeHtml(school?.principalName || "Principal")} (Seal &amp; Sign)</div>
-              </div>
+    // PAGE 2 OF STANDALONE ADMISSION FORM
+    return `
+      <div class="adm-box" style="flex:1;display:flex;flex-direction:column;justify-content:space-between;padding:3.5mm 4mm;">
+        <div>
+          ${page2CompactHeaderHtml}
+
+          <div class="section-heading" style="margin-top:1.5mm;">4. Residential Address &amp; Communication (स्थायी एवं वर्तमान पता)</div>
+          <table class="bio-table" style="font-size:7.7pt;">
+            <tbody>
+              <tr>
+                <td class="lbl" style="width:25%;">Present / Local Address</td>
+                <td class="val">${!isBlankForm ? escapeHtml(fullAddress) : "&nbsp;"}</td>
+              </tr>
+              <tr>
+                <td class="lbl">Permanent Native Address</td>
+                <td class="val">${!isBlankForm ? escapeHtml(permanentAddress) : "&nbsp;"}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="section-heading">5. Previous Academic Record &amp; Last School (पूर्व विद्यालय का विवरण)</div>
+          <table class="bio-table" style="font-size:7.7pt;">
+            <tbody>
+              <tr>
+                <td class="lbl" style="width:25%;">Name of School Last Attended</td>
+                <td class="val" colspan="3">${!isBlankForm && prevSchool !== "—" ? escapeHtml(prevSchool) : "&nbsp;"}</td>
+              </tr>
+              <tr>
+                <td class="lbl">Board / Affiliation</td>
+                <td class="val">${!isBlankForm ? escapeHtml((student as any)?.previousBoard || "CBSE / State Board") : "&nbsp;"}</td>
+                <td class="lbl">Last Class &amp; % Marks</td>
+                <td class="val">${!isBlankForm ? `${escapeHtml((student as any)?.previousClass || "Previous Class")} • ${escapeHtml(prevMarks || "Pass")}` : "&nbsp;"}</td>
+              </tr>
+              <tr>
+                <td class="lbl">Transfer Certificate (TC No.)</td>
+                <td class="val" colspan="3">${!isBlankForm ? escapeHtml((student as any)?.tcNumber || "Submitted / Attached") : "&nbsp;"}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="section-heading">6. School Bus / Transport Facility (स्कूल बस / परिवहन सेवा)</div>
+          <table class="bio-table" style="font-size:7.7pt;">
+            <tbody>
+              <tr>
+                <td class="lbl" style="width:25%;">Transport Opted</td>
+                <td class="val" colspan="3">
+                  ${!isBlankForm ? (
+                    usesBus
+                      ? `<strong>YES (बस/वैन उपलब्ध)</strong> — Route: ${escapeHtml(busRoute || "Main Route")} | Pickup Stop: ${escapeHtml(student?.busStop || busRoute || "Assigned Stop")} | Distance: ${escapeHtml(transportDistanceKm || "—")} Km | Vehicle: ${escapeHtml(busNumber || "School Bus")} | Bus Fee: ₹${busFee}/mo ${driverName ? `| Driver: ${escapeHtml(driverName)} (📞 ${escapeHtml(driverPhone || "—")})` : ""}`
+                      : `<strong>NO</strong> — Mode: ${transportModeIfNo === "Walking" ? "Walking (पैदल)" : "Guardian / Own Arrangement (अभिभावक स्वयं)"}`
+                  ) : "&nbsp;"}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="section-heading">7. Health, Child Sensitivity &amp; Medical Emergency (स्वास्थ्य व विशेष देखभाल)</div>
+          <table class="bio-table" style="font-size:7.7pt;">
+            <tbody>
+              <tr>
+                <td class="lbl" style="width:25%;">Child Sensitivity / Health</td>
+                <td class="val">${!isBlankForm ? escapeHtml(childSensitivityRemarks || medicalCondition || "Normal / Fit") : "&nbsp;"}</td>
+                <td class="lbl">Emergency Calling</td>
+                <td class="val" style="font-weight:900;color:#b91c1c;">${!isBlankForm && emergencyPhone !== "—" ? `🚨 ${escapeHtml(emergencyPhone)} (${escapeHtml(emergencyPerson)})` : "&nbsp;"}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="section-heading">8. Admission Fee Structure &amp; Initial Payment Record (प्रारंभिक शुल्क एवं रसीद विवरण)</div>
+          <table class="bio-table" style="font-size:7.7pt;">
+            <thead>
+              <tr style="background:#f1f5f9;font-weight:800;color:#1e3a8a;">
+                <td style="width:25%;">Admission Fee (प्रवेश शुल्क)</td>
+                <td style="width:25%;">Registration / Form Fee</td>
+                <td style="width:25%;">Monthly Tuition Fee</td>
+                <td style="width:25%;">Total Paid at Admission</td>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="val">₹${(feeItems.find(i => /admission/i.test(i.description))?.due || 0).toLocaleString("en-IN")}</td>
+                <td class="val">₹${(feeItems.find(i => /registration|form/i.test(i.description))?.due || 0).toLocaleString("en-IN")}</td>
+                <td class="val">₹${Number(monthlyFee || 0).toLocaleString("en-IN")} / mo</td>
+                <td class="val" style="font-weight:900;color:${totalPaid > 0 ? "#166534" : "#92400e"};">
+                  ${totalPaid > 0 ? `₹${totalPaid.toLocaleString("en-IN")} (${resolvedFee?.payModeInfo?.payMode || "Cash"}) • Rcpt #${resolvedFee?.receiptNo || "ADM-01"}` : "Pending at Counter"}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="section-heading">9. Submitted Documents Checklist (संलग्न दस्तावेजों की सूची)</div>
+          ${docsChecklistHtml}
+
+          <div class="section-heading">10. Legal Declaration by Parent / Guardian (अभिभावक द्वारा घोषणा पत्र)</div>
+          <div style="font-size:7pt;color:#334155;line-height:1.4;border:1px solid #cbd5e1;border-radius:4px;padding:2mm 2.8mm;background:#f8fafc;">
+            मैं प्रमाणित करता/करती हूँ कि ऊपर दिया गया छात्र का नाम, जन्मतिथि एवं अन्य सभी विवरण पूर्णतः सत्य हैं। मैं विद्यालय के अनुशासन, उपस्थिति एवं शुल्क संबंधी सभी नियमों का पालन करने के लिए सहमत हूँ।<br/>
+            <em>I hereby declare that the particulars furnished above are true and correct to the best of my knowledge, and I agree to abide by the rules, fee schedule, and discipline regulations of the institution.</em>
+          </div>
+
+          <div style="display:flex;justify-content:space-between;align-items:center;border:1.2px solid #1e3a8a;border-radius:4px;padding:1.6mm 2.5mm;margin-top:2mm;background:#f8fafc;font-size:7.2pt;">
+            <div>
+              <strong style="color:#1e3a8a;">FOR OFFICE USE ONLY:</strong> Enrollment Status: <strong style="color:#166534;">CONFIRMED &amp; APPROVED BY AUTHORITY</strong> • Class: <strong>${escapeHtml(clsLabel)}</strong> • Roll No: <strong>${escapeHtml(rollNo)}</strong>
+              ${resolvedFee ? ` • Adm. Receipt: <strong>${escapeHtml(resolvedFee.receiptNo)} (Paid ₹${totalPaid.toLocaleString("en-IN")})</strong>` : ""}
+            </div>
+            <img src="${qrImgUrl}" alt="QR" crossorigin="anonymous" style="width:12mm;height:12mm;object-fit:contain;" />
+          </div>
+
+          <div class="sig-row" style="margin-top:4mm;">
+            <div class="sig-block">
+              <div style="font-size:6.2pt;color:#64748b;margin-bottom:0.8mm;">Date: ____/____/20__</div>
+              <div class="sig-line">Signature of Student</div>
+            </div>
+            <div class="sig-block">
+              <div style="font-size:6.2pt;color:#64748b;margin-bottom:0.8mm;">Date: ____/____/20__</div>
+              <div class="sig-line">Signature of Parent / Guardian</div>
+            </div>
+            <div class="sig-block">
+              <div style="font-size:6.2pt;color:#64748b;margin-bottom:0.8mm;">Date: ____/____/20__</div>
+              <div class="sig-line">Admission Clerk / Accounts</div>
+            </div>
+            <div class="sig-block">
+              ${school?.principalSignatureUrl ? `<img src="${escapeHtml(school.principalSignatureUrl)}" alt="Sign" crossorigin="anonymous" style="height:9mm;max-width:32mm;object-fit:contain;display:block;margin:0 auto 0.5mm;" />` : `<div style="height:7mm;"></div>`}
+              <div class="sig-line">${escapeHtml(school?.principalName || "Principal")} (Seal &amp; Sign)</div>
             </div>
           </div>
+        </div>
+
+        <!-- Page 2 Footer -->
+        <div style="display:flex;justify-content:space-between;align-items:center;border-top:1.2px solid #cbd5e1;padding-top:1.8mm;margin-top:auto;font-size:6.8pt;color:#64748b;font-weight:700;">
+          <span>📄 पृष्ठ 2 / 2 (Page 2 of 2)</span>
+          <span style="color:#15803d;font-weight:800;">✓ आधिकारिक विद्यालय दस्तावेज (Official School Record)</span>
+          <span>NSTA School ERP</span>
         </div>
       </div>
     `;
   };
 
+  const buildSheetInnerHtml = (targetMode: AdmissionPrintMode): string => {
+    if (targetMode === "form_only" || targetMode === "classic_box_grid") {
+      if (previewPage === "all") {
+        return `
+          <div class="a4-sheet a4-page-1">${buildSheetInnerHtmlPage(targetMode, 1)}</div>
+          <div class="page-break"></div>
+          <div class="a4-sheet a4-page-2">${buildSheetInnerHtmlPage(targetMode, 2)}</div>
+        `;
+      }
+      return `<div class="a4-sheet a4-page-${previewPage}">${buildSheetInnerHtmlPage(targetMode, previewPage)}</div>`;
+    }
+    return `<div class="a4-sheet">${buildSheetInnerHtmlPage(targetMode, 1)}</div>`;
+  };
+
   const handlePrintA4 = () => {
-    const bodyHtml = buildSheetInnerHtml(mode);
+    const isTwoPage = mode === "form_only" || mode === "classic_box_grid";
+    let bodyHtml = "";
+    if (isTwoPage) {
+      const p1 = buildSheetInnerHtmlPage(mode, 1);
+      const p2 = buildSheetInnerHtmlPage(mode, 2);
+      bodyHtml = `
+        <div class="a4-sheet a4-page-1">${p1}</div>
+        <div class="page-break"></div>
+        <div class="a4-sheet a4-page-2">${p2}</div>
+      `;
+    } else {
+      bodyHtml = `<div class="a4-sheet">${buildSheetInnerHtmlPage(mode, 1)}</div>`;
+    }
+
     const fullDoc = `<!DOCTYPE html>
       <html>
         <head>
@@ -1817,30 +1577,64 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
   const handleDownloadPdf = async () => {
     setDownloadingPdf(true);
     try {
-      const sheetHtml = buildSheetInnerHtml(mode);
-      const canvas = await renderHtmlToCanvasSafe(sheetHtml, ADMISSION_PRINT_CSS, {
-        widthPx: 794,
-        scale: 2,
-        backgroundColor: "#ffffff",
-      });
-      const imgData = canvas.toDataURL("image/jpeg", 0.95);
-      const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-      const pdfW = pdf.internal.pageSize.getWidth();
-      const pdfH = pdf.internal.pageSize.getHeight();
-      const margin = 5;
-      const renderW = pdfW - margin * 2;
-      const renderH = Math.min(pdfH - margin * 2, (canvas.height * renderW) / canvas.width);
-      pdf.addImage(imgData, "JPEG", margin, margin, renderW, renderH);
-      const safeName = fullName.replace(/[^a-z0-9-_]+/gi, "_");
-      const prefix =
-        mode === "classic_box_grid"
-          ? isBlankForm ? "Blank_Classic_Admission_Form" : "Classic_Admission_Form"
-          : mode === "combined"
-          ? "Admission_Form_And_Receipt"
-          : mode === "receipt_only"
-          ? "Official_Admission_Fee_Receipt"
-          : "Admission_Form";
-      pdf.save(`${prefix}_${safeName}_${admNo}.pdf`);
+      const isTwoPage = mode === "form_only" || mode === "classic_box_grid";
+      if (isTwoPage) {
+        // Page 1
+        const p1Html = `<div class="a4-sheet">${buildSheetInnerHtmlPage(mode, 1)}</div>`;
+        const canvas1 = await renderHtmlToCanvasSafe(p1Html, ADMISSION_PRINT_CSS, {
+          widthPx: 794,
+          scale: 2,
+          backgroundColor: "#ffffff",
+        });
+
+        // Page 2
+        const p2Html = `<div class="a4-sheet">${buildSheetInnerHtmlPage(mode, 2)}</div>`;
+        const canvas2 = await renderHtmlToCanvasSafe(p2Html, ADMISSION_PRINT_CSS, {
+          widthPx: 794,
+          scale: 2,
+          backgroundColor: "#ffffff",
+        });
+
+        const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+        const pdfW = pdf.internal.pageSize.getWidth();
+        const pdfH = pdf.internal.pageSize.getHeight();
+        const margin = 5;
+        const renderW = pdfW - margin * 2;
+
+        // Add Page 1
+        const renderH1 = Math.min(pdfH - margin * 2, (canvas1.height * renderW) / canvas1.width);
+        pdf.addImage(canvas1.toDataURL("image/jpeg", 0.95), "JPEG", margin, margin, renderW, renderH1);
+
+        // Add Page 2
+        pdf.addPage("a4", "portrait");
+        const renderH2 = Math.min(pdfH - margin * 2, (canvas2.height * renderW) / canvas2.width);
+        pdf.addImage(canvas2.toDataURL("image/jpeg", 0.95), "JPEG", margin, margin, renderW, renderH2);
+
+        const safeName = fullName.replace(/[^a-z0-9-_]+/gi, "_");
+        const prefix =
+          mode === "classic_box_grid"
+            ? isBlankForm ? "Blank_Classic_Admission_Form" : "Classic_Admission_Form"
+            : "Admission_Form";
+        pdf.save(`${prefix}_${safeName}_${admNo}_2Page.pdf`);
+      } else {
+        const sheetHtml = `<div class="a4-sheet">${buildSheetInnerHtmlPage(mode, 1)}</div>`;
+        const canvas = await renderHtmlToCanvasSafe(sheetHtml, ADMISSION_PRINT_CSS, {
+          widthPx: 794,
+          scale: 2,
+          backgroundColor: "#ffffff",
+        });
+        const imgData = canvas.toDataURL("image/jpeg", 0.95);
+        const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+        const pdfW = pdf.internal.pageSize.getWidth();
+        const pdfH = pdf.internal.pageSize.getHeight();
+        const margin = 5;
+        const renderW = pdfW - margin * 2;
+        const renderH = Math.min(pdfH - margin * 2, (canvas.height * renderW) / canvas.width);
+        pdf.addImage(imgData, "JPEG", margin, margin, renderW, renderH);
+        const safeName = fullName.replace(/[^a-z0-9-_]+/gi, "_");
+        const prefix = mode === "receipt_only" ? "Official_Admission_Fee_Receipt" : "Admission_Form_And_Receipt";
+        pdf.save(`${prefix}_${safeName}_${admNo}.pdf`);
+      }
     } catch (err) {
       console.warn("PDF generation error, fallback to print:", err);
       handlePrintA4();
@@ -2001,6 +1795,48 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
               <span>{isBlankForm ? "📝 खाली फॉर्म (Blank)" : "📋 भरा हुआ (Filled)"}</span>
             </button>
 
+            {/* 2-Page Navigation Toggle for Admission Form */}
+            {(mode === "form_only" || mode === "classic_box_grid") && (
+              <div className="flex items-center bg-slate-800 p-0.5 rounded-lg border border-slate-700 text-xs shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setPreviewPage(1)}
+                  className={`px-2 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                    previewPage === 1
+                      ? "bg-indigo-600 text-white shadow-xs"
+                      : "text-slate-300 hover:text-white hover:bg-slate-700/60"
+                  }`}
+                  title="पेज 1: छात्र विवरण, माता-पिता, अभिभावक व भाई-बहन विवरण"
+                >
+                  📄 पेज 1
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewPage(2)}
+                  className={`px-2 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                    previewPage === 2
+                      ? "bg-indigo-600 text-white shadow-xs"
+                      : "text-slate-300 hover:text-white hover:bg-slate-700/60"
+                  }`}
+                  title="पेज 2: पता, वाहन, शुल्क रिकॉर्ड, दस्तावेज चेकलिस्ट, घोषणा व 4 हस्ताक्षर"
+                >
+                  📄 पेज 2
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewPage("all")}
+                  className={`px-2 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                    previewPage === "all"
+                      ? "bg-purple-600 text-white shadow-xs"
+                      : "text-slate-300 hover:text-white hover:bg-slate-700/60"
+                  }`}
+                  title="दोनों पेज (2 Pages) एक साथ देखें"
+                >
+                  📑 दोनों पेज (2 Pages)
+                </button>
+              </div>
+            )}
+
             {/* Quick Action Controls */}
             <div className="flex items-center gap-1.5 flex-nowrap">
               {/* Interactive Zoom Controls */}
@@ -2092,7 +1928,9 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
             className="shadow-2xl rounded-lg overflow-hidden bg-white border border-slate-300 dark:border-slate-800 shrink-0 transition-all duration-150 my-auto"
             style={{
               width: `${196 * zoomLevel}mm`,
-              height: `${281 * zoomLevel}mm`,
+              height: previewPage === "all" && (mode === "form_only" || mode === "classic_box_grid")
+                ? `${(281 * 2 + 8) * zoomLevel}mm`
+                : `${281 * zoomLevel}mm`,
               maxWidth: "100%",
               boxSizing: "border-box",
             }}
@@ -2101,7 +1939,9 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
               ref={previewRef}
               style={{
                 width: "196mm",
-                minHeight: "281mm",
+                minHeight: previewPage === "all" && (mode === "form_only" || mode === "classic_box_grid")
+                  ? `${281 * 2 + 8}mm`
+                  : "281mm",
                 transform: `scale(${zoomLevel})`,
                 transformOrigin: "top left",
               }}

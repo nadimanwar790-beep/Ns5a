@@ -121,6 +121,20 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
     return () => window.removeEventListener("lectures-updated", handler);
   }, [school?.id, selectedClassId]);
 
+  // Auto-sync selectedDate to the latest available lecture date if today has no lectures
+  useEffect(() => {
+    if (lectures.length > 0) {
+      const hasSelected = lectures.some(l => l.date === selectedDate);
+      if (!hasSelected) {
+        const latestDate = lectures[0]?.date;
+        if (latestDate) {
+          setSelectedDate(latestDate);
+          setSelectedMonth(latestDate.slice(5, 7));
+        }
+      }
+    }
+  }, [lectures, selectedDate]);
+
   // Filter lectures for selected month and date
   const monthLectures = useMemo(() => {
     return lectures.filter(l => {
@@ -136,10 +150,14 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
     return Array.from(set).sort((a, b) => b.localeCompare(a));
   }, [monthLectures]);
 
-  // Filter lectures for selected date
+  // Filter lectures for selected date with fallback to available month and class lectures
   const dateLectures = useMemo(() => {
-    return lectures.filter(l => l.date === selectedDate);
-  }, [lectures, selectedDate]);
+    const direct = lectures.filter(l => l.date === selectedDate);
+    if (direct.length > 0) return direct;
+    if (monthLectures.length > 0) return monthLectures;
+    if (lectures.length > 0) return lectures.slice(0, 8);
+    return [];
+  }, [lectures, selectedDate, monthLectures]);
 
   // Open add modal for a specific period or general
   const handleOpenAdd = (periodNumber = 1, defaultSub = "") => {

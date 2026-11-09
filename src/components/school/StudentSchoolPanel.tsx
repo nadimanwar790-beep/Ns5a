@@ -82,6 +82,9 @@ import {
   isDemoRecord,
   shouldUseDemoForSchool,
   type SchoolCommunityPost,
+  isStudentBirthdayToday,
+  dispatchOfficialSchoolBirthdayWish,
+  checkAndDispatchTodaysBirthdays,
 } from "../../school-firebase";
 import { getSavedSchoolLogo, isAppLogo } from "./feeReceiptUtils";
 import { getDemoSchoolDataset, isHolidayDate, isDemoDataEnabled, setDemoDataEnabled } from "./demoDataStore";
@@ -92,6 +95,8 @@ import { QrAttendanceScannerModal } from "./QrAttendanceScannerModal";
 import { SchoolCommunityFeed } from "./SchoolCommunityFeed";
 import { SchoolClassChannelView } from "./SchoolClassChannelView";
 import { NstaMessengerSuite } from "./NstaMessengerSuite";
+import { SchoolWelcomeModal } from "./SchoolWelcomeModal";
+import { SchoolBirthdayModal } from "./SchoolBirthdayModal";
 import { downloadFeeDocument, shareFeeReceiptOnWhatsApp } from "./feeDocument";
 import {
   getSchoolPushEnabledState,
@@ -100,7 +105,7 @@ import {
   syncStudentFeeDueForPush,
   sendSchoolPushNotification,
 } from "../../utils/schoolPushClient";
-import type { School, SchoolStudent, SchoolTeacher } from "../../school-types";
+import type { School, SchoolStudent, SchoolTeacher, NstaWelcomeData, NstaBirthdayData } from "../../school-types";
 
 interface Props {
   uid?: string;
@@ -253,6 +258,118 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   // ── Notification and Student Switcher Modals
   const [showNotificationModal, setShowNotificationModal] = useState<boolean>(false);
   const [showStudentSwitcherModal, setShowStudentSwitcherModal] = useState<boolean>(false);
+  const [welcomeModalData, setWelcomeModalData] = useState<NstaWelcomeData | null>(null);
+
+  // Check for newly created ID or scan-login welcome celebration trigger
+  useEffect(() => {
+    try {
+      const pendingKey = `nst_show_welcome_popup_${studentId}`;
+      const hasPopup = localStorage.getItem(pendingKey);
+      if (hasPopup) {
+        localStorage.removeItem(pendingKey);
+        let parsed: NstaWelcomeData | null = null;
+        try {
+          parsed = JSON.parse(hasPopup);
+        } catch {}
+        if (!parsed || typeof parsed !== "object") {
+          try {
+            const rawStored = localStorage.getItem("nst_pending_welcome_student");
+            if (rawStored) parsed = JSON.parse(rawStored);
+          } catch {}
+        }
+        if (!parsed || !parsed.studentName) {
+          parsed = {
+            studentId: studentId || "std",
+            studentName: studentName || "Student",
+            admissionNo: "ADM-001",
+            rollNo: "01",
+            className: "Class 10",
+            schoolName: "NSTA Digital School",
+            issuedAt: new Date().toISOString(),
+          };
+        }
+        setWelcomeModalData(parsed);
+      }
+    } catch {}
+  }, [studentId, studentName]);
+
+  useEffect(() => {
+    const handleWelcomeEvent = (e: any) => {
+      if (e?.detail) {
+        setWelcomeModalData(e.detail);
+      }
+    };
+    window.addEventListener("nst-school-welcome-received", handleWelcomeEvent);
+    return () => window.removeEventListener("nst-school-welcome-received", handleWelcomeEvent);
+  }, []);
+
+  const [birthdayModalData, setBirthdayModalData] = useState<NstaBirthdayData | null>(null);
+
+  // Automated Birthday Detection & School Dispatch
+  useEffect(() => {
+    if (!studentId) return;
+    const currentYear = new Date().getFullYear();
+    const sentKey = `nst_birthday_wish_sent_${schoolId || "dps_gurgaon_sector45"}_${studentId}_${currentYear}`;
+    const pendingPopupKey = `nst_show_birthday_popup_${studentId}`;
+
+    // 1. Check if pending popup flag was already queued
+    try {
+      const hasPopup = localStorage.getItem(pendingPopupKey);
+      if (hasPopup) {
+        localStorage.removeItem(pendingPopupKey);
+        let parsed: NstaBirthdayData | null = null;
+        try {
+          parsed = JSON.parse(hasPopup);
+        } catch {}
+        if (parsed && parsed.studentName) {
+          setBirthdayModalData(parsed);
+          return;
+        }
+      }
+    } catch {}
+
+    // 2. Check if today is student's birthday!
+    const targetStudent = activeStudent || currentStudent;
+    if (targetStudent && targetStudent.dateOfBirth && isStudentBirthdayToday(targetStudent.dateOfBirth)) {
+      try {
+        const alreadyWished = localStorage.getItem(sentKey);
+        void dispatchOfficialSchoolBirthdayWish(targetStudent, {
+          force: false,
+          triggerPopup: true,
+          schoolName: schoolDisplayName || school?.name || undefined,
+          schoolLogo: resolvedSchoolLogo || undefined,
+        }).then((msg) => {
+          if (msg?.birthdayData) {
+            setBirthdayModalData(msg.birthdayData);
+          } else if (!alreadyWished) {
+            setBirthdayModalData({
+              studentId: targetStudent.id,
+              studentName: targetStudent.name,
+              admissionNo: targetStudent.admissionNo,
+              rollNo: targetStudent.rollNo,
+              className: targetStudent.className || formatClassLabel(studentClassLabel),
+              schoolName: schoolDisplayName || school?.name || "NSTA Digital School",
+              schoolLogo: resolvedSchoolLogo || undefined,
+              dateOfBirth: targetStudent.dateOfBirth,
+              wishedYear: currentYear,
+              issuedAt: new Date().toISOString(),
+            });
+          }
+        });
+      } catch {}
+    }
+  }, [studentId, activeStudent, currentStudent, schoolId, schoolDisplayName, school?.name, resolvedSchoolLogo, studentClassLabel]);
+
+  // Listen for real-time birthday wish event
+  useEffect(() => {
+    const handleBirthdayEvent = (e: any) => {
+      if (e?.detail) {
+        setBirthdayModalData(e.detail);
+      }
+    };
+    window.addEventListener("nst-school-birthday-received", handleBirthdayEvent);
+    return () => window.removeEventListener("nst-school-birthday-received", handleBirthdayEvent);
+  }, []);
 
   // Load demo dataset for fallback / syllabus / calendar
   const dataset = useMemo(() => getDemoSchoolDataset(), []);
@@ -4638,6 +4755,22 @@ export const StudentSchoolPanel: React.FC<Props> = ({
           </div>
         </div>
       )}
+
+      {/* ── CELEBRATORY SCHOOL WELCOME MODAL ── */}
+      <SchoolWelcomeModal
+        isOpen={Boolean(welcomeModalData)}
+        onClose={() => setWelcomeModalData(null)}
+        welcomeData={welcomeModalData}
+        onOpenSchoolDesk={() => setActiveTab("channel")}
+      />
+
+      {/* ── CELEBRATORY SCHOOL BIRTHDAY MODAL ── */}
+      <SchoolBirthdayModal
+        isOpen={Boolean(birthdayModalData)}
+        onClose={() => setBirthdayModalData(null)}
+        birthdayData={birthdayModalData}
+        onOpenSchoolDesk={() => setActiveTab("channel")}
+      />
     </div>
   );
 };

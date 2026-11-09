@@ -6,7 +6,8 @@ import {
   getSubjects, getStudents, shouldUseDemoForSchool, isDemoRecord,
   saveSubject, saveMultipleSubjects, generateId, deleteSubject,
   getSchoolFeeHistory, getReferralPayouts, getSchoolReferralSettings,
-  subscribeToTeachers
+  subscribeToTeachers,
+  isStudentBirthdayToday, dispatchOfficialSchoolBirthdayWish
 } from "../../school-firebase";
 import { getDemoSchoolDataset } from "./demoDataStore";
 import type {
@@ -30,7 +31,8 @@ import {
   Search, Phone, User, Calendar, Award, Sparkles, Filter, CheckCircle2,
   GraduationCap, LogOut, Home, Megaphone, Image as ImageIcon,
   Clock, Book, MessageSquare, Plus, X, Trash2, Check, Layers, IndianRupee, Wallet, Bell,
-  Youtube, RotateCw, Menu, Building2, AlertCircle, UserPlus, Crown, ArrowRight
+  Youtube, RotateCw, Menu, Building2, AlertCircle, UserPlus, Crown, ArrowRight,
+  Cake, Gift
 } from "lucide-react";
 import { TimetableManager } from "./TimetableManager";
 import { ClassroomVideoArchive } from "./ClassroomVideoArchive";
@@ -508,6 +510,10 @@ export const TeacherPanel: React.FC<Props> = ({
       if (st.classId) map[st.classId] = (map[st.classId] || 0) + 1;
     });
     return map;
+  }, [allStudents]);
+
+  const todaysTeacherBirthdays = useMemo(() => {
+    return allStudents.filter((s) => isStudentBirthdayToday(s.dateOfBirth));
   }, [allStudents]);
 
   const handleToggleScreenRotate = async () => {
@@ -2051,6 +2057,45 @@ export const TeacherPanel: React.FC<Props> = ({
             <span className="text-[10px] text-slate-400">Photos, Videos &amp; Notices</span>
           </div>
         </div>
+
+        {/* ── TODAY'S BIRTHDAYS (TEACHER NO-PUNISHMENT ALERT) ── */}
+        {todaysTeacherBirthdays.length > 0 && (
+          <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-amber-500 via-rose-500 to-pink-500 text-white shadow-xl border-2 border-white/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 animate-in slide-in-from-top-2">
+            <div className="flex items-center gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center text-2xl shadow-inner shrink-0">
+                🎂
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-white text-rose-700 shadow-xs">
+                    🛡️ NO PUNISHMENT POLICY
+                  </span>
+                  <span className="text-xs text-rose-100 font-bold">
+                    आज {todaysTeacherBirthdays.length} छात्र का जन्मदिन है!
+                  </span>
+                </div>
+                <h4 className="font-black text-sm sm:text-base text-white mt-0.5">
+                  🎉 आज जन्मदिन है: {todaysTeacherBirthdays.map((s) => s.name).join(", ")}
+                </h4>
+                <p className="text-xs text-rose-100/90 font-medium">
+                  शिक्षकों से अनुरोध: आज इन बच्चों को किसी भी बात पर डांटें या दंडित (punish) न करें। स्कूल की ओर से उन्हें जन्मदिन का शुभाशीर्वाद दें।
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                const target = selectedClass || classes[0] || null;
+                if (target) setSelectedClass(target);
+                setView("attendance");
+              }}
+              className="px-4 py-2 rounded-xl bg-white text-rose-700 hover:bg-rose-50 font-black text-xs shrink-0 transition active:scale-95 shadow cursor-pointer self-start sm:self-center"
+            >
+              उपस्थिति में देखें →
+            </button>
+          </div>
+        )}
 
         {/* Broadcast Studio Quick Card */}
         <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-indigo-950 via-slate-900 to-purple-950 text-white shadow-xl border-2 border-indigo-500/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5">

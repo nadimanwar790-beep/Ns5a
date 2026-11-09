@@ -1,6 +1,6 @@
-// @ts-nocheck
 import { ref, set, get, onValue, off, update, remove } from 'firebase/database';
 import { rtdb } from '../firebase';
+import { saveNstaMessage } from '../school-firebase';
 
 export interface ActiveSessionData {
   sessionId: string;
@@ -111,11 +111,11 @@ export const checkActiveRemoteSession = async (userId: string): Promise<ActiveSe
       return null;
     }
 
-    // Deadlock Prevention: If previous device has been inactive for > 24 hours,
-    // consider it stale/dead/lost and allow seamless direct login!
-    const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
-    if (data.updatedAt && Date.now() - data.updatedAt > TWENTY_FOUR_HOURS) {
-      console.info('[SessionManager] Stale session detected (>24h). Allowing direct login.');
+    // Active Account Detection: Heartbeat within last 2 minutes signifies active use!
+    // "agar account use na ho raha hai to bina otp ke hi login ho jaye"
+    const TWO_MINUTES = 2 * 60 * 1000;
+    if (data.updatedAt && Date.now() - data.updatedAt > TWO_MINUTES) {
+      console.info('[SessionManager] Inactive account detected (>2 min). Allowing direct login without OTP.');
       return null;
     }
 
@@ -132,7 +132,7 @@ export const createLoginChallenge = async (
 ): Promise<{ challengeId: string; otp: string; expiresAt: number }> => {
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
   const challengeId = `chall_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-  const expiresAt = Date.now() + 120000; // 2 minutes validity
+  const expiresAt = Date.now() + 600000; // 10 minutes validity (600,000ms)
   const otpHash = await hashOtp(otp, challengeId);
 
   const deviceName = requestingDeviceName || (typeof navigator !== 'undefined'
@@ -156,6 +156,26 @@ export const createLoginChallenge = async (
 
   const challengeRef = ref(rtdb, `login_challenges/${userId}`);
   await set(challengeRef, challengeData);
+
+  // Dispatch security message to NSTA Messenger from "NSTA Official Security Desk"
+  try {
+    const activeSchoolId = (typeof localStorage !== 'undefined' && localStorage.getItem('nst_active_school_id')) || 'default';
+    const msgId = `nsta_otp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const securityMsg = {
+      id: msgId,
+      schoolId: activeSchoolId,
+      threadType: "SCHOOL_DESK" as const,
+      senderId: "nsta_official_desk",
+      senderName: "NSTA Official Security Desk",
+      senderRole: "ADMIN" as const,
+      studentId: userId,
+      content: `🔐 [NSTA Official Security Desk]\nDusre device se aapke account me login ki koshish hui hai (${deviceName}).\n\nLogin Authorization OTP: [ ${otp} ]\n\n⏰ Validity: 10 Minutes\nScreen par 30 second me OTP alert display kiya gaya hai. Agar aapne login nahi kiya hai to OTP kisi se share na karein.`,
+      createdAt: new Date().toISOString(),
+      deliveredTo: [userId],
+      readBy: []
+    };
+    saveNstaMessage(securityMsg as any).catch(() => {});
+  } catch {}
 
   return { challengeId, otp, expiresAt };
 };
