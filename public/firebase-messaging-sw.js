@@ -38,7 +38,8 @@ function displayPushNotification(title, body, data, iconUrl) {
     return Promise.resolve();
   }
 
-  const rawIcon = (iconUrl && !iconUrl.endsWith('.svg')) ? iconUrl : '/icons/icon-192.png';
+  const candidateIcon = (data && (data.senderPhoto || data.icon)) || iconUrl;
+  const rawIcon = (candidateIcon && !candidateIcon.endsWith('.svg')) ? candidateIcon : '/icons/icon-192.png';
   const icon = toAbsoluteUrl(rawIcon);
   const badge = toAbsoluteUrl('/icons/badge-monochrome.png');
   // Fresh unique tag forces Android to pop up a heads-up banner over other apps instead of silently collapsing

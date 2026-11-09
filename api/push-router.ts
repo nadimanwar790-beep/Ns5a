@@ -142,17 +142,20 @@ async function dispatchWebPush(
     studentId?: string;
     schoolId?: string;
     urgent?: boolean;
+    icon?: string;
+    senderPhoto?: string;
   }
 ): Promise<boolean> {
   try {
     await ensureVapidConfigured();
+    const effectiveIcon = payload.icon || payload.senderPhoto || "/icons/icon-192.png?v=3";
     await webpush.sendNotification(
       record.subscription,
       JSON.stringify({
         notification: {
           title: payload.title,
           body: payload.body,
-          icon: "/icons/icon-192.png?v=3",
+          icon: effectiveIcon,
           badge: "/icons/badge-monochrome.png?v=4",
           silent: false,
           renotify: true,
@@ -166,6 +169,8 @@ async function dispatchWebPush(
           url: payload.url || "/",
           studentId: payload.studentId || "",
           schoolId: payload.schoolId || "",
+          icon: effectiveIcon,
+          senderPhoto: effectiveIcon,
           urgent: payload.urgent !== false ? "1" : "0",
         },
       }),
@@ -511,6 +516,8 @@ export default async function handler(req: any, res: any) {
         type = "SCHOOL_NOTICE",
         url = "/?schoolPortal=1",
         urgent = true,
+        icon,
+        senderPhoto,
       } = req.body || {};
 
       if (!title || !body) {
@@ -523,6 +530,7 @@ export default async function handler(req: any, res: any) {
 
       let delivered = 0;
       let matchedDevices = 0;
+      const effectiveIcon = icon || senderPhoto || "/icons/icon-192.png?v=3";
 
       for (const [id, record] of Object.entries(subsObj)) {
         if (!record?.subscription?.endpoint) continue;
@@ -569,6 +577,8 @@ export default async function handler(req: any, res: any) {
           studentId: matchedStudent?.id,
           schoolId: matchedStudent?.schoolId || schoolId,
           urgent,
+          icon: effectiveIcon,
+          senderPhoto: effectiveIcon,
         });
         if (ok) delivered++;
       }
@@ -594,7 +604,7 @@ export default async function handler(req: any, res: any) {
       const fcmDelivered = await dispatchFcmToUsers(
         fcmRecipients,
         isFcmBroadcast,
-        { title, body, type, url },
+        { title, body, type, url, icon: effectiveIcon },
         { schoolId, classId }
       );
       delivered += fcmDelivered;

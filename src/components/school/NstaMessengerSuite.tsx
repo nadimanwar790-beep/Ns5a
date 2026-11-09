@@ -3,6 +3,7 @@ import {
   Users,
   Building2,
   GraduationCap,
+  Bell,
   Send,
   Image as ImageIcon,
   FileText,
@@ -342,6 +343,33 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     return safeTeachers[0]?.id || "";
   });
 
+  // Sender's DP / ID Card Photo resolution (so recipient sees sender photo in right-side of push notification)
+  const currentSenderPhoto = useMemo(() => {
+    if (currentUserRole === "STUDENT") {
+      if (student?.photoUrl) return student.photoUrl;
+      try {
+        const stored = localStorage.getItem("nst_active_student") || localStorage.getItem("nst_cached_student");
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (parsed?.photoUrl) return parsed.photoUrl;
+        }
+      } catch (_) {}
+      const matched = safeStudents.find(
+        (s) => s.id === currentUserId || (currentUserName && s.name?.toLowerCase() === currentUserName?.toLowerCase())
+      );
+      if (matched?.photoUrl) return matched.photoUrl;
+    } else if (currentUserRole === "TEACHER") {
+      if (teacher?.photoUrl) return teacher.photoUrl;
+      const matched = safeTeachers.find(
+        (t) => t.id === currentUserId || (currentUserName && t.name?.toLowerCase() === currentUserName?.toLowerCase())
+      );
+      if (matched?.photoUrl) return matched.photoUrl;
+    } else if (currentUserRole === "ADMIN") {
+      if (school?.logoUrl) return school.logoUrl;
+    }
+    return school?.logoUrl || "";
+  }, [currentUserRole, student, teacher, school, currentUserId, currentUserName, safeStudents, safeTeachers]);
+
   // Chat message input
   const [inputText, setInputText] = useState("");
   const [messages, setMessages] = useState<NstaMessage[]>([]);
@@ -507,6 +535,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       senderId: currentUserId || "user",
       senderName: currentUserName || "User",
       senderRole: currentUserRole,
+      senderPhoto: currentSenderPhoto || undefined,
       text: forwardModalMsg.text || "",
       attachmentUrl: forwardModalMsg.attachmentUrl,
       attachmentType: forwardModalMsg.attachmentType,
@@ -1070,6 +1099,19 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       const title = overrideTitle || defaultTitle;
       const body = overrideBody || msg.text || "Naya sandesh aaya hai";
 
+      // Resolve sender's DP / ID Card photo (shown on the right side of the Android notification)
+      let senderPhoto = msg.senderPhoto || currentSenderPhoto;
+      if (!senderPhoto) {
+        if (msg.senderRole === "STUDENT") {
+          const matchedSt = safeStudents.find((s) => s.id === msg.senderId);
+          if (matchedSt?.photoUrl) senderPhoto = matchedSt.photoUrl;
+        } else if (msg.senderRole === "TEACHER") {
+          const matchedTch = safeTeachers.find((t) => t.id === msg.senderId);
+          if (matchedTch?.photoUrl) senderPhoto = matchedTch.photoUrl;
+        }
+      }
+      if (!senderPhoto) senderPhoto = school?.logoUrl || "";
+
       if (isTeacherChat) {
         // 1-on-1 Teacher <-> Student private routing:
         if (msg.senderRole === "STUDENT") {
@@ -1082,6 +1124,8 @@ export const NstaMessengerSuite: React.FC<Props> = ({
               title: `💬 Student: ${senderTitle}`,
               body,
               type: "NSTA_MESSAGE",
+              icon: senderPhoto,
+              senderPhoto,
               url: `/?schoolPortal=1&schoolTab=messenger&subTab=teacher`,
               urgent: true,
             });
@@ -1096,6 +1140,8 @@ export const NstaMessengerSuite: React.FC<Props> = ({
               title: `💬 Teacher: ${senderTitle}`,
               body,
               type: "NSTA_MESSAGE",
+              icon: senderPhoto,
+              senderPhoto,
               url: `/?schoolPortal=1&schoolTab=messenger&subTab=teacher`,
               urgent: true,
             });
@@ -1109,6 +1155,8 @@ export const NstaMessengerSuite: React.FC<Props> = ({
           title,
           body,
           type: "NSTA_MESSAGE",
+          icon: senderPhoto,
+          senderPhoto,
           url: `/?schoolPortal=1&schoolTab=messenger&subTab=class`,
           urgent: true,
         });
@@ -1121,6 +1169,8 @@ export const NstaMessengerSuite: React.FC<Props> = ({
           title,
           body,
           type: "SCHOOL_NOTICE",
+          icon: senderPhoto,
+          senderPhoto,
           url: `/?schoolPortal=1&schoolTab=messenger&subTab=school`,
           urgent: true,
         });
@@ -1179,6 +1229,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       senderId: currentUserId || "user",
       senderName: currentUserName || (currentUserRole === "ADMIN" ? "School Admin" : currentUserRole === "TEACHER" ? "Teacher" : "Student"),
       senderRole: currentUserRole,
+      senderPhoto: currentSenderPhoto || undefined,
       text: cleanText,
       createdAt: new Date().toISOString(),
       status: "sent"
@@ -1406,6 +1457,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
         senderId: currentUserId || "user",
         senderName: currentUserName || (currentUserRole === "ADMIN" ? "School Admin" : currentUserRole === "TEACHER" ? "Teacher" : "Student"),
         senderRole: currentUserRole,
+        senderPhoto: currentSenderPhoto || undefined,
         text: imageCaption.trim() || "Photo",
         attachmentType: "IMAGE",
         attachmentUrl: uploadedUrl,
@@ -1471,6 +1523,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
         senderId: currentUserId || "user",
         senderName: currentUserName || (currentUserRole === "ADMIN" ? "School Admin" : currentUserRole === "TEACHER" ? "Teacher" : "Student"),
         senderRole: currentUserRole,
+        senderPhoto: currentSenderPhoto || undefined,
         text: videoCaption.trim() || "Video",
         attachmentType: "VIDEO",
         attachmentUrl: uploadedUrl,
@@ -1561,6 +1614,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
         senderId: currentUserId || "user",
         senderName: currentUserName || (currentUserRole === "ADMIN" ? "School Admin" : currentUserRole === "TEACHER" ? "Teacher" : "Student"),
         senderRole: currentUserRole,
+        senderPhoto: currentSenderPhoto || undefined,
         text: file.name,
         fileName: file.name,
         fileSize: file.size,
@@ -1626,6 +1680,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
         senderId: currentUserId || "user",
         senderName: currentUserName || (currentUserRole === "ADMIN" ? "School Admin" : currentUserRole === "TEACHER" ? "Teacher" : "Student"),
         senderRole: currentUserRole,
+        senderPhoto: currentSenderPhoto || undefined,
         text: noteLabel ? `🎙️ Voice Note: ${noteLabel}` : "🎙️ Voice Message",
         attachmentType: "AUDIO",
         attachmentUrl: uploadedUrl,
@@ -1787,6 +1842,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
         senderId: currentUserId || "user",
         senderName: currentUserName || (currentUserRole === "ADMIN" ? "School Admin" : currentUserRole === "TEACHER" ? "Teacher" : "Student"),
         senderRole: currentUserRole,
+        senderPhoto: currentSenderPhoto || undefined,
         text: `🎙️ Audio Note: ${file.name}`,
         attachmentType: "AUDIO",
         attachmentUrl: uploadedUrl,
@@ -1973,6 +2029,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       senderId: currentUserId || "user",
       senderName: currentUserName || (currentUserRole === "ADMIN" ? "School Admin" : currentUserRole === "TEACHER" ? "Teacher" : "Student"),
       senderRole: currentUserRole,
+      senderPhoto: currentSenderPhoto || undefined,
       text: `👤 Contact: ${contact.name}`,
       attachmentType: "CONTACT",
       contactData: {
@@ -2024,6 +2081,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       senderId: currentUserId || "user",
       senderName: currentUserName || (currentUserRole === "ADMIN" ? "School Admin" : currentUserRole === "TEACHER" ? "Teacher" : "Student"),
       senderRole: currentUserRole,
+      senderPhoto: currentSenderPhoto || undefined,
       text: `📍 Location: ${locName}`,
       attachmentType: "LOCATION",
       locationData: {
@@ -2257,8 +2315,19 @@ export const NstaMessengerSuite: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* Right: Group Info button (kon kon hai) + Class dropdown (if admin) + Theme button */}
+          {/* Right: Pop-up guide + Group Info button (kon kon hai) + Class dropdown (if admin) + Theme button */}
           <div className="flex items-center gap-1.5 shrink-0">
+            {/* Pop-up guide launcher */}
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new CustomEvent('open-popup-settings-guide'))}
+              className="p-1.5 px-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-bold flex items-center gap-1 transition cursor-pointer active:scale-95"
+              title="पॉप-अप नोटिफिकेशन सेटिंग (Show as pop-up guide)"
+            >
+              <Bell className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline text-[11px]">पॉप-अप सेटिंग्स</span>
+            </button>
+
             {/* Button to see who is in the group (Class & DP ke side me) */}
             {activeTab === "class" && (
               <button

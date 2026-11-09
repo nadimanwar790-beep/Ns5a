@@ -30033,6 +30033,14 @@ RULES:
               <h2 className="font-black text-base text-white">Notifications</h2>
               <p className="text-[11px] text-slate-500">{allNotifications.length} message{allNotifications.length !== 1 ? 's' : ''}</p>
             </div>
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new CustomEvent('open-popup-settings-guide'))}
+              className="px-2.5 py-1 rounded-xl bg-amber-400/20 border border-amber-400/40 text-amber-300 text-xs font-bold flex items-center gap-1.5 hover:bg-amber-400/30 transition cursor-pointer"
+            >
+              <Sliders size={13} />
+              <span>पॉप-अप सेटिंग्स</span>
+            </button>
           </div>
           <div className="flex-1 overflow-y-auto p-4 pb-[72px] space-y-3">
             {allNotifications.length === 0 && (

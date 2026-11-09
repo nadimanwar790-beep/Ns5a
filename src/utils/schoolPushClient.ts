@@ -184,6 +184,8 @@ export async function sendSchoolPushNotification(payload: {
   type?: "MONTHLY_FEE" | "FEE_RECEIPT" | "SCHOOL_NOTICE" | "SCHOOL_HOLIDAY" | "HOMEWORK" | "DEFAULT" | "NSTA_MESSAGE";
   url?: string;
   urgent?: boolean;
+  icon?: string;
+  senderPhoto?: string;
 }): Promise<{ delivered: number; matchedDevices: number }> {
   // 1. Dual-write to RTDB for instantaneous in-app wake up & chime
   try {
@@ -198,6 +200,8 @@ export async function sendSchoolPushNotification(payload: {
         title: payload.title,
         body: payload.body,
         url: payload.url || "/?schoolPortal=1",
+        icon: payload.icon || payload.senderPhoto || "",
+        senderPhoto: payload.senderPhoto || payload.icon || "",
         timestamp,
         status: "UNREAD",
         schoolId: payload.schoolId || "",

@@ -1480,6 +1480,7 @@ export interface NstaMessage {
   senderId: string;
   senderName: string;
   senderRole: "ADMIN" | "TEACHER" | "STUDENT";
+  senderPhoto?: string;   // ID Card / DP photo URL of the sender
   text: string;
   attachmentUrl?: string;
   attachmentType?: "IMAGE" | "VIDEO" | "PDF" | "NOTICE" | "AUDIO" | "DOCUMENT" | "ZIP" | "FILE" | "CONTACT" | "LOCATION";
