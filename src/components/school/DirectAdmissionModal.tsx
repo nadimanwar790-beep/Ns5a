@@ -107,9 +107,13 @@ export const DirectAdmissionModal: React.FC<Props> = ({
   const [fatherName, setFatherName] = useState<string>("");
   const [fatherOccupation, setFatherOccupation] = useState<string>("");
   const [fatherAadhaar, setFatherAadhaar] = useState<string>("");
+  const [fatherPhone, setFatherPhone] = useState<string>("");
+  const [fatherWhatsapp, setFatherWhatsapp] = useState<string>("");
   const [motherName, setMotherName] = useState<string>("");
   const [motherOccupation, setMotherOccupation] = useState<string>("");
   const [motherAadhaar, setMotherAadhaar] = useState<string>("");
+  const [motherPhone, setMotherPhone] = useState<string>("");
+  const [motherWhatsapp, setMotherWhatsapp] = useState<string>("");
   const [phone, setPhone] = useState<string>("");
   const [whatsappNo, setWhatsappNo] = useState<string>("");
   const [email, setEmail] = useState<string>("");
@@ -124,6 +128,7 @@ export const DirectAdmissionModal: React.FC<Props> = ({
   const [emergencyContact, setEmergencyContact] = useState<string>("");
   const [emergencyPhone, setEmergencyPhone] = useState<string>("");
   const [emergencyRelation, setEmergencyRelation] = useState<string>("");
+  const [emergencyWhatsapp, setEmergencyWhatsapp] = useState<string>("");
   const [address, setAddress] = useState<string>("");
   const [city, setCity] = useState<string>("");
   const [pincode, setPincode] = useState<string>("");
@@ -468,11 +473,15 @@ export const DirectAdmissionModal: React.FC<Props> = ({
         fatherName: fatherName.trim() || undefined,
         fatherOccupation: fatherOccupation.trim() || undefined,
         fatherAadhaar: fatherAadhaar.trim() || undefined,
+        fatherPhone: fatherPhone.trim() || undefined,
+        fatherWhatsapp: fatherWhatsapp.trim() || undefined,
         motherName: motherName.trim() || undefined,
         motherOccupation: motherOccupation.trim() || undefined,
         motherAadhaar: motherAadhaar.trim() || undefined,
-        phone: phone.trim() || whatsappNo.trim() || undefined,
-        whatsappNo: whatsappNo.trim() || phone.trim() || undefined,
+        motherPhone: motherPhone.trim() || undefined,
+        motherWhatsapp: motherWhatsapp.trim() || undefined,
+        phone: phone.trim() || fatherPhone.trim() || whatsappNo.trim() || undefined,
+        whatsappNo: whatsappNo.trim() || fatherWhatsapp.trim() || phone.trim() || undefined,
         email: email.trim() || undefined,
         address: address.trim() || undefined,
         city: city.trim() || undefined,
@@ -487,6 +496,7 @@ export const DirectAdmissionModal: React.FC<Props> = ({
         emergencyContact: emergencyContact.trim() || undefined,
         emergencyPhone: emergencyPhone.trim() || undefined,
         emergencyRelation: emergencyRelation.trim() || undefined,
+        emergencyWhatsapp: emergencyWhatsapp.trim() || undefined,
         admissionType,
         photoUrl: photoUrl || undefined,
         usesBus,
@@ -1107,23 +1117,132 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Father & Mother Numbers */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 p-3 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-200 dark:border-slate-700">
                   <div>
-                    <label className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 block mb-1">💬 WhatsApp Number (व्हाट्सएप नंबर)</label>
+                    <label className="text-[11px] font-bold text-indigo-700 dark:text-indigo-300 block mb-1">📞 Father Mobile (पिता का मोबाइल)</label>
                     <input
                       type="tel"
+                      maxLength={10}
+                      value={fatherPhone}
+                      onChange={(e) => {
+                        const val = e.target.value.replace(/\D/g, "").slice(0, 10);
+                        setFatherPhone(val);
+                        if (!phone || phone === fatherPhone) setPhone(val);
+                      }}
+                      placeholder="10-digit Mobile"
+                      className="w-full px-3 py-2 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-900 text-xs font-bold text-slate-800 dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400">💬 Father WhatsApp (पिता व्हाट्सएप)</label>
+                      {fatherPhone && fatherWhatsapp !== fatherPhone && (
+                        <button
+                          type="button"
+                          onClick={() => setFatherWhatsapp(fatherPhone)}
+                          className="text-[10px] text-emerald-600 hover:underline cursor-pointer"
+                        >
+                          Same as Mobile
+                        </button>
+                      )}
+                    </div>
+                    <input
+                      type="tel"
+                      maxLength={10}
+                      value={fatherWhatsapp}
+                      onChange={(e) => setFatherWhatsapp(e.target.value.replace(/\D/g, "").slice(0, 10))}
+                      placeholder="WhatsApp No."
+                      className="w-full px-3 py-2 rounded-xl border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-800 dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-pink-700 dark:text-pink-300 block mb-1">📱 Mother Mobile (माता का मोबाइल)</label>
+                    <input
+                      type="tel"
+                      maxLength={10}
+                      value={motherPhone}
+                      onChange={(e) => setMotherPhone(e.target.value.replace(/\D/g, "").slice(0, 10))}
+                      placeholder="10-digit Mobile"
+                      className="w-full px-3 py-2 rounded-xl border border-pink-200 dark:border-pink-800 bg-white dark:bg-slate-900 text-xs font-bold text-slate-800 dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400">💬 Mother WhatsApp (माता व्हाट्सएप)</label>
+                      {motherPhone && motherWhatsapp !== motherPhone && (
+                        <button
+                          type="button"
+                          onClick={() => setMotherWhatsapp(motherPhone)}
+                          className="text-[10px] text-emerald-600 hover:underline cursor-pointer"
+                        >
+                          Same as Mobile
+                        </button>
+                      )}
+                    </div>
+                    <input
+                      type="tel"
+                      maxLength={10}
+                      value={motherWhatsapp}
+                      onChange={(e) => setMotherWhatsapp(e.target.value.replace(/\D/g, "").slice(0, 10))}
+                      placeholder="WhatsApp No."
+                      className="w-full px-3 py-2 rounded-xl border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-800 dark:text-white"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400">💬 WhatsApp Number (व्हाट्सएप नंबर)</label>
+                      {phone && whatsappNo !== phone && (
+                        <button
+                          type="button"
+                          onClick={() => setWhatsappNo(phone)}
+                          className="text-[10px] text-emerald-600 hover:underline cursor-pointer"
+                        >
+                          Same as Calling
+                        </button>
+                      )}
+                    </div>
+                    <input
+                      type="tel"
+                      maxLength={10}
                       value={whatsappNo}
-                      onChange={(e) => setWhatsappNo(e.target.value)}
+                      onChange={(e) => setWhatsappNo(e.target.value.replace(/\D/g, "").slice(0, 10))}
                       placeholder="WhatsApp Mobile Number"
                       className="w-full px-3 py-2 rounded-xl border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-800 dark:text-white"
                     />
                   </div>
                   <div>
-                    <label className="text-[11px] font-bold text-blue-600 dark:text-blue-400 block mb-1">📞 Calling Mobile (प्राथमिक मोबाइल)</label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[11px] font-bold text-blue-600 dark:text-blue-400">📞 Calling Mobile (प्राथमिक मोबाइल)</label>
+                      <div className="flex items-center gap-1">
+                        {fatherPhone && phone !== fatherPhone && (
+                          <button
+                            type="button"
+                            onClick={() => setPhone(fatherPhone)}
+                            className="text-[10px] text-indigo-600 hover:underline cursor-pointer"
+                          >
+                            पिता
+                          </button>
+                        )}
+                        {motherPhone && phone !== motherPhone && (
+                          <button
+                            type="button"
+                            onClick={() => setPhone(motherPhone)}
+                            className="text-[10px] text-pink-600 hover:underline cursor-pointer"
+                          >
+                            माता
+                          </button>
+                        )}
+                      </div>
+                    </div>
                     <input
                       type="tel"
+                      maxLength={10}
                       value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
+                      onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 10))}
                       placeholder="10-digit Calling Mobile"
                       className="w-full px-3 py-2 rounded-xl border border-blue-300 dark:border-blue-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-800 dark:text-white"
                     />
@@ -1163,17 +1282,18 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-500 block mb-1">Medical / Allergy Note</label>
-                    <input
-                      type="text"
-                      value={medicalHistory}
-                      onChange={(e) => setMedicalHistory(e.target.value)}
-                      placeholder="Normal / Fit"
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
-                    />
-                  </div>
+                <div>
+                  <label className="text-[11px] font-bold text-slate-500 block mb-1">Medical / Allergy Note</label>
+                  <input
+                    type="text"
+                    value={medicalHistory}
+                    onChange={(e) => setMedicalHistory(e.target.value)}
+                    placeholder="Normal / Fit"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 p-3 bg-amber-50/60 dark:bg-amber-950/20 rounded-2xl border border-amber-200 dark:border-amber-900/40">
                   <div>
                     <label className="text-[11px] font-bold text-amber-700 dark:text-amber-300 block mb-1">Emergency Person</label>
                     <input
@@ -1188,8 +1308,9 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                     <label className="text-[11px] font-bold text-amber-700 dark:text-amber-300 block mb-1">Emergency Mobile</label>
                     <input
                       type="tel"
+                      maxLength={10}
                       value={emergencyPhone}
-                      onChange={(e) => setEmergencyPhone(e.target.value)}
+                      onChange={(e) => setEmergencyPhone(e.target.value.replace(/\D/g, "").slice(0, 10))}
                       placeholder="Emergency Phone"
                       className="w-full px-3 py-2 rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
                     />
@@ -1202,6 +1323,28 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                       onChange={(e) => setEmergencyRelation(e.target.value)}
                       placeholder="Uncle / Brother"
                       className="w-full px-3 py-2 rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
+                    />
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400">💬 Emergency WhatsApp</label>
+                      {emergencyPhone && emergencyWhatsapp !== emergencyPhone && (
+                        <button
+                          type="button"
+                          onClick={() => setEmergencyWhatsapp(emergencyPhone)}
+                          className="text-[10px] text-emerald-600 hover:underline cursor-pointer"
+                        >
+                          Same as Mobile
+                        </button>
+                      )}
+                    </div>
+                    <input
+                      type="tel"
+                      maxLength={10}
+                      value={emergencyWhatsapp}
+                      onChange={(e) => setEmergencyWhatsapp(e.target.value.replace(/\D/g, "").slice(0, 10))}
+                      placeholder="WhatsApp No."
+                      className="w-full px-3 py-2 rounded-xl border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
                     />
                   </div>
                 </div>

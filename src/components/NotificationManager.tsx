@@ -337,19 +337,16 @@ export const sendPushNotification = async (request: PushNotificationRequest) => 
   // 2. Also try native server push via /api/notifications/push (non-blocking)
   try {
     const idToken = await auth?.currentUser?.getIdToken().catch(() => null);
-    if (idToken) {
-      void fetch('/api/notifications/push', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-          ...request,
-          url: request.url || '/',
-        }),
-      }).catch(() => {});
-    }
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (idToken) headers.Authorization = `Bearer ${idToken}`;
+    void fetch('/api/notifications/push', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        ...request,
+        url: request.url || '/',
+      }),
+    }).catch(() => {});
   } catch (_) {}
 
   return true;
@@ -629,18 +626,48 @@ export const testDelayedBackgroundNotification = async (delaySeconds = 5): Promi
     return false;
   }
 
+  // 1. Immediately trigger in-app floating Heads-Up Pop-Up banner
+  try {
+    window.dispatchEvent(new CustomEvent('nst_foreground_notification', {
+      detail: {
+        title: '🎉 Notification Pop-Up Test!',
+        body: 'ऐप खुला रहने पर यह फ्लोटिंग बैनर स्क्रीन पर तुरंत दिखाई देगा!',
+        payload: { id: 'test_fg_' + Date.now(), type: 'TEST', url: '/' }
+      }
+    }));
+  } catch (_) {}
+
+  // 2. Ask backend server to send a true network push after delaySeconds.
+  // When user closes the app or switches to YouTube/WhatsApp, this network push wakes up
+  // Android OS / Chrome service worker and displays the heads-up pop-up banner on screen!
+  try {
+    const currentUid = auth?.currentUser?.uid || localStorage.getItem('nst_user_id') || '';
+    void fetch('/api/notifications/test-background', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        delaySeconds,
+        userId: currentUid,
+        title: '🔔 NSTA Pop-Up Alert Test',
+        body: 'Aap doosra app (YouTube/WhatsApp) chala rahe the tab bhi notification screen par pop-up hua! 🎉',
+      }),
+    }).catch(() => {});
+  } catch (_) {}
+
+  // 3. Also schedule service worker notification as client-side fallback
   try {
     if ('serviceWorker' in navigator) {
       const reg = await getFcmServiceWorkerRegistration();
       setTimeout(() => {
         reg.showNotification('🎉 Background Notification Test!', {
           body: 'Aapki app band hone par bhi notification bilkul sahi kaam kar raha hai! (Lock Screen Test Successful)',
-          icon: '/icons/icon-192.png',
+          icon: '/icons/icon-192.png?v=3',
           badge: '/icons/badge-monochrome.png?v=4',
-          tag: 'bg-test-' + Date.now(),
+          tag: 'bg-test-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
           renotify: true,
           requireInteraction: true,
-          vibrate: [200, 100, 200],
+          silent: false,
+          vibrate: [500, 200, 500, 200, 500],
           data: { url: '/' },
         } as any);
       }, Math.max(1, delaySeconds) * 1000);

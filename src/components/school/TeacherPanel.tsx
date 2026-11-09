@@ -30,7 +30,7 @@ import {
   Search, Phone, User, Calendar, Award, Sparkles, Filter, CheckCircle2,
   GraduationCap, LogOut, Home, Megaphone, Image as ImageIcon,
   Clock, Book, MessageSquare, Plus, X, Trash2, Check, Layers, IndianRupee, Wallet, Bell,
-  Youtube, RotateCw, Menu, Building2, AlertCircle, UserPlus
+  Youtube, RotateCw, Menu, Building2, AlertCircle, UserPlus, Crown, ArrowRight
 } from "lucide-react";
 import { TimetableManager } from "./TimetableManager";
 import { ClassroomVideoArchive } from "./ClassroomVideoArchive";
@@ -43,6 +43,7 @@ import { OnlineAdmissionManager } from "./OnlineAdmissionManager";
 import { getSavedSchoolLogo } from "./feeReceiptUtils";
 import { ClassCurriculumNotesManager } from "./ClassCurriculumNotesManager";
 import { isSchoolEliteCurriculum } from "../../school-types";
+import { GroupStudyModal } from "../GroupStudyModal";
 
 interface Props {
   schoolId: string;
@@ -50,6 +51,7 @@ interface Props {
   teacherName: string;
   onBack?: () => void;
   onLogout?: () => void;
+  onOpenPlatformContent?: () => void;
 }
 
 type TeacherView =
@@ -73,7 +75,8 @@ type TeacherView =
   | "parent_queries"
   | "referrals"
   | "messenger_broadcast"
-  | "online_admission";
+  | "online_admission"
+  | "school_study_room";
 
 export const COMMON_BOOK_PRESETS = [
   { name: "Hindi", icon: "📖", category: "Language" },
@@ -141,7 +144,26 @@ export const PRESET_BOOK_BUNDLES = [
   },
 ];
 
-export const TeacherPanel: React.FC<Props> = ({ schoolId, teacherId, teacherName, onBack, onLogout }) => {
+export const TeacherPanel: React.FC<Props> = ({
+  schoolId,
+  teacherId,
+  teacherName,
+  onBack,
+  onLogout,
+  onOpenPlatformContent
+}) => {
+  const handleExploreFullApp = () => {
+    try {
+      localStorage.setItem("nst_app_view_mode", "STUDENT");
+      window.dispatchEvent(new CustomEvent("nst_open_student_dashboard"));
+    } catch {}
+    if (onOpenPlatformContent) {
+      onOpenPlatformContent();
+    } else if (onBack) {
+      onBack();
+    }
+  };
+
   const [school, setSchool] = useState<School | null>(null);
   const [sessions, setSessions] = useState<SchoolSession[]>([]);
   const [activeSession, setActiveSession] = useState<SchoolSession | null>(null);
@@ -647,9 +669,10 @@ export const TeacherPanel: React.FC<Props> = ({ schoolId, teacherId, teacherName
         hoverBg: "hover:bg-cyan-950/40 hover:text-cyan-200",
       },
       items: [
-        { id: "class_notes_manager" as TeacherView, label: "Class 6-12 Notes Manager", icon: Sparkles, desc: "स्कूल नोट्स, MCQ, Video व PDF" },
+        { id: "class_notes_manager" as TeacherView, label: "Class 1-12 Notes Manager", icon: Sparkles, desc: "स्कूल नोट्स, MCQ, Video व PDF" },
         { id: "subjects" as TeacherView, label: "Smart Class & Subjects", icon: Play, desc: "स्मार्ट क्लास, पाठ व एमसीक्यू" },
         { id: "video_lectures" as TeacherView, label: "Class Video Archive", icon: Youtube, desc: "यूट्यूब वीडियो लेक्चर्स संग्रह" },
+        { id: "school_study_room" as TeacherView, label: "School Study Room", icon: Users, desc: "लाइव स्टडी रूम (School MCQs)" },
         { id: "library" as TeacherView, label: "Library Management", icon: Book, desc: "पुस्तकालय व पुस्तक विवरण" },
       ]
     },
@@ -830,6 +853,28 @@ export const TeacherPanel: React.FC<Props> = ({ schoolId, teacherId, teacherName
 
         {/* Bottom Sidebar Action Footer */}
         <div className="p-2.5 border-t border-slate-800 bg-slate-950/80 space-y-1.5 shrink-0">
+          {/* Explore Full NSTA Learning App */}
+          <button
+            type="button"
+            onClick={handleExploreFullApp}
+            className="w-full p-2 rounded-xl bg-gradient-to-r from-indigo-900/70 via-purple-900/60 to-slate-900 border border-indigo-500/40 hover:border-indigo-400 text-left transition flex items-center justify-between gap-2 shadow-md group cursor-pointer active:scale-95"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-7 h-7 rounded-lg bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center shrink-0 text-amber-300">
+                <Sparkles className="w-3.5 h-3.5 animate-spin" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-black text-white group-hover:text-indigo-200 truncate">
+                  Explore Full NSTA App
+                </p>
+                <p className="text-[9.5px] text-indigo-300/80 truncate">
+                  53+ Books, MCQs &amp; Study Room
+                </p>
+              </div>
+            </div>
+            <ArrowRight className="w-3.5 h-3.5 text-indigo-400 group-hover:translate-x-1 transition-transform shrink-0" />
+          </button>
+
           <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white/5 border border-white/10">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
             <span className="text-[10px] font-black text-emerald-300 truncate">
@@ -936,6 +981,31 @@ export const TeacherPanel: React.FC<Props> = ({ schoolId, teacherId, teacherName
 
           {/* Footer */}
           <div className="p-2.5 border-t border-slate-800 bg-slate-950/80 space-y-1.5 shrink-0">
+            {/* Explore Full NSTA Learning App */}
+            <button
+              type="button"
+              onClick={() => {
+                setIsSidebarOpen(false);
+                handleExploreFullApp();
+              }}
+              className="w-full p-2 rounded-xl bg-gradient-to-r from-indigo-900/70 via-purple-900/60 to-slate-900 border border-indigo-500/40 hover:border-indigo-400 text-left transition flex items-center justify-between gap-2 shadow-md group cursor-pointer active:scale-95"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-7 h-7 rounded-lg bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center shrink-0 text-amber-300">
+                  <Sparkles className="w-3.5 h-3.5 animate-spin" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-black text-white group-hover:text-indigo-200 truncate">
+                    Explore Full NSTA App
+                  </p>
+                  <p className="text-[9.5px] text-indigo-300/80 truncate">
+                    53+ Books, MCQs &amp; Study Room
+                  </p>
+                </div>
+              </div>
+              <ArrowRight className="w-3.5 h-3.5 text-indigo-400 group-hover:translate-x-1 transition-transform shrink-0" />
+            </button>
+
             <button
               type="button"
               onClick={handlePerformLogout}
@@ -1196,6 +1266,43 @@ export const TeacherPanel: React.FC<Props> = ({ schoolId, teacherId, teacherName
           currentTeacherName={teacherName}
           currentTeacherId={teacherId}
           onBack={() => setView("dashboard")}
+        />
+      );
+    }
+
+    // Class 6-12 Notes Manager
+    if (view === "class_notes_manager") {
+      return (
+        <ClassCurriculumNotesManager
+          schoolId={schoolId}
+          schoolName={school?.name}
+          isSuperAdmin={false}
+          isElite={isSchoolEliteCurriculum(school)}
+          onBack={() => setView("dashboard")}
+        />
+      );
+    }
+
+    // School Live Study Room
+    if (view === "school_study_room") {
+      return (
+        <GroupStudyModal
+          isOpen={true}
+          onClose={() => setView("dashboard")}
+          user={{
+            id: teacherId,
+            uid: teacherId,
+            name: teacherName,
+            role: "TEACHER",
+            isSchoolHost: true,
+            schoolId: school!.id,
+            schoolName: school?.name || "School",
+            subscriptionLevel: "ULTRA"
+          }}
+          tierTheme={{ primary: '#4f46e5' }}
+          isSchoolHost={true}
+          schoolId={school!.id}
+          schoolName={school?.name}
         />
       );
     }

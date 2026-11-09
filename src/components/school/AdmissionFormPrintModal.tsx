@@ -573,11 +573,15 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
   const fatherName = student?.fatherName || application?.fatherName || "—";
   const fatherOcc = student?.fatherOccupation || application?.fatherOccupation || "";
   const fatherAadhaar = student?.fatherAadhaar || application?.fatherAadhaar || "—";
+  const fatherPhone = student?.fatherPhone || application?.fatherPhone || "";
+  const fatherWhatsapp = student?.fatherWhatsapp || application?.fatherWhatsapp || "";
   const motherName = student?.motherName || application?.motherName || "—";
   const motherOcc = student?.motherOccupation || application?.motherOccupation || "";
   const motherAadhaar = student?.motherAadhaar || application?.motherAadhaar || "—";
-  const phone = student?.phone || application?.phone || "—";
-  const whatsappNo = student?.whatsappNo || application?.whatsappNo || "";
+  const motherPhone = student?.motherPhone || application?.motherPhone || "";
+  const motherWhatsapp = student?.motherWhatsapp || application?.motherWhatsapp || "";
+  const phone = student?.phone || application?.phone || fatherPhone || "—";
+  const whatsappNo = student?.whatsappNo || application?.whatsappNo || fatherWhatsapp || "";
   const email = student?.email || application?.email || "";
   const addressParts = [
     student?.address || application?.address || "",
@@ -611,6 +615,7 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
     (!isEmergContactNumeric && rawEmergContact ? rawEmergContact : "") ||
     "Guardian / Relative";
   const emergencyRelation = student?.emergencyRelation || application?.emergencyRelation || "Relative";
+  const emergencyWhatsapp = student?.emergencyWhatsapp || application?.emergencyWhatsapp || "";
   const identificationMark = student?.identificationMark || (student as any)?.idMark || application?.identificationMark || "—";
   const medicalCondition = student?.medicalHistory || (student as any)?.medicalNotes || application?.medicalHistory || (application as any)?.medicalNotes || "Normal / Fit";
   const religion = (student as any)?.religion || (application as any)?.religion || "Hindu";
@@ -1216,14 +1221,14 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
                     <td class="val" style="font-weight:900;color:#047857;font-size:8.8pt;">💬 ${escapeHtml(whatsappNo || phone || "—")}</td>
                   </tr>
                   <tr>
-                    <td class="lbl">Father's Name &amp; Edu.</td>
-                    <td class="val"><strong>${escapeHtml(fatherName)}</strong>${fatherQualification ? ` (${escapeHtml(fatherQualification)})` : ""}${fatherOcc ? ` • ${escapeHtml(fatherOcc)}` : ""}</td>
+                    <td class="lbl">Father's Name &amp; Contact</td>
+                    <td class="val"><strong>${escapeHtml(fatherName)}</strong>${fatherQualification ? ` (${escapeHtml(fatherQualification)})` : ""}${fatherOcc ? ` • ${escapeHtml(fatherOcc)}` : ""}${fatherPhone ? `<br/><span style="font-size:7.5pt;color:#1e3a8a;">📞 <strong>${escapeHtml(fatherPhone)}</strong></span>` : ""}${fatherWhatsapp ? ` <span style="font-size:7.5pt;color:#047857;">| 💬 WA: <strong>${escapeHtml(fatherWhatsapp)}</strong></span>` : ""}</td>
                     <td class="lbl">Father Aadhaar</td>
                     <td class="val" style="font-family:monospace;">${escapeHtml(maskAadhaar(fatherAadhaar))}</td>
                   </tr>
                   <tr>
-                    <td class="lbl">Mother's Name &amp; Edu.</td>
-                    <td class="val"><strong>${escapeHtml(motherName)}</strong>${motherQualification ? ` (${escapeHtml(motherQualification)})` : ""}${motherOcc ? ` • ${escapeHtml(motherOcc)}` : ""}</td>
+                    <td class="lbl">Mother's Name &amp; Contact</td>
+                    <td class="val"><strong>${escapeHtml(motherName)}</strong>${motherQualification ? ` (${escapeHtml(motherQualification)})` : ""}${motherOcc ? ` • ${escapeHtml(motherOcc)}` : ""}${motherPhone ? `<br/><span style="font-size:7.5pt;color:#be185d;">📱 <strong>${escapeHtml(motherPhone)}</strong></span>` : ""}${motherWhatsapp ? ` <span style="font-size:7.5pt;color:#047857;">| 💬 WA: <strong>${escapeHtml(motherWhatsapp)}</strong></span>` : ""}</td>
                     <td class="lbl">Mother Aadhaar</td>
                     <td class="val" style="font-family:monospace;">${escapeHtml(maskAadhaar(motherAadhaar))}</td>
                   </tr>
@@ -1233,7 +1238,7 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
                   </tr>
                   <tr>
                     <td class="lbl">Emergency Contact</td>
-                    <td class="val">${escapeHtml(emergencyPerson)}: <strong>${escapeHtml(emergencyPhone)}</strong> (${escapeHtml(emergencyRelation)})</td>
+                    <td class="val">${escapeHtml(emergencyPerson)}: <strong>${escapeHtml(emergencyPhone)}</strong> (${escapeHtml(emergencyRelation)})${emergencyWhatsapp ? ` | <span style="color:#047857;">💬 WA: <strong>${escapeHtml(emergencyWhatsapp)}</strong></span>` : ""}</td>
                     <td class="lbl">Medical &amp; Fitness</td>
                     <td class="val">${escapeHtml(childSensitivityRemarks || medicalCondition || "Normal / Fit")}</td>
                   </tr>
@@ -1661,10 +1666,10 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
             <table class="bio-table" style="font-size:7.8pt;">
               <tbody>
                 <tr>
-                  <td class="lbl">Father's Name</td>
-                  <td class="val" style="font-weight:bold;">${!isBlankForm ? escapeHtml(fatherName) : "&nbsp;"}</td>
-                  <td class="lbl">Father Qualification</td>
-                  <td class="val">${!isBlankForm ? escapeHtml(fatherQualification || "Matric / Graduate") : "&nbsp;"}</td>
+                  <td class="lbl">Father's Name &amp; Phone</td>
+                  <td class="val" style="font-weight:bold;">${!isBlankForm ? `${escapeHtml(fatherName)} ${fatherPhone ? `<br/><span style="font-size:7.5pt;color:#1e3a8a;">📞 ${escapeHtml(fatherPhone)}</span>` : ""}` : "&nbsp;"}</td>
+                  <td class="lbl">Father Edu. &amp; WhatsApp</td>
+                  <td class="val">${!isBlankForm ? `${escapeHtml(fatherQualification || "Matric / Graduate")} ${fatherWhatsapp ? `<br/><span style="font-size:7.5pt;color:#047857;">💬 WA: ${escapeHtml(fatherWhatsapp)}</span>` : ""}` : "&nbsp;"}</td>
                 </tr>
                 <tr>
                   <td class="lbl">Father Occupation &amp; Income</td>
@@ -1673,14 +1678,14 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
                   <td class="val" style="font-family:monospace;">${!isBlankForm ? escapeHtml(maskAadhaar(fatherAadhaar)) : "&nbsp;"}</td>
                 </tr>
                 <tr>
-                  <td class="lbl">Mother's Name</td>
-                  <td class="val" style="font-weight:bold;">${!isBlankForm ? escapeHtml(motherName) : "&nbsp;"}</td>
-                  <td class="lbl">Mother Qualification</td>
-                  <td class="val">${!isBlankForm ? escapeHtml(motherQualification || "Matric / Intermediate") : "&nbsp;"}</td>
+                  <td class="lbl">Mother's Name &amp; Phone</td>
+                  <td class="val" style="font-weight:bold;">${!isBlankForm ? `${escapeHtml(motherName)} ${motherPhone ? `<br/><span style="font-size:7.5pt;color:#be185d;">📱 ${escapeHtml(motherPhone)}</span>` : ""}` : "&nbsp;"}</td>
+                  <td class="lbl">Mother Edu. &amp; WhatsApp</td>
+                  <td class="val">${!isBlankForm ? `${escapeHtml(motherQualification || "Matric / Intermediate")} ${motherWhatsapp ? `<br/><span style="font-size:7.5pt;color:#047857;">💬 WA: ${escapeHtml(motherWhatsapp)}</span>` : ""}` : "&nbsp;"}</td>
                 </tr>
                 <tr>
-                  <td class="lbl">Mother Occupation &amp; WhatsApp</td>
-                  <td class="val">${!isBlankForm ? `${escapeHtml(motherOcc || "—")} | <strong style="font-weight:900;color:#047857;font-size:8.8pt;">💬 ${escapeHtml(whatsappNo || phone)}</strong>` : "&nbsp;"}</td>
+                  <td class="lbl">Mother Occupation &amp; Calling</td>
+                  <td class="val">${!isBlankForm ? `${escapeHtml(motherOcc || "—")} | Primary: 📞 ${escapeHtml(phone)} | WA: 💬 ${escapeHtml(whatsappNo || phone)}` : "&nbsp;"}</td>
                   <td class="lbl">Mother's Aadhaar (Masked)</td>
                   <td class="val" style="font-family:monospace;">${!isBlankForm ? escapeHtml(maskAadhaar(motherAadhaar)) : "&nbsp;"}</td>
                 </tr>
@@ -1695,7 +1700,7 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
                 </tr>
                 <tr>
                   <td class="lbl">Emergency Contact &amp; Guardian</td>
-                  <td class="val" colspan="3">${!isBlankForm ? `${escapeHtml(emergencyPerson)} — Mobile: <strong style="color:#b91c1c;font-size:8.8pt;">${escapeHtml(emergencyPhone)}</strong> (${escapeHtml(emergencyRelation)}) | Local Guardian: ${escapeHtml(guardianName)}` : "&nbsp;"}</td>
+                  <td class="val" colspan="3">${!isBlankForm ? `${escapeHtml(emergencyPerson)} — Mobile: <strong style="color:#b91c1c;font-size:8.8pt;">${escapeHtml(emergencyPhone)}</strong> (${escapeHtml(emergencyRelation)}) ${emergencyWhatsapp ? `| <strong style="color:#047857;font-size:8.8pt;">💬 WA: ${escapeHtml(emergencyWhatsapp)}</strong>` : ""} | Local Guardian: ${escapeHtml(guardianName)}` : "&nbsp;"}</td>
                 </tr>
               </tbody>
             </table>

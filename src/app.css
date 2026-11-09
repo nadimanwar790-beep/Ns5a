@@ -3114,12 +3114,11 @@ model-viewer {
 /* ── UNIFIED SUBJECT CARDS — White inside, tier color on border/left accent ── */
 .nst-subject-card {
   transition: all 0.18s ease;
-  background: var(--nst-color-surface);
-  border-width: 1.5px;
-  border-style: solid;
+  background: var(--nst-color-surface, #ffffff);
+  border: 1.5px solid #cbd5e1;
   border-left-width: 4px;
-  border-radius: var(--nst-r-xl);
-  box-shadow: var(--nst-shadow-sm);
+  border-radius: var(--nst-r-xl, 16px);
+  box-shadow: var(--nst-shadow-sm, 0 1px 3px rgba(0,0,0,0.06));
 }
 
 /* FREE — sky blue accent */

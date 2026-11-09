@@ -286,6 +286,13 @@ export const getSubjectsList = (classLevel: string, stream: string | null, board
               pool.geography,
               pool.polity
           );
+      } else if (['1', '2', '3', '4', '5'].includes(classLevel)) {
+          juniorSubjects.push(
+              pool.science || { id: 'science', name: 'EVS / Science', icon: 'science', color: 'bg-white text-slate-700' },
+              { id: 'hindi', name: 'Hindi (हिंदी)', icon: 'book', color: 'bg-white text-slate-700' },
+              { id: 'english', name: 'English', icon: 'book', color: 'bg-white text-slate-700' },
+              pool.sst || { id: 'sst', name: 'Social Studies', icon: 'geo', color: 'bg-white text-slate-700' }
+          );
       } else {
           juniorSubjects.push(pool.science, pool.sst);
       }

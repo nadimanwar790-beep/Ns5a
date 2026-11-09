@@ -89,6 +89,7 @@ interface Props {
   accountantId?: string;
   onBack?: () => void;
   onLogout?: () => void;
+  onOpenPlatformContent?: () => void;
 }
 
 type AccountantTab =
@@ -119,8 +120,21 @@ export const AccountantPanel: React.FC<Props> = ({
   schoolId,
   accountantId,
   onBack,
-  onLogout
+  onLogout,
+  onOpenPlatformContent
 }) => {
+  const handleExploreFullApp = () => {
+    try {
+      localStorage.setItem("nst_app_view_mode", "STUDENT");
+      window.dispatchEvent(new CustomEvent("nst_open_student_dashboard"));
+    } catch {}
+    if (onOpenPlatformContent) {
+      onOpenPlatformContent();
+    } else if (onBack) {
+      onBack();
+    }
+  };
+
   const [activeTab, setActiveTab] = useState<AccountantTab>("home");
   const [school, setSchool] = useState<School | null>(null);
   const [classes, setClasses] = useState<SchoolClass[]>([]);
@@ -723,6 +737,28 @@ export const AccountantPanel: React.FC<Props> = ({
             </div>
           )}
 
+          {/* Explore Full NSTA Learning App */}
+          <button
+            type="button"
+            onClick={handleExploreFullApp}
+            className="w-full p-2.5 rounded-xl bg-gradient-to-r from-indigo-900/70 via-purple-900/60 to-slate-900 border border-indigo-500/40 hover:border-indigo-400 text-left transition flex items-center justify-between gap-2 shadow-md group cursor-pointer active:scale-95"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-7 h-7 rounded-lg bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center shrink-0 text-amber-300">
+                <Sparkles className="w-3.5 h-3.5 animate-spin" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-black text-white group-hover:text-indigo-200 truncate">
+                  Explore Full NSTA App
+                </p>
+                <p className="text-[9.5px] text-indigo-300/80 truncate">
+                  53+ Books, MCQs &amp; Study Room
+                </p>
+              </div>
+            </div>
+            <ArrowRight className="w-3.5 h-3.5 text-indigo-400 group-hover:translate-x-1 transition-transform shrink-0" />
+          </button>
+
           {/* Security & Boundary Notice */}
           <div className="mt-auto p-3 rounded-xl bg-slate-900 border border-slate-800 text-[11px] text-slate-400 space-y-1">
             <div className="flex items-center gap-1.5 text-emerald-400 font-bold">
@@ -894,6 +930,33 @@ export const AccountantPanel: React.FC<Props> = ({
                     <span>Bus & Transport Dues</span>
                   </button>
                 )}
+
+                {/* Explore Full NSTA Learning App */}
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsMobileMenuOpen(false);
+                      handleExploreFullApp();
+                    }}
+                    className="w-full p-2.5 rounded-xl bg-gradient-to-r from-indigo-900/70 via-purple-900/60 to-slate-900 border border-indigo-500/40 hover:border-indigo-400 text-left transition flex items-center justify-between gap-2 shadow-md group cursor-pointer active:scale-95"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-7 h-7 rounded-lg bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center shrink-0 text-amber-300">
+                        <Sparkles className="w-3.5 h-3.5 animate-spin" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-black text-white group-hover:text-indigo-200 truncate">
+                          Explore Full NSTA App
+                        </p>
+                        <p className="text-[9.5px] text-indigo-300/80 truncate">
+                          53+ Books, MCQs &amp; Study Room
+                        </p>
+                      </div>
+                    </div>
+                    <ArrowRight className="w-3.5 h-3.5 text-indigo-400 group-hover:translate-x-1 transition-transform shrink-0" />
+                  </button>
+                </div>
               </div>
             </div>
           </div>

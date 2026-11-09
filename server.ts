@@ -154,7 +154,7 @@ async function dispatchFcmToUsers(
   const cleanSet = new Set(recipientIds.map((id) => String(id).trim().replace(/[.#$[\]/]/g, "_")));
   const rawSet = new Set(recipientIds.map((id) => String(id).trim()));
 
-  const targets: string[] = [];
+  const tokenToKeysMap = new Map<string, string[]>();
   for (const [key, entry] of Object.entries(allTokens)) {
     if (!entry?.token) continue;
     if (filter?.schoolId && entry.schoolId && entry.schoolId !== filter.schoolId) continue;
@@ -171,64 +171,103 @@ async function dispatchFcmToUsers(
       (entryStudentId && (rawSet.has(entryStudentId) || cleanSet.has(entryStudentId.replace(/[.#$[\]/]/g, "_"))));
 
     if (isMatch) {
-      targets.push(entry.token);
+      const keys = tokenToKeysMap.get(entry.token) || [];
+      keys.push(key);
+      tokenToKeysMap.set(entry.token, keys);
     }
   }
 
   let sent = 0;
   await Promise.allSettled(
-    Array.from(new Set(targets)).map(async (fcmToken) => {
-      const res = await fetch(
-        `https://fcm.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/messages:send`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            message: {
-              token: fcmToken,
-              notification: {
-                title: payload.title,
-                body: payload.body,
-              },
-              data: {
-                title: payload.title,
-                body: payload.body,
-                type: String(payload.type || "DEFAULT"),
-                url: String(payload.url || "/"),
-                icon: String(payload.icon || "/icons/icon-192.png?v=3"),
-                urgent: "1",
-              },
-              android: {
-                priority: "HIGH",
-              },
-              webpush: {
-                headers: {
-                  Urgency: "high",
-                  TTL: "604800",
-                },
+    Array.from(tokenToKeysMap.entries()).map(async ([fcmToken, keys]) => {
+      try {
+        const res = await fetch(
+          `https://fcm.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/messages:send`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              message: {
+                token: fcmToken,
                 notification: {
                   title: payload.title,
                   body: payload.body,
-                  icon: payload.icon || "/icons/icon-192.png?v=3",
-                  badge: "/icons/icon-192.png?v=3",
-                  requireInteraction: true,
                 },
-                fcm_options: {
-                  link: payload.url || "/",
+                data: {
+                  title: payload.title,
+                  body: payload.body,
+                  type: String(payload.type || "DEFAULT"),
+                  url: String(payload.url || "/"),
+                  icon: String(payload.icon || "/icons/icon-192.png?v=3"),
+                  urgent: "1",
+                },
+                android: {
+                  priority: "HIGH",
+                  notification: {
+                    channel_id: "default",
+                    notification_priority: "PRIORITY_MAX",
+                    default_sound: true,
+                    default_vibrate_timings: true,
+                    visibility: "PUBLIC",
+                  },
+                },
+                webpush: {
+                  headers: {
+                    Urgency: "high",
+                    TTL: "604800",
+                  },
+                  notification: {
+                    title: payload.title,
+                    body: payload.body,
+                    icon: payload.icon || "/icons/icon-192.png?v=3",
+                    badge: "/icons/badge-monochrome.png?v=4",
+                    requireInteraction: true,
+                    silent: false,
+                    vibrate: [500, 200, 500, 200, 500],
+                    renotify: true,
+                    tag: `nsta-alert-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                    timestamp: Date.now(),
+                  },
+                  fcm_options: {
+                    link: payload.url || "/",
+                  },
                 },
               },
-            },
-          }),
+            }),
+          }
+        );
+        if (res.ok) {
+          sent++;
+        } else {
+          const errText = await res.text().catch(() => "");
+          const isDeadToken =
+            res.status === 404 ||
+            res.status === 410 ||
+            res.status === 403 ||
+            res.status === 400 ||
+            errText.includes("UNREGISTERED") ||
+            errText.includes("THIRD_PARTY_PERMISSION_DENIED") ||
+            errText.includes("SENDER_ID_MISMATCH") ||
+            errText.includes("INVALID_ARGUMENT") ||
+            errText.includes("NOT_FOUND") ||
+            errText.includes("Device unregistered") ||
+            errText.includes("NotRegistered");
+
+          if (isDeadToken) {
+            // Automatically prune dead/unregistered/expired tokens from RTDB so subsequent dispatches succeed cleanly
+            console.info("[Server FCM] Auto-pruning invalid/unregistered token for keys:", keys);
+            await Promise.allSettled(
+              keys.map((k) => rtdbDelete(`fcm_tokens/${k}`))
+            );
+          } else {
+            console.warn("[Server FCM Send Error]", res.status, errText);
+          }
         }
-      );
-      if (res.ok) {
-        sent++;
-      } else {
-        const errText = await res.text().catch(() => "");
-        console.warn("[Server FCM Send Error]", res.status, errText);
+      } catch (err) {
+        console.info("[Server FCM Dispatch Warning]", err);
       }
     })
   );
@@ -478,11 +517,13 @@ async function dispatchWebPush(
           title: payload.title,
           body: payload.body,
           icon: "/icons/icon-192.png?v=3",
-          badge: "/icons/icon-192.png?v=3",
+          badge: "/icons/badge-monochrome.png?v=4",
           silent: false,
           renotify: true,
           requireInteraction: true,
-          vibrate: [300, 150, 300, 150, 300],
+          vibrate: [500, 200, 500, 200, 500],
+          tag: `nsta-alert-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          timestamp: Date.now(),
         },
         data: {
           title: payload.title,
@@ -898,6 +939,76 @@ async function startServer() {
       delivered += fcmDelivered;
     }
     res.json({ ok: true, delivered });
+  });
+
+  // Dedicated Background Test endpoint that schedules push from server after delaySeconds
+  // This ensures that when the user switches to another app or locks the phone,
+  // the push is sent by the server over the internet, waking up Android OS over other apps.
+  app.post("/api/notifications/test-background", async (req, res) => {
+    const { delaySeconds = 5, userId, title, body } = req.body || {};
+    const delay = Math.max(1, Math.min(60, Number(delaySeconds) || 5));
+    const testTitle = title || "🔔 NSTA Background Notification Test";
+    const testBody = body || "Aap doosra app chala rahe the tab bhi notification screen par pop-up hua! (Test Successful)";
+
+    res.json({ ok: true, scheduledInSeconds: delay, message: `Server will push in ${delay} seconds.` });
+
+    setTimeout(async () => {
+      let delivered = 0;
+      const targetUserId = userId ? String(userId).trim() : "";
+
+      // Ensure remote subscriptions are loaded
+      if (subscriptionsMap.size === 0) {
+        await hydrateRemotePushEngine().catch(() => {});
+      }
+
+      for (const record of subscriptionsMap.values()) {
+        const isMatch =
+          !targetUserId ||
+          targetUserId === "all" ||
+          targetUserId === "guest" ||
+          record.userId === targetUserId ||
+          record.id === targetUserId ||
+          (record.students || []).some((s) => s.id === targetUserId);
+
+        if (isMatch) {
+          const ok = await dispatchWebPush(record, {
+            title: testTitle,
+            body: testBody,
+            type: "TEST",
+            url: "/",
+            urgent: true,
+          });
+          if (ok) delivered++;
+        }
+      }
+
+      // If targeted user had no exact match, broadcast test push to all known active subscriptions
+      if (delivered === 0 && subscriptionsMap.size > 0) {
+        for (const record of subscriptionsMap.values()) {
+          const ok = await dispatchWebPush(record, {
+            title: testTitle,
+            body: testBody,
+            type: "TEST",
+            url: "/",
+            urgent: true,
+          });
+          if (ok) delivered++;
+        }
+      }
+
+      const fcmDelivered = await dispatchFcmToUsers(
+        targetUserId ? [targetUserId] : [],
+        !targetUserId || delivered === 0,
+        {
+          title: testTitle,
+          body: testBody,
+          type: "TEST",
+          url: "/",
+        }
+      );
+      delivered += fcmDelivered;
+      console.log(`[Server] Background test push delivered to ${delivered} endpoints after ${delay}s.`);
+    }, delay * 1000);
   });
 
   // Digital Asset Links for Android App / Trusted Web Activity (TWA) verification

@@ -4,12 +4,12 @@ import {
   subscribeToAllSchools, saveSchool, updateSchool, generateId, setSchoolLockCode,
   assignSchoolAdminByEmail, checkEmailSchoolAllotment, lockSchool, deleteSchool
 } from "../../school-firebase";
-import type { School, SchoolSubscription } from "../../school-types";
+import { isSchoolEliteCurriculum, type School, type SchoolSubscription } from "../../school-types";
 import { SchoolAdminPanel } from "./SchoolAdminPanel";
 import {
   School as SchoolIcon, Plus, Pause, Play,
   Users, IndianRupee, Settings, X, Zap, Tag, Lock, Eye, EyeOff, Shield, Trash2, Unlock, ArrowLeft,
-  CreditCard, CheckCircle, AlertCircle, Clock, ChevronRight, FileText, StickyNote, Calendar
+  CreditCard, CheckCircle, AlertCircle, Clock, ChevronRight, FileText, StickyNote, Calendar, Crown
 } from "lucide-react";
 
 interface Props {
@@ -60,14 +60,18 @@ const SubEditor = ({
 }) => {
   const currentTier = value.tier || (value.maxStudents === 200 ? "starter_200" : value.maxStudents === 500 ? "growth_500" : "enterprise_2000");
 
+  const isEliteActive = Boolean(value.isElite || value.customCurriculumEnabled);
   const selectTier = (tier: "starter_200" | "growth_500" | "enterprise_2000") => {
+    const mult = isEliteActive ? 2 : 1;
     if (tier === "starter_200") {
       onChange({
         ...value,
         tier: "starter_200",
         maxStudents: 200,
         maxTeachers: 10,
-        monthlyAmount: 999,
+        monthlyAmount: 999 * mult,
+        isElite: isEliteActive,
+        customCurriculumEnabled: isEliteActive,
         reading: true,
         writing: true,
         pdf: true,
@@ -80,7 +84,9 @@ const SubEditor = ({
         tier: "growth_500",
         maxStudents: 500,
         maxTeachers: 25,
-        monthlyAmount: 1999,
+        monthlyAmount: 1999 * mult,
+        isElite: isEliteActive,
+        customCurriculumEnabled: isEliteActive,
         reading: true,
         writing: true,
         pdf: true,
@@ -93,7 +99,9 @@ const SubEditor = ({
         tier: "enterprise_2000",
         maxStudents: 2000,
         maxTeachers: 9999,
-        monthlyAmount: 3999,
+        monthlyAmount: 3999 * mult,
+        isElite: isEliteActive,
+        customCurriculumEnabled: isEliteActive,
         reading: true,
         writing: true,
         pdf: true,
@@ -180,6 +188,43 @@ const SubEditor = ({
           <li><strong>Included Powers:</strong> {currentTier === "starter_200" || currentTier === "lite" ? "Student Management, Fees & Due Slips, Daily Attendance" : currentTier === "growth_500" ? "Everything in Tier 1 + Sub-Admins, ID Cards & Admit Card Hub" : "Everything in Tier 2 + Staff HRM Payroll, Online Admissions & School Website"}</li>
         </ul>
       </div>
+
+      {/* Elite Edition 2x Toggle */}
+      <div className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${
+        value.isElite
+          ? "bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-700"
+          : "bg-slate-50 dark:bg-slate-700/40 border-slate-200 dark:border-slate-600"
+      }`}>
+        <div className="flex-1">
+          <p className="text-xs font-black text-slate-800 dark:text-white flex items-center gap-1.5">
+            <Crown size={14} className="text-amber-500" />
+            Elite Edition (2× Price) — Custom Curriculum &amp; Notes
+          </p>
+          <p className="text-[11px] text-slate-500 dark:text-slate-300 mt-0.5">
+            School ko Class 1-12 Notes, Video, Audio, PDF &amp; MCQ Manager aur Custom Study Rooms ka access dega.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            const nextElite = !value.isElite;
+            const baseRate = currentTier === "starter_200" || currentTier === "lite" ? 999 : currentTier === "growth_500" ? 1999 : 3999;
+            onChange({
+              ...value,
+              isElite: nextElite,
+              customCurriculumEnabled: nextElite,
+              monthlyAmount: nextElite ? baseRate * 2 : baseRate
+            });
+          }}
+          className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
+            value.isElite
+              ? "bg-amber-500 text-slate-950 shadow-sm"
+              : "bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-200"
+          }`}
+        >
+          {value.isElite ? "👑 Elite (2× Active)" : "Standard (1×)"}
+        </button>
+      </div>
     </div>
   );
 };
@@ -226,12 +271,22 @@ const PlanAssigner: React.FC<{
     if (st === "starter_200" || st === "growth_500" || st === "enterprise_2000") return st;
     return "enterprise_2000";
   });
+  const [isElite, setIsElite] = useState<boolean>(() => {
+    return Boolean(
+      school?.subscription?.isElite ||
+      (school as any)?.isElite ||
+      school?.subscription?.customCurriculumEnabled ||
+      (school as any)?.customCurriculumEnabled
+    );
+  });
   const [duration, setDur]    = useState<PlanDur>("1_year");
   const [saving, setSaving]   = useState(false);
   const [success, setSuccess] = useState(false);
 
-  const price   = PLAN_PRICES[tier][duration] || 0;
-  const saving_ = PLAN_SAVINGS[tier][duration] || 0;
+  const rawBasePrice  = PLAN_PRICES[tier][duration] || 0;
+  const rawBaseSaving = PLAN_SAVINGS[tier][duration] || 0;
+  const price   = isElite ? rawBasePrice * 2 : rawBasePrice;
+  const saving_ = isElite ? rawBaseSaving * 2 : rawBaseSaving;
 
   const computeExpiry = (dur: PlanDur): string => {
     if (dur === "lifetime") {
@@ -250,30 +305,43 @@ const PlanAssigner: React.FC<{
     const expiresAt = computeExpiry(duration);
     const maxStudents = tier === "starter_200" ? 200 : tier === "growth_500" ? 500 : 2000;
     const maxTeachers = tier === "starter_200" ? 10 : tier === "growth_500" ? 25 : 9999;
+    const baseMonthly = PLAN_PRICES[tier]["monthly"] || 999;
+    const monthlyAmount = isElite ? baseMonthly * 2 : baseMonthly;
+
     const newSub: SchoolSubscription = {
       ...school.subscription,
       tier,
       maxStudents,
       maxTeachers,
       status:        "active",
+      isElite,
+      customCurriculumEnabled: isElite,
       expiresAt,
       paidUntil:     expiresAt,
       reading:       true,
       writing:       true,
       pdf:           true,
       mcq:           true,
-      monthlyAmount: price,
+      monthlyAmount,
       planDuration:  duration,
       assignedAt:    new Date().toISOString(),
       lastPaidDate:  new Date().toISOString(),
       lastPaidAmount: price,
+      paymentNotes:  isElite ? "Elite Plan (2× Price — Class 1-12 Notes, MCQ, PDF & Video Manager Active)" : "Standard Plan Active",
     };
-    await updateSchool(school.id, { subscription: newSub });
+    await updateSchool(school.id, {
+      subscription: newSub,
+      isElite,
+      customCurriculumEnabled: isElite,
+      active: true,
+    });
     onAssigned(newSub);
     setSaving(false);
     setSuccess(true);
     setTimeout(() => setSuccess(false), 3000);
   };
+
+  const tierLabel = tier === "starter_200" ? "Basic (200)" : tier === "growth_500" ? "Standard (500)" : "Pro (2000)";
 
   return (
     <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm space-y-4">
@@ -323,31 +391,97 @@ const PlanAssigner: React.FC<{
           : "📦 Basic Plan (200 Students): 10 Teachers • Core Management, Fees & Due Register"}
       </div>
 
+      {/* ── 👑 ELITE PLAN (2× PRICE) EDITION SELECTOR ───────────────────── */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between text-xs">
+          <span className="font-bold text-slate-700 dark:text-slate-200">Plan Edition Chunein:</span>
+          {isElite && (
+            <span className="bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 text-[10px] font-black px-2 py-0.5 rounded-full flex items-center gap-1">
+              <Crown size={11} /> 2× Price Active
+            </span>
+          )}
+        </div>
+        <div className="bg-slate-100 dark:bg-slate-700/60 p-1 rounded-xl grid grid-cols-2 gap-1.5">
+          <button
+            type="button"
+            onClick={() => setIsElite(false)}
+            className={`py-2 px-3 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+              !isElite
+                ? "bg-white dark:bg-slate-800 text-slate-800 dark:text-white shadow-xs"
+                : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-200"
+            }`}
+          >
+            <Shield className="w-3.5 h-3.5" />
+            Standard Plan (1×)
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsElite(true)}
+            className={`py-2 px-3 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+              isElite
+                ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-xs"
+                : "text-amber-600 dark:text-amber-400 hover:text-amber-700"
+            }`}
+          >
+            <Crown className="w-3.5 h-3.5" />
+            👑 Elite Plan (2× Price)
+          </button>
+        </div>
+
+        {isElite && (
+          <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700 rounded-xl p-3 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2.5">
+            <Crown className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-black text-amber-900 dark:text-amber-100">👑 Elite Curriculum Feature Unlocked:</p>
+              <p className="text-[11px] text-amber-800 dark:text-amber-300 mt-0.5 leading-relaxed">
+                School ke pass <strong>Class 1 se 12</strong> tak ke Subject Notes, Coaching MCQs, Video Lectures, PDF Notes add karne ka exclusive manager aur Custom School Study Rooms ka full power active rahega.
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Duration selector */}
       <div className="grid grid-cols-2 gap-2">
         {(["1_year", "monthly"] as PlanDur[]).map(d => {
-          const p = PLAN_PRICES[tier][d] || 0;
-          const s = PLAN_SAVINGS[tier][d] || 0;
+          const rawP = PLAN_PRICES[tier][d] || 0;
+          const p = isElite ? rawP * 2 : rawP;
+          const rawS = PLAN_SAVINGS[tier][d] || 0;
+          const s = isElite ? rawS * 2 : rawS;
           return (
             <button
               key={d}
               onClick={() => setDur(d)}
               className={`flex flex-col items-center gap-1 p-2.5 rounded-xl border-2 transition-all active:scale-95 cursor-pointer text-center ${
                 duration === d
-                  ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30"
+                  ? isElite
+                    ? "border-amber-500 bg-amber-50/70 dark:bg-amber-950/30"
+                    : "border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30"
                   : "border-slate-200 dark:border-slate-600 hover:border-slate-300"
               }`}
             >
-              <span className={`text-[11px] font-black uppercase ${duration === d ? "text-indigo-700 dark:text-indigo-300" : "text-slate-500 dark:text-slate-400"}`}>
+              <span className={`text-[11px] font-black uppercase ${
+                duration === d
+                  ? isElite
+                    ? "text-amber-700 dark:text-amber-300"
+                    : "text-indigo-700 dark:text-indigo-300"
+                  : "text-slate-500 dark:text-slate-400"
+              }`}>
                 {d === "1_year" ? "📅 " : "🗓️ "}
                 {DURATION_LABEL[d]}
               </span>
-              <span className={`text-xs font-black ${duration === d ? "text-indigo-600 dark:text-indigo-400" : "text-slate-600 dark:text-slate-300"}`}>
-                ₹{p.toLocaleString()}
+              <span className={`text-xs font-black ${
+                duration === d
+                  ? isElite
+                    ? "text-amber-700 dark:text-amber-300"
+                    : "text-indigo-600 dark:text-indigo-400"
+                  : "text-slate-600 dark:text-slate-300"
+              }`}>
+                ₹{p.toLocaleString("en-IN")}
               </span>
               {s > 0 && (
                 <span className="text-[9px] bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300 px-1 rounded font-bold">
-                  Save ₹{s.toLocaleString()}
+                  Save ₹{s.toLocaleString("en-IN")}
                 </span>
               )}
             </button>
@@ -360,15 +494,20 @@ const PlanAssigner: React.FC<{
         <div>
           <p className="text-xs text-slate-400">Plan</p>
           <p className="text-sm font-black text-slate-800 dark:text-white">
-            {(tier === "starter_200" ? "Basic Plan (200 Std)" : tier === "growth_500" ? "Standard Plan (500 Std)" : "Pro Plan (2000 Std)")} · {DURATION_LABEL[duration]}
+            {tierLabel} Plan · {isElite ? "👑 Elite Edition (2×)" : "Standard Plan"} · {DURATION_LABEL[duration]}
           </p>
           <p className="text-[10px] text-slate-400 mt-0.5">
             Valid till: {computeExpiry(duration)}
           </p>
+          <p className={`text-[10px] font-bold mt-1 ${isElite ? "text-amber-600 dark:text-amber-400" : "text-slate-500"}`}>
+            {isElite ? "👑 Class 1-12 Notes, Video, PDF & MCQ Manager Included" : "Standard Student ERP & School Suite"}
+          </p>
         </div>
         <div className="text-right">
-          <p className="text-xl font-black text-indigo-600 dark:text-indigo-400">₹{price.toLocaleString()}</p>
-          {saving_ > 0 && <p className="text-[10px] text-green-600 font-bold">Save ₹{saving_}</p>}
+          <p className={`text-xl font-black ${isElite ? "text-amber-600 dark:text-amber-400" : "text-indigo-600 dark:text-indigo-400"}`}>
+            ₹{price.toLocaleString("en-IN")}
+          </p>
+          {saving_ > 0 && <p className="text-[10px] text-green-600 font-bold">Save ₹{saving_.toLocaleString("en-IN")}</p>}
         </div>
       </div>
 
@@ -381,14 +520,20 @@ const PlanAssigner: React.FC<{
       <button
         onClick={handleAssign}
         disabled={saving}
-        className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white rounded-xl text-sm font-black flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
+        className={`w-full py-3.5 disabled:opacity-60 text-white rounded-xl text-sm font-black flex items-center justify-center gap-2 active:scale-[0.98] transition-all cursor-pointer shadow-md ${
+          isElite
+            ? "bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 shadow-amber-500/20"
+            : "bg-indigo-600 hover:bg-indigo-700 shadow-indigo-500/20"
+        }`}
       >
         {saving ? (
           <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+        ) : isElite ? (
+          <Crown className="w-4 h-4" />
         ) : (
           <Zap className="w-4 h-4" />
         )}
-        {saving ? "Assigning..." : `Assign ${tier === "pro" ? "Pro" : "Lite"} Plan`}
+        {saving ? "Assigning Plan..." : `Assign ${tierLabel} ${isElite ? "👑 Elite Plan (2×)" : "Plan"} (₹${price.toLocaleString("en-IN")})`}
       </button>
     </div>
   );
@@ -841,9 +986,24 @@ export const SuperAdminPanel: React.FC<Props> = ({ adminUid, onBack }) => {
   };
 
   const updateSubscription = async (school: School, newSub: SchoolSubscription) => {
-    const updated = { ...newSub, monthlyAmount: calcAmount(newSub) };
-    await updateSchool(school.id, { subscription: updated });
-    setSelectedSchool({ ...school, subscription: updated });
+    const isElite = Boolean(newSub.isElite || newSub.customCurriculumEnabled);
+    const updated = {
+      ...newSub,
+      isElite,
+      customCurriculumEnabled: isElite,
+      monthlyAmount: calcAmount(newSub)
+    };
+    await updateSchool(school.id, {
+      subscription: updated,
+      isElite,
+      customCurriculumEnabled: isElite,
+    });
+    setSelectedSchool({
+      ...school,
+      subscription: updated,
+      isElite,
+      customCurriculumEnabled: isElite,
+    });
   };
 
   const handleToggleLock = async () => {
@@ -855,8 +1015,10 @@ export const SuperAdminPanel: React.FC<Props> = ({ adminUid, onBack }) => {
 
   const handleDelete = async () => {
     if (!selectedSchool) return;
+    const targetId = selectedSchool.id;
     setDeleting(true);
-    await deleteSchool(selectedSchool.id);
+    await deleteSchool(targetId);
+    setSchools(prev => prev.filter(s => s.id !== targetId));
     setDeleting(false);
     setDeleteConfirm(false);
     setView("dashboard");
@@ -969,6 +1131,18 @@ export const SuperAdminPanel: React.FC<Props> = ({ adminUid, onBack }) => {
               <div className="flex justify-between">
                 <span className="text-slate-400">Status</span>
                 <span className={`font-medium ${s.active ? "text-green-500" : "text-red-400"}`}>{s.subscription.status}</span>
+              </div>
+              <div className="flex justify-between items-center pt-2 border-t border-slate-100 dark:border-slate-700/60">
+                <span className="text-slate-400">Edition</span>
+                {isSchoolEliteCurriculum(s) ? (
+                  <span className="font-black text-amber-600 dark:text-amber-400 flex items-center gap-1 text-xs bg-amber-50 dark:bg-amber-950/50 px-2 py-0.5 rounded-md border border-amber-200 dark:border-amber-800">
+                    <Crown size={12} className="text-amber-500" /> 👑 Elite Plan (Class 1-12 Notes Active)
+                  </span>
+                ) : (
+                  <span className="text-slate-600 dark:text-slate-300 font-semibold text-xs">
+                    Standard Plan (Core ERP)
+                  </span>
+                )}
               </div>
             </div>
           </div>

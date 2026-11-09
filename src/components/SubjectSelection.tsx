@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { ClassLevel, Subject, Stream, Board, SystemSettings, LucentNoteEntry, HomeworkItem } from '../types';
-import { getSubjectsList } from '../constants';
+import { getSubjectsList, isSubjectMatch } from '../constants';
 import { Calculator, FlaskConical, Languages, Globe2, BookMarked, History, TrendingUp, Briefcase, Landmark, Feather, Home, HeartPulse, Activity, Cpu, ChevronRight } from 'lucide-react';
 import type { ContentIndexMap } from '../firebase';
 import { useAppTheme } from '../utils/themeContext';
@@ -134,8 +134,15 @@ const getSubjectStats = (
   });
 
   const lucentCount = lucentNotes.filter(n => {
-    const nClass = (n as any).classLevel || 'COMPETITION';
-    return nClass === classLevel && (n.subject || '').toLowerCase() === subject.id.toLowerCase();
+    const nClass = String((n as any).classLevel || 'COMPETITION');
+    const matchesClass = nClass === String(classLevel);
+    const matchesSubject =
+      (n.subject || '').toLowerCase().trim() === subject.id.toLowerCase().trim() ||
+      (n.subject || '').toLowerCase().trim() === subject.name.toLowerCase().trim() ||
+      isSubjectMatch(n.subject, subject.id, classLevel, settings) ||
+      isSubjectMatch(n.subject, subject.name, classLevel, settings);
+    const matchesBoard = Boolean((n as any).schoolId) || !(n as any).board || (n as any).board === board || (n as any).board === 'ALL';
+    return matchesClass && matchesSubject && matchesBoard;
   }).length;
 
   return { notes, pdf, video, audio, mcq, lucentNotes: lucentCount };
@@ -213,7 +220,7 @@ export const SubjectSelection: React.FC<Props> = ({
   }, [classLevel, stream, board, settings]);
   const currentBoard = board || 'CBSE';
   const isCompetition = classLevel === 'COMPETITION';
-  const isSchoolClass = !isCompetition && ['6','7','8','9','10','11','12'].includes(String(classLevel));
+  const isSchoolClass = !isCompetition && ['1','2','3','4','5','6','7','8','9','10','11','12'].includes(String(classLevel));
 
   const tier = isPremium && subscriptionLevel === 'ULTRA'
     ? 'ultra'
@@ -223,17 +230,23 @@ export const SubjectSelection: React.FC<Props> = ({
 
   const tierHeaderColor = appTheme.primary;
 
-  // Pre-compute per-subject lesson progress for school classes (class 6-12) AND competition
+  // Pre-compute per-subject lesson progress for school classes (class 1-12) AND competition
   const subjectProgressMap = useMemo(() => {
     const map: Record<string, SubjectLessonStats> = {};
 
     if (isSchoolClass && lucentNotes.length > 0) {
       subjects.forEach(subject => {
-        const lessons = lucentNotes.filter(n =>
-          String((n as any).classLevel) === String(classLevel) &&
-          (n.subject || '').toLowerCase().trim() === subject.id.toLowerCase().trim() &&
-          (!(n as any).board || (n as any).board === currentBoard)
-        ) as LucentNoteEntry[];
+        const lessons = lucentNotes.filter(n => {
+          const nClass = String((n as any).classLevel);
+          const matchesClass = nClass === String(classLevel);
+          const matchesSubject =
+            (n.subject || '').toLowerCase().trim() === subject.id.toLowerCase().trim() ||
+            (n.subject || '').toLowerCase().trim() === subject.name.toLowerCase().trim() ||
+            isSubjectMatch(n.subject, subject.id, classLevel, settings) ||
+            isSubjectMatch(n.subject, subject.name, classLevel, settings);
+          const matchesBoard = Boolean((n as any).schoolId) || !(n as any).board || (n as any).board === currentBoard || (n as any).board === 'ALL';
+          return matchesClass && matchesSubject && matchesBoard;
+        }) as LucentNoteEntry[];
         if (lessons.length > 0) {
           map[subject.id] = computeSubjectStats(lessons);
         }
@@ -382,25 +395,25 @@ export const SubjectSelection: React.FC<Props> = ({
               key={subject.id}
               onClick={() => onSelect(subject)}
               data-tier={tier}
-              className="nst-subject-card p-4 rounded-2xl flex flex-col gap-0 active:scale-95 text-left group"
+              className="nst-subject-card p-4 rounded-2xl flex flex-col gap-0 active:scale-95 text-left group bg-white dark:bg-slate-900 border-2 border-slate-200/90 dark:border-slate-800 hover:border-blue-500 dark:hover:border-blue-400 shadow-xs hover:shadow-md transition-all cursor-pointer w-full"
               style={_cardStyle}
             >
               {/* Top row: icon + title + arrow */}
               <div className="flex items-center gap-4">
-                <div className="nst-card-icon w-12 h-12 rounded-xl flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+                <div className="nst-card-icon w-12 h-12 rounded-xl flex items-center justify-center shrink-0 bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-800/40 group-hover:scale-110 transition-transform">
                   <SubjectIcon icon={subject.icon} className="w-6 h-6" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h3 className="nst-card-title font-black text-base truncate">{subject.name}</h3>
+                  <h3 className="nst-card-title font-black text-base truncate text-slate-800 dark:text-white">{subject.name}</h3>
 
                   {/* Lesson progress bar (school subjects + competition books) */}
                   {lessonProgress ? (
                     <LessonProgressBar stats={lessonProgress} primary={tierHeaderColor} />
                   ) : settings == null ? (
-                    <p className="nst-card-meta text-[11px] font-medium mt-0.5 opacity-60">Loading…</p>
+                    <p className="nst-card-meta text-[11px] font-medium mt-0.5 opacity-60 text-slate-500">Loading…</p>
                   ) : null}
                 </div>
-                <ChevronRight size={18} className="nst-card-arrow opacity-70 shrink-0" />
+                <ChevronRight size={18} className="nst-card-arrow opacity-70 shrink-0 text-slate-400 dark:text-slate-500 group-hover:text-blue-500 group-hover:translate-x-0.5 transition-all" />
               </div>
             </button>
           );

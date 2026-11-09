@@ -138,6 +138,8 @@ export interface GroupStudyRoom {
   hostId: string;
   hostName: string;
   hostPhotoURL?: string;
+  schoolId?: string;
+  isSchoolRoom?: boolean;
   createdAt: number;
   lastActive: number;
   maxMembers: number;
@@ -717,6 +719,8 @@ export const createGroupRoom = async (
     preloadedQuestions?: GroupStudyMcqQuestion[];
     preloadedTitle?: string;
     durationPerQuestion?: number;
+    schoolId?: string;
+    isSchoolRoom?: boolean;
   },
   host: {
     id: string;
@@ -773,9 +777,11 @@ export const createGroupRoom = async (
     hostId: effectiveHostId,
     hostName: host.name,
     hostPhotoURL: host.photoURL,
+    schoolId: roomData.schoolId,
+    isSchoolRoom: roomData.isSchoolRoom,
     createdAt: now,
     lastActive: now,
-    maxMembers: Math.min(Math.max(roomData.maxMembers || 30, 5), 100),
+    maxMembers: Math.min(Math.max(roomData.maxMembers || 30, 5), roomData.isSchoolRoom ? 500 : 100),
     mode: 'LIVE_MCQ',
     mcqType,
     durationMinutes,

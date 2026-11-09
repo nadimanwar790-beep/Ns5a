@@ -12,7 +12,7 @@ import type { User, SystemSettings, Challenge20 } from '../types';
 import { isDailyChallenge20, getChallengeDateKey } from '../utils/challengeGenerator';
 import { getLevelInfo } from '../utils/levelSystem';
 import { subscribeToAllCoachings } from '../coaching-firebase';
-import { subscribeToAllSchools } from '../school-firebase';
+import { getAllSchools } from '../school-firebase';
 
 interface Props {
   user: User;
@@ -135,18 +135,28 @@ export const UpdatesPage: React.FC<Props> = ({
   }, [initialSectionTab]);
 
   useEffect(() => {
-    const unsubscribeSchools = subscribeToAllSchools((schools) => {
-      setHasAvailableSchool(schools.some((school) => school.active));
-    }, () => setHasAvailableSchool(null));
-    const unsubscribeCoachings = subscribeToAllCoachings((coachings) => {
+    let isMounted = true;
+    try {
+      getAllSchools().then((schools) => {
+        if (isMounted && Array.isArray(schools)) {
+          setHasAvailableSchool(schools.some((school) => (school as any).active));
+        }
+      }).catch(() => {
+        if (isMounted) setHasAvailableSchool(null);
+      });
+    } catch {
+      if (isMounted) setHasAvailableSchool(null);
+    }
+
+    const unsubscribeCoachings = typeof subscribeToAllCoachings === 'function' ? subscribeToAllCoachings((coachings) => {
       setHasAvailableCoaching(
         coachings.some((coaching) => coaching.subscription?.status === 'active')
       );
-    }, () => setHasAvailableCoaching(null));
+    }, () => setHasAvailableCoaching(null)) : () => {};
 
     return () => {
-      unsubscribeSchools();
-      unsubscribeCoachings();
+      isMounted = false;
+      if (typeof unsubscribeCoachings === 'function') unsubscribeCoachings();
     };
   }, []);
 

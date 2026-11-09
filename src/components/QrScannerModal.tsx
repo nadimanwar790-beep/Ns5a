@@ -11,6 +11,7 @@ import {
   QrCode,
   Sparkles,
   RefreshCw,
+  Search,
 } from 'lucide-react';
 import { parseLoginQrToken } from '../services/sessionManager';
 
@@ -20,6 +21,9 @@ interface Props {
   mode: 'LOGIN' | 'STUDY_ROOM';
   onScanSuccess: (decodedText: string, metadata?: any) => void;
   title?: string;
+  manualTitle?: string;
+  manualPlaceholder?: string;
+  manualSubmitText?: string;
 }
 
 export const QrScannerModal: React.FC<Props> = ({
@@ -28,6 +32,9 @@ export const QrScannerModal: React.FC<Props> = ({
   mode,
   onScanSuccess,
   title,
+  manualTitle,
+  manualPlaceholder,
+  manualSubmitText,
 }) => {
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isScanning, setIsScanning] = useState(false);
@@ -244,22 +251,31 @@ export const QrScannerModal: React.FC<Props> = ({
             </button>
           </div>
 
-          <form onSubmit={handleManualSubmit} className="w-full flex items-center gap-1.5 pt-1">
-            <input
-              type="text"
-              value={manualCode}
-              onChange={(e) => setManualCode(e.target.value)}
-              placeholder={mode === 'LOGIN' ? 'Paste Login Token or UID...' : 'Room Code enter karein (e.g. ABC123)'}
-              className="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-500 text-xs focus:outline-none focus:border-indigo-500 font-mono"
-            />
-            <button
-              type="submit"
-              disabled={!manualCode.trim()}
-              className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-xs font-bold text-white cursor-pointer"
-            >
-              Submit
-            </button>
-          </form>
+          {/* Manual ID / Mobile / Token Fallback */}
+          <div className="w-full pt-2 border-t border-slate-800/80 space-y-1.5">
+            <div className="flex items-center justify-between text-[11px] text-slate-300 px-0.5">
+              <span className="font-semibold flex items-center gap-1.5 text-slate-300">
+                <Search className="w-3.5 h-3.5 text-indigo-400" />
+                {manualTitle || (mode === 'LOGIN' ? 'कैमरा काम न करे तो ID या मोबाइल नंबर से जुड़ें' : 'Manual Code')}
+              </span>
+            </div>
+            <form onSubmit={handleManualSubmit} className="w-full flex items-center gap-1.5">
+              <input
+                type="text"
+                value={manualCode}
+                onChange={(e) => setManualCode(e.target.value)}
+                placeholder={manualPlaceholder || (mode === 'LOGIN' ? 'Mobile / Teacher ID / Roll No / Admission No' : 'Room Code enter karein (e.g. ABC123)')}
+                className="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-700/80 text-white placeholder-slate-500 text-xs focus:outline-none focus:border-indigo-500 font-medium"
+              />
+              <button
+                type="submit"
+                disabled={!manualCode.trim()}
+                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-xs font-bold text-white cursor-pointer shadow-md transition-all active:scale-95 shrink-0"
+              >
+                {manualSubmitText || (mode === 'LOGIN' ? 'जुड़ें' : 'Submit')}
+              </button>
+            </form>
+          </div>
         </div>
       </div>
     </div>

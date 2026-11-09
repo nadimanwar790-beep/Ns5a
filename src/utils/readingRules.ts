@@ -9,11 +9,21 @@ import { User, SystemSettings } from '../types';
  */
 export const isSequentialReadingEnforced = (
   user?: User | null,
-  settings?: SystemSettings | null
+  settings?: SystemSettings | null,
+  entry?: any
 ): boolean => {
   if (!user) return true;
   const isAdmin = user.role === 'ADMIN' || user.role === 'SUB_ADMIN';
   if (isAdmin) return false;
+
+  // School Mode: Enrolled school students or school curriculum notes NEVER have sequential page locks (100% Free reading)
+  if ((user as any)?.schoolId) return false;
+  if (entry?.schoolId) return false;
+  try {
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('nst_active_school_id')) {
+      return false;
+    }
+  } catch {}
 
   // Credit Economy Mode: All pages and steps are unlocked directly and user can study in any order
   if (user.studyMode === 'CREDIT') {

@@ -55,6 +55,7 @@ import { SchoolCommunityFeed } from "./SchoolCommunityFeed";
 import { SchoolMessengerBroadcastStudio } from "./SchoolMessengerBroadcastStudio";
 import { NstaMessengerSuite } from "./NstaMessengerSuite";
 import { AbsenteeActionPage } from "./AbsenteeActionPage";
+import { GroupStudyModal } from "../GroupStudyModal";
 import {
   Users, BookOpen, Calendar, IndianRupee, Plus, Trash2, Settings,
   ChevronRight, ChevronLeft, X, Edit3, FileText, Award,
@@ -74,6 +75,8 @@ import { ClassFeeStructureSection } from "./ClassFeeStructureSection";
 import { DirectAdmissionModal } from "./DirectAdmissionModal";
 import { AdmissionFormPrintModal } from "./AdmissionFormPrintModal";
 import { BusTransportModal } from "./BusTransportModal";
+import { ClassCurriculumNotesManager } from "./ClassCurriculumNotesManager";
+import { isSchoolEliteCurriculum } from "../../school-types";
 
 interface Props {
   schoolId: string;
@@ -81,6 +84,7 @@ interface Props {
   onBack?: () => void;
   onOpenPlatformContent?: () => void;
   onLogout?: () => void;
+  onLeaveSchool?: () => void;
   onPreviewTeacher?: () => void;
   onPreviewStudent?: () => void;
   onPreviewAccountant?: () => void;
@@ -93,16 +97,40 @@ type AdminView =
   | "community"
   | "absentee"
   | "sessions" | "classes" | "subjects" | "teachers" | "students"
-  | "content" | "attendance" | "fees" | "fee_class" | "fee_all" | "fee_structure" | "bus_transport" | "qr_pay" | "fee_alerts" | "receipt_header" | "report_card" | "marks" | "results"
+  | "content" | "class_notes_manager" | "attendance" | "fees" | "fee_class" | "fee_all" | "fee_structure" | "bus_transport" | "qr_pay" | "fee_alerts" | "receipt_header" | "report_card" | "marks" | "results"
   | "store" | "subscription"
   | "id_cards" | "admit_cards" | "certificates" | "marksheet_hub" | "promotion" | "notices" | "holidays" | "staff_hrm" | "reports_hub"
   | "public_website" | "online_admissions" | "online_admission_fee"
   | "timetable" | "homework" | "library" | "parent_queries" | "inventory_store"
-  | "nsta_broadcast" | "video_lectures" | "classroom_videos";
+  | "nsta_broadcast" | "video_lectures" | "classroom_videos" | "school_study_room";
 
 
-export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, onLogout, onPreviewTeacher, onPreviewStudent, onPreviewAccountant }) => {
+export const SchoolAdminPanel: React.FC<Props> = ({
+  schoolId,
+  adminUid,
+  onBack,
+  onOpenPlatformContent,
+  onLogout,
+  onLeaveSchool,
+  onPreviewTeacher,
+  onPreviewStudent,
+  onPreviewAccountant
+}) => {
+  const handleExploreFullApp = () => {
+    try {
+      localStorage.setItem("nst_app_view_mode", "STUDENT");
+      window.dispatchEvent(new CustomEvent("nst_open_student_dashboard"));
+    } catch {}
+    if (onOpenPlatformContent) {
+      onOpenPlatformContent();
+    } else if (onBack) {
+      onBack();
+    }
+  };
+
   const [school, setSchool] = useState<School | null>(null);
+  const [showLeaveConfirmModal, setShowLeaveConfirmModal] = useState(false);
+  const [leavingSchoolLoading, setLeavingSchoolLoading] = useState(false);
   const [schoolLoading, setSchoolLoading] = useState(true);
   const [sessions, setSessions] = useState<SchoolSession[]>([]);
   const [classes, setClasses] = useState<SchoolClass[]>([]);
@@ -1380,7 +1408,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
       },
       items: [
         { id: "classes" as AdminView, label: "Classes & Sections", icon: BookOpen, desc: "कक्षाएं, वर्ग व अटेंडेंस" },
-        { id: "class_notes_manager" as AdminView, label: "Class 6-12 Notes Manager", icon: Sparkles, desc: "स्कूल पाठ्यक्रम नोट्स, MCQ, Video व PDF" },
+        { id: "class_notes_manager" as AdminView, label: "Class 1-12 Notes Manager", icon: Sparkles, desc: "स्कूल पाठ्यक्रम नोट्स, MCQ, Video व PDF" },
         { id: "students" as AdminView, label: "Students Directory", icon: Users, desc: "नामांकन व छात्र प्रोफाइल" },
         { id: "teachers" as AdminView, label: "Teachers & Faculty", icon: Users, desc: "अध्यापक व स्टाफ खाते" },
         { id: "timetable" as AdminView, label: "Timetable & Routine", icon: Clock, desc: "साप्ताहिक घंटी व समय सारणी" },
@@ -1581,6 +1609,28 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
 
         {/* Bottom Sidebar Action Footer */}
         <div className="p-2.5 border-t border-slate-800 bg-slate-950/80 space-y-2 shrink-0">
+          {/* Explore Full NSTA Learning App */}
+          <button
+            type="button"
+            onClick={handleExploreFullApp}
+            className="w-full p-2 rounded-xl bg-gradient-to-r from-indigo-900/70 via-purple-900/60 to-slate-900 border border-indigo-500/40 hover:border-indigo-400 text-left transition flex items-center justify-between gap-2 shadow-md group cursor-pointer active:scale-95"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-7 h-7 rounded-lg bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center shrink-0 text-amber-300">
+                <Sparkles className="w-3.5 h-3.5 animate-spin" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-black text-white group-hover:text-indigo-200 truncate">
+                  Explore Full NSTA App
+                </p>
+                <p className="text-[9.5px] text-indigo-300/80 truncate">
+                  53+ Books, MCQs &amp; Study Room
+                </p>
+              </div>
+            </div>
+            <ArrowRight className="w-3.5 h-3.5 text-indigo-400 group-hover:translate-x-1 transition-transform shrink-0" />
+          </button>
+
           <div className="space-y-1">
             <div className="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-0.5 flex items-center justify-between">
               <span>डैशबोर्ड व्यू (Dashboard View)</span>
@@ -1618,6 +1668,17 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
               </button>
             </div>
           </div>
+          {onLeaveSchool && (
+            <button
+              type="button"
+              onClick={() => setShowLeaveConfirmModal(true)}
+              className="w-full mb-1.5 py-1.5 px-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 hover:text-amber-100 text-[11px] font-bold flex items-center justify-center gap-1.5 transition cursor-pointer active:scale-95 shadow-xs"
+              title="Leave this school / Detach account from this school"
+            >
+              <Building2 className="w-3.5 h-3.5 text-amber-400" />
+              <span>Leave School (स्कूल छोड़ें)</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={handlePerformLogout}
@@ -1723,6 +1784,31 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
 
           {/* Footer */}
           <div className="p-2.5 border-t border-slate-800 bg-slate-950/80 space-y-2 shrink-0">
+            {/* Explore Full NSTA Learning App */}
+            <button
+              type="button"
+              onClick={() => {
+                setIsSidebarOpen(false);
+                handleExploreFullApp();
+              }}
+              className="w-full p-2 rounded-xl bg-gradient-to-r from-indigo-900/70 via-purple-900/60 to-slate-900 border border-indigo-500/40 hover:border-indigo-400 text-left transition flex items-center justify-between gap-2 shadow-md group cursor-pointer active:scale-95"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-7 h-7 rounded-lg bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center shrink-0 text-amber-300">
+                  <Sparkles className="w-3.5 h-3.5 animate-spin" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-black text-white group-hover:text-indigo-200 truncate">
+                    Explore Full NSTA App
+                  </p>
+                  <p className="text-[9.5px] text-indigo-300/80 truncate">
+                    53+ Books, MCQs &amp; Study Room
+                  </p>
+                </div>
+              </div>
+              <ArrowRight className="w-3.5 h-3.5 text-indigo-400 group-hover:translate-x-1 transition-transform shrink-0" />
+            </button>
+
             <div className="space-y-1">
               <div className="text-[9px] font-bold uppercase tracking-wider text-slate-400 px-0.5 flex items-center justify-between">
                 <span>डैशबोर्ड व्यू (Dashboard View)</span>
@@ -1763,6 +1849,20 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
                 </button>
               </div>
             </div>
+            {onLeaveSchool && (
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSidebarOpen(false);
+                  setShowLeaveConfirmModal(true);
+                }}
+                className="w-full mb-1.5 py-1.5 px-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 hover:text-amber-100 text-[11px] font-bold flex items-center justify-center gap-1.5 transition cursor-pointer active:scale-95 shadow-xs"
+                title="Leave this school / Detach account from this school"
+              >
+                <Building2 className="w-3.5 h-3.5 text-amber-400" />
+                <span>Leave School (स्कूल छोड़ें)</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={handlePerformLogout}
@@ -1850,10 +1950,23 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
             <span className="hidden xs:inline">{isNativeLandscape ? "📱 Portrait" : "🔄 Screen Rotate"}</span>
             <span className="xs:hidden">{isNativeLandscape ? "📱" : "🔄 Rotate"}</span>
           </button>
+
           <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 text-[11px] font-bold">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
             <span>सत्र: {activeSession?.name || "2026-27"}</span>
           </span>
+
+          {onLeaveSchool && (
+            <button
+              type="button"
+              onClick={() => setShowLeaveConfirmModal(true)}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-xs font-bold transition cursor-pointer active:scale-95"
+              title="Leave School / स्कूल छोड़ें"
+            >
+              <Building2 className="w-3.5 h-3.5 text-amber-500" />
+              <span className="hidden sm:inline">Leave School</span>
+            </button>
+          )}
 
           <button
             type="button"
@@ -1865,7 +1978,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
             <span>Settings</span>
           </button>
 
-          </div>
+        </div>
       </header>
     );
   };
@@ -3096,6 +3209,58 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
             }}
           />
         )}
+        {/* Leave School Confirmation Modal */}
+        {showLeaveConfirmModal && (
+          <div className="fixed inset-0 z-[9999] bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+            <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full p-6 border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center shrink-0">
+                  <Building2 className="w-6 h-6 text-amber-500" />
+                </div>
+                <div>
+                  <h3 className="font-black text-lg text-slate-800 dark:text-white">
+                    Leave School (स्कूल छोड़ें)
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {school?.name || "This school"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-3.5 text-xs text-amber-900 dark:text-amber-200 leading-relaxed">
+                क्या आप वाकई इस स्कूल से अलग होना चाहते हैं? आपका अकाउंट इस स्कूल से detach हो जाएगा और आप Hub Overview / अन्य स्कूल में स्विच कर सकेंगे।
+              </div>
+
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  type="button"
+                  disabled={leavingSchoolLoading}
+                  onClick={() => setShowLeaveConfirmModal(false)}
+                  className="flex-1 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 font-bold text-xs text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
+                >
+                  रद्द करें (Cancel)
+                </button>
+                <button
+                  type="button"
+                  disabled={leavingSchoolLoading}
+                  onClick={async () => {
+                    setLeavingSchoolLoading(true);
+                    try {
+                      if (onLeaveSchool) onLeaveSchool();
+                    } finally {
+                      setLeavingSchoolLoading(false);
+                      setShowLeaveConfirmModal(false);
+                    }
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-black text-xs transition cursor-pointer shadow-md shadow-amber-600/30 flex items-center justify-center gap-1.5 active:scale-95"
+                >
+                  {leavingSchoolLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <LogOut className="w-4 h-4" />}
+                  <span>हाँ, स्कूल छोड़ें</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {renderAdminBottomNav()}
       </>
     );
@@ -3710,6 +3875,29 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
     );
   }
 
+  if (view === "school_study_room") {
+    return renderErpShell(
+      <GroupStudyModal
+        isOpen={true}
+        onClose={() => setView("dashboard")}
+        user={{
+          id: adminUid,
+          uid: adminUid,
+          name: school?.principalName || "School Principal",
+          role: "SCHOOL_ADMIN",
+          isSchoolHost: true,
+          schoolId: school!.id,
+          schoolName: school?.name || "School",
+          subscriptionLevel: "ULTRA"
+        }}
+        tierTheme={{ primary: '#4f46e5' }}
+        isSchoolHost={true}
+        schoolId={school!.id}
+        schoolName={school?.name}
+      />
+    );
+  }
+
   if (view === "homework") {
     return renderErpShell(
       <HomeworkManager
@@ -3785,8 +3973,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({ schoolId, adminUid, onBack, 
     { label: "NSTA Messenger", subtitle: "Class Groups, School Desk & Teacher Chat", icon: <MessageSquare className="w-5 h-5 text-indigo-500" />, view: "nsta_broadcast", count: "3 Screens ⚡", locked: false, featured: true },
     { label: "School Community", subtitle: "Photo, Video & Chhutti Post", icon: <ImageIcon className="w-5 h-5 text-rose-500" />, view: "community", count: "LIVE", locked: false, featured: true },
     { label: "Timetable & Routine", subtitle: "Weekly Periods & Routine", icon: <Clock className="w-5 h-5 text-amber-500" />, view: "timetable", count: "8 Periods", locked: false },
-    { label: "Class 6-12 Notes Manager", subtitle: "School Custom Curriculum, Notes & MCQ", icon: <Sparkles className="w-5 h-5 text-emerald-500" />, view: "class_notes_manager", count: isSchoolEliteCurriculum(school) ? "Elite 👑" : "Elite Req", locked: false, featured: true },
-    { label: "Class Video Archive", subtitle: "Daily YouTube Lectures & Routine", icon: <Youtube className="w-5 h-5 text-red-500" />, view: "video_lectures", count: "YouTube 🔴", locked: false, featured: true },
+    { label: "Class 1-12 Notes Manager", subtitle: "School Custom Curriculum, Notes & MCQ", icon: <Sparkles className="w-5 h-5 text-emerald-500" />, view: "class_notes_manager", count: isSchoolEliteCurriculum(school) ? "Elite 👑" : "Elite Req", locked: false, featured: true },
+    { label: "Class Video Archive", subtitle: "Daily YouTube Lectures & Routine", icon: <Youtube className="w-5 h-5 text-red-500" />, view: "video_lectures", count: isSchoolEliteCurriculum(school) ? "Elite 👑" : "Elite Req", locked: false, featured: true },
+    { label: "School Study Room", subtitle: "Live MCQ Arena with School Curriculum", icon: <Users className="w-5 h-5 text-purple-600" />, view: "school_study_room", count: isSchoolEliteCurriculum(school) ? "Elite 👑" : "Elite Req", locked: false, featured: true },
     { label: "Daily Homework", subtitle: "Diary & Notebook Submission", icon: <BookOpen className="w-5 h-5 text-purple-600" />, view: "homework", count: "Diary", locked: false },
     { label: "Library Management", subtitle: "Books Catalog & Issue/Return", icon: <Book className="w-5 h-5 text-emerald-600" />, view: "library", count: "Books", locked: false },
     { label: "Parent-Teacher Query", subtitle: "Helpdesk & Leave Requests", icon: <MessageSquare className="w-5 h-5 text-blue-600" />, view: "parent_queries", count: "Helpdesk", locked: false },

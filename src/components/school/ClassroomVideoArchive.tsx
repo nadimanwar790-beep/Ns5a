@@ -3,11 +3,11 @@ import React, { useState, useEffect, useMemo } from "react";
 import {
   Youtube, Calendar, BookOpen, Clock, User, Plus, Trash2, Edit3,
   Search, Play, ChevronLeft, ChevronRight, Video, Sparkles, Filter,
-  Layers, CheckCircle2, AlertCircle, Save, X, ExternalLink
+  Layers, CheckCircle2, AlertCircle, Save, X, ExternalLink, Crown
 } from "lucide-react";
-import type {
-  School, SchoolClass, SchoolSession, SchoolTeacher, SchoolSubject,
-  DailyClassLecture
+import {
+  type School, type SchoolClass, type SchoolSession, type SchoolTeacher, type SchoolSubject,
+  type DailyClassLecture, isSchoolEliteCurriculum
 } from "../../school-types";
 import {
   getClassLectures, saveClassLecture, deleteClassLecture,
@@ -251,6 +251,84 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
               }}
               isAdmin={isAdmin}
             />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const isElite = isSchoolEliteCurriculum(school);
+  if (!isElite) {
+    return (
+      <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 animate-in slide-in-from-right max-w-4xl mx-auto my-4">
+        <div className="flex items-center gap-3 mb-6 pb-4 border-b border-slate-100 dark:border-slate-800">
+          {onBack && (
+            <button type="button" onClick={onBack} className="bg-slate-100 dark:bg-slate-800 p-2 rounded-full hover:bg-slate-200 cursor-pointer">
+              <ChevronLeft size={20} />
+            </button>
+          )}
+          <div className="flex-1">
+            <h3 className="text-xl font-black text-slate-800 dark:text-white flex items-center gap-2">
+              <Crown className="text-amber-500" size={24} />
+              Classroom YouTube Video Lectures
+            </h3>
+            <p className="text-xs text-slate-500 font-medium">{school?.name || "School"} Video Archive Desk</p>
+          </div>
+        </div>
+
+        <div className="bg-gradient-to-br from-amber-500/10 via-amber-50 dark:via-amber-950/20 to-orange-500/10 border-2 border-amber-300 dark:border-amber-600 rounded-3xl p-6 sm:p-8 text-center space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-amber-500 to-amber-600 text-white flex items-center justify-center mx-auto shadow-lg shadow-amber-500/30">
+            <Crown size={32} />
+          </div>
+          <div className="space-y-1">
+            <span className="px-3 py-1 bg-amber-200/80 text-amber-900 rounded-full text-[11px] font-black uppercase tracking-wider">
+              👑 Elite School Plan Required
+            </span>
+            <h4 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-2">
+              Classroom YouTube Video Lectures Archive
+            </h4>
+            <p className="text-sm text-slate-600 dark:text-slate-300 max-w-xl mx-auto leading-relaxed">
+              Apne school ke students ke liye Class 1 se 12 tak ke daily YouTube lecture links, revision archive aur missed class videos jodne ke liye <strong>School Elite Subscription (2× Price)</strong> activate karein.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-xl mx-auto text-left pt-2">
+            <div className="bg-white dark:bg-slate-800 border border-amber-200 dark:border-amber-800 rounded-2xl p-3.5 shadow-sm">
+              <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Basic Elite</p>
+              <p className="text-lg font-black text-slate-800 dark:text-white">₹1,999<span className="text-xs font-normal text-slate-500">/mo</span></p>
+              <p className="text-[10px] text-emerald-600 font-bold mt-1">200 Students + YouTube Lectures</p>
+            </div>
+            <div className="bg-white dark:bg-slate-800 border-2 border-amber-400 rounded-2xl p-3.5 shadow-sm relative">
+              <span className="absolute -top-2 right-2 bg-amber-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full">POPULAR</span>
+              <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Standard Elite</p>
+              <p className="text-lg font-black text-slate-800 dark:text-white">₹3,999<span className="text-xs font-normal text-slate-500">/mo</span></p>
+              <p className="text-[10px] text-emerald-600 font-bold mt-1">500 Students + YouTube Lectures</p>
+            </div>
+            <div className="bg-white dark:bg-slate-800 border border-amber-200 dark:border-amber-800 rounded-2xl p-3.5 shadow-sm">
+              <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Pro Elite</p>
+              <p className="text-lg font-black text-slate-800 dark:text-white">₹7,999<span className="text-xs font-normal text-slate-500">/mo</span></p>
+              <p className="text-[10px] text-emerald-600 font-bold mt-1">2000 Students + Full Video Desk</p>
+            </div>
+          </div>
+
+          <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
+            <a
+              href={`https://wa.me/918227070298?text=${encodeURIComponent(`Hello Super Admin, I want to upgrade school "${school?.name || 'My School'}" (ID: ${school?.id}) to the Elite Plan (2x Price) to unlock Classroom YouTube Video Lectures.`)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-sm shadow-lg shadow-emerald-600/30 flex items-center gap-2 cursor-pointer"
+            >
+              👑 Contact Super Admin for Elite Upgrade
+            </a>
+            {onBack && (
+              <button
+                type="button"
+                onClick={onBack}
+                className="px-5 py-3 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold rounded-xl text-sm cursor-pointer"
+              >
+                Back to Dashboard
+              </button>
+            )}
           </div>
         </div>
       </div>

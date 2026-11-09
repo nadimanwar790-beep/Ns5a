@@ -397,8 +397,17 @@ import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import { SchoolHomeCard } from './school/SchoolHomeCard';
 import { QrAttendanceScannerModal } from './school/QrAttendanceScannerModal';
+import { SchoolNotebookReader } from './school/SchoolNotebookReader';
 import { HomeAssemblyAnimation } from './HomeAssemblyAnimation';
-import { getSchool as getSchoolById, getSchoolUserProfile, getAllSchools, removeSchoolUserByUid } from '../school-firebase';
+import {
+  getSchool as getSchoolById,
+  getSchoolUserProfile,
+  getAllSchools,
+  removeSchoolUserByUid,
+  getLocalSchoolCurriculumNotes,
+  getAllAvailableSchoolCurriculumNotes,
+  subscribeToSchoolCurriculumNotes,
+} from '../school-firebase';
 import { getActiveCoachings, getCoachingUserProfile } from '../coaching-firebase';
 import { SlidePageTransition } from './SlidePageTransition';
 
@@ -1676,7 +1685,7 @@ export const StudentDashboard: React.FC<Props> = ({
   const [activeSessionClass, setActiveSessionClass] = useState<string | null>(() => {
     const isValidClass = (value: string | null): value is string =>
       value === 'COMPETITION' ||
-      (!!value && ['6', '7', '8', '9', '10', '11', '12'].includes(value));
+      (!!value && ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'].includes(value));
     try {
       const savedForUser = user?.id
         ? localStorage.getItem(`nst_session_class_${user.id}`)
@@ -1691,7 +1700,8 @@ export const StudentDashboard: React.FC<Props> = ({
         if (isValidClass(legacySaved)) return legacySaved;
       }
     } catch {}
-    return (user as any)?.classLevel || null;
+    const rawClass = (user as any)?.classLevel || (user as any)?.classGrade?.replace(/[^0-9]/g, '');
+    return isValidClass(rawClass) ? rawClass : null;
   });
   const sessionClassOwnerRef = useRef(user?.id || '');
   const persistSessionClassChoice = (classLevel: string) => {
@@ -1718,11 +1728,12 @@ export const StudentDashboard: React.FC<Props> = ({
       } catch {}
       if (
         savedClass === 'COMPETITION' ||
-        (savedClass && ['6', '7', '8', '9', '10', '11', '12'].includes(savedClass))
+        (savedClass && ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'].includes(savedClass))
       ) {
         setActiveSessionClass(savedClass);
       } else {
-        setActiveSessionClass((user as any)?.classLevel || null);
+        const fallback = (user as any)?.classLevel || (user as any)?.classGrade?.replace(/[^0-9]/g, '') || null;
+        setActiveSessionClass(fallback);
       }
       return;
     }
@@ -1769,7 +1780,158 @@ export const StudentDashboard: React.FC<Props> = ({
     (settings?.hiddenFeatures || []).includes('GROUP_STUDY') ||
     (settings?.hiddenHomeButtons || []).includes('GROUP_STUDY');
 
-  const isCreateStudyRoomHidden = false;
+  // School state for current user
+  const [userSchool, setUserSchool] = useState<any>(null);
+
+  const isSchoolStaffOrAdmin =
+    Boolean(_isAdminUser) ||
+    (user as any)?.role === 'TEACHER' ||
+    (user as any)?.role === 'SCHOOL_ADMIN' ||
+    (user as any)?.role === 'PRINCIPAL' ||
+    Boolean(userSchool && (userSchool.adminEmail === (user as any)?.email || userSchool.createdBy === (user as any)?.uid));
+
+  // Only schools (teachers, school admins, principal, super admin) can create study rooms
+  const isCreateStudyRoomHidden = !isSchoolStaffOrAdmin;
+
+  const isSuperAdminEmailCheck = (emailStr?: string | null): boolean => {
+    if (!emailStr) return false;
+    const clean = emailStr.trim().toLowerCase();
+    return (
+      clean === 'nadimanwar794@gmail.com' ||
+      clean === 'nadimanwar794@gmsil.com' ||
+      clean === 'nsdimanwar794@gmail.com' ||
+      clean === 'nadiman0636indo@gmail.com' ||
+      clean === 'n44438403@gmail.com' ||
+      clean === 'fgkfgffhgg@gmail.com' ||
+      clean === 'ghduug6@gmail.com' ||
+      clean.startsWith('nadimanwar794')
+    );
+  };
+
+  const isSuperAdminUser = Boolean(
+    _isAdminUser ||
+    isSuperAdminEmailCheck(user?.email) ||
+    (user as any)?.role === 'SUPERADMIN' ||
+    (user as any)?.isAdmin === true ||
+    (user as any)?.isSuperAdmin === true
+  );
+
+  // Resolve effective student school ID from all possible state/storage sources
+  const resolvedStudentSchoolId = useMemo(() => {
+    // If user is Super Admin: Super Admin is NEVER tied to any school by default,
+    // and never has a student school ID for reading/notes.
+    if (isSuperAdminUser) return '';
+    if ((user as any)?.schoolId) return (user as any).schoolId;
+    if (userSchool?.id) return userSchool.id;
+    try {
+      const actId = localStorage.getItem('nst_active_school_id');
+      if (actId) return actId;
+      const actKey = localStorage.getItem('nst_active_student_key');
+      if (actKey && actKey.includes('__')) return actKey.split('__')[0];
+      const profRaw = localStorage.getItem('nst_school_user_profile');
+      if (profRaw) {
+        const p = JSON.parse(profRaw);
+        if (p?.schoolId) return p.schoolId;
+      }
+      const linkedRaw = localStorage.getItem(`nst_user_linked_students_${user?.id || (user as any)?.uid}`);
+      if (linkedRaw) {
+        const parsed = JSON.parse(linkedRaw);
+        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0]?.schoolId) {
+          return parsed[0].schoolId;
+        }
+      }
+    } catch {}
+    return '';
+  }, [isSuperAdminUser, (user as any)?.schoolId, userSchool?.id, user?.id]);
+
+  // Real-time school curriculum notes state
+  const [schoolCurriculumNotes, setSchoolCurriculumNotes] = useState<LucentNoteEntry[]>(() => {
+    if (isSuperAdminUser || !resolvedStudentSchoolId) return [];
+    return getAllAvailableSchoolCurriculumNotes(resolvedStudentSchoolId);
+  });
+
+  // Listen to school curriculum notes updates and real-time remote subscriptions
+  useEffect(() => {
+    if (isSuperAdminUser || !resolvedStudentSchoolId) {
+      setSchoolCurriculumNotes([]);
+      return;
+    }
+    const refreshNotes = () => {
+      setSchoolCurriculumNotes(getAllAvailableSchoolCurriculumNotes(resolvedStudentSchoolId));
+    };
+    refreshNotes();
+
+    window.addEventListener('nst-school-curriculum-notes-updated', refreshNotes);
+    window.addEventListener('nst_lucent_notes_updated', refreshNotes);
+    window.addEventListener('nst_system_settings_updated', refreshNotes);
+    window.addEventListener('storage', refreshNotes);
+
+    const unsubs: (() => void)[] = [];
+    if (resolvedStudentSchoolId) {
+      unsubs.push(
+        subscribeToSchoolCurriculumNotes(resolvedStudentSchoolId, (notes) => {
+          if (Array.isArray(notes) && notes.length > 0) {
+            setSchoolCurriculumNotes(prev => {
+              const map = new Map<string, any>();
+              notes.forEach(n => { if (n?.id) map.set(n.id, n); });
+              prev.forEach(n => { if (n?.id && !map.has(n.id)) map.set(n.id, n); });
+              return Array.from(map.values());
+            });
+          }
+        })
+      );
+    }
+
+    return () => {
+      window.removeEventListener('nst-school-curriculum-notes-updated', refreshNotes);
+      window.removeEventListener('nst_lucent_notes_updated', refreshNotes);
+      window.removeEventListener('nst_system_settings_updated', refreshNotes);
+      window.removeEventListener('storage', refreshNotes);
+      unsubs.forEach(u => { try { u(); } catch {} });
+    };
+  }, [isSuperAdminUser, resolvedStudentSchoolId]);
+
+  // Resolve curriculum notes:
+  // "supper admin koi bhi school dekh sakega par kisi bhi school ka notes supper admin ko na dikhega"
+  // Super Admin strictly sees ONLY standard global NSTA notes, NEVER any school's notes!
+  // If student has no school attached: return ONLY default Super Admin notes!
+  // If student is attached to school:
+  //   - If Elite school: school's custom notes take full priority.
+  //   - If Non-Elite school: Super Admin default content is used normally + school notes alongside.
+  const resolvedLucentNotes = useMemo(() => {
+    const rawAll = (settings?.lucentNotes || []) as LucentNoteEntry[];
+    const defaultNotes = rawAll.filter(n => !n.schoolId || n.schoolId === 'GLOBAL');
+
+    // CRITICAL: Super Admin must NEVER see any school's notes in the syllabus / reader view
+    if (isSuperAdminUser || !resolvedStudentSchoolId) {
+      return defaultNotes;
+    }
+
+    const schoolNotesMap = new Map<string, LucentNoteEntry>();
+
+    // 1. Live school notes state
+    schoolCurriculumNotes.forEach(n => { if (n?.id) schoolNotesMap.set(n.id, n); });
+
+    // 2. Any notes with schoolId in rawAll
+    rawAll.forEach(n => { if (n?.id && n.schoolId && n.schoolId !== 'GLOBAL') schoolNotesMap.set(n.id, n); });
+
+    // 3. Any notes in local storage cache
+    const diskNotes = getAllAvailableSchoolCurriculumNotes(resolvedStudentSchoolId);
+    diskNotes.forEach(n => { if (n?.id) schoolNotesMap.set(n.id, n); });
+
+    const allSchoolNotes = Array.from(schoolNotesMap.values());
+    const strictlyMatchingSchoolNotes = allSchoolNotes.filter(n => n.schoolId === resolvedStudentSchoolId);
+    const relevantSchoolNotes = strictlyMatchingSchoolNotes.length > 0 ? strictlyMatchingSchoolNotes : allSchoolNotes;
+
+    const schoolLessonKeys = new Set(
+      relevantSchoolNotes.map(n => `${n.classLevel}_${(n.subject || '').toLowerCase().trim()}_${(n.lessonTitle || '').toLowerCase().trim()}`)
+    );
+    const fallbackNotes = defaultNotes.filter(
+      n => !schoolLessonKeys.has(`${n.classLevel}_${(n.subject || '').toLowerCase().trim()}_${(n.lessonTitle || '').toLowerCase().trim()}`)
+    );
+
+    return [...relevantSchoolNotes, ...fallbackNotes];
+  }, [settings?.lucentNotes, resolvedStudentSchoolId, userSchool, schoolCurriculumNotes]);
 
   useEffect(() => {
     const unsub = subscribeToActiveRooms((rooms) => {
@@ -2767,10 +2929,10 @@ export const StudentDashboard: React.FC<Props> = ({
   const [syllabusMode, setSyllabusMode] = useState<"SCHOOL" | "COMPETITION">(
     "SCHOOL",
   );
-  const [userSchool, setUserSchool] = useState<any>(null);
   const [showHomeQrScanner, setShowHomeQrScanner] = useState(false);
   const [allSchools, setAllSchools] = useState<any[]>([]);
   const [showSchoolPicker, setShowSchoolPicker] = useState(false);
+  const [showExitSchoolConfirm, setShowExitSchoolConfirm] = useState(false);
   const [showCoachingPicker, setShowCoachingPicker] = useState(false);
   const [showClassPickerDrawer, setShowClassPickerDrawer] = useState(false);
   const [rtdbCoachingList, setRtdbCoachingList] = useState<{ id: string; name: string; emoji?: string }[]>([]);
@@ -3104,6 +3266,10 @@ export const StudentDashboard: React.FC<Props> = ({
   }, []);
 
   useEffect(() => {
+    if (isSuperAdminUser) {
+      setUserSchool(null);
+      return;
+    }
     const schoolId = (user as any).schoolId;
     if (schoolId) {
       getSchoolById(schoolId).then(s => { if (s) setUserSchool(s); }).catch(() => {});
@@ -4610,7 +4776,7 @@ export const StudentDashboard: React.FC<Props> = ({
   // Uses activeSessionBoard so switching board immediately shows correct indicators
   useEffect(() => {
     const board = activeSessionBoard || user?.board || 'NCERT_EN';
-    const classes = ['6','7','8','9','10','11','12','COMPETITION'];
+    const classes = ['1','2','3','4','5','6','7','8','9','10','11','12','COMPETITION'];
     const unsubs = classes.map(cls =>
       subscribeToContentIndex(board, cls, (stats, rawIndex) => {
         const key = `${board}_${cls}`;
@@ -5756,6 +5922,17 @@ export const StudentDashboard: React.FC<Props> = ({
       setInitialRevisionAutoStartMcq(true);
     } else {
       setInitialRevisionAutoStartMcq(false);
+    }
+
+    const isStudentInSchool = Boolean(
+      userSchool ||
+      (user as any)?.schoolId ||
+      resolvedStudentSchoolId ||
+      (typeof localStorage !== 'undefined' && localStorage.getItem('nst_active_school_id'))
+    );
+    if (isStudentInSchool) {
+      showAlert('Revision Hub केवल सामान्य (Non-School) छात्रों के लिए है। स्कूल छात्र अपने स्कूल टाइमटेबल और स्कूल नोट्स से अध्ययन करें।', 'INFO');
+      return;
     }
 
     const _isAdm = user.role === 'ADMIN' || user.role === 'SUB_ADMIN';
@@ -7284,6 +7461,8 @@ export const StudentDashboard: React.FC<Props> = ({
   // Returns true if a Lucent entry is locked AND this user doesn't have valid access.
   const _lucentIsLocked = (entry: any): boolean => {
     if (!entry) return false;
+    // School custom curriculum notes uploaded by teachers are 100% free & open to school students
+    if (entry.schoolId) return false;
     // Rule: Har user ko har subject ka 1st lesson 100% free milega
     if (isFirstLessonOfSubject(entry, settings?.lucentNotes)) return false;
     if (!entry?.locked) return false;
@@ -7354,8 +7533,18 @@ export const StudentDashboard: React.FC<Props> = ({
       return;
     }
 
-    // Check sequential page reading rule: Free users always ON, Basic/Ultra configurable
-    if (isSequentialReadingEnforced(user, settings) && pageIdx > 0) {
+    // Check sequential page reading rule: Free users always ON, Basic/Ultra configurable.
+    // Completely disabled for school students / school study material.
+    const isSchoolNote = Boolean(entry.schoolId && entry.schoolId !== 'GLOBAL');
+    const isEliteSchoolUser = Boolean(
+      userSchool &&
+      (userSchool.subscription?.isElite ||
+       userSchool.subscription?.customCurriculumEnabled ||
+       ((userSchool.subscription?.monthlyAmount || 0) >= 1999 && userSchool.subscription?.status === 'active'))
+    );
+    const hasActiveSchool = Boolean(userSchool?.id || resolvedStudentSchoolId || (user as any)?.schoolId);
+
+    if (!isSchoolNote && !(hasActiveSchool && isEliteSchoolUser) && isSequentialReadingEnforced(user, settings, entry) && pageIdx > 0) {
       const prevHasMcq = ((entry.pages || [])[pageIdx - 1]?.mcqs?.length ?? 0) > 0;
       const prevStep = getSequentialPageStep(entry.id, pageIdx - 1, prevHasMcq);
       if (prevStep !== 'COMPLETED') {
@@ -7379,6 +7568,12 @@ export const StudentDashboard: React.FC<Props> = ({
       setLucentNoteViewer(entry);
       setLucentPageIndex(pageIdx);
     };
+
+    // School study material is 100% free for students (no coin/credit gate, credits na katega)
+    if (isSchoolNote || (hasActiveSchool && isEliteSchoolUser)) {
+      doOpen();
+      return;
+    }
 
     // Sample lesson or 1st lesson of subject — permanently free for everyone only when NOT in Credit Mode
     if (user.studyMode !== 'CREDIT' && (entry.isSampleLesson || isFirstLessonOfSubject(entry, settings?.lucentNotes))) {
@@ -9968,13 +10163,46 @@ export const StudentDashboard: React.FC<Props> = ({
     setSchoolCodeTargetId(null);
   };
 
-  const handleRemoveSchool = async () => {
-    const updated = { ...user, schoolId: null } as any;
-    handleUserUpdate(updated);
-    setUserSchool(null);
-    try { await saveUserToLive(updated); } catch {}
-    try { await removeSchoolUserByUid(user.id); } catch {}
+  const handleExitSchool = async () => {
+    try {
+      const updated = {
+        ...user,
+        schoolId: null,
+        schoolName: null,
+        schoolRole: null,
+        schoolCode: null,
+      } as any;
+      handleUserUpdate(updated);
+      setUserSchool(null);
+      setSchoolCurriculumNotes([]);
+
+      try {
+        localStorage.removeItem('nst_active_school_id');
+        localStorage.removeItem('nst_active_student_key');
+        localStorage.removeItem('nst_school_user_profile');
+        localStorage.removeItem('nst_linked_school_info');
+        if (user?.id) {
+          localStorage.removeItem(`nst_user_linked_students_${user.id}`);
+        }
+      } catch {}
+
+      try { await saveUserToLive(updated); } catch {}
+      try { await removeSchoolUserByUid(user.id); } catch {}
+
+      window.dispatchEvent(new CustomEvent('nst-school-curriculum-notes-updated', {
+        detail: { schoolId: null, notes: [] }
+      }));
+      window.dispatchEvent(new CustomEvent('nst_lucent_notes_updated'));
+
+      showAlert('Aap successfully school se exit ho gaye hain. Ab aapke liye Super Admin ke default study materials aur rules restore ho gaye hain.', 'SUCCESS', 'School Exited');
+      setShowExitSchoolConfirm(false);
+    } catch (err: any) {
+      console.error('Error exiting school:', err);
+      showAlert('School exit karne me problem aayi. Kripya punah prayas karein.', 'ERROR');
+    }
   };
+
+  const handleRemoveSchool = handleExitSchool;
 
   const handleJoinCoaching = async (c: { id: string; name: string }) => {
     const updated = { ...user, coachingId: c.id, coachingName: c.name } as any;
@@ -10123,8 +10351,8 @@ export const StudentDashboard: React.FC<Props> = ({
       description: `📚 ${n.pages.length} page${n.pages.length === 1 ? '' : 's'}${n.bookName ? ` • ${n.bookName}` : ''}`,
     }));
 
-    // When class612LucentMode is ON and class is 6-12: show ONLY admin Lucent chapters
-    const isLucentOnlyMode = !!(settings?.class612LucentMode) && ['6','7','8','9','10','11','12'].includes(String(currentClass));
+    // When class612LucentMode is ON and class is 1-12: show ONLY admin Lucent chapters
+    const isLucentOnlyMode = !!(settings?.class612LucentMode) && ['1','2','3','4','5','6','7','8','9','10','11','12'].includes(String(currentClass));
     if (isLucentOnlyMode) {
       setChapters(adminChapters);
       setLoadingChapters(false);
@@ -10270,7 +10498,7 @@ export const StudentDashboard: React.FC<Props> = ({
     // CLASS 6-12 SUBJECT LESSON LIST (admin Lucent-style notes for that class+subject)
     if (class612SubjectView && contentViewStep === "SUBJECTS") {
       const { classLevel: cv, subject: sv } = class612SubjectView;
-      const _allLucent = (settings?.lucentNotes || []) as LucentNoteEntry[];
+      const _allLucent = resolvedLucentNotes;
 
       const isTargetMath =
         String(sv.id || '').toLowerCase().trim() === 'math' ||
@@ -10374,12 +10602,15 @@ export const StudentDashboard: React.FC<Props> = ({
           if (isTargetMath) {
             if (!isMathNote) return false;
           } else {
-            if (nSub !== targetSub && !isSubjectMatch(n.subject, sv.id, cv, settings) && !isSubjectMatch(n.subject, sv.name, cv, settings)) {
+            const matchesId = nSub === targetSub;
+            const matchesName = nSub === String(sv.name || '').toLowerCase().trim();
+            const matchesSubjectMatch = isSubjectMatch(n.subject, sv.id, cv, settings) || isSubjectMatch(n.subject, sv.name, cv, settings);
+            if (!matchesId && !matchesName && !matchesSubjectMatch) {
               return false;
             }
           }
 
-          if (n.board && n.board !== 'ALL' && _curBoard !== 'ALL' && n.board !== _curBoard) {
+          if (!n.schoolId && n.board && n.board !== 'ALL' && _curBoard !== 'ALL' && n.board !== _curBoard) {
             return false;
           }
           return true;
@@ -10568,6 +10799,15 @@ export const StudentDashboard: React.FC<Props> = ({
                           <p className="text-[11px] text-amber-700 font-black mt-0.5">✅ Aaj ka lesson — tap to open</p>
                         ) : (
                           <p className={`text-[11px] font-bold mt-0.5 flex flex-wrap gap-1.5 items-center ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                            {entry.schoolName ? (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                                🏫 {entry.schoolName}
+                              </span>
+                            ) : entry.schoolId ? (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                                🏫 School Notes
+                              </span>
+                            ) : null}
                             {entry.isSampleLesson && <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-emerald-100 text-emerald-700">🆓 FREE</span>}
                             {(entry.isMathLesson || isTargetMath) && (
                               <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-blue-100 text-blue-700">
@@ -10767,12 +11007,12 @@ export const StudentDashboard: React.FC<Props> = ({
       // Also match by bookName for custom books — admin sets bookName = custom book name
       // so entries appear under the correct custom book in student view.
       const _customBookForView = customBooksFromSettings.find(b => b.id === homeworkSubjectView);
-      const subjectLucentLessons = ((settings?.lucentNotes || []) as LucentNoteEntry[])
+      const subjectLucentLessons = (resolvedLucentNotes)
         .filter(n => {
           const isComp = syllabusMode === 'COMPETITION' || activeSessionClass === 'COMPETITION' || user.classLevel === 'COMPETITION' || n.classLevel === 'COMPETITION' || !n.classLevel;
           if (!isComp && n.classLevel !== activeSessionClass) return false;
 
-          const isBoardOk = !n.board || n.board === 'ALL' || n.board === _curBoard || isComp;
+          const isBoardOk = Boolean(n.schoolId) || !n.board || n.board === 'ALL' || n.board === _curBoard || isComp;
           if (!isBoardOk) return false;
 
           const tk = (homeworkSubjectView || '').toLowerCase().trim();
@@ -13923,7 +14163,7 @@ export const StudentDashboard: React.FC<Props> = ({
             user={user}
             activeBoard={activeSessionBoard || (user as any)?.board || 'BSEB'}
             activeClass={activeSessionClass || (user as any)?.classLevel || '10'}
-            lucentNotes={(settings?.lucentNotes || []) as any[]}
+            lucentNotes={resolvedLucentNotes as any[]}
             onBack={() => {
               setSlideDirection('backward');
               setShowMyRoutine(false);
@@ -14385,9 +14625,22 @@ export const StudentDashboard: React.FC<Props> = ({
                 onTabChange('COURSES');
               };
 
-              const classEmojis: Record<string, string> = { '6':'📖','7':'🧪','8':'🌍','9':'📚','10':'🏆','11':'🚀','12':'🎓' };
-              const boardClasses = ['10','12'];
-              const rows = [['6','7','8','9'], ['10','11','12']];
+              const classEmojis: Record<string, string> = {
+                '1': '🌱',
+                '2': '✏️',
+                '3': '🎨',
+                '4': '🧩',
+                '5': '🔬',
+                '6': '📖',
+                '7': '🧪',
+                '8': '🌍',
+                '9': '📚',
+                '10': '🏆',
+                '11': '🚀',
+                '12': '🎓',
+              };
+              const boardClasses = ['10', '12'];
+              const rows = [['1', '2', '3', '4'], ['5', '6', '7', '8'], ['9', '10', '11', '12']];
 
               const tbBorderColor = isActive && (level === 'ULTRA' || level === 'PRO')
                 ? '#1E2A4A'
@@ -14407,8 +14660,8 @@ export const StudentDashboard: React.FC<Props> = ({
               const classSubjects = getSubjectsList(currentSelectedClass, _stream, _board, settings);
               const classSubjectCount = classSubjects.length;
 
-              const currentClassLessons = ((settings?.lucentNotes || []) as LucentNoteEntry[]).filter(
-                n => String(n.classLevel) === currentSelectedClass && (n.board === _board || !n.board)
+              const currentClassLessons = (resolvedLucentNotes as LucentNoteEntry[]).filter(
+                n => String(n.classLevel) === currentSelectedClass && (Boolean(n.schoolId) || n.board === _board || !n.board)
               );
               const classLessonCount = currentClassLessons.length;
 
@@ -14748,11 +15001,16 @@ export const StudentDashboard: React.FC<Props> = ({
                           </button>
                         </div>
 
-                        {/* School & Board Classes Grid */}
+                        {/* School & Board Classes Grid (Class 1 to 12) */}
                         <div className={`px-3.5 py-3 border-b ${isCurrentBlue ? 'border-[#1e2f4f]' : isCurrentDark ? 'border-slate-800' : 'border-slate-100'}`}>
-                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">School & Board Classes</p>
-                          <div className="grid grid-cols-2 gap-1.5">
-                            {['6', '7', '8', '9', '10', '11', '12'].map((c) => {
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">School & Board Classes</p>
+                            <span className="text-[9px] font-bold text-indigo-500 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-full border border-indigo-200/50">
+                              Class 1 – 12
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-1.5 max-h-60 sm:max-h-72 overflow-y-auto pr-0.5">
+                            {['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'].map((c) => {
                               const isSelected = !isCompetitionSelected && String(c) === currentSelectedClass;
                               const isBoard = boardClasses.includes(c);
                               const subjCount = getSubjectsList(c, _stream, _board, settings).length;
@@ -14866,72 +15124,6 @@ export const StudentDashboard: React.FC<Props> = ({
                   )}
 
                   {/* Practice Set card moved to MCQ Hub */}
-
-                  {/* ── 2. SCHOOL CARD (HOME PAGE — ONLY SHOWN IF ENROLLED IN A SCHOOL) ── */}
-                  {Boolean(userSchool || (user as any)?.schoolId) && (
-                    <div id="home-school-card-section" className="space-y-2">
-                      <div className="flex items-center justify-between gap-2 mb-1">
-                        <span className="text-[10px] font-black uppercase tracking-widest" style={{ color: isDarkMode ? '#94a3b8' : tierTheme.textSecondary || '#64748b' }}>
-                          🏫 Enrolled School Portal
-                        </span>
-                      </div>
-
-                      {userSchool ? (
-                        <SchoolHomeCard
-                          school={userSchool}
-                          onOpen={() => {
-                            hapticStrong();
-                            onOpenSchool?.();
-                          }}
-                          onChangeSchool={handleOpenSchoolPicker}
-                          onOpenQrScanner={() => setShowHomeQrScanner(true)}
-                          onOpenWebsite={() => {
-                            window.dispatchEvent(new CustomEvent('nst-open-school-public-view', { detail: { view: 'website', schoolId: userSchool.id, school: userSchool } }));
-                            try { window.history.pushState({}, '', `/?view=school_website&schoolId=${userSchool.id}`); } catch {}
-                          }}
-                          onOpenAdmission={() => {
-                            window.dispatchEvent(new CustomEvent('nst-open-school-public-view', { detail: { view: 'admission', schoolId: userSchool.id, school: userSchool } }));
-                            try { window.history.pushState({}, '', `/?view=admission&schoolId=${userSchool.id}`); } catch {}
-                          }}
-                          studentId={user.id}
-                          studentClassId={(user as any).classId || "class_10"}
-                          themeAccent={themePrimary}
-                          cardBg={themeCardBg}
-                          card3D={_card3D}
-                          isDarkMode={isDarkMode}
-                        />
-                      ) : (
-                        <div
-                          className="nst-card-animated w-full rounded-2xl p-4 flex items-center justify-between border"
-                          style={{
-                            background: themeCardBg,
-                            borderColor: `${themePrimary}30`,
-                          }}
-                        >
-                          <div className="flex items-center gap-3">
-                            <div
-                              className="w-12 h-12 rounded-2xl flex items-center justify-center text-xl shrink-0"
-                              style={{ background: `${themePrimary}18` }}
-                            >
-                              🏫
-                            </div>
-                            <div>
-                              <p className="text-[10px] font-black uppercase tracking-wider text-indigo-500">My School</p>
-                              <h4 className="font-black text-sm text-slate-800 dark:text-white">Connecting to School…</h4>
-                              <p className="text-[11px] text-slate-400">Loading school details</p>
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => { hapticStrong(); onOpenSchool?.(); }}
-                            className="px-3 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-black active:scale-95 transition"
-                          >
-                            Open →
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
 
                   {/* ── 3. DAILY CHALLENGE, LIVE STUDY ROOM, REVISION HUB & MY MISTAKES (HOME PAGE) ── */}
                   <div className="space-y-3">
@@ -15151,8 +15343,15 @@ export const StudentDashboard: React.FC<Props> = ({
                           );
                         })()}
 
-                        {/* ── REVISION HUB CARD ── */}
+                        {/* ── REVISION HUB CARD (Hidden for school students) ── */}
                         {(() => {
+                          const isStudentInSchool = Boolean(
+                            userSchool ||
+                            (user as any)?.schoolId ||
+                            resolvedStudentSchoolId ||
+                            (typeof localStorage !== 'undefined' && localStorage.getItem('nst_active_school_id'))
+                          );
+                          if (isStudentInSchool) return null;
                           return (
                             <div id="home-revision-card" className="w-full home-revhub-card-anim flex flex-col">
                               <div
@@ -15548,7 +15747,7 @@ export const StudentDashboard: React.FC<Props> = ({
               settings={settings}
               initialParentSubject={initialParentSubject}
               contentIndex={classContentIndex[`${activeSessionBoard || user.board || 'NCERT_EN'}_${activeSessionClass || '10'}`] || {}}
-              lucentNotes={(settings?.lucentNotes || []) as any[]}
+              lucentNotes={resolvedLucentNotes as any[]}
               subscriptionLevel={user.subscriptionLevel}
               isPremium={user.isPremium}
               listCardBg={settings?.contentListCardBg}
@@ -15578,11 +15777,11 @@ export const StudentDashboard: React.FC<Props> = ({
                   setSelectedLucentBook('Lucent');
                   return;
                 }
-                // Class 6-12 school subjects → show admin Lucent lessons for that class+subject
+                // Class 1-12 school subjects → show admin Lucent lessons for that class+subject
                 // Guard: only trigger when NOT in competition mode (syllabusMode check prevents
                 // cross-contamination when activeSessionClass is null/stale)
                 const currentClass = String(activeSessionClass || user.classLevel || '10');
-                if (syllabusMode !== 'COMPETITION' && ['6','7','8','9','10','11','12'].includes(currentClass)) {
+                if (syllabusMode !== 'COMPETITION' && ['1','2','3','4','5','6','7','8','9','10','11','12'].includes(currentClass)) {
                   setClass612SubjectView({ classLevel: currentClass, subject });
                   return;
                 }
@@ -16880,9 +17079,7 @@ export const StudentDashboard: React.FC<Props> = ({
             const _hasSchool = Boolean(_userSchoolId || userSchool);
             const _hasCoaching = Boolean(_userCoachingId || isCoachingAdmin);
 
-            // Hide Affiliations section unless school or coaching is active / on
-            if (!_hasSchool && !_hasCoaching) return null;
-
+            // Always show Affiliations with School option available
             const _openSchoolPicker = async () => {
               setSchoolPickerLoading(true);
               setShowSchoolPicker(true);
@@ -16913,47 +17110,58 @@ export const StudentDashboard: React.FC<Props> = ({
                     <p className={`text-xs font-black uppercase tracking-widest ${_pTxt}`}>Affiliations</p>
                   </div>
 
-                  {/* ── SCHOOL ROW ── */}
-                  {_hasSchool && (
-                    <div className="px-4 py-3 flex items-center gap-2.5" style={{ borderBottom: _hasCoaching ? _pSep : undefined }}>
-                      <Building2 size={17} className={_light ? "text-blue-600 shrink-0" : "text-blue-400 shrink-0"} />
-                      <div className="flex-1 min-w-0">
-                        <span className="text-[11px] font-bold" style={{ color: _pTxtMutedColor }}>School: </span>
-                        <span className={`text-[13px] font-black ${_userSchoolId && userSchool ? _pTxt : _pTxtMuted}`}>
-                          {_userSchoolId && userSchool ? userSchool.name : _userSchoolId ? '…' : 'Not Joined'}
-                        </span>
-                      </div>
-                      {_userSchoolId ? (
-                        <div className="flex gap-1.5 shrink-0">
-                          <button onClick={_openSchoolPicker}
-                            className="text-[11px] font-black px-2.5 py-1 rounded-lg active:scale-95 transition cursor-pointer"
-                            style={{
-                              background: _light ? `${tierTheme.primary}18` : 'rgba(234, 179, 8, 0.15)',
-                              color: _light ? tierTheme.primary : '#fde047',
-                              border: _light ? `1px solid ${tierTheme.primary}30` : '1px solid rgba(234, 179, 8, 0.35)',
-                            }}>
-                            Change
-                          </button>
-                          <button onClick={handleRemoveSchool}
-                            className="text-[11px] font-black px-2.5 py-1 rounded-lg active:scale-95 transition cursor-pointer"
-                            style={{ background: 'rgba(239,68,68,0.10)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.25)' }}>
-                            Remove
-                          </button>
-                        </div>
-                      ) : (
-                        <button onClick={_openSchoolPicker}
-                          className="text-[11px] font-black px-3 py-1 rounded-lg active:scale-95 transition shrink-0 cursor-pointer"
-                          style={{
-                            background: _light ? `${tierTheme.primary}15` : 'linear-gradient(135deg, #fde68a 0%, #eab308 50%, #b45309 100%)',
-                            color: _light ? tierTheme.primary : '#0f172a',
-                            border: _light ? `1px solid ${tierTheme.primary}30` : '1px solid rgba(253, 230, 138, 0.5)',
-                            boxShadow: _light ? undefined : '0 2px 8px rgba(234, 179, 8, 0.35)',
-                          }}>
-                          Join →
-                        </button>
-                      )}
+                  {/* ── SCHOOL ROW (DIRECT TAP OPENS SCHOOL ERP GATEWAY) ── */}
+                  <div
+                    onClick={() => {
+                      hapticStrong();
+                      onOpenSchool?.();
+                    }}
+                    className={`px-4 py-3 flex items-center gap-2.5 cursor-pointer ${_pHovCls} transition-colors`}
+                    style={{ borderBottom: _hasCoaching ? _pSep : undefined }}
+                  >
+                    <Building2 size={17} className={_light ? "text-blue-600 shrink-0" : "text-emerald-400 shrink-0"} />
+                    <div className="flex-1 min-w-0">
+                      <span className="text-[11px] font-bold" style={{ color: _pTxtMutedColor }}>School: </span>
+                      <span className={`text-[13px] font-black truncate ${_userSchoolId && userSchool ? _pTxt : _pTxtMuted}`}>
+                        {_userSchoolId && userSchool ? userSchool.name : _userSchoolId ? 'Connected School' : 'School ID Card से जुड़ें'}
+                      </span>
+                      <p className={`text-[10px] ${_pTxtSub} truncate`}>
+                        {_userSchoolId && userSchool ? 'Tap to open School ERP Portal' : 'ID Card या QR scan करके school से जुड़ें'}
+                      </p>
                     </div>
-                  )}
+                    {_userSchoolId ? (
+                      <div className="flex gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                        <button onClick={() => { hapticStrong(); onOpenSchool?.(); }}
+                          className="text-[11px] font-black px-2.5 py-1 rounded-lg active:scale-95 transition cursor-pointer"
+                          style={{
+                            background: _light ? `${tierTheme.primary}18` : 'rgba(234, 179, 8, 0.15)',
+                            color: _light ? tierTheme.primary : '#fde047',
+                            border: _light ? `1px solid ${tierTheme.primary}30` : '1px solid rgba(234, 179, 8, 0.35)',
+                          }}>
+                          Open
+                        </button>
+                        <button onClick={() => setShowExitSchoolConfirm(true)}
+                          className="text-[11px] font-black px-2.5 py-1 rounded-lg active:scale-95 transition cursor-pointer flex items-center gap-1"
+                          style={{ background: 'rgba(239,68,68,0.10)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.25)' }}>
+                          <LogOut size={12} />
+                          Exit
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          hapticStrong();
+                          onOpenSchool?.();
+                        }}
+                        className="text-[11px] font-black px-3 py-1.5 rounded-xl active:scale-95 transition shrink-0 cursor-pointer flex items-center gap-1 text-white bg-indigo-600 hover:bg-indigo-500 shadow-sm"
+                      >
+                        <QrCode size={13} />
+                        <span>Scan / Login →</span>
+                      </button>
+                    )}
+                  </div>
 
                   {/* ── COACHING ROW ── */}
                   {_hasCoaching && (
@@ -17057,6 +17265,36 @@ export const StudentDashboard: React.FC<Props> = ({
                 <ChevronRight size={14} style={{ color: _pTxtMutedColor }} className="shrink-0" />
               </button>
             )}
+
+            {/* School ERP Entry in Actions Menu */}
+            <button
+              type="button"
+              onClick={() => {
+                hapticStrong();
+                onOpenSchool?.();
+              }}
+              className={`w-full px-4 py-4 flex items-center gap-3.5 ${_pHovCls} transition-all cursor-pointer bg-gradient-to-r from-emerald-500/10 via-slate-900/40 to-transparent`}
+              style={{ borderBottom: _pSep }}
+            >
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 shadow-sm" style={{
+                background: _light ? 'rgba(16,185,129,0.15)' : 'rgba(16,185,129,0.20)',
+                border: '1px solid rgba(16,185,129,0.40)',
+              }}>
+                <Building2 size={18} className="text-emerald-400" />
+              </div>
+              <div className="flex-1 text-left min-w-0">
+                <div className="flex items-center gap-2">
+                  <p className={`text-sm font-black ${_pTxt}`}>School</p>
+                  <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-emerald-500 text-slate-950 uppercase">
+                    {userSchool ? 'Connected' : 'ID Card'}
+                  </span>
+                </div>
+                <p className={`text-[10px] ${_pTxtSub} truncate mt-0.5`}>
+                  {userSchool ? userSchool.name : 'School ID Card से जुड़ें / Scan QR'}
+                </p>
+              </div>
+              <ChevronRight size={16} style={{ color: _pTxtMutedColor }} className="shrink-0" />
+            </button>
 
             {/* ── Settings Button ── */}
             <button
@@ -17768,7 +18006,7 @@ export const StudentDashboard: React.FC<Props> = ({
     );
   };
 
-  if (showBoardPromptForClass) {
+  if (showBoardPromptForClass && !Boolean(userSchool || (user as any)?.schoolId)) {
     return (
       <div className="min-h-[100dvh] flex items-center justify-center bg-slate-900/50 p-4 z-[200] fixed inset-0 backdrop-blur-sm animate-in fade-in">
         <div className="bg-white rounded-3xl p-6 w-full shadow-2xl relative text-center">
@@ -19577,8 +19815,29 @@ export const StudentDashboard: React.FC<Props> = ({
                         </button>
                       </div>
 
-                      {/* Board dropdown with increased padding */}
+                      {/* Board dropdown with increased padding - hidden for school students */}
                       {(() => {
+                        const isStudentInSchool = Boolean(userSchool || (user as any)?.schoolId);
+                        if (isStudentInSchool) {
+                          return (
+                            <div className={`px-4 pt-3.5 pb-3.5 border-b ${isCurrentBlue ? 'border-[#1e2f4f]' : isCurrentDark ? 'border-slate-800' : 'border-slate-100'}`}>
+                              <p className="text-[10px] font-black uppercase tracking-widest text-emerald-500 mb-1.5 flex items-center gap-1">
+                                <span>🏫</span> School Curriculum
+                              </p>
+                              <div className={`px-3 py-2 rounded-xl text-[12px] font-black border flex items-center justify-between ${
+                                isCurrentBlue
+                                  ? 'bg-[#132038] border-[#1e3252] text-white'
+                                  : isCurrentDark
+                                  ? 'bg-slate-800/80 border-slate-700 text-white'
+                                  : 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
+                              }`}>
+                                <span className="truncate">{userSchool?.name || 'School Student'}</span>
+                                <span className="text-[10px] bg-emerald-500/20 text-emerald-600 px-2 py-0.5 rounded-full font-bold ml-1 shrink-0">DIRECT</span>
+                              </div>
+                            </div>
+                          );
+                        }
+
                         const boardOptions = [
                           { id: 'NCERT_EN', label: 'NCERT English' },
                           { id: 'NCERT_HI', label: 'NCERT Hindi' },
@@ -27178,7 +27437,7 @@ export const StudentDashboard: React.FC<Props> = ({
               );
             })()}
             {/* ── UNIFIED SLIM BAR — tab bar ke neeche (Reading/chunk mode mein hidden — ChunkedNotesReader ka slim bar leta hai jagah) ── */}
-            {!lucentImmersive && !isLandscapeUiHidden && lucentActiveTab !== 'FLASHCARD' && !(lucentActiveTab === 'NOTES' && lucentNotesViewMode === 'chunk') && (
+            {!lucentImmersive && !isLandscapeUiHidden && !Boolean(entry.schoolId) && lucentActiveTab !== 'FLASHCARD' && !(lucentActiveTab === 'NOTES' && lucentNotesViewMode === 'chunk') && (
               <div className="bg-white border-b border-slate-100 shrink-0 flex items-center" style={{ minHeight: 36 }}>
                 {/* Back */}
                 <button onClick={closeLucentViewer} className="w-8 h-8 flex items-center justify-center text-slate-600 active:scale-90 transition shrink-0 border-r border-slate-100" title="Back">
@@ -27410,6 +27669,19 @@ export const StudentDashboard: React.FC<Props> = ({
               }}
             >
               {currentPage ? (
+                Boolean(entry.schoolId) ? (
+                  /* ── School Curriculum Mode: Continuous Samsung Notes / Gemini Document Reader with Calm Floating TTS (No Auto-Highlight jumps) ── */
+                  <SchoolNotebookReader
+                    entry={entry}
+                    currentPage={currentPage}
+                    pageIndex={safeIndex}
+                    totalPages={totalPages}
+                    onPageChange={(idx) => setLucentPageIndex(idx)}
+                    onBack={closeLucentViewer}
+                    schoolName={userSchool?.name || entry.schoolName}
+                    isDarkMode={isDarkMode}
+                  />
+                ) : (
                 <div className={lucentNotesViewMode === 'html' ? '' : 'px-4 pb-2'}>
                   {lucentNotesViewMode === 'html' ? (
                     /* ── Write Mode: Full-page HTML rendered view ── */
@@ -27646,6 +27918,7 @@ export const StudentDashboard: React.FC<Props> = ({
                   )}
                   {/* ────────────────────────────────────────────────────────────────── */}
                 </div>
+                )
               ) : (
                 <div className="text-center text-slate-500 py-16 text-sm">No pages available.</div>
               )}
@@ -28747,7 +29020,7 @@ RULES:
       )}
 
       {/* REVISION HUB FULL-SCREEN — MCQ · Revision · History · Performance */}
-      {showRevisionHubScreen && (
+      {showRevisionHubScreen && !Boolean(userSchool || (user as any)?.schoolId || resolvedStudentSchoolId || (typeof localStorage !== 'undefined' && localStorage.getItem('nst_active_school_id'))) && (
         <RevisionHubScreen
           user={user}
           settings={settings}
@@ -29153,7 +29426,7 @@ RULES:
           user={user}
           activeBoard={activeSessionBoard || (user as any)?.board || 'BSEB'}
           activeClass={activeSessionClass || (user as any)?.classLevel || '10'}
-          lucentNotes={(settings?.lucentNotes || []) as any[]}
+          lucentNotes={resolvedLucentNotes as any[]}
           onBack={() => setShowMyRoutine(false)}
           onUserUpdate={handleUserUpdate}
           settings={settings}
@@ -34689,6 +34962,17 @@ Explanation: Yahan explanation...`}</p>
         onOpenStore={() => onTabChange('STORE')}
         onNavigateToContent={handleNavigateFromGroupStudy}
         onUserUpdate={handleUserUpdate}
+        isSchoolHost={Boolean(
+          (user as any)?.role === 'SCHOOL_ADMIN' ||
+          (user as any)?.role === 'TEACHER' ||
+          (user as any)?.role === 'PRINCIPAL' ||
+          (user as any)?.schoolRole === 'SCHOOL_ADMIN' ||
+          (user as any)?.schoolRole === 'TEACHER' ||
+          (user as any)?.isSchoolHost ||
+          (user as any)?.isTeacher
+        )}
+        schoolId={userSchool?.id || (user as any)?.schoolId || resolvedStudentSchoolId}
+        schoolName={userSchool?.name || (user as any)?.schoolName}
       />
 
       {/* Floating Live Dot / HUD disabled per user request: "aur ab background me na aayega" */}
@@ -34909,13 +35193,63 @@ Explanation: Yahan explanation...`}</p>
             {(user as any).schoolId && (
               <div className="p-3 pt-0 shrink-0">
                 <button
-                  onClick={async () => { await handleRemoveSchool(); setShowSchoolPicker(false); }}
-                  className="w-full py-3 rounded-2xl text-sm font-black active:scale-95 transition bg-red-500/10 text-red-500 border border-red-500/20"
+                  onClick={() => { setShowSchoolPicker(false); setShowExitSchoolConfirm(true); }}
+                  className="w-full py-3 rounded-2xl text-sm font-black active:scale-95 transition bg-red-500/10 text-red-500 border border-red-500/20 flex items-center justify-center gap-2 cursor-pointer"
                 >
-                  School hatao (None)
+                  <LogOut size={16} />
+                  Exit School (Default Mode me jaayein)
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ── SCHOOL EXIT CONFIRMATION MODAL ── */}
+      {showExitSchoolConfirm && (
+        <div className="fixed inset-0 z-[99999] bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-sm rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 shadow-2xl text-center space-y-4">
+            <div className="w-14 h-14 mx-auto rounded-2xl bg-red-500/15 text-red-500 flex items-center justify-center">
+              <LogOut size={26} />
+            </div>
+            <div>
+              <h3 className="text-lg font-black text-slate-900 dark:text-white">
+                School Exit Karein?
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+                School exit karne par aapka account default Super Admin mode me wapas restore ho jayega.
+              </p>
+            </div>
+            <div className="bg-slate-50 dark:bg-slate-800/60 rounded-2xl p-3 text-left space-y-2 text-xs text-slate-600 dark:text-slate-300">
+              <div className="flex items-start gap-2">
+                <span className="text-amber-500 font-bold shrink-0">•</span>
+                <span>School ke custom notes aur study materials hat jayenge.</span>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="text-emerald-500 font-bold shrink-0">•</span>
+                <span>Super Admin ke default notes aur study materials wapas aa jayenge.</span>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="text-blue-500 font-bold shrink-0">•</span>
+                <span>Normal rules (Sequential reading &amp; credit balance rules) lagu ho jayenge.</span>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowExitSchoolConfirm(false)}
+                className="py-2.5 rounded-xl text-xs font-black bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleExitSchool}
+                className="py-2.5 rounded-xl text-xs font-black bg-red-600 hover:bg-red-700 text-white shadow-md active:scale-95 transition cursor-pointer"
+              >
+                Haan, Exit Karein
+              </button>
+            </div>
           </div>
         </div>
       )}

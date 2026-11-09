@@ -33,8 +33,9 @@ import { extractStatements } from '../utils/mcqParser';
 
 type HubTab = 'MCQ' | 'REVISION' | 'PERFORMANCE';
 
-const CLASSES = ['6', '7', '8', '9', '10', '11', '12'];
+const CLASSES = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'];
 const CLASS_EMOJIS: Record<string, string> = {
+  '1': '🌱', '2': '✏️', '3': '🎨', '4': '🧩', '5': '🔬',
   '6': '📗', '7': '📘', '8': '📙', '9': '📕',
   '10': '🏅', '11': '🔬', '12': '🎓',
 };

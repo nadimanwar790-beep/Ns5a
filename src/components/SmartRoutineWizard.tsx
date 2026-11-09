@@ -65,9 +65,19 @@ export const SmartRoutineWizard: React.FC<SmartRoutineWizardProps> = ({
   }, [isOpen]);
 
   // Step 1: Goal & Class/Book
+  const resolvedSchoolId = user?.schoolId || (typeof localStorage !== 'undefined' ? localStorage.getItem('nst_active_school_id') : null);
+  const resolvedSchoolName = user?.schoolName || (() => {
+    try {
+      const raw = localStorage.getItem('nst_linked_school_info');
+      if (raw) return JSON.parse(raw)?.name;
+    } catch {}
+    return null;
+  })() || 'Aapka School';
+  const isSchoolStudent = Boolean(resolvedSchoolId);
+
   const [mode, setMode] = useState<'SCHOOL' | 'COMPETITION'>(routineData.routineMode || 'SCHOOL');
   const [board, setBoard] = useState<string>(routineData.selectedBoard || 'BSEB');
-  const [classLevel, setClassLevel] = useState<string>(routineData.selectedClass || '10');
+  const [classLevel, setClassLevel] = useState<string>(routineData.selectedClass || (user?.className ? String(user.className).replace(/[^0-9]/g, '') : '10') || '10');
   const [selectedBooks, setSelectedBooks] = useState<string[]>(
     routineData.selectedBooks?.length ? routineData.selectedBooks : [routineData.selectedBook || 'Lucent']
   );
@@ -96,14 +106,30 @@ export const SmartRoutineWizard: React.FC<SmartRoutineWizardProps> = ({
     allNotes.forEach(n => {
       const cl = n.classLevel;
       if (cl && !isNaN(Number(cl))) {
-        const nb = n.board;
-        if (targetBoard && targetBoard !== 'ALL_BOARDS' && nb && nb !== targetBoard && nb !== 'ALL_BOARDS') return;
-        s.add(String(cl));
+        if (isSchoolStudent) {
+          if (!n.schoolId || n.schoolId === resolvedSchoolId || n.schoolId === 'GLOBAL') {
+            s.add(String(cl));
+          }
+        } else {
+          const nb = n.board;
+          if (targetBoard && targetBoard !== 'ALL_BOARDS' && nb && nb !== targetBoard && nb !== 'ALL_BOARDS') return;
+          s.add(String(cl));
+        }
       }
     });
-    if (s.size === 0) ['9', '10', '11', '12'].forEach(c => s.add(c));
+    if (user?.className) {
+      const numMatch = String(user.className).match(/\d+/);
+      if (numMatch) s.add(numMatch[0]);
+    }
+    if (s.size === 0) {
+      if (isSchoolStudent) {
+        ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'].forEach(c => s.add(c));
+      } else {
+        ['9', '10', '11', '12'].forEach(c => s.add(c));
+      }
+    }
     return Array.from(s).sort((a, b) => Number(a) - Number(b));
-  }, [allNotes, board]);
+  }, [allNotes, board, isSchoolStudent, resolvedSchoolId, user?.className]);
 
   // Available competition books with real notes (Strictly COMPETITION ONLY — NO Class 6-12 or academic subjects!)
   const availableBooks = useMemo(() => {
@@ -136,7 +162,11 @@ export const SmartRoutineWizard: React.FC<SmartRoutineWizardProps> = ({
 
       if (mode === 'SCHOOL') {
         if (n.classLevel === 'COMPETITION') return;
-        if (board && board !== 'ALL_BOARDS' && n.board && n.board !== board && n.board !== 'ALL_BOARDS') return;
+        if (isSchoolStudent) {
+          if (n.schoolId && n.schoolId !== 'GLOBAL' && n.schoolId !== resolvedSchoolId) return;
+        } else {
+          if (board && board !== 'ALL_BOARDS' && n.board && n.board !== board && n.board !== 'ALL_BOARDS') return;
+        }
         if (classLevel && n.classLevel && String(n.classLevel) !== String(classLevel)) return;
       } else {
         // COMPETITION MODE: Strictly NO academic school notes (Class 6-12, BSEB, etc.)
@@ -253,7 +283,11 @@ export const SmartRoutineWizard: React.FC<SmartRoutineWizardProps> = ({
           if (s !== subId) return false;
           if (mode === 'SCHOOL') {
             if (n.classLevel === 'COMPETITION') return false;
-            if (board && board !== 'ALL_BOARDS' && n.board && n.board !== board && n.board !== 'ALL_BOARDS') return false;
+            if (isSchoolStudent) {
+              if (n.schoolId && n.schoolId !== 'GLOBAL' && n.schoolId !== resolvedSchoolId) return false;
+            } else {
+              if (board && board !== 'ALL_BOARDS' && n.board && n.board !== board && n.board !== 'ALL_BOARDS') return false;
+            }
             if (classLevel && n.classLevel && String(n.classLevel) !== String(classLevel)) return false;
           } else {
             // Strictly exclude academic school notes from competition routine
@@ -273,9 +307,9 @@ export const SmartRoutineWizard: React.FC<SmartRoutineWizardProps> = ({
           subjectId: subId,
           displayName: subObj.displayName,
           emoji: subObj.emoji,
-          bookName: mode === 'COMPETITION' ? (selectedBooks[0] || 'Lucent') : '',
+          bookName: mode === 'COMPETITION' ? (selectedBooks[0] || 'Lucent') : (isSchoolStudent ? resolvedSchoolName : ''),
           classLevel: mode === 'SCHOOL' ? classLevel : undefined,
-          board: mode === 'SCHOOL' ? board : undefined,
+          board: mode === 'SCHOOL' ? (isSchoolStudent ? resolvedSchoolName : board) : undefined,
           currentLessonIndex: 0,
           totalLessons: matchingNotes.length,
         });
@@ -305,7 +339,7 @@ export const SmartRoutineWizard: React.FC<SmartRoutineWizardProps> = ({
 
     onComplete({
       routineMode: mode,
-      selectedBoard: mode === 'SCHOOL' ? board : null,
+      selectedBoard: mode === 'SCHOOL' ? (isSchoolStudent ? resolvedSchoolName : board) : null,
       selectedClass: mode === 'SCHOOL' ? classLevel : null,
       selectedBooks: mode === 'COMPETITION' ? selectedBooks : [],
       routineCategories: categories,
@@ -399,26 +433,50 @@ export const SmartRoutineWizard: React.FC<SmartRoutineWizardProps> = ({
             {/* School Class & Board pickers */}
             {mode === 'SCHOOL' ? (
               <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-3">
-                <div>
-                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Board Chunein</p>
-                  <div className="flex gap-2">
-                    {['BSEB', 'NCERT_HI', 'NCERT_EN'].map(b => (
-                      <button
-                        key={b}
-                        type="button"
-                        onClick={() => setBoard(b)}
-                        className="flex-1 py-1.5 rounded-xl text-xs font-black transition-all"
-                        style={{
-                          background: board === b ? theme.primary : '#ffffff',
-                          color: board === b ? '#ffffff' : '#64748b',
-                          border: `1px solid ${board === b ? theme.primary : '#cbd5e1'}`,
-                        }}
-                      >
-                        {b === 'BSEB' ? 'Bihar Board' : b === 'NCERT_HI' ? 'NCERT (Hindi)' : 'NCERT (Eng)'}
-                      </button>
-                    ))}
+                {isSchoolStudent ? (
+                  <div>
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Aapka School</p>
+                    <div className="flex items-center gap-3 p-3 rounded-2xl bg-gradient-to-r from-amber-500/10 via-amber-50 to-indigo-500/10 border-2 border-amber-300 shadow-xs">
+                      <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center font-black text-xl shadow-md shrink-0">
+                        🏫
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h4 className="font-black text-sm text-slate-900 truncate">
+                            {resolvedSchoolName}
+                          </h4>
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-amber-200/80 text-amber-900 border border-amber-300 shrink-0">
+                            School Routine
+                          </span>
+                        </div>
+                        <p className="text-[11px] font-bold text-slate-500 mt-0.5">
+                          School Custom Curriculum &amp; Timetable Active
+                        </p>
+                      </div>
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div>
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Board Chunein</p>
+                    <div className="flex gap-2">
+                      {['BSEB', 'NCERT_HI', 'NCERT_EN'].map(b => (
+                        <button
+                          key={b}
+                          type="button"
+                          onClick={() => setBoard(b)}
+                          className="flex-1 py-1.5 rounded-xl text-xs font-black transition-all"
+                          style={{
+                            background: board === b ? theme.primary : '#ffffff',
+                            color: board === b ? '#ffffff' : '#64748b',
+                            border: `1px solid ${board === b ? theme.primary : '#cbd5e1'}`,
+                          }}
+                        >
+                          {b === 'BSEB' ? 'Bihar Board' : b === 'NCERT_HI' ? 'NCERT (Hindi)' : 'NCERT (Eng)'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <div>
                   <p className="text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Class Chunein</p>

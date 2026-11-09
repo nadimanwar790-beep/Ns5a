@@ -92,9 +92,17 @@ export const StudentQuickActionModal: React.FC<Props> = ({
     fatherName: "",
     fatherOccupation: "",
     fatherQualification: "",
+    fatherPhone: "",
+    fatherWhatsapp: "",
     motherName: "",
     motherOccupation: "",
     motherQualification: "",
+    motherPhone: "",
+    motherWhatsapp: "",
+    emergencyContact: "",
+    emergencyPhone: "",
+    emergencyRelation: "",
+    emergencyWhatsapp: "",
     monthlyFee: 0,
     busFee: 0,
     busRoute: "",
@@ -151,9 +159,17 @@ export const StudentQuickActionModal: React.FC<Props> = ({
         fatherName: student.fatherName || "",
         fatherOccupation: student.fatherOccupation || "",
         fatherQualification: (student as any).fatherQualification || "",
+        fatherPhone: student.fatherPhone || "",
+        fatherWhatsapp: student.fatherWhatsapp || "",
         motherName: student.motherName || "",
         motherOccupation: student.motherOccupation || "",
         motherQualification: (student as any).motherQualification || "",
+        motherPhone: student.motherPhone || "",
+        motherWhatsapp: student.motherWhatsapp || "",
+        emergencyContact: student.emergencyContact || "",
+        emergencyPhone: student.emergencyPhone || "",
+        emergencyRelation: student.emergencyRelation || "",
+        emergencyWhatsapp: student.emergencyWhatsapp || "",
         monthlyFee: student.monthlyFee || 0,
         busFee: student.busFee || 0,
         busRoute: student.busRoute || "",
@@ -279,9 +295,17 @@ export const StudentQuickActionModal: React.FC<Props> = ({
         fatherName: editForm.fatherName.trim(),
         fatherOccupation: editForm.fatherOccupation.trim(),
         fatherQualification: editForm.fatherQualification.trim(),
+        fatherPhone: editForm.fatherPhone.trim(),
+        fatherWhatsapp: editForm.fatherWhatsapp.trim(),
         motherName: editForm.motherName.trim(),
         motherOccupation: editForm.motherOccupation.trim(),
         motherQualification: editForm.motherQualification.trim(),
+        motherPhone: editForm.motherPhone.trim(),
+        motherWhatsapp: editForm.motherWhatsapp.trim(),
+        emergencyContact: editForm.emergencyContact.trim(),
+        emergencyPhone: editForm.emergencyPhone.trim(),
+        emergencyRelation: editForm.emergencyRelation.trim(),
+        emergencyWhatsapp: editForm.emergencyWhatsapp.trim(),
         monthlyFee: Number(editForm.monthlyFee) || 0,
         busFee: Number(editForm.busFee) || 0,
         busRoute: editForm.busRoute.trim(),
@@ -1107,6 +1131,18 @@ export const StudentQuickActionModal: React.FC<Props> = ({
                     <p className="font-extrabold text-slate-800 dark:text-white text-sm">{cur.fatherName || "—"}</p>
                     <p className="text-slate-500">Qualification: {cur.fatherQualification || "Graduate / Matric"}</p>
                     <p className="text-slate-500">Occupation: {cur.fatherOccupation || "Business / Agriculture"}</p>
+                    {cur.fatherPhone && (
+                      <p className="text-indigo-600 dark:text-indigo-400 font-bold flex items-center gap-1">
+                        <span>📞 Mobile:</span>
+                        <a href={`tel:${cur.fatherPhone}`} className="hover:underline">{cur.fatherPhone}</a>
+                      </p>
+                    )}
+                    {cur.fatherWhatsapp && (
+                      <p className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
+                        <span>💬 WA:</span>
+                        <a href={`https://wa.me/91${cur.fatherWhatsapp.replace(/\D/g, "")}`} target="_blank" rel="noreferrer" className="hover:underline">{cur.fatherWhatsapp}</a>
+                      </p>
+                    )}
                     <p className="text-slate-500 font-mono text-[11px]">Aadhaar: {maskAadhaar(cur.fatherAadhaar)}</p>
                   </div>
 
@@ -1116,6 +1152,18 @@ export const StudentQuickActionModal: React.FC<Props> = ({
                     <p className="font-extrabold text-slate-800 dark:text-white text-sm">{cur.motherName || "—"}</p>
                     <p className="text-slate-500">Qualification: {cur.motherQualification || "Matric / Intermediate"}</p>
                     <p className="text-slate-500">Occupation: {cur.motherOccupation || "Homemaker"}</p>
+                    {cur.motherPhone && (
+                      <p className="text-pink-600 dark:text-pink-400 font-bold flex items-center gap-1">
+                        <span>📱 Mobile:</span>
+                        <a href={`tel:${cur.motherPhone}`} className="hover:underline">{cur.motherPhone}</a>
+                      </p>
+                    )}
+                    {cur.motherWhatsapp && (
+                      <p className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
+                        <span>💬 WA:</span>
+                        <a href={`https://wa.me/91${cur.motherWhatsapp.replace(/\D/g, "")}`} target="_blank" rel="noreferrer" className="hover:underline">{cur.motherWhatsapp}</a>
+                      </p>
+                    )}
                     <p className="text-slate-500 font-mono text-[11px]">Aadhaar: {maskAadhaar(cur.motherAadhaar)}</p>
                   </div>
                 </div>
@@ -1161,7 +1209,7 @@ export const StudentQuickActionModal: React.FC<Props> = ({
                     <p className="font-extrabold text-slate-800 dark:text-white">
                       {cur.emergencyContact || cur.fatherName || "अभिभावक (Guardian)"} ({cur.emergencyRelation || "Father"})
                     </p>
-                    <div className="flex items-center gap-2 mt-2">
+                    <div className="flex flex-wrap items-center gap-2 mt-2">
                       <a
                         href={`tel:${cur.emergencyPhone || cur.phone || ""}`}
                         className="inline-flex items-center gap-1 px-3 py-1 bg-emerald-600 text-white rounded-lg font-bold text-xs hover:bg-emerald-700"
@@ -1169,6 +1217,16 @@ export const StudentQuickActionModal: React.FC<Props> = ({
                         <Phone className="w-3 h-3" />
                         <span>{cur.emergencyPhone || cur.phone || "कॉल करें"}</span>
                       </a>
+                      {cur.emergencyWhatsapp && (
+                        <a
+                          href={`https://wa.me/91${cur.emergencyWhatsapp.replace(/\D/g, "")}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 px-3 py-1 bg-emerald-700 text-white rounded-lg font-bold text-xs hover:bg-emerald-800"
+                        >
+                          <span>💬 WA: {cur.emergencyWhatsapp}</span>
+                        </a>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -2074,6 +2132,78 @@ export const StudentQuickActionModal: React.FC<Props> = ({
                     onChange={e => setEditForm({ ...editForm, motherOccupation: e.target.value })}
                     className="w-full px-3 py-2 border rounded-xl bg-white dark:bg-slate-700 dark:border-slate-600 text-slate-800 dark:text-white font-medium"
                     placeholder="e.g. Homemaker"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="font-bold text-indigo-700 dark:text-indigo-300">Father Mobile (पिता का मोबाइल)</label>
+                  <input
+                    type="tel"
+                    maxLength={10}
+                    value={editForm.fatherPhone}
+                    onChange={e => setEditForm({ ...editForm, fatherPhone: e.target.value.replace(/\D/g, "").slice(0, 10) })}
+                    className="w-full px-3 py-2 border rounded-xl bg-white dark:bg-slate-700 dark:border-slate-600 text-slate-800 dark:text-white font-medium"
+                    placeholder="10-digit mobile"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="font-bold text-emerald-700 dark:text-emerald-400">Father WhatsApp (पिता व्हाट्सएप)</label>
+                  <input
+                    type="tel"
+                    maxLength={10}
+                    value={editForm.fatherWhatsapp}
+                    onChange={e => setEditForm({ ...editForm, fatherWhatsapp: e.target.value.replace(/\D/g, "").slice(0, 10) })}
+                    className="w-full px-3 py-2 border rounded-xl bg-white dark:bg-slate-700 dark:border-slate-600 text-slate-800 dark:text-white font-medium"
+                    placeholder="WhatsApp number"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="font-bold text-pink-700 dark:text-pink-300">Mother Mobile (माता का मोबाइल)</label>
+                  <input
+                    type="tel"
+                    maxLength={10}
+                    value={editForm.motherPhone}
+                    onChange={e => setEditForm({ ...editForm, motherPhone: e.target.value.replace(/\D/g, "").slice(0, 10) })}
+                    className="w-full px-3 py-2 border rounded-xl bg-white dark:bg-slate-700 dark:border-slate-600 text-slate-800 dark:text-white font-medium"
+                    placeholder="10-digit mobile"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="font-bold text-emerald-700 dark:text-emerald-400">Mother WhatsApp (माता व्हाट्सएप)</label>
+                  <input
+                    type="tel"
+                    maxLength={10}
+                    value={editForm.motherWhatsapp}
+                    onChange={e => setEditForm({ ...editForm, motherWhatsapp: e.target.value.replace(/\D/g, "").slice(0, 10) })}
+                    className="w-full px-3 py-2 border rounded-xl bg-white dark:bg-slate-700 dark:border-slate-600 text-slate-800 dark:text-white font-medium"
+                    placeholder="WhatsApp number"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="font-bold text-amber-700 dark:text-amber-400">Emergency Phone (आपातकालीन मोबाइल)</label>
+                  <input
+                    type="tel"
+                    maxLength={10}
+                    value={editForm.emergencyPhone}
+                    onChange={e => setEditForm({ ...editForm, emergencyPhone: e.target.value.replace(/\D/g, "").slice(0, 10) })}
+                    className="w-full px-3 py-2 border rounded-xl bg-white dark:bg-slate-700 dark:border-slate-600 text-slate-800 dark:text-white font-medium"
+                    placeholder="Emergency mobile"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="font-bold text-emerald-700 dark:text-emerald-400">Emergency WhatsApp</label>
+                  <input
+                    type="tel"
+                    maxLength={10}
+                    value={editForm.emergencyWhatsapp}
+                    onChange={e => setEditForm({ ...editForm, emergencyWhatsapp: e.target.value.replace(/\D/g, "").slice(0, 10) })}
+                    className="w-full px-3 py-2 border rounded-xl bg-white dark:bg-slate-700 dark:border-slate-600 text-slate-800 dark:text-white font-medium"
+                    placeholder="Emergency WhatsApp"
                   />
                 </div>
 

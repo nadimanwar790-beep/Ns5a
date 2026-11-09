@@ -1667,6 +1667,36 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
     const sorted = Array.from(allMonthsSet).sort();
     const localFeeList = getLocalFees(schoolId);
 
+    // Compute arrears breakdown matching modalArrears exactly
+    const arrearsMonthsList = sorted.filter(m => m !== collectingFee.month);
+    const standardRate = modalMonthly + modalBus;
+
+    // Check if recorded history matches modalArrears exactly
+    const histRecords = arrearsMonthsList.map(m => {
+      const hist = localFeeList.find(h => h.studentId === collectingFee.studentId && h.month === m)
+        || feeHistory.find(h => h.studentId === collectingFee.studentId && h.month === m);
+      const alreadyPaid = Number(hist?.paidAmount || 0);
+      const due = hist?.balanceDue !== undefined
+        ? Number(hist.balanceDue)
+        : (hist?.paid ? 0 : Number(hist?.amount || hist?.monthlyAmount || standardRate));
+      return { month: m, hist, alreadyPaid, due };
+    });
+
+    const sumHistDues = histRecords.reduce((acc, h) => acc + h.due, 0);
+    const useDirectHist = sumHistDues === modalArrears && sumHistDues > 0;
+
+    // If history sum does not match actual modalArrears, allocate modalArrears chronologically
+    let arrearsRemaining = modalArrears;
+    const allocatedArrearsMap = new Map<string, number>();
+    arrearsMonthsList.forEach((m, idx) => {
+      const isLastArrears = idx === arrearsMonthsList.length - 1;
+      const alloc = isLastArrears
+        ? Math.max(0, arrearsRemaining)
+        : Math.min(standardRate, Math.max(0, arrearsRemaining));
+      allocatedArrearsMap.set(m, alloc);
+      arrearsRemaining = Math.max(0, arrearsRemaining - alloc);
+    });
+
     return sorted
       .map(m => {
         const isCurrent = m === collectingFee.month;
@@ -1680,25 +1710,24 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
             totalBill: modalCurrentMonthBill,
           };
         }
-        const hist = localFeeList.find(h => h.studentId === collectingFee.studentId && h.month === m)
-          || feeHistory.find(h => h.studentId === collectingFee.studentId && h.month === m);
-        const standardRate = modalMonthly + modalBus;
-        const alreadyPaid = Number(hist?.paidAmount || 0);
-        const due = hist?.balanceDue !== undefined
-          ? Number(hist.balanceDue)
-          : (hist?.paid ? 0 : Number(hist?.amount || hist?.monthlyAmount || standardRate));
+
+        const histItem = histRecords.find(h => h.month === m);
+        const alreadyPaid = histItem?.alreadyPaid || 0;
+        const due = useDirectHist
+          ? (histItem?.due || 0)
+          : (allocatedArrearsMap.get(m) ?? 0);
 
         return {
           month: m,
           label: formatMonthLabel(m),
-          monthlyAmount: Number(hist?.monthlyAmount || standardRate),
+          monthlyAmount: Number(histItem?.hist?.monthlyAmount || standardRate),
           totalDue: due,
           alreadyPaid,
-          totalBill: Number(hist?.amount || standardRate),
+          totalBill: Math.max(due, Number(histItem?.hist?.amount || standardRate)),
         };
       })
       .filter(item => item.totalDue > 0 || item.month === collectingFee.month);
-  }, [collectingFee, modalMonthly, modalCurrentMonthBill, modalBus, schoolId, feeHistory]);
+  }, [collectingFee, modalMonthly, modalCurrentMonthBill, modalBus, modalArrears, schoolId, feeHistory]);
 
   const modalFifoResult = React.useMemo<FifoPaymentResult | null>(() => {
     if (!collectingFee || modalUnpaidMonths.length === 0) return null;

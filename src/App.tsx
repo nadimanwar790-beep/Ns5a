@@ -12,6 +12,8 @@ import {
 } from 'lucide-react';
 import { PwaInstallPrompt } from './components/PwaInstallPrompt';
 import { NotificationPrompt } from './components/NotificationPrompt';
+import { GlobalNotificationPopup } from './components/GlobalNotificationPopup';
+import { subscribeToUserNotifications, listenToForegroundMessages } from './components/NotificationManager';
 import { auth, logoutUser, getFreshUserData, getUserData } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { DeviceConflictModal } from './components/DeviceConflictModal';
@@ -156,7 +158,7 @@ export const DEFAULT_SUPERADMIN_USER = {
   email: 'ghduug6@gmail.com',
   mobile: '9811023450',
   role: 'SUPERADMIN',
-  schoolId: 'dps_gurgaon_sector45',
+  schoolId: '',
   credits: 99999,
   diamonds: 99999,
   streak: 100,
@@ -191,6 +193,11 @@ const getInitialUser = () => {
           parsed.role = 'SUPERADMIN';
           parsed.isAdmin = true;
           parsed.isSuperAdmin = true;
+          // Super Admin is never tied to any school by default!
+          parsed.schoolId = '';
+          parsed.schoolName = null;
+          parsed.schoolRole = null;
+          parsed.schoolCode = null;
         } else if (isSchoolAdminEmail(parsed.email)) {
           parsed.role = 'SCHOOL_ADMIN';
         }
@@ -227,15 +234,21 @@ const getInitialSettings = () => {
 
 export function App() {
   const [user, setUser] = useState<any>(getInitialUser);
-  // Default view mode
+  // Default view mode: STUDENT by default
   const [view, setView] = useState<AppViewMode>(() => {
     try {
       const saved = localStorage.getItem('nst_app_view_mode') as AppViewMode;
-      if (saved === 'ADMIN' || saved === 'SCHOOL_ERP' || saved === 'STUDENT') {
+      if (saved === 'ADMIN' || saved === 'STUDENT') {
         return saved;
       }
+      if (saved === 'SCHOOL_ERP') {
+        const u = getInitialUser();
+        if (isSchoolAdminEmail(u?.email) || u?.role === 'SCHOOL_ADMIN' || u?.role === 'TEACHER') {
+          return 'SCHOOL_ERP';
+        }
+      }
     } catch {}
-    return 'SCHOOL_ERP';
+    return 'STUDENT';
   });
 
   const handleSetView = (newView: AppViewMode) => {
@@ -274,6 +287,24 @@ export function App() {
     };
     window.addEventListener('nst_open_student_dashboard', handleOpenStudent);
     return () => window.removeEventListener('nst_open_student_dashboard', handleOpenStudent);
+  }, []);
+
+  // Real-time synchronization when school notes or settings are updated
+  useEffect(() => {
+    const handleSettingsUpdated = () => {
+      try {
+        const raw = localStorage.getItem('nst_system_settings');
+        if (raw) setSettings(JSON.parse(raw));
+      } catch {}
+    };
+    window.addEventListener('nst_system_settings_updated', handleSettingsUpdated);
+    window.addEventListener('nst-school-curriculum-notes-updated', handleSettingsUpdated);
+    window.addEventListener('storage', handleSettingsUpdated);
+    return () => {
+      window.removeEventListener('nst_system_settings_updated', handleSettingsUpdated);
+      window.removeEventListener('nst-school-curriculum-notes-updated', handleSettingsUpdated);
+      window.removeEventListener('storage', handleSettingsUpdated);
+    };
   }, []);
 
   // Guarantee pre-react splash screen dismissal immediately
@@ -445,26 +476,28 @@ export function App() {
           }
           handleLogin(parsedCached);
         } else {
-          const isSchoolAdm = isSchoolAdminEmail(cleanEmail);
+          const isSuperAdm = isSuperAdminEmail(cleanEmail);
+          const isSchoolAdm = !isSuperAdm && isSchoolAdminEmail(cleanEmail);
           const resolvedUser = {
             ...(fresh || {}),
             id: firebaseUser.uid,
             uid: firebaseUser.uid,
-            displayId: isSchoolAdm ? 'ADMIN-DPS' : (fresh?.displayId || `NSTA-${firebaseUser.uid.slice(-6).toUpperCase()}`),
-            name: fresh?.name || firebaseUser.displayName || (isSchoolAdm ? 'Dr. Arvind Swaminathan (School Admin)' : 'Student'),
+            displayId: isSuperAdm ? 'SUPERADMIN' : isSchoolAdm ? 'ADMIN-DPS' : (fresh?.displayId || `NSTA-${firebaseUser.uid.slice(-6).toUpperCase()}`),
+            name: fresh?.name || firebaseUser.displayName || (isSuperAdm ? 'Super Admin' : isSchoolAdm ? 'Dr. Arvind Swaminathan (School Admin)' : 'Student'),
             email: firebaseUser.email || '',
             photoURL: firebaseUser.photoURL || '',
-            role: isSchoolAdm ? 'SCHOOL_ADMIN' : (fresh?.role || 'STUDENT'),
-            schoolId: isSchoolAdm ? 'dps_gurgaon_sector45' : (fresh?.schoolId || ''),
+            role: isSuperAdm ? 'SUPERADMIN' : isSchoolAdm ? 'SCHOOL_ADMIN' : (fresh?.role || 'STUDENT'),
+            schoolId: isSuperAdm ? '' : (isSchoolAdm ? 'dps_gurgaon_sector45' : (fresh?.schoolId || '')),
             isGuest: false,
-            provider: isSchoolAdm ? 'admin_login' : (fresh?.provider || 'google'),
-            credits: isSchoolAdm ? 10000 : (fresh?.credits || 50),
+            provider: isSuperAdm ? 'superadmin_login' : isSchoolAdm ? 'admin_login' : (fresh?.provider || 'google'),
+            credits: isSuperAdm ? 99999 : isSchoolAdm ? 10000 : (fresh?.credits || 50),
+            diamonds: isSuperAdm ? 99999 : (fresh?.diamonds || 0),
             streak: fresh?.streak || 1,
             totalScore: fresh?.totalScore || 0,
             profileCompleted: true,
             board: fresh?.board || 'CBSE',
             classLevel: fresh?.classLevel || '10',
-            subscriptionTier: isSchoolAdm ? 'PRO' : (fresh?.subscriptionTier || 'FREE'),
+            subscriptionTier: isSuperAdm ? 'PRO' : isSchoolAdm ? 'PRO' : (fresh?.subscriptionTier || 'FREE'),
             studyMode: fresh?.studyMode || 'CREDIT'
           };
           handleLogin(resolvedUser);
@@ -538,6 +571,30 @@ export function App() {
       unsubscribeChallenge();
     };
   }, [user?.uid, user?.id, user?.isGuest]);
+
+  // Real-time Push & In-App Notification Listeners (Heads-Up Pop-Up Banner)
+  useEffect(() => {
+    let unsubForeground: any = null;
+    let unsubUserNotifs: any = null;
+
+    listenToForegroundMessages((payload) => {
+      console.log('[App] Received FCM foreground message:', payload);
+    }).then((unsub) => {
+      unsubForeground = unsub;
+    }).catch(() => {});
+
+    const uid = user?.uid || user?.id;
+    if (uid) {
+      unsubUserNotifs = subscribeToUserNotifications(uid, (notif) => {
+        console.log('[App] Received RTDB user notification:', notif);
+      });
+    }
+
+    return () => {
+      if (typeof unsubForeground === 'function') unsubForeground();
+      if (typeof unsubUserNotifs === 'function') unsubUserNotifs();
+    };
+  }, [user?.uid, user?.id]);
 
   const handleAcknowledgeConflict = () => {
     setConflictModalOpen(false);
@@ -645,11 +702,12 @@ export function App() {
               isSuperAdmin={Boolean(isSuperAdminEmail(user.email) || user.role === 'SUPERADMIN')}
               userRole={user.role || (isSchoolAdminEmail(user.email) ? 'SCHOOL_ADMIN' : 'STUDENT')}
               user={user}
-              defaultSchoolId={user.schoolId || 'dps_gurgaon_sector45'}
+              defaultSchoolId={user.schoolId || ''}
               forceAdminView={isSchoolAdminEmail(user.email) || user.role === 'SCHOOL_ADMIN' || user.role === 'ADMIN' || user.role === 'SUPERADMIN' || user.role === 'PRINCIPAL'}
-              onBack={isSuperAdminEmail(user.email) || user.role === 'SUPERADMIN' ? () => handleSetView('ADMIN') : undefined}
+              onBack={isSuperAdminEmail(user.email) || user.role === 'SUPERADMIN' ? () => handleSetView('ADMIN') : () => handleSetView('STUDENT')}
               onOpenAdminDashboard={isSuperAdminEmail(user.email) || user.role === 'SUPERADMIN' ? () => handleSetView('ADMIN') : undefined}
               onOpenPlatformContent={() => handleSetView('STUDENT')}
+              onOpenStudentDashboard={() => handleSetView('STUDENT')}
               onLogout={handleLogout}
             />
           )}
@@ -663,8 +721,10 @@ export function App() {
                 isSuperAdmin={false}
                 userRole="SCHOOL_ADMIN"
                 user={user}
-                defaultSchoolId={user.schoolId || 'dps_gurgaon_sector45'}
+                defaultSchoolId={user.schoolId || ''}
                 forceAdminView={true}
+                onOpenPlatformContent={() => handleSetView('STUDENT')}
+                onOpenStudentDashboard={() => handleSetView('STUDENT')}
                 onLogout={handleLogout}
               />
             ) : (
@@ -713,6 +773,7 @@ export function App() {
         appName={settings?.appName || 'NSTA'}
       />
 
+      <GlobalNotificationPopup />
       <PwaInstallPrompt />
       <NotificationPrompt userId={user?.uid || user?.id || ''} />
     </div>

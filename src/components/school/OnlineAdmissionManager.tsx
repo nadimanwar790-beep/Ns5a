@@ -61,6 +61,7 @@ import type {
   ClassFeeHead,
   ClassAdmissionHeadToggles,
   SeniorStream,
+  AdmissionFormFieldSettings,
 } from "../../school-types";
 import {
   BLOOD_GROUPS,
@@ -70,6 +71,7 @@ import {
   isSeniorClass,
   sortSchoolClasses,
   getDefaultSubjectsForClass,
+  DEFAULT_ADMISSION_FIELD_SETTINGS,
 } from "../../school-types";
 import {
   getAdmissionApplications,
@@ -94,11 +96,12 @@ import {
   getSchoolReferralSettings,
   saveSchoolReferralSettings,
   updateClassFeeStructure,
+  updateSchool,
 } from "../../school-firebase";
 import { saveUserToLive } from "../../firebase";
 import { DirectUploadButton } from "../DirectUploadButton";
 import { OfficialFeeReceiptModal } from "./OfficialFeeReceiptModal";
-import { AdmissionFormPrintModal, type AdmissionPrintMode } from "./AdmissionFormPrintModal";
+import { AdmissionFormPrintModal, type AdmissionPrintMode, calculateAgeOnAprilFirst } from "./AdmissionFormPrintModal";
 import {
   detectFamilySiblings,
   mergeSchoolReferrerList,
@@ -581,17 +584,58 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
     };
   }, [school.id, activeSession?.id]);
 
-  const [activeTab, setActiveTab] = useState<"applications" | "new_form" | "fee_setup">(() => {
+  const [activeTab, setActiveTab] = useState<"applications" | "new_form" | "fee_setup" | "field_settings">(() => {
     if (viewMode === "fee_setup_only") return "fee_setup";
     if (viewMode === "admissions_only") return isAdmin ? "applications" : "new_form";
     return isAdmin ? "applications" : "new_form";
   });
 
+  // Admin Admission Form Field Customization (What to show/hide in the form)
+  const [fieldSettings, setFieldSettings] = useState<AdmissionFormFieldSettings>(() => {
+    try {
+      const stored = localStorage.getItem(`nst_admission_field_settings_${school.id}`);
+      if (stored) {
+        return { ...DEFAULT_ADMISSION_FIELD_SETTINGS, ...JSON.parse(stored) };
+      }
+      if (school.admissionFieldSettings) {
+        return { ...DEFAULT_ADMISSION_FIELD_SETTINGS, ...school.admissionFieldSettings };
+      }
+    } catch {}
+    return DEFAULT_ADMISSION_FIELD_SETTINGS;
+  });
+
+  const [savingFieldSettings, setSavingFieldSettings] = useState(false);
+  const handleUpdateFieldSetting = async (key: keyof AdmissionFormFieldSettings, val: boolean) => {
+    const next = { ...fieldSettings, [key]: val };
+    setFieldSettings(next);
+    try {
+      localStorage.setItem(`nst_admission_field_settings_${school.id}`, JSON.stringify(next));
+      await updateSchool(school.id, { admissionFieldSettings: next } as any);
+    } catch (e) {
+      console.warn("Failed to sync field setting:", e);
+    }
+  };
+
+  const handleBulkUpdateFieldSettings = async (next: AdmissionFormFieldSettings) => {
+    setSavingFieldSettings(true);
+    setFieldSettings(next);
+    try {
+      localStorage.setItem(`nst_admission_field_settings_${school.id}`, JSON.stringify(next));
+      await updateSchool(school.id, { admissionFieldSettings: next } as any);
+      setSuccessToast("✅ एडमिशन फॉर्म फ़ील्ड सेटिंग्स सफलतापूर्वक सुरक्षित कर दी गईं!");
+      setTimeout(() => setSuccessToast(null), 3500);
+    } catch (e) {
+      console.warn("Failed to sync field settings:", e);
+    } finally {
+      setSavingFieldSettings(false);
+    }
+  };
+
   // Sync activeTab if viewMode changes externally
   useEffect(() => {
     if (viewMode === "fee_setup_only") {
       setActiveTab("fee_setup");
-    } else if (viewMode === "admissions_only" && activeTab === "fee_setup") {
+    } else if (viewMode === "admissions_only" && (activeTab === "fee_setup" || activeTab === "field_settings")) {
       setActiveTab(isAdmin ? "applications" : "new_form");
     }
   }, [viewMode, isAdmin]);
@@ -932,18 +976,32 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
     photoUrl: "",
     classId: classes[0]?.id || "",
     stream: "Science" as SeniorStream,
+    isOnlyChild: false,
+    identificationMark: "",
+    motherTongue: "Hindi (हिंदी)",
     previousSchool: "",
     previousMarks: "",
+    previousBoard: "CBSE",
+    previousTcNo: "",
+    previousTcDate: "",
     fatherName: "",
+    fatherQualification: "Graduate",
     fatherOccupation: "",
+    fatherPhone: "",
+    fatherWhatsapp: "",
     motherName: "",
-    motherOccupation: "",
+    motherQualification: "Graduate",
+    motherOccupation: "Home Maker",
+    motherPhone: "",
+    motherWhatsapp: "",
     annualIncome: "",
     emergencyContact: "",
     emergencyPhone: "",
     emergencyRelation: "Parent / Guardian",
-    identificationMark: "",
+    emergencyWhatsapp: "",
     medicalHistory: "Fit / No major condition",
+    childSensitivity: false,
+    childSensitivityRemarks: "",
     aadhaarNo: "",
     fatherAadhaar: "",
     motherAadhaar: "",
@@ -953,8 +1011,18 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
     address: "",
     city: "",
     pincode: "",
+    correspondenceAddress: "",
+    isSameAddress: true,
     usesBus: false,
     busRoute: "",
+    transportModeIfNo: "Guardian" as "Walking" | "Guardian",
+    transportDistanceKm: "",
+    siblingDetails: [] as Array<{ slNo: number; name: string; relation: string; className: string; rollNo?: string }>,
+    bankAccountName: "",
+    bankName: "",
+    bankAccountNumber: "",
+    bankIfsc: "",
+    parentDeclarationAccepted: true,
     referredByTeacherId: "",
     submittedDocs: [
       "Birth Certificate (जन्म प्रमाण पत्र)",
@@ -965,6 +1033,17 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
     paymentScreenshotUrl: "",
     transactionRef: "",
   });
+
+  // Calculate age as on 1st April of current academic session
+  const sessionYearNum = useMemo(() => {
+    const sName = activeSession?.name || sessions[0]?.name || "";
+    const match = sName.match(/\d{4}/);
+    return match ? parseInt(match[0], 10) : new Date().getFullYear();
+  }, [activeSession?.name, sessions]);
+
+  const ageOnApril1 = useMemo(() => {
+    return calculateAgeOnAprilFirst(form.dateOfBirth, sessionYearNum);
+  }, [form.dateOfBirth, sessionYearNum]);
 
   const parentApplications = useMemo(() => {
     if (!parentPortalPhone.trim()) return [];
@@ -1340,6 +1419,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
         emergencyContact: form.emergencyContact.trim() || undefined,
         emergencyPhone: form.emergencyPhone.trim() || undefined,
         emergencyRelation: form.emergencyRelation.trim() || undefined,
+        emergencyWhatsapp: form.emergencyWhatsapp.trim() || undefined,
         identificationMark: form.identificationMark.trim() || undefined,
         medicalHistory: form.medicalHistory.trim() || undefined,
         admissionType: form.admissionType || "NEW",
@@ -1352,13 +1432,17 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
         previousMarks: form.previousMarks.trim() || undefined,
         fatherName: form.fatherName.trim(),
         fatherOccupation: form.fatherOccupation.trim() || undefined,
+        fatherPhone: form.fatherPhone.trim() || undefined,
+        fatherWhatsapp: form.fatherWhatsapp.trim() || undefined,
         motherName: form.motherName.trim(),
         motherOccupation: form.motherOccupation.trim() || undefined,
+        motherPhone: form.motherPhone.trim() || undefined,
+        motherWhatsapp: form.motherWhatsapp.trim() || undefined,
         aadhaarNo: form.aadhaarNo.trim() || undefined,
         fatherAadhaar: form.fatherAadhaar.trim() || undefined,
         motherAadhaar: form.motherAadhaar.trim() || undefined,
         phone: form.phone.trim(),
-        whatsappNo: form.whatsappNo.trim() || undefined,
+        whatsappNo: form.whatsappNo.trim() || form.fatherWhatsapp.trim() || undefined,
         email: form.email.trim() || undefined,
         address: form.address.trim(),
         city: form.city.trim() || undefined,
@@ -1383,6 +1467,26 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
           : undefined,
         isSiblingMarked: formSiblingDetection.isExactFamily || undefined,
         familyGroupId: formSiblingDetection.isExactFamily ? formSiblingDetection.familyGroupId : undefined,
+        isOnlyChild: form.isOnlyChild || undefined,
+        motherTongue: form.motherTongue.trim() || undefined,
+        fatherQualification: form.fatherQualification.trim() || undefined,
+        motherQualification: form.motherQualification.trim() || undefined,
+        correspondenceAddress: form.isSameAddress ? form.address.trim() : (form.correspondenceAddress.trim() || form.address.trim()),
+        isSameAddress: form.isSameAddress,
+        previousBoard: form.previousBoard.trim() || undefined,
+        previousTcNo: form.previousTcNo.trim() || undefined,
+        previousTcDate: form.previousTcDate.trim() || undefined,
+        transportModeIfNo: form.transportModeIfNo || undefined,
+        transportDistanceKm: form.transportDistanceKm.trim() || undefined,
+        childSensitivity: form.childSensitivity,
+        childSensitivityRemarks: form.childSensitivityRemarks.trim() || undefined,
+        siblingDetails: form.siblingDetails.length > 0 ? form.siblingDetails : undefined,
+        bankAccountName: form.bankAccountName.trim() || undefined,
+        bankName: form.bankName.trim() || undefined,
+        bankAccountNumber: form.bankAccountNumber.trim() || undefined,
+        bankIfsc: form.bankIfsc.trim() || undefined,
+        parentDeclarationAccepted: form.parentDeclarationAccepted,
+        ageOnAprilFirst: ageOnApril1 || undefined,
         status: "pending",
         appliedAt: new Date().toISOString(),
       };
@@ -1425,19 +1529,24 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
           emergencyContact: form.emergencyContact.trim() || undefined,
           emergencyPhone: form.emergencyPhone.trim() || undefined,
           emergencyRelation: form.emergencyRelation.trim() || undefined,
+          emergencyWhatsapp: form.emergencyWhatsapp.trim() || undefined,
           identificationMark: form.identificationMark.trim() || undefined,
           medicalHistory: form.medicalHistory.trim() || undefined,
           admissionType: form.admissionType || "NEW",
           apaarId: form.apaarId.trim() || undefined,
           fatherName: form.fatherName.trim(),
           fatherOccupation: form.fatherOccupation.trim() || undefined,
+          fatherPhone: form.fatherPhone.trim() || undefined,
+          fatherWhatsapp: form.fatherWhatsapp.trim() || undefined,
           motherName: form.motherName.trim(),
           motherOccupation: form.motherOccupation.trim() || undefined,
+          motherPhone: form.motherPhone.trim() || undefined,
+          motherWhatsapp: form.motherWhatsapp.trim() || undefined,
           aadhaarNo: form.aadhaarNo.trim() || undefined,
           fatherAadhaar: form.fatherAadhaar.trim() || undefined,
           motherAadhaar: form.motherAadhaar.trim() || undefined,
           phone: form.phone.trim(),
-          whatsappNo: form.whatsappNo.trim() || form.phone.trim(),
+          whatsappNo: form.whatsappNo.trim() || form.fatherWhatsapp.trim() || form.phone.trim(),
           email: form.email.trim() || undefined,
           dateOfBirth: form.dateOfBirth,
           bloodGroup: form.bloodGroup || undefined,
@@ -1460,6 +1569,25 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
           isSiblingMarked: isFamilyMarked || undefined,
           siblingStudentIds: siblingIds.length > 0 ? siblingIds : undefined,
           admissionSiblingDiscount: isFamilyMarked && Number(adminConcession) > 0 ? Number(adminConcession) : undefined,
+          isOnlyChild: form.isOnlyChild || undefined,
+          motherTongue: form.motherTongue.trim() || undefined,
+          fatherQualification: form.fatherQualification.trim() || undefined,
+          motherQualification: form.motherQualification.trim() || undefined,
+          correspondenceAddress: form.isSameAddress ? form.address.trim() : (form.correspondenceAddress.trim() || form.address.trim()),
+          isSameAddress: form.isSameAddress,
+          previousBoard: form.previousBoard.trim() || undefined,
+          previousTcNo: form.previousTcNo.trim() || undefined,
+          previousTcDate: form.previousTcDate.trim() || undefined,
+          transportModeIfNo: form.transportModeIfNo || undefined,
+          transportDistanceKm: form.transportDistanceKm.trim() || undefined,
+          childSensitivity: form.childSensitivity,
+          childSensitivityRemarks: form.childSensitivityRemarks.trim() || undefined,
+          siblingDetails: form.siblingDetails.length > 0 ? form.siblingDetails : undefined,
+          bankAccountName: form.bankAccountName.trim() || undefined,
+          bankName: form.bankName.trim() || undefined,
+          bankAccountNumber: form.bankAccountNumber.trim() || undefined,
+          bankIfsc: form.bankIfsc.trim() || undefined,
+          ageOnAprilFirst: ageOnApril1 || undefined,
           joinDate: paidIso.slice(0, 10),
           active: true,
           createdAt: paidIso,
@@ -1650,19 +1778,26 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
         emergencyContact: enrollingApp.emergencyContact,
         emergencyPhone: enrollingApp.emergencyPhone,
         emergencyRelation: enrollingApp.emergencyRelation,
+        emergencyWhatsapp: enrollingApp.emergencyWhatsapp,
         identificationMark: enrollingApp.identificationMark,
         medicalHistory: enrollingApp.medicalHistory,
         admissionType: enrollingApp.admissionType || "NEW",
         apaarId: enrollApaarId.trim() || enrollingApp.apaarId || undefined,
         fatherName: enrollingApp.fatherName,
         fatherOccupation: enrollingApp.fatherOccupation,
+        fatherPhone: enrollingApp.fatherPhone,
+        fatherWhatsapp: enrollingApp.fatherWhatsapp,
         motherName: enrollingApp.motherName,
         motherOccupation: enrollingApp.motherOccupation,
+        motherPhone: enrollingApp.motherPhone,
+        motherWhatsapp: enrollingApp.motherWhatsapp,
+        fatherQualification: enrollingApp.fatherQualification,
+        motherQualification: enrollingApp.motherQualification,
         aadhaarNo: enrollStudentAadhaar.trim() || enrollingApp.aadhaarNo || undefined,
         fatherAadhaar: enrollFatherAadhaar.trim() || enrollingApp.fatherAadhaar || undefined,
         motherAadhaar: enrollMotherAadhaar.trim() || enrollingApp.motherAadhaar || undefined,
         phone: enrollingApp.phone,
-        whatsappNo: enrollingApp.whatsappNo || enrollingApp.phone,
+        whatsappNo: enrollingApp.whatsappNo || enrollingApp.fatherWhatsapp || enrollingApp.phone,
         email: enrollingApp.email,
         dateOfBirth: enrollingApp.dateOfBirth,
         bloodGroup: enrollingApp.bloodGroup || undefined,
@@ -2286,7 +2421,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                 ? "कक्षा-वार प्रवेश शुल्क एवं हेड सेट-अप (Online Admission Fee Setup)"
                 : !isAdmin
                 ? "अभिभावक ऑनलाइन प्रवेश पोर्टल (Parent Online Admission)"
-                : "Online Admissions &amp; Print Portal"}
+                : "Online Admissions & Print Portal"}
             </h1>
           </div>
           <div className="text-xs text-blue-200 hidden sm:block font-semibold">
@@ -2334,16 +2469,28 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
             </button>
             {/* In admissions_only mode: fee_setup tab is NEVER rendered (Online Admission & Fee wla part na dikhega) */}
             {viewMode !== "admissions_only" && (
-              <button
-                onClick={() => setActiveTab("fee_setup")}
-                className={`px-4 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 transition cursor-pointer ${
-                  activeTab === "fee_setup"
-                    ? "bg-emerald-600 text-white shadow"
-                    : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
-                }`}
-              >
-                <Sliders className="w-4 h-4" /> Class-Wise Fee &amp; Heads Setup
-              </button>
+              <>
+                <button
+                  onClick={() => setActiveTab("fee_setup")}
+                  className={`px-4 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 transition cursor-pointer ${
+                    activeTab === "fee_setup"
+                      ? "bg-emerald-600 text-white shadow"
+                      : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+                  }`}
+                >
+                  <Sliders className="w-4 h-4" /> Class-Wise Fee &amp; Heads Setup
+                </button>
+                <button
+                  onClick={() => setActiveTab("field_settings")}
+                  className={`px-4 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 transition cursor-pointer ${
+                    activeTab === "field_settings"
+                      ? "bg-purple-600 text-white shadow"
+                      : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+                  }`}
+                >
+                  <Sliders className="w-4 h-4 text-purple-400" /> ⚙️ Form Fields Manager
+                </button>
+              </>
             )}
           </div>
         )}
@@ -2746,6 +2893,432 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                   })}
               </div>
             )}
+          </div>
+        )}
+
+        {/* 0.5 ADMIN ADMISSION FORM FIELDS MANAGER (SCHOOL ADMIN CUSTOMIZATION) */}
+        {activeTab === "field_settings" && isAdmin && (
+          <div className="space-y-5 animate-in fade-in duration-200">
+            {/* Header Card */}
+            <div className="bg-gradient-to-r from-purple-900 via-indigo-950 to-slate-900 text-white rounded-3xl p-6 shadow-xl border border-purple-700/50 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="px-3 py-1 rounded-full bg-purple-500/20 text-purple-300 border border-purple-400/30 text-xs font-black uppercase tracking-wider flex items-center gap-1.5">
+                    <Sliders className="w-3.5 h-3.5" />
+                    <span>एडमिशन फॉर्म कस्टमाइज़र</span>
+                  </span>
+                  <span className="text-xs text-purple-200/80 font-bold">
+                    ({Object.values(fieldSettings).filter(Boolean).length} / {Object.keys(fieldSettings).length} फ़ील्ड्स चालू)
+                  </span>
+                </div>
+                <h2 className="text-xl sm:text-2xl font-black">
+                  एडमिशन फॉर्म फ़ील्ड मैनेजर (Form Fields Manager)
+                </h2>
+                <p className="text-xs sm:text-sm text-purple-200 mt-1 max-w-2xl">
+                  यहाँ से स्कूल एडमिन चुन सकते हैं कि ऑनलाइन एडमिशन फॉर्म में अभिभावकों और शिक्षकों को कौन-कौन से फ़ील्ड दिखेंगे और कौन-से छिपे रहेंगे। चालू या बंद करने पर बदलाव तुरंत लाइव फॉर्म में दिखेंगे।
+                </p>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const allOn: AdmissionFormFieldSettings = { ...fieldSettings };
+                    (Object.keys(allOn) as (keyof AdmissionFormFieldSettings)[]).forEach((k) => {
+                      allOn[k] = true;
+                    });
+                    handleBulkUpdateFieldSettings(allOn);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-black flex items-center gap-1.5 shadow transition cursor-pointer"
+                >
+                  <CheckCheck className="w-4 h-4" />
+                  <span>सभी फ़ील्ड चालू करें</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleBulkUpdateFieldSettings(DEFAULT_ADMISSION_FIELD_SETTINGS)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 flex items-center gap-1.5 transition cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>डिफ़ॉल्ट सेट करें</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("new_form")}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black flex items-center gap-1.5 shadow transition cursor-pointer"
+                >
+                  <Eye className="w-4 h-4" />
+                  <span>लाइव फॉर्म देखें</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Field Groups Grid */}
+            <div className="grid md:grid-cols-2 gap-4">
+              {/* Group 1: Student Bio-Data Fields */}
+              <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm space-y-3.5">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">👤</span>
+                    <h3 className="text-sm font-black text-slate-900 dark:text-white">
+                      1. छात्र विवरण (Student Bio-Data Fields)
+                    </h3>
+                  </div>
+                  <span className="text-[10px] font-bold text-slate-400">नाम व कक्षा अनिवार्य हैं</span>
+                </div>
+
+                <div className="space-y-2.5">
+                  {[
+                    { key: "showAgeOnAprilFirst", label: "1 अप्रैल को आयु (Auto Age as on 1st April)", hint: "DOB से वर्ष, माह और दिन स्वतः गिनेगा", emoji: "📅" },
+                    { key: "showSingleChild", label: "इकलौता बच्चा (Single Child Status)", hint: "क्या छात्र माता-पिता की एकमात्र संतान है (हाँ/नहीं)", emoji: "⭐" },
+                    { key: "showIdentificationMark", label: "पहचान चिन्ह (Identification Mark)", hint: "चेहरे या शरीर पर तिल, कट या चोट का स्थायी निशान", emoji: "🔍" },
+                    { key: "showMotherTongue", label: "मातृभाषा (Mother Tongue)", hint: "हिंदी, भोजपुरी, उर्दू, अंग्रेजी आदि", emoji: "🗣️" },
+                    { key: "showApaarId", label: "APAAR / PEN No. (UDISE+ ID)", hint: "शिक्षा मंत्रालय का 11-अंकीय राष्ट्रीय छात्र पहचान क्रमांक", emoji: "🆔" },
+                    { key: "showBloodGroup", label: "रक्त समूह (Blood Group)", hint: "A+, B+, O+, AB+ आदि", emoji: "🩸" },
+                    { key: "showCategoryCaste", label: "जाति / श्रेणी (Category / Caste)", hint: "General, OBC, SC, ST, EWS", emoji: "🏛️" },
+                    { key: "showReligionNationality", label: "धर्म एवं राष्ट्रीयता (Religion & Nationality)", hint: "हिन्दू/मुस्लिम/सिख/ईसाई एवं Indian", emoji: "🕊️" },
+                    { key: "showStudentAadhaar", label: "छात्र आधार (Student 12-Digit Aadhaar)", hint: "UIDAI 12-अंकीय आधार संख्या", emoji: "💳" },
+                    { key: "showMedicalHistory", label: "स्वास्थ्य एवं एलर्जी विवरण (Medical History)", hint: "दमा, एलर्जी या नियमित दवा संबंधी निर्देश", emoji: "🩺" },
+                  ].map((f) => (
+                    <label
+                      key={f.key}
+                      className="flex items-center justify-between p-2.5 rounded-2xl hover:bg-slate-50 dark:hover:bg-slate-700/50 transition cursor-pointer select-none border border-transparent hover:border-slate-200 dark:hover:border-slate-700"
+                    >
+                      <div className="flex items-start gap-2.5 pr-2">
+                        <span className="text-base shrink-0 mt-0.5">{f.emoji}</span>
+                        <div>
+                          <p className="text-xs font-bold text-slate-800 dark:text-slate-100 leading-tight">
+                            {f.label}
+                          </p>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">{f.hint}</p>
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(fieldSettings[f.key as keyof AdmissionFormFieldSettings])}
+                        onChange={(e) =>
+                          handleUpdateFieldSetting(f.key as keyof AdmissionFormFieldSettings, e.target.checked)
+                        }
+                        className="w-5 h-5 accent-purple-600 rounded cursor-pointer shrink-0"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Group 2: Parent & Guardian Fields */}
+              <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm space-y-3.5">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">👨‍👩‍👧</span>
+                    <h3 className="text-sm font-black text-slate-900 dark:text-white">
+                      2. अभिभावक प्रोफाइल (Parent &amp; Family Fields)
+                    </h3>
+                  </div>
+                  <span className="text-[10px] font-bold text-slate-400">पिता का नाम अनिवार्य है</span>
+                </div>
+
+                <div className="space-y-2.5">
+                  {[
+                    { key: "showFatherPhone", label: "पिता का मोबाइल नंबर (Father Mobile)", hint: "पिता से सीधे कॉलिंग संपर्क हेतु 10-अंकीय मोबाइल नंबर", emoji: "📞" },
+                    { key: "showFatherWhatsapp", label: "पिता का व्हाट्सएप (Father WhatsApp)", hint: "पिता के व्हाट्सएप पर मैसेज व सूचनाएं भेजने हेतु", emoji: "💬" },
+                    { key: "showFatherQualification", label: "पिता की शैक्षिक योग्यता (Father Qualification)", hint: "Postgraduate, Graduate, Intermediate, 10th आदि", emoji: "🎓" },
+                    { key: "showFatherOccupation", label: "पिता का व्यवसाय (Father Occupation)", hint: "कृषि, व्यापार, सरकारी सेवा, निजी नौकरी आदि", emoji: "💼" },
+                    { key: "showFatherAadhaar", label: "पिता का आधार (Father Aadhaar)", hint: "पिता की 12-अंकीय आधार संख्या", emoji: "💳" },
+                    { key: "showMotherPhone", label: "माता का मोबाइल नंबर (Mother Mobile)", hint: "माता से सीधे कॉलिंग संपर्क हेतु मोबाइल नंबर", emoji: "📱" },
+                    { key: "showMotherWhatsapp", label: "माता का व्हाट्सएप (Mother WhatsApp)", hint: "माता के व्हाट्सएप पर उपस्थिति व गृहकार्य सूचना हेतु", emoji: "💬" },
+                    { key: "showMotherQualification", label: "माता की शैक्षिक योग्यता (Mother Qualification)", hint: "Postgraduate, Graduate, 10th, Home Maker आदि", emoji: "📚" },
+                    { key: "showMotherOccupation", label: "माता का व्यवसाय (Mother Occupation)", hint: "गृहणी, शिक्षिका, व्यापार, नौकरी आदि", emoji: "👩‍💼" },
+                    { key: "showMotherAadhaar", label: "माता का आधार (Mother Aadhaar)", hint: "माता की 12-अंकीय आधार संख्या", emoji: "💳" },
+                    { key: "showAnnualIncome", label: "परिवार की वार्षिक आय (Annual Income)", hint: "छात्रवृत्ति एवं सरकारी पोर्टल हेतु वार्षिक आमदनी", emoji: "💰" },
+                    { key: "showEmergencyContact", label: "आपातकालीन संपर्क व्यक्ति व फोन (Emergency Contact)", hint: "स्थानीय अभिभावक/रिश्तेदार का नाम, फोन व संबंध", emoji: "🚨" },
+                    { key: "showEmergencyWhatsapp", label: "आपातकालीन व्हाट्सएप (Emergency WhatsApp)", hint: "आपातकाल में तुरंत व्हाट्सएप अलर्ट भेजने हेतु", emoji: "🚨" },
+                  ].map((f) => (
+                    <label
+                      key={f.key}
+                      className="flex items-center justify-between p-2.5 rounded-2xl hover:bg-slate-50 dark:hover:bg-slate-700/50 transition cursor-pointer select-none border border-transparent hover:border-slate-200 dark:hover:border-slate-700"
+                    >
+                      <div className="flex items-start gap-2.5 pr-2">
+                        <span className="text-base shrink-0 mt-0.5">{f.emoji}</span>
+                        <div>
+                          <p className="text-xs font-bold text-slate-800 dark:text-slate-100 leading-tight">
+                            {f.label}
+                          </p>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">{f.hint}</p>
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(fieldSettings[f.key as keyof AdmissionFormFieldSettings])}
+                        onChange={(e) =>
+                          handleUpdateFieldSetting(f.key as keyof AdmissionFormFieldSettings, e.target.checked)
+                        }
+                        className="w-5 h-5 accent-purple-600 rounded cursor-pointer shrink-0"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Group 3: Previous School & TC Details */}
+              <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm space-y-3.5">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">🏫</span>
+                    <h3 className="text-sm font-black text-slate-900 dark:text-white">
+                      3. पूर्व विद्यालय एवं टी.सी. (Previous School &amp; TC)
+                    </h3>
+                  </div>
+                  <span className="text-[10px] font-bold text-purple-600">Re-admission / Transfer</span>
+                </div>
+
+                <div className="space-y-2.5">
+                  {[
+                    { key: "showPreviousSchool", label: "पूर्व विद्यालय का नाम व कक्षा (School Last Attended)", hint: "छात्र पहले किस स्कूल और बोर्ड में पढ़ रहा था", emoji: "🏫" },
+                    { key: "showPreviousTcDetails", label: "टी.सी. क्रमांक एवं दिनांक (TC / SLC No. & Date)", hint: "स्थानांतरण प्रमाण पत्र (TC) का क्रमांक और जारी होने की तिथि", emoji: "📜" },
+                  ].map((f) => (
+                    <label
+                      key={f.key}
+                      className="flex items-center justify-between p-2.5 rounded-2xl hover:bg-slate-50 dark:hover:bg-slate-700/50 transition cursor-pointer select-none border border-transparent hover:border-slate-200 dark:hover:border-slate-700"
+                    >
+                      <div className="flex items-start gap-2.5 pr-2">
+                        <span className="text-base shrink-0 mt-0.5">{f.emoji}</span>
+                        <div>
+                          <p className="text-xs font-bold text-slate-800 dark:text-slate-100 leading-tight">
+                            {f.label}
+                          </p>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">{f.hint}</p>
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(fieldSettings[f.key as keyof AdmissionFormFieldSettings])}
+                        onChange={(e) =>
+                          handleUpdateFieldSetting(f.key as keyof AdmissionFormFieldSettings, e.target.checked)
+                        }
+                        className="w-5 h-5 accent-purple-600 rounded cursor-pointer shrink-0"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Group 4: Addresses */}
+              <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm space-y-3.5">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">📍</span>
+                    <h3 className="text-sm font-black text-slate-900 dark:text-white">
+                      4. पता विवरण (Address &amp; Correspondence)
+                    </h3>
+                  </div>
+                  <span className="text-[10px] font-bold text-slate-400">स्थायी पता हमेशा अनिवार्य</span>
+                </div>
+
+                <div className="space-y-2.5">
+                  {[
+                    { key: "showCorrespondenceAddress", label: "पत्राचार का अलग पता (Correspondence Address)", hint: "यदि छात्र किराए पर रहता है (समान होने पर 'Same' चेकबॉक्स के साथ)", emoji: "📮" },
+                  ].map((f) => (
+                    <label
+                      key={f.key}
+                      className="flex items-center justify-between p-2.5 rounded-2xl hover:bg-slate-50 dark:hover:bg-slate-700/50 transition cursor-pointer select-none border border-transparent hover:border-slate-200 dark:hover:border-slate-700"
+                    >
+                      <div className="flex items-start gap-2.5 pr-2">
+                        <span className="text-base shrink-0 mt-0.5">{f.emoji}</span>
+                        <div>
+                          <p className="text-xs font-bold text-slate-800 dark:text-slate-100 leading-tight">
+                            {f.label}
+                          </p>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">{f.hint}</p>
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(fieldSettings[f.key as keyof AdmissionFormFieldSettings])}
+                        onChange={(e) =>
+                          handleUpdateFieldSetting(f.key as keyof AdmissionFormFieldSettings, e.target.checked)
+                        }
+                        className="w-5 h-5 accent-purple-600 rounded cursor-pointer shrink-0"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Group 5: Transport & Commute */}
+              <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm space-y-3.5">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">🚌</span>
+                    <h3 className="text-sm font-black text-slate-900 dark:text-white">
+                      5. परिवहन एवं संवेदनशीलता (Transport &amp; Sensitivity)
+                    </h3>
+                  </div>
+                  <span className="text-[10px] font-bold text-amber-600">Bus &amp; Distance</span>
+                </div>
+
+                <div className="space-y-2.5">
+                  {[
+                    { key: "showTransportModeIfNo", label: "बिना बस आवागमन साधन (Walking / Guardian)", hint: "अगर बस सुविधा नहीं लेते तो पैदल / अभिभावक द्वारा आएंगे", emoji: "🚶" },
+                    { key: "showTransportDistance", label: "स्कूल से दूरी - किमी में (Distance from School)", hint: "घर से स्कूल की दूरी (किमी)", emoji: "📏" },
+                    { key: "showChildSensitivity", label: "बच्चे की संवेदनशीलता / विशेष देखभाल (Child Sensitivity)", hint: "विशेष स्वास्थ्य संवेदनशीलता (हाँ/नहीं व रिमार्क)", emoji: "💖" },
+                  ].map((f) => (
+                    <label
+                      key={f.key}
+                      className="flex items-center justify-between p-2.5 rounded-2xl hover:bg-slate-50 dark:hover:bg-slate-700/50 transition cursor-pointer select-none border border-transparent hover:border-slate-200 dark:hover:border-slate-700"
+                    >
+                      <div className="flex items-start gap-2.5 pr-2">
+                        <span className="text-base shrink-0 mt-0.5">{f.emoji}</span>
+                        <div>
+                          <p className="text-xs font-bold text-slate-800 dark:text-slate-100 leading-tight">
+                            {f.label}
+                          </p>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">{f.hint}</p>
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(fieldSettings[f.key as keyof AdmissionFormFieldSettings])}
+                        onChange={(e) =>
+                          handleUpdateFieldSetting(f.key as keyof AdmissionFormFieldSettings, e.target.checked)
+                        }
+                        className="w-5 h-5 accent-purple-600 rounded cursor-pointer shrink-0"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Group 6: Sibling Profile & Teacher Referrals */}
+              <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm space-y-3.5">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">👨‍👧‍👦</span>
+                    <h3 className="text-sm font-black text-slate-900 dark:text-white">
+                      6. भाई-बहन एवं रेफरल (Siblings &amp; Referrals)
+                    </h3>
+                  </div>
+                  <span className="text-[10px] font-bold text-emerald-600">Discounts &amp; Rewards</span>
+                </div>
+
+                <div className="space-y-2.5">
+                  {[
+                    { key: "showSiblingTable", label: "स्कूल में पढ़ने वाले भाई-बहन तालिका (Sibling Details)", hint: "नाम, भाई/बहन, कक्षा व रोल नंबर तालिका (Sibling Discount हेतु)", emoji: "👫" },
+                    { key: "showTeacherReferral", label: "शिक्षक संदर्भ चयन (Teacher Referral Option)", hint: "एडमिशन किस शिक्षक के माध्यम से हुआ (10% कमीशन ऑटो-ट्रैकिंग)", emoji: "👨‍🏫" },
+                  ].map((f) => (
+                    <label
+                      key={f.key}
+                      className="flex items-center justify-between p-2.5 rounded-2xl hover:bg-slate-50 dark:hover:bg-slate-700/50 transition cursor-pointer select-none border border-transparent hover:border-slate-200 dark:hover:border-slate-700"
+                    >
+                      <div className="flex items-start gap-2.5 pr-2">
+                        <span className="text-base shrink-0 mt-0.5">{f.emoji}</span>
+                        <div>
+                          <p className="text-xs font-bold text-slate-800 dark:text-slate-100 leading-tight">
+                            {f.label}
+                          </p>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">{f.hint}</p>
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(fieldSettings[f.key as keyof AdmissionFormFieldSettings])}
+                        onChange={(e) =>
+                          handleUpdateFieldSetting(f.key as keyof AdmissionFormFieldSettings, e.target.checked)
+                        }
+                        className="w-5 h-5 accent-purple-600 rounded cursor-pointer shrink-0"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Group 7: Bank Account Details */}
+              <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm space-y-3.5">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">🏦</span>
+                    <h3 className="text-sm font-black text-slate-900 dark:text-white">
+                      7. बैंक खाता विवरण (Bank Details for DBT / Scholarship)
+                    </h3>
+                  </div>
+                  <span className="text-[10px] font-bold text-blue-600">पोशाक / छात्रवृत्ति</span>
+                </div>
+
+                <div className="space-y-2.5">
+                  {[
+                    { key: "showBankDetails", label: "बैंक खाता संख्या, बैंक नाम व IFSC (Bank Details)", hint: "सशर्त छात्रवृत्ति/सरकारी डीबीटी हेतु खाता विवरण", emoji: "🏦" },
+                  ].map((f) => (
+                    <label
+                      key={f.key}
+                      className="flex items-center justify-between p-2.5 rounded-2xl hover:bg-slate-50 dark:hover:bg-slate-700/50 transition cursor-pointer select-none border border-transparent hover:border-slate-200 dark:hover:border-slate-700"
+                    >
+                      <div className="flex items-start gap-2.5 pr-2">
+                        <span className="text-base shrink-0 mt-0.5">{f.emoji}</span>
+                        <div>
+                          <p className="text-xs font-bold text-slate-800 dark:text-slate-100 leading-tight">
+                            {f.label}
+                          </p>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">{f.hint}</p>
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(fieldSettings[f.key as keyof AdmissionFormFieldSettings])}
+                        onChange={(e) =>
+                          handleUpdateFieldSetting(f.key as keyof AdmissionFormFieldSettings, e.target.checked)
+                        }
+                        className="w-5 h-5 accent-purple-600 rounded cursor-pointer shrink-0"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Group 8: Documents, Payment & Declarations */}
+              <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm space-y-3.5">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">📑</span>
+                    <h3 className="text-sm font-black text-slate-900 dark:text-white">
+                      8. दस्तावेज़, पेमेंट व घोषणा (Documents &amp; Declarations)
+                    </h3>
+                  </div>
+                  <span className="text-[10px] font-bold text-slate-400">Final Verification</span>
+                </div>
+
+                <div className="space-y-2.5">
+                  {[
+                    { key: "showRequiredDocuments", label: "आवश्यक दस्तावेज़ अपलोड चेकलिस्ट (Document Checklist)", hint: "जन्म प्रमाण पत्र, आधार, टीसी, फोटो आदि", emoji: "📂" },
+                    { key: "showPaymentScreenshot", label: "पेमेंट स्क्रीनशॉट व यू.टी.आर. विवरण (Payment Screenshot)", hint: "ऑनलाइन UPI भुगतान का स्क्रीनशॉट संलग्न करने का विकल्प", emoji: "📷" },
+                    { key: "showParentDeclaration", label: "अभिभावक ऑनलाइन घोषणा पत्र (Parent Self-Declaration)", hint: "सत्यता एवं विद्यालय नियमों के पालन हेतु घोषणा चेकबॉक्स", emoji: "✍️" },
+                  ].map((f) => (
+                    <label
+                      key={f.key}
+                      className="flex items-center justify-between p-2.5 rounded-2xl hover:bg-slate-50 dark:hover:bg-slate-700/50 transition cursor-pointer select-none border border-transparent hover:border-slate-200 dark:hover:border-slate-700"
+                    >
+                      <div className="flex items-start gap-2.5 pr-2">
+                        <span className="text-base shrink-0 mt-0.5">{f.emoji}</span>
+                        <div>
+                          <p className="text-xs font-bold text-slate-800 dark:text-slate-100 leading-tight">
+                            {f.label}
+                          </p>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">{f.hint}</p>
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(fieldSettings[f.key as keyof AdmissionFormFieldSettings])}
+                        onChange={(e) =>
+                          handleUpdateFieldSetting(f.key as keyof AdmissionFormFieldSettings, e.target.checked)
+                        }
+                        className="w-5 h-5 accent-purple-600 rounded cursor-pointer shrink-0"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
@@ -4276,7 +4849,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                     })()}
                     <div>
                       <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                        Date of Birth *
+                        Date of Birth * (जन्म तिथि)
                       </label>
                       <input
                         type="date"
@@ -4286,279 +4859,641 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                         className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
                     </div>
-                    <div className="grid grid-cols-3 gap-2">
+
+                    {/* Auto-calculated Age on 1st April */}
+                    {fieldSettings.showAgeOnAprilFirst && ageOnApril1 && (
+                      <div className="p-2.5 rounded-xl bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-1.5 font-bold text-indigo-950 dark:text-indigo-200">
+                          <span>🎂</span>
+                          <span>1 अप्रैल को आयु (Age as on 1st April):</span>
+                        </div>
+                        <span className="font-black font-mono px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-[11px] shadow-xs">
+                          {ageOnApril1.years} वर्ष, {ageOnApril1.months} माह, {ageOnApril1.days} दिन
+                        </span>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                       <div>
                         <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                          Gender
+                          Gender (लिंग)
                         </label>
                         <select
                           value={form.gender}
                           onChange={(e) => setForm({ ...form, gender: e.target.value as any })}
                           className="w-full px-2.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         >
-                          <option value="male" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">Male</option>
-                          <option value="female" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">Female</option>
-                          <option value="other" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">Other</option>
+                          <option value="male" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">Male (पुरुष)</option>
+                          <option value="female" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">Female (महिला)</option>
+                          <option value="other" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">Other (अन्य)</option>
                         </select>
                       </div>
-                      <div>
-                        <label className="block text-xs font-bold text-rose-600 mb-1">
-                          Blood Grp
-                        </label>
-                        <select
-                          value={form.bloodGroup}
-                          onChange={(e) => setForm({ ...form, bloodGroup: e.target.value })}
-                          className="w-full px-2.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        >
-                          <option value="" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">Optional</option>
-                          {BLOOD_GROUPS.map((bg) => (
-                            <option key={bg} value={bg} className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">
-                              {bg}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                          Category
-                        </label>
-                        <select
-                          value={form.category}
-                          onChange={(e) => setForm({ ...form, category: e.target.value })}
-                          className="w-full px-2.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        >
-                          {ADMISSION_CATEGORIES.map((cat) => (
-                            <option key={cat} value={cat} className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">
-                              {cat}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
+
+                      {fieldSettings.showBloodGroup && (
+                        <div>
+                          <label className="block text-xs font-bold text-rose-600 mb-1">
+                            Blood Group
+                          </label>
+                          <select
+                            value={form.bloodGroup}
+                            onChange={(e) => setForm({ ...form, bloodGroup: e.target.value })}
+                            className="w-full px-2.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          >
+                            <option value="" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">Optional</option>
+                            {BLOOD_GROUPS.map((bg) => (
+                              <option key={bg} value={bg} className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">
+                                {bg}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      {fieldSettings.showCategory && (
+                        <div>
+                          <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                            Caste Category (जाति)
+                          </label>
+                          <select
+                            value={form.category}
+                            onChange={(e) => setForm({ ...form, category: e.target.value })}
+                            className="w-full px-2.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          >
+                            {ADMISSION_CATEGORIES.map((cat) => (
+                              <option key={cat} value={cat} className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">
+                                {cat}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
                     </div>
 
-                    <div className="grid grid-cols-2 gap-2">
+                    {/* Single Child of Parents */}
+                    {fieldSettings.showSingleChild && (
+                      <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div>
+                          <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                            Single Child Status (क्या छात्र माता-पिता की इकलौती संतान है?)
+                          </p>
+                          <p className="text-[10px] text-slate-500">Only child of parents (Yes / No)</p>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <label className="flex items-center gap-1.5 cursor-pointer text-xs font-bold text-slate-700 dark:text-slate-200 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800">
+                            <input
+                              type="radio"
+                              name="isSingleChild"
+                              checked={form.isSingleChild === true}
+                              onChange={() => setForm({ ...form, isSingleChild: true })}
+                              className="w-3.5 h-3.5 accent-indigo-600"
+                            />
+                            <span>हाँ (Yes)</span>
+                          </label>
+                          <label className="flex items-center gap-1.5 cursor-pointer text-xs font-bold text-slate-700 dark:text-slate-200 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800">
+                            <input
+                              type="radio"
+                              name="isSingleChild"
+                              checked={form.isSingleChild === false}
+                              onChange={() => setForm({ ...form, isSingleChild: false })}
+                              className="w-3.5 h-3.5 accent-indigo-600"
+                            />
+                            <span>नहीं (No)</span>
+                          </label>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Religion & Nationality */}
+                    {(fieldSettings.showReligion || fieldSettings.showNationality) && (
+                      <div className="grid grid-cols-2 gap-2">
+                        {fieldSettings.showReligion && (
+                          <div>
+                            <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                              Religion (धर्म)
+                            </label>
+                            <input
+                              type="text"
+                              value={form.religion}
+                              onChange={(e) => setForm({ ...form, religion: e.target.value })}
+                              placeholder="e.g. Hindu / Muslim / Sikh"
+                              className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            />
+                          </div>
+                        )}
+                        {fieldSettings.showNationality && (
+                          <div>
+                            <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                              Nationality (राष्ट्रीयता)
+                            </label>
+                            <input
+                              type="text"
+                              value={form.nationality}
+                              onChange={(e) => setForm({ ...form, nationality: e.target.value })}
+                              placeholder="Indian"
+                              className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Mother Tongue & Identification Mark */}
+                    {(fieldSettings.showMotherTongue || fieldSettings.showIdentificationMark) && (
+                      <div className="grid sm:grid-cols-2 gap-2">
+                        {fieldSettings.showMotherTongue && (
+                          <div>
+                            <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                              Mother Tongue (मातृभाषा)
+                            </label>
+                            <input
+                              type="text"
+                              value={form.motherTongue}
+                              onChange={(e) => setForm({ ...form, motherTongue: e.target.value })}
+                              placeholder="e.g. Hindi / Bhojpuri"
+                              className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            />
+                          </div>
+                        )}
+                        {fieldSettings.showIdentificationMark && (
+                          <div>
+                            <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                              Identification Mark (पहचान चिन्ह)
+                            </label>
+                            <input
+                              type="text"
+                              value={form.identificationMark}
+                              onChange={(e) => setForm({ ...form, identificationMark: e.target.value })}
+                              placeholder="e.g. Mole on right cheek"
+                              className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Student Aadhaar */}
+                    {fieldSettings.showStudentAadhaar && (
                       <div>
                         <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                          Religion (धर्म)
+                          Student Aadhaar (12-Digit)
                         </label>
                         <input
                           type="text"
-                          value={form.religion}
-                          onChange={(e) => setForm({ ...form, religion: e.target.value })}
-                          placeholder="e.g. Hindu / Muslim"
-                          className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          maxLength={14}
+                          value={form.aadhaarNo}
+                          onChange={(e) => setForm({ ...form, aadhaarNo: e.target.value.replace(/[^\d\s]/g, "") })}
+                          placeholder="XXXX XXXX XXXX"
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-mono font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         />
                       </div>
+                    )}
+
+                    {/* APAAR / PEN ID */}
+                    {fieldSettings.showApaarPenId && (
                       <div>
                         <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                          Nationality (राष्ट्रीयता)
+                          APAAR / PEN ID (भारत सरकार स्थायी शिक्षा संख्या)
                         </label>
                         <input
                           type="text"
-                          value={form.nationality}
-                          onChange={(e) => setForm({ ...form, nationality: e.target.value })}
-                          placeholder="Indian"
-                          className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          value={form.apaarId}
+                          onChange={(e) => setForm({ ...form, apaarId: e.target.value })}
+                          placeholder="12-digit APAAR or 11-digit PEN ID"
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-mono font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         />
                       </div>
-                    </div>
+                    )}
 
-                    <div>
-                      <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                        Student Aadhaar (12-Digit)
-                      </label>
-                      <input
-                        type="text"
-                        maxLength={14}
-                        value={form.aadhaarNo}
-                        onChange={(e) => setForm({ ...form, aadhaarNo: e.target.value.replace(/[^\d\s]/g, "") })}
-                        placeholder="XXXX XXXX XXXX"
-                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-mono font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                        Medical History / Allergies (स्वास्थ्य विवरण)
-                      </label>
-                      <input
-                        type="text"
-                        value={form.medicalHistory}
-                        onChange={(e) => setForm({ ...form, medicalHistory: e.target.value })}
-                        placeholder="e.g. None / Normal / Asthma"
-                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      />
-                    </div>
+                    {/* Medical History */}
+                    {fieldSettings.showMedicalHistory && (
+                      <div>
+                        <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                          Medical History / Allergies (स्वास्थ्य विवरण)
+                        </label>
+                        <input
+                          type="text"
+                          value={form.medicalHistory}
+                          onChange={(e) => setForm({ ...form, medicalHistory: e.target.value })}
+                          placeholder="e.g. None / Normal / Asthma"
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                {/* Parent & Contact Details */}
+                {/* 2. Parent & Contact Details */}
                 <div>
                   <h3 className="text-xs font-black uppercase tracking-wider text-indigo-600 dark:text-indigo-400 mb-3">
-                    2. Parent &amp; Contact Information (अभिभावक विवरण)
+                    2. Parent &amp; Family Profile (माता-पिता का विवरण)
                   </h3>
                   <div className="grid sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                        Father's Name *
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={form.fatherName}
-                        onChange={(e) => setForm({ ...form, fatherName: e.target.value })}
-                        placeholder="Father's Full Name"
-                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                        Father's Occupation &amp; Aadhaar
-                      </label>
-                      <div className="grid grid-cols-2 gap-2">
+                    {/* Father's Info */}
+                    <div className="space-y-3 p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-700">
+                      <p className="text-xs font-black text-indigo-700 dark:text-indigo-300 uppercase tracking-wider">
+                        पिता का विवरण (Father's Profile)
+                      </p>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                          Father's Name * (पिता का नाम)
+                        </label>
                         <input
                           type="text"
-                          value={form.fatherOccupation}
-                          onChange={(e) => setForm({ ...form, fatherOccupation: e.target.value })}
-                          placeholder="Occupation"
-                          className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        />
-                        <input
-                          type="text"
-                          maxLength={14}
-                          value={form.fatherAadhaar}
-                          onChange={(e) => setForm({ ...form, fatherAadhaar: e.target.value.replace(/[^\d\s]/g, "") })}
-                          placeholder="Father Aadhaar"
-                          className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-mono font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          required
+                          value={form.fatherName}
+                          onChange={(e) => setForm({ ...form, fatherName: e.target.value })}
+                          placeholder="Father's Full Name"
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         />
                       </div>
+
+                      {fieldSettings.showFatherQualification && (
+                        <div>
+                          <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                            Educational Qualification (शैक्षणिक योग्यता)
+                          </label>
+                          <input
+                            type="text"
+                            value={form.fatherQualification}
+                            onChange={(e) => setForm({ ...form, fatherQualification: e.target.value })}
+                            placeholder="e.g. Graduate / 12th / Post Graduate"
+                            className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          />
+                        </div>
+                      )}
+
+                      {(fieldSettings.showFatherOccupation || fieldSettings.showFatherAadhaar) && (
+                        <div className="grid grid-cols-2 gap-2">
+                          {fieldSettings.showFatherOccupation && (
+                            <div>
+                              <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                                Occupation (व्यवसाय)
+                              </label>
+                              <input
+                                type="text"
+                                value={form.fatherOccupation}
+                                onChange={(e) => setForm({ ...form, fatherOccupation: e.target.value })}
+                                placeholder="e.g. Business / Service"
+                                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                              />
+                            </div>
+                          )}
+                          {fieldSettings.showFatherAadhaar && (
+                            <div>
+                              <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                                Father Aadhaar
+                              </label>
+                              <input
+                                type="text"
+                                maxLength={14}
+                                value={form.fatherAadhaar}
+                                onChange={(e) => setForm({ ...form, fatherAadhaar: e.target.value.replace(/[^\d\s]/g, "") })}
+                                placeholder="Aadhaar No."
+                                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-mono font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Father Mobile and Father WhatsApp */}
+                      {(fieldSettings.showFatherPhone || fieldSettings.showFatherWhatsapp) && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 border-t border-slate-200/60 dark:border-slate-700/60">
+                          {fieldSettings.showFatherPhone && (
+                            <div>
+                              <label className="block text-[11px] font-bold text-indigo-700 dark:text-indigo-300 mb-1">
+                                📞 Father Mobile (पिता का मोबाइल नंबर)
+                              </label>
+                              <input
+                                type="tel"
+                                maxLength={10}
+                                value={form.fatherPhone}
+                                onChange={(e) => {
+                                  const val = e.target.value.replace(/\D/g, "").slice(0, 10);
+                                  setForm((prev) => ({
+                                    ...prev,
+                                    fatherPhone: val,
+                                    phone: !prev.phone || prev.phone === prev.fatherPhone ? val : prev.phone,
+                                  }));
+                                }}
+                                placeholder="10-digit Mobile Number"
+                                className="w-full px-3 py-2 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                              />
+                            </div>
+                          )}
+
+                          {fieldSettings.showFatherWhatsapp && (
+                            <div>
+                              <div className="flex items-center justify-between mb-1">
+                                <label className="block text-[11px] font-bold text-emerald-700 dark:text-emerald-400">
+                                  💬 Father WhatsApp (पिता का व्हाट्सएप)
+                                </label>
+                                {form.fatherPhone && form.fatherWhatsapp !== form.fatherPhone && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setForm((prev) => ({ ...prev, fatherWhatsapp: prev.fatherPhone }))}
+                                    className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+                                  >
+                                    Same as Mobile
+                                  </button>
+                                )}
+                              </div>
+                              <input
+                                type="tel"
+                                maxLength={10}
+                                value={form.fatherWhatsapp}
+                                onChange={(e) => setForm({ ...form, fatherWhatsapp: e.target.value.replace(/\D/g, "").slice(0, 10) })}
+                                placeholder="WhatsApp Number"
+                                className="w-full px-3 py-2 rounded-xl border border-emerald-300 dark:border-emerald-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
 
-                    <div>
-                      <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                        Mother's Name
-                      </label>
-                      <input
-                        type="text"
-                        value={form.motherName}
-                        onChange={(e) => setForm({ ...form, motherName: e.target.value })}
-                        placeholder="Mother's Full Name"
-                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                        Mother's Occupation &amp; Aadhaar
-                      </label>
-                      <div className="grid grid-cols-2 gap-2">
+                    {/* Mother's Info */}
+                    <div className="space-y-3 p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-700">
+                      <p className="text-xs font-black text-pink-700 dark:text-pink-300 uppercase tracking-wider">
+                        माता का विवरण (Mother's Profile)
+                      </p>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                          Mother's Name (माता का नाम)
+                        </label>
                         <input
                           type="text"
-                          value={form.motherOccupation}
-                          onChange={(e) => setForm({ ...form, motherOccupation: e.target.value })}
-                          placeholder="Occupation"
-                          className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        />
-                        <input
-                          type="text"
-                          maxLength={14}
-                          value={form.motherAadhaar}
-                          onChange={(e) => setForm({ ...form, motherAadhaar: e.target.value.replace(/[^\d\s]/g, "") })}
-                          placeholder="Mother Aadhaar"
-                          className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-mono font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          value={form.motherName}
+                          onChange={(e) => setForm({ ...form, motherName: e.target.value })}
+                          placeholder="Mother's Full Name"
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         />
                       </div>
+
+                      {fieldSettings.showMotherQualification && (
+                        <div>
+                          <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                            Educational Qualification (शैक्षणिक योग्यता)
+                          </label>
+                          <input
+                            type="text"
+                            value={form.motherQualification}
+                            onChange={(e) => setForm({ ...form, motherQualification: e.target.value })}
+                            placeholder="e.g. 10th / Graduate / Housewife"
+                            className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          />
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-2 gap-2">
+                        {fieldSettings.showMotherOccupation && (
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                              Occupation (व्यवसाय)
+                            </label>
+                            <input
+                              type="text"
+                              value={form.motherOccupation}
+                              onChange={(e) => setForm({ ...form, motherOccupation: e.target.value })}
+                              placeholder="Housewife / Teacher"
+                              className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            />
+                          </div>
+                        )}
+                        {fieldSettings.showMotherAadhaar && (
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                              Mother's Aadhaar (वैकल्पिक)
+                            </label>
+                            <input
+                              type="text"
+                              maxLength={14}
+                              value={form.motherAadhaar}
+                              onChange={(e) => setForm({ ...form, motherAadhaar: e.target.value.replace(/[^\d\s]/g, "") })}
+                              placeholder="Aadhaar No."
+                              className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-mono font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            />
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Mother Mobile and Mother WhatsApp */}
+                      {(fieldSettings.showMotherPhone || fieldSettings.showMotherWhatsapp) && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 border-t border-slate-200/60 dark:border-slate-700/60">
+                          {fieldSettings.showMotherPhone && (
+                            <div>
+                              <label className="block text-[11px] font-bold text-pink-700 dark:text-pink-300 mb-1">
+                                📱 Mother Mobile (माता का मोबाइल नंबर)
+                              </label>
+                              <input
+                                type="tel"
+                                maxLength={10}
+                                value={form.motherPhone}
+                                onChange={(e) => setForm({ ...form, motherPhone: e.target.value.replace(/\D/g, "").slice(0, 10) })}
+                                placeholder="10-digit Mobile Number"
+                                className="w-full px-3 py-2 rounded-xl border border-pink-200 dark:border-pink-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-pink-500"
+                              />
+                            </div>
+                          )}
+
+                          {fieldSettings.showMotherWhatsapp && (
+                            <div>
+                              <div className="flex items-center justify-between mb-1">
+                                <label className="block text-[11px] font-bold text-emerald-700 dark:text-emerald-400">
+                                  💬 Mother WhatsApp (माता का व्हाट्सएप)
+                                </label>
+                                {form.motherPhone && form.motherWhatsapp !== form.motherPhone && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setForm((prev) => ({ ...prev, motherWhatsapp: prev.motherPhone }))}
+                                    className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+                                  >
+                                    Same as Mobile
+                                  </button>
+                                )}
+                              </div>
+                              <input
+                                type="tel"
+                                maxLength={10}
+                                value={form.motherWhatsapp}
+                                onChange={(e) => setForm({ ...form, motherWhatsapp: e.target.value.replace(/\D/g, "").slice(0, 10) })}
+                                placeholder="WhatsApp Number"
+                                className="w-full px-3 py-2 rounded-xl border border-emerald-300 dark:border-emerald-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
 
+                    {/* Primary Contact Numbers */}
                     <div>
-                      <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                        Primary Mobile Number *
-                      </label>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-xs font-bold text-slate-800 dark:text-slate-200">
+                          Primary Contact Mobile * (मुख्य मोबाइल नंबर)
+                        </label>
+                        <div className="flex items-center gap-1.5">
+                          {form.fatherPhone && form.phone !== form.fatherPhone && (
+                            <button
+                              type="button"
+                              onClick={() => setForm((prev) => ({ ...prev, phone: prev.fatherPhone }))}
+                              className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+                            >
+                              पिता का नंबर
+                            </button>
+                          )}
+                          {form.motherPhone && form.phone !== form.motherPhone && (
+                            <button
+                              type="button"
+                              onClick={() => setForm((prev) => ({ ...prev, phone: prev.motherPhone }))}
+                              className="text-[10px] font-bold text-pink-600 dark:text-pink-400 hover:underline cursor-pointer"
+                            >
+                              माता का नंबर
+                            </button>
+                          )}
+                        </div>
+                      </div>
                       <input
                         type="tel"
                         required
+                        maxLength={10}
                         value={form.phone}
-                        onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                        onChange={(e) => setForm({ ...form, phone: e.target.value.replace(/\D/g, "").slice(0, 10) })}
                         placeholder="10-digit Mobile Number"
                         className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
                     </div>
+
                     <div className="grid grid-cols-2 gap-2">
                       <div>
-                        <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                          WhatsApp No.
-                        </label>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="block text-xs font-bold text-slate-800 dark:text-slate-200">
+                            WhatsApp No. (व्हाट्सएप नंबर)
+                          </label>
+                          {form.phone && form.whatsappNo !== form.phone && (
+                            <button
+                              type="button"
+                              onClick={() => setForm((prev) => ({ ...prev, whatsappNo: prev.phone }))}
+                              className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+                            >
+                              Same as Mobile
+                            </button>
+                          )}
+                        </div>
                         <input
                           type="tel"
+                          maxLength={10}
                           value={form.whatsappNo}
-                          onChange={(e) => setForm({ ...form, whatsappNo: e.target.value })}
+                          onChange={(e) => setForm({ ...form, whatsappNo: e.target.value.replace(/\D/g, "").slice(0, 10) })}
                           placeholder="WhatsApp"
                           className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         />
                       </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                          Family Annual Income (वार्षिक आय)
-                        </label>
-                        <input
-                          type="text"
-                          value={form.annualIncome}
-                          onChange={(e) => setForm({ ...form, annualIncome: e.target.value })}
-                          placeholder="e.g. ₹1,50,000 / year"
-                          className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        />
-                      </div>
+                      {fieldSettings.showAnnualIncome && (
+                        <div>
+                          <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                            Annual Income (वार्षिक आय)
+                          </label>
+                          <input
+                            type="text"
+                            value={form.annualIncome}
+                            onChange={(e) => setForm({ ...form, annualIncome: e.target.value })}
+                            placeholder="e.g. ₹1,50,000 / year"
+                            className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          />
+                        </div>
+                      )}
                     </div>
 
-                    <div className="sm:col-span-2 grid sm:grid-cols-3 gap-3 p-3 bg-amber-50/50 dark:bg-amber-950/20 rounded-2xl border border-amber-200 dark:border-amber-900/40">
-                      <div>
-                        <label className="block text-xs font-bold text-amber-900 dark:text-amber-200 mb-1">
-                          Emergency Contact Person (आपातकालीन संपर्क)
-                        </label>
-                        <input
-                          type="text"
-                          value={form.emergencyContact}
-                          onChange={(e) => setForm({ ...form, emergencyContact: e.target.value })}
-                          placeholder="Name of Uncle / Guardian"
-                          className="w-full px-3 py-2 rounded-xl border border-amber-300 dark:border-amber-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-amber-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-amber-900 dark:text-amber-200 mb-1">
-                          Emergency Phone No.
-                        </label>
-                        <input
-                          type="tel"
-                          value={form.emergencyPhone}
-                          onChange={(e) => setForm({ ...form, emergencyPhone: e.target.value })}
-                          placeholder="Emergency Mobile"
-                          className="w-full px-3 py-2 rounded-xl border border-amber-300 dark:border-amber-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-amber-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-amber-900 dark:text-amber-200 mb-1">
-                          Relation with Student
-                        </label>
-                        <input
-                          type="text"
-                          value={form.emergencyRelation}
-                          onChange={(e) => setForm({ ...form, emergencyRelation: e.target.value })}
-                          placeholder="e.g. Uncle / Brother"
-                          className="w-full px-3 py-2 rounded-xl border border-amber-300 dark:border-amber-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-amber-500"
-                        />
-                      </div>
-                    </div>
+                    {/* Emergency Contact Section */}
+                    {fieldSettings.showEmergencyContact && (
+                      <div className="sm:col-span-2 p-3.5 bg-amber-50/60 dark:bg-amber-950/20 rounded-2xl border border-amber-200 dark:border-amber-900/40 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-black text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                            <span>🚨</span>
+                            <span>आपातकालीन संपर्क विवरण (Emergency Contact Details)</span>
+                          </p>
+                          <span className="text-[10px] font-bold text-amber-700 dark:text-amber-400">अभिभावक अनुपलब्ध होने पर</span>
+                        </div>
 
+                        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                          <div>
+                            <label className="block text-[11px] font-bold text-amber-900 dark:text-amber-200 mb-1">
+                              Emergency Person (संपर्क व्यक्ति)
+                            </label>
+                            <input
+                              type="text"
+                              value={form.emergencyContact}
+                              onChange={(e) => setForm({ ...form, emergencyContact: e.target.value })}
+                              placeholder="Name of Uncle / Guardian"
+                              className="w-full px-3 py-2 rounded-xl border border-amber-300 dark:border-amber-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-amber-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-bold text-amber-900 dark:text-amber-200 mb-1">
+                              Emergency Mobile (मोबाइल नंबर)
+                            </label>
+                            <input
+                              type="tel"
+                              maxLength={10}
+                              value={form.emergencyPhone}
+                              onChange={(e) => setForm({ ...form, emergencyPhone: e.target.value.replace(/\D/g, "").slice(0, 10) })}
+                              placeholder="10-digit Mobile"
+                              className="w-full px-3 py-2 rounded-xl border border-amber-300 dark:border-amber-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-amber-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-bold text-amber-900 dark:text-amber-200 mb-1">
+                              Relation (विद्यार्थी से संबंध)
+                            </label>
+                            <input
+                              type="text"
+                              value={form.emergencyRelation}
+                              onChange={(e) => setForm({ ...form, emergencyRelation: e.target.value })}
+                              placeholder="e.g. Uncle / Grandfather"
+                              className="w-full px-3 py-2 rounded-xl border border-amber-300 dark:border-amber-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-amber-500"
+                            />
+                          </div>
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="block text-[11px] font-bold text-emerald-800 dark:text-emerald-300">
+                                💬 WhatsApp Number
+                              </label>
+                              {form.emergencyPhone && form.emergencyWhatsapp !== form.emergencyPhone && (
+                                <button
+                                  type="button"
+                                  onClick={() => setForm((prev) => ({ ...prev, emergencyWhatsapp: prev.emergencyPhone }))}
+                                  className="text-[10px] font-bold text-emerald-700 dark:text-emerald-400 hover:underline cursor-pointer"
+                                >
+                                  Same as Mobile
+                                </button>
+                              )}
+                            </div>
+                            <input
+                              type="tel"
+                              maxLength={10}
+                              value={form.emergencyWhatsapp}
+                              onChange={(e) => setForm({ ...form, emergencyWhatsapp: e.target.value.replace(/\D/g, "").slice(0, 10) })}
+                              placeholder="Emergency WhatsApp"
+                              className="w-full px-3 py-2 rounded-xl border border-emerald-300 dark:border-emerald-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Permanent Address */}
                     <div className="sm:col-span-2 grid sm:grid-cols-4 gap-3">
                       <div className="sm:col-span-2">
                         <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                          Residential Address *
+                          Permanent Address * (स्थायी पता)
                         </label>
                         <input
                           type="text"
                           required
                           value={form.address}
                           onChange={(e) => setForm({ ...form, address: e.target.value })}
-                          placeholder="House / Village / Street"
+                          placeholder="Village / Ward / Street / Landmark"
                           className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         />
                       </div>
@@ -4570,7 +5505,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                           type="text"
                           value={form.city}
                           onChange={(e) => setForm({ ...form, city: e.target.value })}
-                          placeholder="City"
+                          placeholder="e.g. Saran / Chapra"
                           className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         />
                       </div>
@@ -4588,34 +5523,417 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                         />
                       </div>
                     </div>
+
+                    {/* Correspondence Address */}
+                    {fieldSettings.showCorrespondenceAddress && (
+                      <div className="sm:col-span-2 p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-700 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <label className="block text-xs font-bold text-slate-800 dark:text-slate-200">
+                            Correspondence Address (पत्राचार का पता)
+                          </label>
+                          <label className="flex items-center gap-1.5 cursor-pointer text-xs font-bold text-indigo-600 dark:text-indigo-400 select-none">
+                            <input
+                              type="checkbox"
+                              checked={form.isSameAddress}
+                              onChange={(e) =>
+                                setForm({
+                                  ...form,
+                                  isSameAddress: e.target.checked,
+                                  correspondenceAddress: e.target.checked ? form.address : form.correspondenceAddress,
+                                })
+                              }
+                              className="w-4 h-4 accent-indigo-600 rounded"
+                            />
+                            <span>स्थायी पते के समान (Same as Permanent)</span>
+                          </label>
+                        </div>
+                        {!form.isSameAddress && (
+                          <input
+                            type="text"
+                            value={form.correspondenceAddress}
+                            onChange={(e) => setForm({ ...form, correspondenceAddress: e.target.value })}
+                            placeholder="Enter present communication address if different"
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          />
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                {/* Transport & Documents */}
-                <div className="space-y-4 pt-2 border-t border-slate-200 dark:border-slate-700">
-                  {getClassFees(classes.find((c) => c.id === form.classId) || classes[0]).busAvailable && (
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                      <label className="flex items-center gap-2 cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={form.usesBus}
-                          onChange={(e) => setForm({ ...form, usesBus: e.target.checked })}
-                          className="w-4 h-4 accent-amber-600"
-                        />
-                        <Bus className="w-4 h-4 text-amber-600" />
-                        <span className="text-xs font-bold text-slate-800 dark:text-white">
-                          School Bus / Transport Facility Required
-                        </span>
-                      </label>
-                      {form.usesBus && (
-                        <input
-                          type="text"
-                          value={form.busRoute}
-                          onChange={(e) => setForm({ ...form, busRoute: e.target.value })}
-                          placeholder="Nearest Bus Stop / Route"
-                          className="px-3.5 py-2 rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold sm:w-64 focus:outline-none focus:ring-2 focus:ring-amber-500"
-                        />
+                {/* 3. Previous School & TC Details */}
+                {(fieldSettings.showPreviousSchool || fieldSettings.showPreviousTcDetails) && (
+                  <div className="pt-2 border-t border-slate-200 dark:border-slate-700">
+                    <h3 className="text-xs font-black uppercase tracking-wider text-indigo-600 dark:text-indigo-400 mb-3">
+                      3. Previous School &amp; TC Details (पूर्व विद्यालय विवरण)
+                    </h3>
+                    <div className="grid sm:grid-cols-2 gap-4">
+                      {fieldSettings.showPreviousSchool && (
+                        <div>
+                          <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                            Name of School Last Attended (पूर्व विद्यालय का नाम)
+                          </label>
+                          <input
+                            type="text"
+                            value={form.previousSchool}
+                            onChange={(e) => setForm({ ...form, previousSchool: e.target.value })}
+                            placeholder="e.g. Govt Middle School Affour"
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          />
+                        </div>
                       )}
+
+                      {fieldSettings.showPreviousSchool && (
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                              Last Class Passed
+                            </label>
+                            <input
+                              type="text"
+                              value={form.previousClass}
+                              onChange={(e) => setForm({ ...form, previousClass: e.target.value })}
+                              placeholder="e.g. Class 5"
+                              className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                              Board / Council
+                            </label>
+                            <input
+                              type="text"
+                              value={form.previousBoard}
+                              onChange={(e) => setForm({ ...form, previousBoard: e.target.value })}
+                              placeholder="e.g. BSEB / CBSE"
+                              className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {fieldSettings.showPreviousTcDetails && (
+                        <div className="grid grid-cols-2 gap-2 sm:col-span-2">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                              Transfer Certificate (TC / SLC) No.
+                            </label>
+                            <input
+                              type="text"
+                              value={form.previousTcNo}
+                              onChange={(e) => setForm({ ...form, previousTcNo: e.target.value })}
+                              placeholder="TC Serial Number"
+                              className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                              TC Issue Date
+                            </label>
+                            <input
+                              type="date"
+                              value={form.previousTcDate}
+                              onChange={(e) => setForm({ ...form, previousTcDate: e.target.value })}
+                              className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* 4. Transport & Child Sensitivity */}
+                <div className="space-y-4 pt-2 border-t border-slate-200 dark:border-slate-700">
+                  <h3 className="text-xs font-black uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+                    4. Transport &amp; Child Sensitivity (परिवहन एवं संवेदनशीलता)
+                  </h3>
+
+                  <div className="p-3.5 rounded-2xl bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 space-y-3">
+                    {getClassFees(classes.find((c) => c.id === form.classId) || classes[0]).busAvailable && (
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <label className="flex items-center gap-2 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={form.usesBus}
+                            onChange={(e) => setForm({ ...form, usesBus: e.target.checked })}
+                            className="w-4 h-4 accent-amber-600"
+                          />
+                          <Bus className="w-4 h-4 text-amber-600" />
+                          <span className="text-xs font-bold text-slate-800 dark:text-white">
+                            Want to avail School Bus / Transport Facility (स्कूल वाहन सुविधा चाहिए)
+                          </span>
+                        </label>
+                        {form.usesBus && (
+                          <input
+                            type="text"
+                            value={form.busRoute}
+                            onChange={(e) => setForm({ ...form, busRoute: e.target.value })}
+                            placeholder="Specify Location / Stop (e.g. Affour Nagra)"
+                            className="px-3.5 py-2 rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold sm:w-64 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                          />
+                        )}
+                      </div>
+                    )}
+
+                    {/* If Bus not availed: Walking / Guardian / Self */}
+                    {!form.usesBus && fieldSettings.showTransportModeIfNo && (
+                      <div className="flex items-center gap-4 text-xs font-bold text-slate-700 dark:text-slate-300 pt-1">
+                        <span className="text-slate-500">यदि वाहन नहीं चाहिए तो कैसे आएंगे:</span>
+                        {(["Walking", "Guardian", "Self"] as const).map((mode) => (
+                          <label key={mode} className="flex items-center gap-1.5 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="transportModeIfNo"
+                              value={mode}
+                              checked={form.transportModeIfNo === mode}
+                              onChange={(e) => setForm({ ...form, transportModeIfNo: e.target.value as any })}
+                              className="w-3.5 h-3.5 accent-amber-600"
+                            />
+                            <span>{mode === "Walking" ? "पैदल (Walking)" : mode === "Guardian" ? "अभिभावक साथ (Guardian)" : "स्वयं साधन (Self)"}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Distance from School in KM */}
+                    {fieldSettings.showTransportDistance && (
+                      <div className="w-full sm:w-72 pt-1">
+                        <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
+                          Distance from School in Km (स्कूल से दूरी किमी में)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          value={form.transportDistanceKm}
+                          onChange={(e) => setForm({ ...form, transportDistanceKm: e.target.value })}
+                          placeholder="e.g. 1.5 Km"
+                          className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-amber-500"
+                        />
+                      </div>
+                    )}
+
+                    {/* Child Sensitivity (Yes/No) + Remarks */}
+                    {fieldSettings.showChildSensitivity && (
+                      <div className="pt-2 border-t border-amber-200 dark:border-amber-900/30 space-y-2">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                            Sensitivity about Child (क्या बच्चे को कोई विशेष शारीरिक/मानसिक संवेदनशीलता या देखभाल की आवश्यकता है?)
+                          </p>
+                          <div className="flex items-center gap-3">
+                            <label className="flex items-center gap-1.5 cursor-pointer text-xs font-bold text-slate-700 dark:text-slate-300">
+                              <input
+                                type="radio"
+                                name="hasChildSensitivity"
+                                checked={form.hasChildSensitivity === true}
+                                onChange={() => setForm({ ...form, hasChildSensitivity: true })}
+                                className="w-3.5 h-3.5 accent-rose-600"
+                              />
+                              <span>हाँ (Yes)</span>
+                            </label>
+                            <label className="flex items-center gap-1.5 cursor-pointer text-xs font-bold text-slate-700 dark:text-slate-300">
+                              <input
+                                type="radio"
+                                name="hasChildSensitivity"
+                                checked={form.hasChildSensitivity === false}
+                                onChange={() => setForm({ ...form, hasChildSensitivity: false })}
+                                className="w-3.5 h-3.5 accent-rose-600"
+                              />
+                              <span>नहीं (No)</span>
+                            </label>
+                          </div>
+                        </div>
+                        {form.hasChildSensitivity && (
+                          <input
+                            type="text"
+                            value={form.childSensitivityRemarks}
+                            onChange={(e) => setForm({ ...form, childSensitivityRemarks: e.target.value })}
+                            placeholder="यदि हाँ, तो विवरण दें (Specify medical condition, allergy, or special care notes)"
+                            className="w-full px-3.5 py-2 rounded-xl border border-rose-300 dark:border-rose-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-rose-500"
+                          />
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 5. Sibling Profile Table (If studying in school) */}
+                  {fieldSettings.showSiblingTable && (
+                    <div className="p-3.5 rounded-2xl bg-indigo-50/40 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-900/40 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-xs font-black text-indigo-950 dark:text-indigo-200 uppercase tracking-wider">
+                            Sibling Profile (यदि सगे भाई / बहन इस विद्यालय में पढ़ते हैं)
+                          </p>
+                          <p className="text-[10px] text-slate-500">Brothers / Sisters currently studying in this school</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setForm({
+                              ...form,
+                              siblingDetails: [
+                                ...(form.siblingDetails || []),
+                                { name: "", relation: "Brother", className: "", rollNo: "" },
+                              ],
+                            })
+                          }
+                          className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-[11px] font-bold hover:bg-indigo-700 flex items-center gap-1 cursor-pointer"
+                        >
+                          + भाई / बहन जोड़ें
+                        </button>
+                      </div>
+
+                      {form.siblingDetails && form.siblingDetails.length > 0 ? (
+                        <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
+                          <table className="w-full text-xs text-left">
+                            <thead className="bg-slate-100 dark:bg-slate-800 text-[10px] uppercase font-bold text-slate-600 dark:text-slate-300">
+                              <tr>
+                                <th className="p-2 w-10 text-center">क्र.</th>
+                                <th className="p-2">Name (नाम)</th>
+                                <th className="p-2 w-28">Brother / Sister</th>
+                                <th className="p-2 w-24">Class (कक्षा)</th>
+                                <th className="p-2 w-24">Roll / Adm No.</th>
+                                <th className="p-2 w-10 text-center">हटाएं</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                              {form.siblingDetails.map((sib, sIdx) => (
+                                <tr key={sIdx}>
+                                  <td className="p-2 text-center font-bold text-slate-400">{sIdx + 1}</td>
+                                  <td className="p-1.5">
+                                    <input
+                                      type="text"
+                                      value={sib.name}
+                                      onChange={(e) => {
+                                        const updated = [...form.siblingDetails!];
+                                        updated[sIdx].name = e.target.value;
+                                        setForm({ ...form, siblingDetails: updated });
+                                      }}
+                                      placeholder="Sibling's Name"
+                                      className="w-full px-2 py-1 rounded border border-slate-200 dark:border-slate-700 text-xs font-semibold"
+                                    />
+                                  </td>
+                                  <td className="p-1.5">
+                                    <select
+                                      value={sib.relation}
+                                      onChange={(e) => {
+                                        const updated = [...form.siblingDetails!];
+                                        updated[sIdx].relation = e.target.value as any;
+                                        setForm({ ...form, siblingDetails: updated });
+                                      }}
+                                      className="w-full px-2 py-1 rounded border border-slate-200 dark:border-slate-700 text-xs font-semibold"
+                                    >
+                                      <option value="Brother">Brother (भाई)</option>
+                                      <option value="Sister">Sister (बहन)</option>
+                                    </select>
+                                  </td>
+                                  <td className="p-1.5">
+                                    <input
+                                      type="text"
+                                      value={sib.className}
+                                      onChange={(e) => {
+                                        const updated = [...form.siblingDetails!];
+                                        updated[sIdx].className = e.target.value;
+                                        setForm({ ...form, siblingDetails: updated });
+                                      }}
+                                      placeholder="Class"
+                                      className="w-full px-2 py-1 rounded border border-slate-200 dark:border-slate-700 text-xs font-semibold"
+                                    />
+                                  </td>
+                                  <td className="p-1.5">
+                                    <input
+                                      type="text"
+                                      value={sib.rollNo || ""}
+                                      onChange={(e) => {
+                                        const updated = [...form.siblingDetails!];
+                                        updated[sIdx].rollNo = e.target.value;
+                                        setForm({ ...form, siblingDetails: updated });
+                                      }}
+                                      placeholder="Roll / Adm"
+                                      className="w-full px-2 py-1 rounded border border-slate-200 dark:border-slate-700 text-xs font-semibold"
+                                    />
+                                  </td>
+                                  <td className="p-1.5 text-center">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const updated = form.siblingDetails!.filter((_, i) => i !== sIdx);
+                                        setForm({ ...form, siblingDetails: updated });
+                                      }}
+                                      className="text-rose-600 hover:text-rose-800 p-1 font-bold text-sm cursor-pointer"
+                                    >
+                                      ×
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-slate-500 italic">
+                          वर्तमान में कोई सहोदर (भाई/बहन) विद्यालय में नामांकित नहीं है (यदि है तो ऊपर "+ भाई / बहन जोड़ें" बटन दबाएं)।
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 6. Bank Account Details (DBT / Scholarship) */}
+                  {fieldSettings.showBankDetails && (
+                    <div className="p-3.5 rounded-2xl bg-emerald-50/40 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/40 space-y-2.5">
+                      <p className="text-xs font-black text-emerald-900 dark:text-emerald-200 uppercase tracking-wider">
+                        बैंक खाता विवरण (Bank Details for DBT / Scholarship)
+                      </p>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                        <div className="col-span-2 sm:col-span-1">
+                          <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            खाताधारक नाम (Account Name)
+                          </label>
+                          <input
+                            type="text"
+                            value={form.bankAccountName}
+                            onChange={(e) => setForm({ ...form, bankAccountName: e.target.value })}
+                            placeholder="Student / Parent Name"
+                            className="w-full px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold"
+                          />
+                        </div>
+                        <div className="col-span-2 sm:col-span-1">
+                          <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            बैंक का नाम (Bank Name)
+                          </label>
+                          <input
+                            type="text"
+                            value={form.bankName}
+                            onChange={(e) => setForm({ ...form, bankName: e.target.value })}
+                            placeholder="e.g. SBI / PNB"
+                            className="w-full px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            खाता संख्या (A/C No)
+                          </label>
+                          <input
+                            type="text"
+                            value={form.bankAccountNumber}
+                            onChange={(e) => setForm({ ...form, bankAccountNumber: e.target.value })}
+                            placeholder="Account Number"
+                            className="w-full px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono font-semibold"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            IFSC कोड
+                          </label>
+                          <input
+                            type="text"
+                            value={form.bankIfsc}
+                            onChange={(e) => setForm({ ...form, bankIfsc: e.target.value.toUpperCase() })}
+                            placeholder="e.g. SBIN0001234"
+                            className="w-full px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono font-semibold"
+                          />
+                        </div>
+                      </div>
                     </div>
                   )}
 
@@ -5002,6 +6320,29 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                         />
                       </div>
                     </div>
+                  </div>
+                )}
+
+                {/* PARENT / GUARDIAN SELF-DECLARATION (अभिभावक घोषणा पत्र) */}
+                {fieldSettings.showParentDeclaration && (
+                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 space-y-2">
+                    <label className="flex items-start gap-3 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        required={!isAdmin}
+                        checked={form.parentDeclarationAccepted}
+                        onChange={(e) => setForm({ ...form, parentDeclarationAccepted: e.target.checked })}
+                        className="w-4 h-4 mt-0.5 accent-indigo-600 rounded shrink-0 cursor-pointer"
+                      />
+                      <div className="text-xs space-y-1">
+                        <p className="font-bold text-slate-900 dark:text-white">
+                          अभिभावक स्व-घोषणा (Parent / Guardian Self-Declaration) *
+                        </p>
+                        <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                          "मैं प्रमाणित करता/करती हूँ कि ऊपर दी गई सभी जानकारियाँ मेरी जानकारी के अनुसार सत्य व सही हैं और कोई भी तथ्य छिपाया नहीं गया है। मैं एवं मेरा पाल्य विद्यालय के सभी नियमों, अनुशासन और शुल्क नीतियों का निष्ठापूर्वक पालन करेंगे।"
+                        </p>
+                      </div>
+                    </label>
                   </div>
                 )}
 

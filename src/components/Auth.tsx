@@ -46,7 +46,8 @@ import {
   GraduationCap,
   School,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  X
 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import jsQR from 'jsqr';
@@ -120,6 +121,7 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
 
   // QR Scanner States
   const [cameraActive, setCameraActive] = useState(false);
+  const [showQrModal, setShowQrModal] = useState(false);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const scannerInstanceRef = useRef<Html5Qrcode | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -145,6 +147,17 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
       try { setSettings(JSON.parse(s)); } catch {}
     }
   }, []);
+
+  useEffect(() => {
+    if (showQrModal) {
+      const t = setTimeout(() => {
+        startScanner();
+      }, 250);
+      return () => clearTimeout(t);
+    } else {
+      stopScanner();
+    }
+  }, [showQrModal, facingMode]);
 
   useEffect(() => {
     return () => {
@@ -533,38 +546,99 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
           const realSchoolName = embeddedSchoolName || found?.schoolName || 'Nstz';
           const realEmail = found?.email || (realAdmissionNo ? `${realAdmissionNo.toLowerCase().replace(/[^a-z0-9]/g, '')}@student.nstz.edu.in` : `student_${realStudentId.slice(-6)}@nstz.app`);
 
-          matchedStudentUser = {
-            id: realStudentId,
-            uid: realStudentId,
-            displayId: realRollNo ? `ROLL-${realRollNo}` : `STU-${realStudentId.slice(0, 6).toUpperCase()}`,
-            name: realName,
-            email: realEmail,
-            mobile: realPhone,
-            role: 'STUDENT',
-            schoolId: cleanSchoolId,
-            schoolName: realSchoolName,
-            classLevel: realClassName || realClass,
-            classId: realClass,
-            className: realClassName,
-            stream: 'General',
-            credits: 100,
-            diamonds: 50,
-            streak: 1,
-            totalScore: 0,
-            profileCompleted: true,
-            subscriptionTier: 'PRO',
-            provider: 'qr_student_id',
-            isQrLogin: true,
-            admissionNo: realAdmissionNo,
-            rollNo: realRollNo,
-            fatherName: realFather,
-            motherName: realMother,
-            bloodGroup: realBlood,
-            dateOfBirth: realDob,
-            address: realAddress,
-            monthlyFee: realFee,
-            photoURL: found?.photoUrl || ''
-          };
+          // Check if an existing account already exists with this student's ID, admission no, or phone
+          let existingLinkedUser: any = null;
+          try {
+            const cachedDirect = localStorage.getItem(`nst_user_profile_${cleanEntityId}`);
+            if (cachedDirect) {
+              const u = JSON.parse(cachedDirect);
+              if (u && (u.id || u.uid)) existingLinkedUser = u;
+            }
+
+            if (!existingLinkedUser) {
+              for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k && (k.startsWith('nst_user_profile_') || k === 'nst_current_user' || k === 'nsta_cached_user')) {
+                  try {
+                    const u = JSON.parse(localStorage.getItem(k) || '{}');
+                    if (u && (u.id || u.uid)) {
+                      const matchesSchool = !u.schoolId || u.schoolId === cleanSchoolId;
+                      const matchesId = u.id === cleanEntityId || u.uid === cleanEntityId;
+                      const matchesAdm = embeddedAdmNo && u.admissionNo && u.admissionNo.toLowerCase() === embeddedAdmNo.toLowerCase();
+                      const matchesPhone = embeddedPhone && u.mobile && u.mobile.replace(/\D/g, '').endsWith((embeddedPhone.replace(/\D/g, '')).slice(-10));
+                      if ((matchesId || matchesAdm || matchesPhone) && matchesSchool) {
+                        existingLinkedUser = u;
+                        break;
+                      }
+                    }
+                  } catch {}
+                }
+              }
+            }
+
+            if (!existingLinkedUser && cleanEntityId) {
+              const remote = await getFreshUserData(cleanEntityId);
+              if (remote) existingLinkedUser = remote;
+            }
+            if (!existingLinkedUser && embeddedPhone) {
+              const remote = await getUserByMobileOrId(embeddedPhone);
+              if (remote) existingLinkedUser = remote;
+            }
+          } catch {}
+
+          if (existingLinkedUser) {
+            matchedStudentUser = {
+              ...existingLinkedUser,
+              schoolId: cleanSchoolId,
+              schoolName: realSchoolName || existingLinkedUser.schoolName,
+              classLevel: realClassName || existingLinkedUser.classLevel || realClass,
+              classId: realClass || existingLinkedUser.classId,
+              className: realClassName || existingLinkedUser.className,
+              admissionNo: realAdmissionNo || existingLinkedUser.admissionNo,
+              rollNo: realRollNo || existingLinkedUser.rollNo,
+              fatherName: realFather || existingLinkedUser.fatherName,
+              motherName: realMother || existingLinkedUser.motherName,
+              bloodGroup: realBlood || existingLinkedUser.bloodGroup,
+              dateOfBirth: realDob || existingLinkedUser.dateOfBirth,
+              address: realAddress || existingLinkedUser.address,
+              monthlyFee: realFee || existingLinkedUser.monthlyFee,
+              provider: existingLinkedUser.provider || 'qr_student_id',
+              isQrLogin: true,
+            };
+          } else {
+            matchedStudentUser = {
+              id: realStudentId,
+              uid: realStudentId,
+              displayId: realRollNo ? `ROLL-${realRollNo}` : `STU-${realStudentId.slice(0, 6).toUpperCase()}`,
+              name: realName,
+              email: realEmail,
+              mobile: realPhone,
+              role: 'STUDENT',
+              schoolId: cleanSchoolId,
+              schoolName: realSchoolName,
+              classLevel: realClassName || realClass,
+              classId: realClass,
+              className: realClassName,
+              stream: 'General',
+              credits: 100,
+              diamonds: 50,
+              streak: 1,
+              totalScore: 0,
+              profileCompleted: true,
+              subscriptionTier: 'PRO',
+              provider: 'qr_student_id',
+              isQrLogin: true,
+              admissionNo: realAdmissionNo,
+              rollNo: realRollNo,
+              fatherName: realFather,
+              motherName: realMother,
+              bloodGroup: realBlood,
+              dateOfBirth: realDob,
+              address: realAddress,
+              monthlyFee: realFee,
+              photoURL: found?.photoUrl || ''
+            };
+          }
 
         // Cache into local students list so school panel finds student immediately
         try {
@@ -1746,6 +1820,29 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
                 <ArrowRight size={16} />
               </button>
 
+              <button
+                type="button"
+                onClick={() => {
+                  setError(null);
+                  setShowQrModal(true);
+                }}
+                disabled={loading}
+                className="w-full py-3 px-4 rounded-xl text-sm font-bold tracking-wide text-slate-800 dark:text-slate-100 bg-gradient-to-r from-amber-500/15 via-orange-500/15 to-yellow-500/15 hover:from-amber-500/25 hover:via-orange-500/25 hover:to-yellow-500/25 border border-amber-500/35 dark:border-amber-400/35 shadow-xs transition-all flex items-center justify-between gap-2.5 cursor-pointer active:scale-[0.99]"
+              >
+                <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
+                  <QrCode size={18} />
+                </div>
+                <div className="text-left flex-1 min-w-0">
+                  <p className="text-xs font-black tracking-wide text-slate-900 dark:text-white leading-tight">
+                    Login with ID Card QR Code
+                  </p>
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight">
+                    ID card scan karke bina password ke direct login karein
+                  </p>
+                </div>
+                <ArrowRight size={16} className="text-amber-500 shrink-0" />
+              </button>
+
               <div className="relative my-3 flex items-center justify-center">
                 <div className="border-t border-slate-200 dark:border-slate-800 w-full" />
                 <span className="bg-slate-50 dark:bg-slate-950 px-3 text-[11px] font-bold text-slate-400 uppercase tracking-wider absolute">OR</span>
@@ -1968,6 +2065,76 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
       <footer className="w-full max-w-md mx-auto text-center py-3 z-10 text-[11px] text-slate-400 shrink-0">
         <p>DPS &amp; NSTA Secure Education Platform</p>
       </footer>
+
+      {/* ── ID CARD QR SCANNER MODAL ── */}
+      {showQrModal && (
+        <div className="fixed inset-0 z-[99999] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-sm rounded-3xl bg-slate-900 border border-slate-800 p-5 shadow-2xl text-white space-y-4">
+            <div className="flex items-center justify-between pb-1 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <QrCode size={20} className="text-amber-400" />
+                <h3 className="text-sm font-black tracking-wide">ID Card QR Scanner</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  stopScanner();
+                  setShowQrModal(false);
+                }}
+                className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-400 text-center">
+              Student ID Card ka QR code camera ke saamne laayein
+            </p>
+
+            {/* Camera Scanner Viewport */}
+            <div className="relative w-full aspect-square bg-black rounded-2xl overflow-hidden border border-slate-700/80 shadow-inner flex items-center justify-center">
+              <div id="auth-qr-reader" className="w-full h-full" />
+              <div className="pointer-events-none absolute inset-6 border-2 border-dashed border-amber-400/70 rounded-2xl flex items-center justify-center animate-pulse" />
+            </div>
+
+            {/* Action Buttons */}
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <button
+                type="button"
+                onClick={switchCamera}
+                className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer"
+              >
+                <RefreshCw size={14} />
+                Flip Camera
+              </button>
+
+              <label className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer text-center">
+                <Upload size={14} />
+                Upload Photo
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => {
+                    handleFileUpload(e);
+                  }}
+                  className="hidden"
+                />
+              </label>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                stopScanner();
+                setShowQrModal(false);
+              }}
+              className="w-full py-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-800 text-xs font-bold text-slate-300 transition cursor-pointer"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 2-Device Cross-Login Challenge Modal */}
       <QrLoginOtpChallengeModal

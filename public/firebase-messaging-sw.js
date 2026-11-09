@@ -1,12 +1,75 @@
-/* NSTA background FCM worker.
+/* NSTA background FCM & Web Push Service Worker.
  * Handles push notifications with native browser push event and Firebase messaging compat.
- * Works even when app is closed or phone is locked.
+ * Works even when app is closed or phone screen is locked.
  */
 self.skipWaiting();
-importScripts('https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js');
-importScripts('https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js');
+
+// In-memory cache to prevent duplicate notification banners within 3 seconds
+const seenPushMap = new Map();
+function isDuplicatePush(id) {
+  if (!id) return false;
+  const now = Date.now();
+  const lastSeen = seenPushMap.get(id);
+  if (lastSeen && now - lastSeen < 3000) {
+    return true;
+  }
+  seenPushMap.set(id, now);
+  if (seenPushMap.size > 200) {
+    for (const [k, v] of seenPushMap.entries()) {
+      if (now - v > 60000) seenPushMap.delete(k);
+    }
+  }
+  return false;
+}
+
+function displayPushNotification(title, body, data, iconUrl) {
+  const notifId = data.id || data.messageId || (title + '_' + (data.timestamp || ''));
+  if (isDuplicatePush(notifId)) {
+    return Promise.resolve();
+  }
+
+  const icon = (iconUrl && !iconUrl.endsWith('.svg')) ? iconUrl : '/icons/icon-192.png?v=3';
+  // Fresh unique tag forces Android to pop up a heads-up banner over other apps instead of silently collapsing
+  const tagKey = 'nsta-alert-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
+
+  const richOptions = {
+    body: body || 'New update received!',
+    icon: icon,
+    badge: '/icons/badge-monochrome.png?v=4',
+    tag: tagKey,
+    renotify: true,
+    requireInteraction: true,
+    silent: false,
+    vibrate: [500, 200, 500, 200, 500],
+    timestamp: Date.now(),
+    data: { url: data.url || '/', ...data },
+    actions: [
+      { action: 'open', title: 'खोलें (Open)' },
+      { action: 'dismiss', title: 'हटाएं' },
+    ],
+  };
+
+  return self.registration.showNotification(title || 'NSTA Alert', richOptions).catch(() => {
+    // Fallback without actions for mobile browsers with strict notification action policies
+    return self.registration.showNotification(title || 'NSTA Alert', {
+      body: body || 'New update received!',
+      icon: '/icons/icon-192.png?v=3',
+      badge: '/icons/badge-monochrome.png?v=4',
+      tag: tagKey,
+      renotify: true,
+      requireInteraction: true,
+      silent: false,
+      vibrate: [500, 200, 500, 200, 500],
+      timestamp: Date.now(),
+      data: { url: data.url || '/', ...data },
+    });
+  });
+}
 
 try {
+  importScripts('https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js');
+  importScripts('https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js');
+
   firebase.initializeApp({
     apiKey: 'AIzaSyCtjCnVHwFIj9NPWZnVXcm4Ayw5YZJna54',
     authDomain: 'nst2512-6a2e4.firebaseapp.com',
@@ -24,40 +87,9 @@ try {
     const notification = payload.notification || {};
     const title = notification.title || data.title || 'NSTA Study App';
     const body = notification.body || data.body || 'New notification received!';
-    const type = data.type || 'DEFAULT';
-    const url = data.url || '/';
-    const tagKey = data.messageId
-      ? `nsta-${type}-${data.messageId}`
-      : data.senderId
-      ? `nsta-${type}-${data.senderId}-${Date.now()}`
-      : `nsta-${type}-${Date.now()}`;
+    const icon = notification.icon || data.icon || data.senderPhoto || '/icons/icon-192.png?v=3';
 
-    return self.registration.showNotification(title, {
-      body,
-      icon: notification.icon || data.icon || data.senderPhoto || '/icons/icon-192.png?v=3',
-      badge: '/icons/badge-monochrome.png?v=4',
-      tag: tagKey,
-      renotify: true,
-      requireInteraction: true,
-      silent: false,
-      vibrate: [300, 150, 300, 150, 300],
-      data: { url, ...data },
-      actions: [
-        { action: 'open', title: 'Open App' },
-        { action: 'dismiss', title: 'Dismiss' },
-      ],
-    }).catch(() => {
-      return self.registration.showNotification(title, {
-        body,
-        icon: '/icons/icon-192.png?v=3',
-        badge: '/icons/badge-monochrome.png?v=4',
-        tag: tagKey,
-        renotify: true,
-        requireInteraction: true,
-        silent: false,
-        data: { url, ...data },
-      });
-    });
+    return displayPushNotification(title, body, { ...data, ...notification }, icon);
   });
 } catch (e) {
   console.warn('[FCM SW] Compat messaging init warning:', e);
@@ -69,6 +101,7 @@ self.addEventListener('push', (event) => {
   let title = 'NSTA Study App';
   let body = 'New notification received!';
   let data = {};
+  let icon = '/icons/icon-192.png?v=3';
 
   if (event.data) {
     try {
@@ -77,6 +110,7 @@ self.addEventListener('push', (event) => {
       const payloadData = parsed.data || {};
       title = notif.title || payloadData.title || title;
       body = notif.body || payloadData.body || body;
+      icon = notif.icon || payloadData.icon || payloadData.senderPhoto || icon;
       data = { ...payloadData, ...notif };
     } catch (_) {
       try {
@@ -85,56 +119,7 @@ self.addEventListener('push', (event) => {
     }
   }
 
-  const type = data.type || 'DEFAULT';
-  const isSchoolUrgent =
-    type === 'MONTHLY_FEE' ||
-    type === 'FEE_RECEIPT' ||
-    type === 'SCHOOL_NOTICE' ||
-    type === 'SCHOOL_HOLIDAY' ||
-    data.urgent === '1';
-  const urgent = isSchoolUrgent || type === 'CHAT' || type === 'FRIEND_REQUEST' || type === 'DIRECT_MESSAGE';
-
-  const openTitle =
-    type === 'MONTHLY_FEE' || type === 'FEE_RECEIPT'
-      ? 'Fee Passbook खोलें'
-      : type === 'SCHOOL_NOTICE' || type === 'SCHOOL_HOLIDAY'
-      ? 'Notice देखें'
-      : 'Open App';
-
-  const tagKey = data.studentId
-    ? `nsta-${type}-${data.studentId}-${Date.now()}`
-    : data.senderId
-    ? `nsta-${type}-${data.senderId}-${Date.now()}`
-    : `nsta-${type}-${Date.now()}`;
-
-  const promise = self.registration.showNotification(title, {
-    body,
-    icon: data.icon || data.senderPhoto || '/icons/icon-192.png?v=3',
-    badge: '/icons/badge-monochrome.png?v=4',
-    tag: tagKey,
-    renotify: true,
-    requireInteraction: true,
-    silent: false,
-    vibrate: [300, 150, 300, 150, 300],
-    data: { url: data.url || '/', ...data },
-    actions: [
-      { action: 'open', title: openTitle },
-      { action: 'dismiss', title: 'Dismiss' },
-    ],
-  }).catch(() => {
-    return self.registration.showNotification(title, {
-      body,
-      icon: '/icons/icon-192.png?v=3',
-      badge: '/icons/badge-monochrome.png?v=4',
-      tag: tagKey,
-      renotify: true,
-      requireInteraction: true,
-      silent: false,
-      data: { url: data.url || '/', ...data },
-    });
-  });
-
-  event.waitUntil(promise);
+  event.waitUntil(displayPushNotification(title, body, data, icon));
 });
 
 self.addEventListener('notificationclick', (event) => {

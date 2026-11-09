@@ -211,14 +211,14 @@ export const NotificationSettings: React.FC<Props> = ({ userId, placement = 'flo
             </div>
 
             {/* Background push tips */}
-            <div className="mt-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 p-3 text-[11px] text-slate-500 dark:text-slate-400 space-y-1">
+            <div className="mt-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 p-3 text-[11px] text-slate-500 dark:text-slate-400 space-y-1.5">
               <p className="font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
                 <ShieldCheck size={13} className="text-indigo-400" />
-                App band hone par notification aane ke niyam:
+                Doosra app use karte waqt screen par Pop-Up aane ke liye:
               </p>
-              <p>1. Chrome popup aane par <strong>"Allow"</strong> par click karein.</p>
-              <p>2. Chrome menu (⋮) me jakar <strong>"Install app"</strong> ya <strong>"Add to Home screen"</strong> karein.</p>
-              <p>3. Android phone settings &gt; Apps &gt; Chrome &gt; Battery me <strong>"Unrestricted"</strong> set karein taki phone app band hone par background push na roke.</p>
+              <p>1. Chrome popup aane par <strong>&quot;Allow&quot;</strong> par click karein.</p>
+              <p>2. <strong>Screen Pop-up ON karein:</strong> Android Settings &gt; Apps &gt; Chrome &gt; Notifications me jakar <strong>&quot;Pop on screen&quot; / &quot;Floating notifications&quot; (Banners)</strong> ko ON karein taki WhatsApp/YouTube chalate waqt upar pop-up dikhe.</p>
+              <p>3. Chrome menu (⋮) me jakar <strong>&quot;Install app&quot;</strong> ya <strong>&quot;Add to Home screen&quot;</strong> karein aur Battery ko <strong>&quot;Unrestricted&quot;</strong> set karein.</p>
             </div>
 
             <button type="button" disabled={saving} onClick={save} className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-indigo-700 disabled:opacity-60">

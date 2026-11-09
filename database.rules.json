@@ -76,6 +76,12 @@
       }
     },
 
+    "group_study_rooms": {
+      ".read": true,
+      ".write": true,
+      ".indexOn": ["createdAt", "lastActive", "hostId", "schoolId", "code"]
+    },
+
     "homework_entries": {
       ".read": true,
       ".write": true

@@ -361,6 +361,9 @@ interface GroupStudyModalProps {
     mode?: 'NOTES' | 'MCQ' | 'PDF';
   }) => void;
   onUserUpdate?: (user: any) => void;
+  isSchoolHost?: boolean;
+  schoolId?: string;
+  schoolName?: string;
 }
 
 export const GroupStudyModal: React.FC<GroupStudyModalProps> = ({
@@ -375,52 +378,119 @@ export const GroupStudyModal: React.FC<GroupStudyModalProps> = ({
   onOpenStore,
   onNavigateToContent,
   onUserUpdate,
+  isSchoolHost = false,
+  schoolId,
+  schoolName,
 }) => {
   // ── Plan & Tier Permissions ───────────────────────────────────────────────
   const userTier: 'FREE' | 'BASIC' | 'ULTRA' = (user?.subscriptionLevel || 'FREE')?.toUpperCase() as any;
   const userEmail = (user?.email || auth.currentUser?.email || '').toLowerCase().trim();
   const isAdmin = Boolean(
     user?.role === 'ADMIN' ||
+    user?.role === 'SUPER_ADMIN' ||
+    user?.role === 'SUPERADMIN' ||
     user?.role === 'SUB_ADMIN' ||
     user?.isAdmin ||
+    user?.isSuperAdmin ||
+    (user as any)?.role === 'SUPER_ADMIN' ||
+    (user as any)?.schoolRole === 'SUPER_ADMIN' ||
+    userEmail === 'nadimanwar794@gmail.com' ||
+    userEmail === 'nsdimanwar794@gmail.com' ||
+    userEmail === 'nadiman0636indo@gmail.com' ||
     userEmail === 'n44438403@gmail.com' ||
     userEmail === ADMIN_EMAIL.toLowerCase() ||
-    userEmail.includes('admin') ||
-    user?.isSuperAdmin
+    userEmail.includes('admin')
+  );
+
+  const resolvedSchoolId = schoolId || (user as any)?.schoolId || (typeof localStorage !== 'undefined' ? localStorage.getItem('nst_active_school_id') : null);
+  const resolvedSchoolName = schoolName || (user as any)?.schoolName || 'School';
+
+  const isTeacher = Boolean(
+    user?.role === 'TEACHER' ||
+    user?.role === 'SCHOOL_TEACHER' ||
+    (user as any)?.role === 'TEACHER' ||
+    (user as any)?.schoolRole === 'TEACHER' ||
+    (user as any)?.isTeacher ||
+    (typeof localStorage !== 'undefined' && (
+      localStorage.getItem('nst_teacher_logged_in') === 'true' ||
+      localStorage.getItem('school_teacher_auth') !== null
+    ))
+  );
+
+  const isSchoolAdmin = Boolean(
+    isSchoolHost ||
+    user?.role === 'SCHOOL_ADMIN' ||
+    user?.role === 'SCHOOLADMIN' ||
+    user?.role === 'SCHOOL_SUB_ADMIN' ||
+    user?.role === 'PRINCIPAL' ||
+    (user as any)?.isSchoolHost ||
+    (user as any)?.role === 'SCHOOL_ADMIN' ||
+    (user as any)?.role === 'PRINCIPAL' ||
+    (user as any)?.schoolRole === 'SCHOOL_ADMIN' ||
+    (user as any)?.schoolRole === 'SUPER_ADMIN' ||
+    (typeof localStorage !== 'undefined' && (
+      localStorage.getItem('nst_school_admin_auth') !== null ||
+      localStorage.getItem('nst_school_admin_logged_in') === 'true'
+    )) ||
+    (typeof sessionStorage !== 'undefined' && (
+      sessionStorage.getItem('school_admin_logged_in') === 'true'
+    ))
+  );
+
+  const isSchoolStaffOrAdmin = Boolean(
+    isSchoolAdmin || isTeacher || isSchoolHost
+  );
+
+  // A school student is strictly a student enrolled in a school, NEVER an Admin, Teacher, or School Admin!
+  const isSchoolStudent = Boolean(
+    !isAdmin &&
+    !isSchoolStaffOrAdmin &&
+    (
+      (user as any)?.schoolRole === 'SCHOOL_STUDENT' ||
+      user?.role === 'SCHOOL_STUDENT' ||
+      ((user?.role === 'STUDENT' || !user?.role) && ((user as any)?.schoolId || (typeof localStorage !== 'undefined' && localStorage.getItem('nst_active_school_id'))))
+    )
+  );
+
+  const isVipStudent = Boolean(
+    user?.isVip ||
+    user?.isPremium ||
+    user?.subscriptionLevel === 'BASIC' ||
+    user?.subscriptionLevel === 'ULTRA' ||
+    user?.isPro ||
+    userTier === 'BASIC' ||
+    userTier === 'ULTRA'
   );
 
   // Limits mandated:
-  // Admin: UNLIMITED rooms, up to 240 min (4 hrs) duration, up to 500 members capacity!
-  // Ultra: max 5 rooms per day, max 120 min (2 hr) duration
-  // Basic: max 3 rooms per day, max 60 min (1 hr) duration
-  // Free: max 2 rooms per day, max 30 min duration
-  const maxRoomsPerDay = isAdmin ? Infinity : (
-    userTier === 'ULTRA' ? 5 :
-    userTier === 'BASIC' ? 3 :
-    2
-  );
+  // Super Admin, School Admin & Teachers: UNLIMITED rooms, up to 240 min (4 hrs) duration, up to 500 members capacity!
+  // Ultra VIP Student: max 5 rooms per day, max 120 min (2 hr) duration
+  // Basic VIP Student: max 3 rooms per day, max 60 min (1 hr) duration
+  // School Students & Free Students: CANNOT CREATE ROOMS (0 rooms allowed)
+  const hasMaxPower = Boolean(isAdmin || isSchoolStaffOrAdmin);
+  const maxRoomsPerDay = hasMaxPower ? Infinity : (isSchoolStudent ? 0 : (userTier === 'ULTRA' ? 5 : (userTier === 'BASIC' || isVipStudent ? 3 : 0)));
 
   const isFreeUser = userTier === 'FREE' && !isAdmin && !user?.isPro && !user?.isVip && !user?.isUltraVip;
   const isUltraUser = userTier === 'ULTRA' || isAdmin || Boolean(user?.isUltraVip);
   const isBasicUser = userTier === 'BASIC' || isUltraUser || Boolean(user?.isPro || user?.isVip);
   const isFreeOnly = !isBasicUser;
 
-  const maxDurationMinutesAllowed = isAdmin ? 240 : (
+  const maxDurationMinutesAllowed = hasMaxPower ? 240 : (
     userTier === 'ULTRA' ? 120 :
-    userTier === 'BASIC' ? 60 :
+    (userTier === 'BASIC' || isVipStudent) ? 60 :
     30
   );
 
   const durationOptions = useMemo(() => {
-    if (isAdmin) return [15, 30, 45, 60, 90, 120, 180, 240];
+    if (hasMaxPower) return [15, 30, 45, 60, 90, 120, 180, 240];
     if (userTier === 'ULTRA') return [30, 60, 90, 120];
-    if (userTier === 'BASIC') return [15, 30, 45, 60];
+    if (userTier === 'BASIC' || isVipStudent) return [15, 30, 45, 60];
     return [30];
-  }, [isAdmin, userTier]);
+  }, [hasMaxPower, userTier, isVipStudent]);
 
-  const maxRoomCapacityAllowed = isAdmin ? 500 : (
+  const maxRoomCapacityAllowed = hasMaxPower ? 500 : (
     userTier === 'ULTRA' ? 100 :
-    userTier === 'BASIC' ? 50 :
+    (userTier === 'BASIC' || isVipStudent) ? 50 :
     25
   );
 
@@ -835,7 +905,8 @@ export const GroupStudyModal: React.FC<GroupStudyModalProps> = ({
       isRevisionHub?: boolean;
       questions: GroupStudyMcqQuestion[];
       mcqCount: number;
-      sourceType: 'REVISION_HUB' | 'NOTES' | 'HOMEWORK' | 'CURATED' | 'CONTEXT' | 'COMPETITION';
+      sourceType: 'REVISION_HUB' | 'NOTES' | 'HOMEWORK' | 'CURATED' | 'CONTEXT' | 'COMPETITION' | 'SCHOOL';
+      schoolId?: string;
     }>();
 
     // 1. From Firebase mcq_lessons (Admin Class MCQs & Competition MCQs - Revision Hub)
@@ -1531,8 +1602,11 @@ export const GroupStudyModal: React.FC<GroupStudyModalProps> = ({
       return revLessons;
     } else {
       // 🎯 MCQ Mode
-      if (createModeDomain === 'ACADEMIC') {
+      if (createModeDomain === 'ACADEMIC' || isSchoolStaffOrAdmin) {
         let academicLessons = allRealLessons.filter((l) => {
+          if (isSchoolStaffOrAdmin && resolvedSchoolId) {
+            return l.schoolId === resolvedSchoolId || l.sourceType === 'SCHOOL' || (l.classLevel && l.classLevel !== 'COMPETITION');
+          }
           return l.classLevel && l.classLevel !== 'COMPETITION';
         });
 
@@ -2262,7 +2336,22 @@ export const GroupStudyModal: React.FC<GroupStudyModalProps> = ({
       alert('Naya Study Room create karne ka option admin dwara band kiya gaya hai.');
       return;
     }
-    if (!isAdmin && todayCreatedRoomsCount >= maxRoomsPerDay) {
+    // 👑 Super Admin, Teacher, School Admin can ALWAYS create rooms!
+    if (isAdmin || isSchoolStaffOrAdmin) {
+      setShowCreateModal(true);
+      return;
+    }
+    // School students cannot create rooms
+    if (isSchoolStudent) {
+      alert('🏫 स्कूल छात्र स्वयं स्टडी रूम नहीं बना सकते। आपके स्कूल या टीचर द्वारा बनाए गए स्कूल स्टडी रूम में आप जॉइन कर सकते हैं!');
+      return;
+    }
+    // Regular students: only VIP students can create rooms
+    if (!isVipStudent) {
+      alert('👑 स्टडी रूम केवल VIP स्टूडेंट्स, टीचर या स्कूल एडमिन द्वारा बनाया जा सकता है। आप किसी भी एक्टिव रूम में फ्री जॉइन कर सकते हैं!');
+      return;
+    }
+    if (todayCreatedRoomsCount >= maxRoomsPerDay) {
       setUpgradePromptReason('DAILY_ROOM_LIMIT');
       return;
     }
@@ -2271,7 +2360,25 @@ export const GroupStudyModal: React.FC<GroupStudyModalProps> = ({
 
   const handleCreateRoom = async (e: React.FormEvent) => {
     e.preventDefault();
-    const effectiveRoomName = newRoomName.trim() || `${user?.name || 'Live'} MCQ Arena`;
+    // Super Admin, Teacher, School Admin bypass student restrictions!
+    if (!isAdmin && !isSchoolStaffOrAdmin) {
+      if (isSchoolStudent) {
+        setShowCreateModal(false);
+        alert('🏫 स्कूल छात्र स्वयं स्टडी रूम नहीं बना सकते। आपके स्कूल या टीचर द्वारा बनाए गए स्कूल स्टडी रूम में आप जॉइन कर सकते हैं!');
+        return;
+      }
+      if (!isVipStudent) {
+        setShowCreateModal(false);
+        alert('👑 स्टडी रूम केवल VIP स्टूडेंट्स, टीचर या स्कूल एडमिन द्वारा बनाया जा सकता है। आप किसी भी एक्टिव रूम में फ्री जॉइन कर सकते हैं!');
+        return;
+      }
+      if (todayCreatedRoomsCount >= maxRoomsPerDay) {
+        setShowCreateModal(false);
+        setUpgradePromptReason('DAILY_ROOM_LIMIT');
+        return;
+      }
+    }
+    const effectiveRoomName = newRoomName.trim() || (isSchoolStaffOrAdmin ? `${resolvedSchoolName} Live Room` : `${user?.name || 'Live'} MCQ Arena`);
     const cleanPassword = newRoomPassword.trim();
 
     // Password is now optional: agar enter kiya to kam se kam 2 characters hone chahiye
@@ -2286,7 +2393,7 @@ export const GroupStudyModal: React.FC<GroupStudyModalProps> = ({
       return;
     }
 
-    if (!isAdmin && todayCreatedRoomsCount >= maxRoomsPerDay) {
+    if (!hasMaxPower && todayCreatedRoomsCount >= maxRoomsPerDay) {
       setShowCreateModal(false);
       setUpgradePromptReason('DAILY_ROOM_LIMIT');
       return;
@@ -2317,7 +2424,7 @@ export const GroupStudyModal: React.FC<GroupStudyModalProps> = ({
       const roomId = await createGroupRoom(
         {
           name: effectiveRoomName,
-          subject: newRoomSubject || 'General Knowledge',
+          subject: newRoomSubject || (isSchoolStaffOrAdmin ? `${resolvedSchoolName} Syllabus` : 'General Knowledge'),
           mode: 'LIVE_MCQ',
           mcqType: 'PROJECTOR_MODE',
           password: cleanPassword,
@@ -2330,7 +2437,9 @@ export const GroupStudyModal: React.FC<GroupStudyModalProps> = ({
           themeColor: roomTheme,
           preloadedQuestions: lessonToLaunch?.questions || [],
           preloadedTitle: lessonToLaunch?.lessonTitle || `${effectiveRoomName} MCQ Battle`,
-          durationPerQuestion: newRoomMcqType === 'REVISION_HUB' ? 15 : 20,
+          durationPerQuestion: 20,
+          schoolId: isSchoolStaffOrAdmin ? (resolvedSchoolId || undefined) : undefined,
+          isSchoolRoom: isSchoolStaffOrAdmin,
         },
         {
           id: effectiveUid,
@@ -4419,33 +4528,35 @@ Aao dekhte hain kisme kitna hai dum! 🏆`;
                           <button
                             onClick={() => handleSwitchMcqType('PROJECTOR_MODE')}
                             className={`px-2.5 py-1 rounded-lg text-[10px] font-black cursor-pointer transition ${
-                              currentRoom.mcqType === 'PROJECTOR_MODE' || currentRoom.mcqType === 'MCQ_PRACTICE'
+                              currentRoom.mcqType === 'PROJECTOR_MODE' || currentRoom.mcqType === 'MCQ_PRACTICE' || currentRoom.isSchoolRoom
                                 ? 'bg-cyan-500 text-slate-950 shadow-sm'
                                 : 'bg-slate-800 text-slate-300 hover:text-white'
                             }`}
-                            title="Ek Lesson ke Pure MCQs (Notes, Lucent & Homework)"
+                            title="School Syllabus Normal MCQ Mode"
                           >
-                            🎯 MCQ
+                            🎯 Normal MCQ {currentRoom.isSchoolRoom ? '(School Syllabus)' : ''}
                           </button>
-                          <button
-                            onClick={() => {
-                              if (isFreeUser) {
-                                alert('🔒 MCQ+ Question Sets sirf Pro / Ultra members host kar sakte hain! Free users standard MCQ practice sets host kar sakte hain.');
-                                return;
-                              }
-                              handleSwitchMcqType('REVISION_HUB');
-                            }}
-                            className={`px-2.5 py-1 rounded-lg text-[10px] font-black cursor-pointer transition ${
-                              currentRoom.mcqType === 'REVISION_HUB'
-                                ? 'bg-purple-500 text-slate-950 shadow-sm'
-                                : isFreeUser
-                                ? 'bg-slate-900 text-slate-500 border border-slate-800'
-                                : 'bg-slate-800 text-slate-300 hover:text-white'
-                            }`}
-                            title={isFreeUser ? 'MCQ+ Mode (Pro/Ultra Members Only)' : 'Revision Hub ke Subjects & Lessons'}
-                          >
-                            ⚡ MCQ + {isFreeUser && '🔒'}
-                          </button>
+                          {!(currentRoom.isSchoolRoom || currentRoom.schoolId || isSchoolStaffOrAdmin) && (
+                            <button
+                              onClick={() => {
+                                if (isFreeUser) {
+                                  alert('🔒 MCQ+ Question Sets sirf Pro / Ultra members host kar sakte hain! Free users standard MCQ practice sets host kar sakte hain.');
+                                  return;
+                                }
+                                handleSwitchMcqType('REVISION_HUB');
+                              }}
+                              className={`px-2.5 py-1 rounded-lg text-[10px] font-black cursor-pointer transition ${
+                                currentRoom.mcqType === 'REVISION_HUB'
+                                  ? 'bg-purple-500 text-slate-950 shadow-sm'
+                                  : isFreeUser
+                                  ? 'bg-slate-900 text-slate-500 border border-slate-800'
+                                  : 'bg-slate-800 text-slate-300 hover:text-white'
+                              }`}
+                              title={isFreeUser ? 'MCQ+ Mode (Pro/Ultra Members Only)' : 'Revision Hub ke Subjects & Lessons'}
+                            >
+                              ⚡ MCQ + {isFreeUser && '🔒'}
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>
@@ -7086,11 +7197,11 @@ Aao dekhte hain kisme kitna hai dum! 🏆`;
                 <label className="block text-xs font-bold text-slate-300 mb-1 flex items-center justify-between">
                   <span>Room Duration (Time Limit):</span>
                   <span className="text-[10px] text-amber-300 font-bold">
-                    {isAdmin
-                      ? '👑 Unlimited / Up to 4 Hours (Admin)'
+                    {hasMaxPower
+                      ? `👑 Unlimited / Up to 4 Hours (${isSchoolStaffOrAdmin ? 'Elite School Host' : 'Admin'})`
                       : userTier === 'FREE'
                       ? '30 Min Max (Free Plan)'
-                      : userTier === 'BASIC'
+                      : userTier === 'BASIC' || isVipStudent
                       ? '1 Hour Max (Basic Plan)'
                       : '2 Hours Max (Ultra Plan)'}
                   </span>
@@ -7125,10 +7236,13 @@ Aao dekhte hain kisme kitna hai dum! 🏆`;
                   onChange={(e) => setNewRoomMaxMembers(parseInt(e.target.value, 10))}
                   className="w-full bg-slate-950/80 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none focus:border-indigo-400 transition"
                 >
-                  {(isAdmin || userTier === 'ULTRA') && (
+                  {hasMaxPower && (
+                    <option value={500}>🏫 500 Members (School Mega Hall - Elite Max Power)</option>
+                  )}
+                  {(hasMaxPower || isAdmin || userTier === 'ULTRA') && (
                     <option value={100}>🚀 100 Members (Mega Battle Room - Full Cohort / High Speed)</option>
                   )}
-                  {(isAdmin || userTier === 'ULTRA' || userTier === 'BASIC') && (
+                  {(hasMaxPower || isAdmin || userTier === 'ULTRA' || userTier === 'BASIC' || isVipStudent) && (
                     <option value={50}>⚡ 50 Members (Medium Class / Group Battle)</option>
                   )}
                   <option value={30}>🎯 30 Members (Standard Batch - Recommended for Best Speed)</option>
@@ -7965,51 +8079,63 @@ Aao dekhte hain kisme kitna hai dum! 🏆`;
                     </div>
                   </div>
 
-                  <div
-                    onClick={() => {
-                      if (isFreeUser) {
-                        alert('🔒 MCQ+ Question Sets sirf Pro / Ultra members host kar sakte hain! Free users standard MCQ practice sets host kar sakte hain.');
-                        return;
-                      }
-                      handleSwitchMcqType('REVISION_HUB');
-                      setBattleSearch('');
-                      setBattleSubject('ALL');
-                      setBattleBook('ALL');
-                      setActiveSetupDrawer(null);
-                    }}
-                    className={`p-4 rounded-2xl border cursor-pointer transition flex items-start gap-3 ${
-                      isFreeUser
-                        ? 'bg-slate-950/50 border-slate-800 text-slate-500'
-                        : currentRoom?.mcqType === 'REVISION_HUB'
-                        ? 'bg-purple-600/25 border-purple-400 text-white ring-1 ring-purple-500 shadow-lg'
-                        : 'bg-slate-950/80 border-slate-800 text-slate-300 hover:border-slate-700'
-                    }`}
-                  >
-                    <div className="w-10 h-10 rounded-xl bg-purple-500/20 text-purple-300 flex items-center justify-center text-xl shrink-0">
-                      ⚡
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <h4 className="text-sm font-black text-white">⚡ MCQ + Mode</h4>
-                          {isFreeUser && (
-                            <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[9px] font-black">
-                              🔒 PRO
+                  {!(currentRoom?.isSchoolRoom || currentRoom?.schoolId || isSchoolStaffOrAdmin) ? (
+                    <div
+                      onClick={() => {
+                        if (isFreeUser) {
+                          alert('🔒 MCQ+ Question Sets sirf Pro / Ultra members host kar sakte hain! Free users standard MCQ practice sets host kar sakte hain.');
+                          return;
+                        }
+                        handleSwitchMcqType('REVISION_HUB');
+                        setBattleSearch('');
+                        setBattleSubject('ALL');
+                        setBattleBook('ALL');
+                        setActiveSetupDrawer(null);
+                      }}
+                      className={`p-4 rounded-2xl border cursor-pointer transition flex items-start gap-3 ${
+                        isFreeUser
+                          ? 'bg-slate-950/50 border-slate-800 text-slate-500'
+                          : currentRoom?.mcqType === 'REVISION_HUB'
+                          ? 'bg-purple-600/25 border-purple-400 text-white ring-1 ring-purple-500 shadow-lg'
+                          : 'bg-slate-950/80 border-slate-800 text-slate-300 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="w-10 h-10 rounded-xl bg-purple-500/20 text-purple-300 flex items-center justify-center text-xl shrink-0">
+                        ⚡
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <h4 className="text-sm font-black text-white">⚡ MCQ + Mode</h4>
+                            {isFreeUser && (
+                              <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[9px] font-black">
+                                🔒 PRO
+                              </span>
+                            )}
+                          </div>
+                          {currentRoom?.mcqType === 'REVISION_HUB' && (
+                            <span className="px-2 py-0.5 rounded-full bg-purple-500 text-white text-[10px] font-black">
+                              ✓ Active
                             </span>
                           )}
                         </div>
-                        {currentRoom?.mcqType === 'REVISION_HUB' && (
-                          <span className="px-2 py-0.5 rounded-full bg-purple-500 text-white text-[10px] font-black">
-                            ✓ Active
-                          </span>
-                        )}
+                        <p className="text-xs text-slate-300 font-bold mt-0.5">Revision Hub & Strictly Lucent GK</p>
+                        <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                          Curated Revision Hub questions aur Lucent Samanya Gyan ke special sets. Pro & Ultra members ke liye exclusive.
+                        </p>
                       </div>
-                      <p className="text-xs text-slate-300 font-bold mt-0.5">Revision Hub & Strictly Lucent GK</p>
-                      <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
-                        Curated Revision Hub questions aur Lucent Samanya Gyan ke special sets. Pro & Ultra members ke liye exclusive.
-                      </p>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="p-3.5 rounded-2xl border border-indigo-500/20 bg-indigo-950/20 text-xs text-indigo-300 flex items-start gap-2.5">
+                      <span className="text-base">🏫</span>
+                      <div>
+                        <p className="font-bold text-white text-xs">School Study Room: Normal MCQ Only</p>
+                        <p className="text-[11px] text-slate-300 mt-0.5">
+                          School study rooms me kewal School Syllabus ke Normal MCQ active rahenge (MCQ+ disabled hai).
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

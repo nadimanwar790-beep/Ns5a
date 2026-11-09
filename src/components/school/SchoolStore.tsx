@@ -139,18 +139,27 @@ export const SchoolStore: React.FC<Props> = ({ school, onBack }) => {
     growth_500: "1_year",
     enterprise_2000: "1_year",
   });
+  const [eliteMap, setEliteMap] = useState<Record<string, boolean>>({
+    starter_200: false,
+    growth_500: false,
+    enterprise_2000: false,
+  });
 
   const sendWhatsApp = (tier: TierPlanConfig, dur: Duration) => {
+    const isElite = eliteMap[tier.key] || false;
     const durName = durationLabel[dur];
-    const priceVal = dur === "1_year" ? tier.prices["1_year"].price : tier.prices.monthly.price;
+    const basePrice = dur === "1_year" ? tier.prices["1_year"].price : tier.prices.monthly.price;
+    const priceVal = isElite ? basePrice * 2 : basePrice;
     const priceStr = `₹${priceVal.toLocaleString("en-IN")}`;
+    const editionText = isElite ? "👑 Elite Plan (2× Price — Class 1 to 12 Notes, MCQ, PDF & Video Manager Included)" : "Standard Plan";
     const msg = encodeURIComponent(
-      `Namaste! 🙏\n\nMain *${school.name}* ka School Admin hoon.\n\nMujhe *IIC School ${tier.name} (${tier.badge}) — ${durName} (${priceStr})* subscription chahiye.\n\n📋 School Details:\n• School: ${school.name}\n• School Code: ${school.code}\n• Admin Email: ${school.adminEmail}\n\nKripya subscription activate karein. Dhanyawad!`
+      `Namaste! 🙏\n\nMain *${school.name}* ka School Admin hoon.\n\nMujhe *IIC School ${tier.name} (${tier.badge}) — ${editionText} — ${durName} (${priceStr})* subscription chahiye.\n\n📋 School Details:\n• School: ${school.name}\n• School Code: ${school.code}\n• Admin Email: ${school.adminEmail}\n\nKripya subscription activate karein. Dhanyawad!`
     );
     window.open(`https://wa.me/${ADMIN_WHATSAPP_NUMBER}?text=${msg}`, "_blank");
   };
 
   const currentTier = school.subscription?.tier;
+  const isEliteActive = Boolean(school.isElite || school.subscription?.isElite);
   const isActive = school.subscription?.status === "active";
   const expiresAt = school.subscription?.expiresAt;
 
@@ -306,15 +315,55 @@ export const SchoolStore: React.FC<Props> = ({ school, onBack }) => {
                   </button>
                 </div>
 
+                {/* Standard vs Elite Edition Switch */}
+                <div className="mt-3.5 bg-slate-100 dark:bg-slate-700/60 p-1 rounded-xl flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setEliteMap(prev => ({ ...prev, [tier.key]: false }))}
+                    className={`flex-1 py-1.5 rounded-lg text-[11px] font-black transition-all cursor-pointer ${
+                      !eliteMap[tier.key]
+                        ? "bg-white dark:bg-slate-800 text-slate-800 dark:text-white shadow-xs"
+                        : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-200"
+                    }`}
+                  >
+                    Standard Plan
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEliteMap(prev => ({ ...prev, [tier.key]: true }))}
+                    className={`flex-1 py-1.5 rounded-lg text-[11px] font-black transition-all cursor-pointer flex items-center justify-center gap-1 ${
+                      eliteMap[tier.key]
+                        ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-xs"
+                        : "text-amber-600 dark:text-amber-400 hover:text-amber-700"
+                    }`}
+                  >
+                    👑 Elite Plan (2×)
+                  </button>
+                </div>
+
+                {eliteMap[tier.key] && (
+                  <div className="mt-2.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-xl p-2.5 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2">
+                    <Sparkles size={15} className="text-amber-600 shrink-0 mt-0.5" />
+                    <p className="text-[11px] font-bold leading-snug">
+                      <strong>👑 Elite Edition Feature:</strong> Class 1 se 12 tak ke Notes, Coaching MCQs, Video Lectures aur PDF Notes add karne ka exclusive manager unlock hoga.
+                    </p>
+                  </div>
+                )}
+
                 {/* Price Display */}
                 <div className="mt-3.5 flex items-baseline gap-2 flex-wrap">
                   <span className="text-3xl font-black text-slate-900 dark:text-white">
-                    ₹{priceObj.price.toLocaleString("en-IN")}
+                    ₹{(eliteMap[tier.key] ? priceObj.price * 2 : priceObj.price).toLocaleString("en-IN")}
                   </span>
                   <span className="text-sm font-bold text-slate-500">
                     /{selectedDur === "1_year" ? "session (365 din)" : "month"}
                   </span>
-                  {selectedDur === "1_year" && tier.prices["1_year"].mrp && (
+                  {eliteMap[tier.key] && (
+                    <span className="text-xs bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 px-2 py-0.5 rounded-full font-black">
+                      2× Elite Rate
+                    </span>
+                  )}
+                  {!eliteMap[tier.key] && selectedDur === "1_year" && tier.prices["1_year"].mrp && (
                     <>
                       <span className="text-xs line-through text-slate-400">
                         ₹{tier.prices["1_year"].mrp.toLocaleString("en-IN")}
@@ -339,6 +388,12 @@ export const SchoolStore: React.FC<Props> = ({ school, onBack }) => {
                     </span>
                   </div>
                 ))}
+                {eliteMap[tier.key] && (
+                  <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 font-bold text-xs bg-amber-50 dark:bg-amber-950/20 p-1.5 rounded-lg border border-amber-200 dark:border-amber-900">
+                    <Sparkles size={14} className="shrink-0" />
+                    <span>Class 1 to 12 Notes, MCQ, PDF & Video Manager Included</span>
+                  </div>
+                )}
               </div>
 
               {/* WhatsApp Purchase Button */}
@@ -349,7 +404,7 @@ export const SchoolStore: React.FC<Props> = ({ school, onBack }) => {
                   className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white rounded-xl font-black flex items-center justify-center gap-2 transition-colors shadow-sm cursor-pointer text-sm"
                 >
                   <MessageCircle className="w-5 h-5" />
-                  WhatsApp Buy: {tier.name} — ₹{priceObj.price.toLocaleString("en-IN")}
+                  WhatsApp Buy: {tier.name} {eliteMap[tier.key] ? "(Elite 2×)" : ""} — ₹{(eliteMap[tier.key] ? priceObj.price * 2 : priceObj.price).toLocaleString("en-IN")}
                 </button>
               </div>
             </div>

@@ -18,6 +18,8 @@ import {
   getLocalSchools,
   getLocalClasses,
   isDemoRecord,
+  detachUserFromSchool,
+  deleteSchool,
 } from "../../school-firebase";
 import { getDemoSchoolDataset, isDemoDataEnabled, setDemoDataEnabled } from "./demoDataStore";
 import { syncLinkedStudentsToPushSubscription } from "../../utils/schoolPushClient";
@@ -177,6 +179,7 @@ interface Props {
   user?: any;
   onBack?: () => void;
   onOpenPlatformContent?: () => void;
+  onOpenStudentDashboard?: () => void;
   onLogout?: () => void;
   onOpenAdminDashboard?: () => void;
 }
@@ -222,12 +225,13 @@ export const SchoolEcosystem: React.FC<Props> = ({
   email,
   displayName,
   isSuperAdmin,
-  defaultSchoolId = "dps_gurgaon_sector45",
+  defaultSchoolId = "",
   forceAdminView = false,
   userRole = "STUDENT",
   user,
   onBack,
   onOpenPlatformContent,
+  onOpenStudentDashboard,
   onLogout,
   onOpenAdminDashboard
 }) => {
@@ -595,7 +599,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
   const effectiveSchoolId =
     (isExplicitAdmin && selectedAdminSchoolId)
       ? selectedAdminSchoolId
-      : (linkedEntity?.schoolId || profile?.schoolId || user?.schoolId || defaultSchoolId || "dps_gurgaon_sector45");
+      : (linkedEntity?.schoolId || profile?.schoolId || user?.schoolId || defaultSchoolId || (allSchools[0]?.id || ""));
 
   // ── QR SCAN & MANUAL INPUT HANDLER ──────────────────────────────────────────
   const handleLinkSuccess = (decodedRaw: string, targetType: "AUTO" | "STUDENT" | "TEACHER" = "AUTO") => {
@@ -1013,6 +1017,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
                 teacherId={profile?.teacherRef || uid}
                 teacherName={profile?.name || user?.name || displayName}
                 onBack={() => setAdminPreviewRole("ADMIN")}
+                onOpenPlatformContent={onOpenPlatformContent}
               />
             </Suspense>
           </PanelErrorBoundary>
@@ -1041,6 +1046,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
               <AccountantPanel
                 schoolId={effectiveSchoolId}
                 onBack={() => setAdminPreviewRole("ADMIN")}
+                onOpenPlatformContent={onOpenPlatformContent}
               />
             </Suspense>
           </PanelErrorBoundary>
@@ -1048,8 +1054,42 @@ export const SchoolEcosystem: React.FC<Props> = ({
       );
     }
 
+    const handleLeaveSchoolForAdmin = async () => {
+      setSelectedAdminSchoolId("");
+      if (user) {
+        user.schoolId = "";
+        user.schoolName = null;
+        user.schoolRole = null;
+        user.schoolCode = null;
+      }
+      try {
+        await detachUserFromSchool(uid, effectiveEmail);
+      } catch {}
+      setShowSuperAdminHub(true);
+    };
+
+    // If Super Admin has opened the hub, or no school is selected, or no schools exist:
+    if (isSuperAdmin && (showSuperAdminHub || !effectiveSchoolId || allSchools.length === 0)) {
+      return (
+        <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100">
+          <SuperAdminPanel
+            adminUid={uid}
+            onBack={() => {
+              if (allSchools.length > 0 && allSchools[0]?.id) {
+                setShowSuperAdminHub(false);
+                setSelectedAdminSchoolId(allSchools[0].id);
+              } else if (onOpenAdminDashboard) {
+                onOpenAdminDashboard();
+              } else if (onBack) {
+                onBack();
+              }
+            }}
+          />
+        </div>
+      );
+    }
+
     // Default: Render SchoolAdminPanel with multi-school switcher & preview switchers
-    const isDefaultDemoSchool = effectiveSchoolId === "dps_gurgaon_sector45" || effectiveSchoolId === "demo_school";
     return (
       <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100">
         {/* Top Multi-School Switcher Bar - only shown if multi-schools available */}
@@ -1064,15 +1104,20 @@ export const SchoolEcosystem: React.FC<Props> = ({
                     <Building2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                     <select
                       value={effectiveSchoolId}
-                      onChange={(e) => setSelectedAdminSchoolId(e.target.value)}
+                      onChange={(e) => {
+                        if (!e.target.value) {
+                          handleLeaveSchoolForAdmin();
+                        } else {
+                          setSelectedAdminSchoolId(e.target.value);
+                          setShowSuperAdminHub(false);
+                        }
+                      }}
                       className="bg-transparent text-emerald-200 font-bold text-[11px] focus:outline-none cursor-pointer max-w-[190px] truncate"
                       title="Active School badlein (Multi-School Switcher)"
                     >
-                      {!allSchools.some((s) => s.id === effectiveSchoolId) && (
-                        <option value={effectiveSchoolId} className="bg-slate-900 text-white">
-                          {effectiveSchoolId === "dps_gurgaon_sector45" ? "Default School (DPS)" : effectiveSchoolId}
-                        </option>
-                      )}
+                      <option value="" className="bg-slate-900 text-amber-300 font-bold">
+                        🏢 All Schools / Hub Overview
+                      </option>
                       {allSchools.map((sch) => (
                         <option key={sch.id} value={sch.id} className="bg-slate-900 text-white">
                           {sch.name} {sch.code ? `(${sch.code})` : ""}
@@ -1089,6 +1134,15 @@ export const SchoolEcosystem: React.FC<Props> = ({
                 >
                   <Plus className="w-3.5 h-3.5 text-blue-300" />
                   <span>Add / All Schools ({Math.max(1, allSchools.length)})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLeaveSchoolForAdmin}
+                  className="px-2.5 py-1 rounded-lg bg-red-600/25 hover:bg-red-600/40 border border-red-500/40 text-red-200 hover:text-white text-[11px] font-bold flex items-center gap-1 transition cursor-pointer"
+                  title="School se alag ho (Leave School / Detach)"
+                >
+                  <LogOut className="w-3.5 h-3.5 text-red-400" />
+                  <span>Leave School</span>
                 </button>
               </div>
             </div>
@@ -1113,6 +1167,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
               schoolId={effectiveSchoolId}
               adminUid={uid}
               onBack={isSuperAdmin ? (onOpenAdminDashboard || onBack) : undefined}
+              onLeaveSchool={handleLeaveSchoolForAdmin}
               onOpenPlatformContent={onOpenPlatformContent}
               onLogout={onLogout}
               onPreviewTeacher={() => setAdminPreviewRole("TEACHER")}
@@ -1164,10 +1219,14 @@ export const SchoolEcosystem: React.FC<Props> = ({
         {/* Header */}
         <div className="px-5 py-4 border-b border-slate-800 bg-slate-900/80 backdrop-blur-md flex items-center justify-between">
           <button
-            onClick={onBack}
-            className="flex items-center gap-2 text-slate-400 hover:text-white text-xs font-semibold transition cursor-pointer"
+            onClick={() => {
+              if (onOpenStudentDashboard) onOpenStudentDashboard();
+              else if (onOpenPlatformContent) onOpenPlatformContent();
+              else if (onBack) onBack();
+            }}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800/90 hover:bg-slate-800 border border-slate-700/70 text-slate-200 hover:text-white text-xs font-bold transition-all shadow-sm active:scale-95 cursor-pointer"
           >
-            <ArrowLeft className="w-4 h-4" />
+            <ArrowLeft className="w-4 h-4 text-emerald-400" />
             <span>Back to App</span>
           </button>
           <div className="flex items-center gap-2">
@@ -1210,7 +1269,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
 
           {/* Action Cards */}
           <div className="space-y-3">
-            {/* Unified Scan ID Card / Fees QR Button for Both Student & Teacher */}
+            {/* 1. Unified Scan ID Card / Fees QR Button for Both Student & Teacher */}
             <button
               onClick={() => {
                 setQrScanMode("AUTO");
@@ -1235,7 +1294,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
               <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-emerald-400 group-hover:translate-x-1 transition-all shrink-0 ml-2" />
             </button>
 
-            {/* Apply for Online Admission */}
+            {/* 2. Apply for Online Admission */}
             <button
               type="button"
               onClick={() => setShowOnlineAdmission(true)}
@@ -1259,49 +1318,18 @@ export const SchoolEcosystem: React.FC<Props> = ({
               </div>
               <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-amber-400 group-hover:translate-x-1 transition-all shrink-0 ml-2" />
             </button>
-
-            {/* Manual Roll No / Employee ID / Mobile Input Fallback */}
-            <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
-              <div className="flex items-center justify-between text-xs text-slate-400">
-                <span className="font-bold flex items-center gap-1.5 text-slate-300">
-                  <Search className="w-3.5 h-3.5 text-indigo-400" />
-                  कैमरा काम न करे तो ID या मोबाइल नंबर से जुड़ें
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={manualInput}
-                  onChange={(e) => setManualInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && manualInput.trim()) {
-                      handleLinkSuccess(manualInput.trim(), "AUTO");
-                    }
-                  }}
-                  placeholder="Mobile / Teacher ID / Roll No / Admission No"
-                  className="flex-1 px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white text-xs font-semibold focus:outline-none focus:border-indigo-500"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!manualInput.trim()) return;
-                    handleLinkSuccess(manualInput.trim(), "AUTO");
-                  }}
-                  className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-md transition cursor-pointer active:scale-95 shrink-0"
-                >
-                  जुड़ें
-                </button>
-              </div>
-            </div>
           </div>
         </div>
 
-        {/* QR Scanner Modal */}
+        {/* QR Scanner Modal with built-in Manual ID / Mobile Number fallback */}
         <QrScannerModal
           isOpen={isQrModalOpen}
           onClose={() => setIsQrModalOpen(false)}
           mode="LOGIN"
           onScanSuccess={(decodedText) => handleLinkSuccess(decodedText, qrScanMode)}
+          manualTitle="कैमरा काम न करे तो ID या मोबाइल नंबर से जुड़ें"
+          manualPlaceholder="Mobile / Teacher ID / Roll No / Admission No"
+          manualSubmitText="जुड़ें"
           title={
             qrScanMode === "TEACHER"
               ? "Scan Teacher / Staff Card"
@@ -1331,6 +1359,25 @@ export const SchoolEcosystem: React.FC<Props> = ({
               teacherId={linkedEntity?.id || profile?.teacherRef || uid}
               teacherName={linkedEntity?.name || profile?.name || user?.name || displayName}
               onLogout={handleTeacherExit}
+              onOpenPlatformContent={onOpenPlatformContent}
+            />
+          </Suspense>
+        </PanelErrorBoundary>
+      </div>
+    );
+  }
+
+  // ── 4.5. ACCOUNTANT PANEL (FOR LOGGED-IN ACCOUNTANT USERS) ──
+  if (isAccountantRole) {
+    return (
+      <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100">
+        <PanelErrorBoundary fallbackTitle="Accountant Portal">
+          <Suspense fallback={<PanelLoadingFallback title="Accountant Portal" />}>
+            <AccountantPanel
+              schoolId={effectiveSchoolId}
+              accountantId={uid}
+              onLogout={onLogout || onBack}
+              onOpenPlatformContent={onOpenPlatformContent}
             />
           </Suspense>
         </PanelErrorBoundary>
@@ -1377,6 +1424,9 @@ export const SchoolEcosystem: React.FC<Props> = ({
         onClose={() => setIsQrModalOpen(false)}
         mode="LOGIN"
         onScanSuccess={(decodedText) => handleLinkSuccess(decodedText, "STUDENT")}
+        manualTitle="कैमरा काम न करे तो ID या मोबाइल नंबर से जुड़ें"
+        manualPlaceholder="Mobile / Student Roll No / Admission No"
+        manualSubmitText="जुड़ें"
         title="Add Another Student ID Card (QR Scan)"
       />
     </div>
