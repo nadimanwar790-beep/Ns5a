@@ -902,12 +902,14 @@ export const subscribeToUserNotifications = (
 ): (() => void) => {
   if (!userId || typeof window === 'undefined') return () => {};
 
+  const sessionStartTime = Date.now();
   const safeUserId = String(userId).trim().replace(/[.#$[\]/]/g, '_');
-  const seenIdsKey = `nst_seen_notif_${safeUserId}`;
+  const seenIdsKey = `nst_seen_notif_ids_${safeUserId}`;
   const seenIds = new Set<string>();
 
+  // 1. Persistent storage of seen notification IDs so old notifications NEVER re-deliver on app open
   try {
-    const raw = sessionStorage.getItem(seenIdsKey);
+    const raw = localStorage.getItem(seenIdsKey);
     if (raw) {
       JSON.parse(raw).forEach((id: string) => seenIds.add(id));
     }
@@ -915,27 +917,107 @@ export const subscribeToUserNotifications = (
 
   const saveSeenIds = () => {
     try {
-      const arr = Array.from(seenIds).slice(-100);
-      sessionStorage.setItem(seenIdsKey, JSON.stringify(arr));
+      const arr = Array.from(seenIds).slice(-500);
+      localStorage.setItem(seenIdsKey, JSON.stringify(arr));
     } catch {}
   };
 
   const handleIncomingNotification = async (item: any, notifKey?: string) => {
     if (!item || !item.id) return;
-    if (seenIds.has(item.id)) return;
+
+    // A. Already seen / delivered check
+    if (seenIds.has(item.id)) {
+      if (notifKey) {
+        remove(ref(rtdb, `user_notifications/${safeUserId}/${notifKey}`)).catch(() => {});
+      }
+      return;
+    }
     seenIds.add(item.id);
     saveSeenIds();
 
-    // Discard notifications older than 45 minutes to prevent ancient loop on app re-open
-    const now = Date.now();
-    if (item.timestamp && now - Number(item.timestamp) > 45 * 60 * 1000) {
+    const notifTimestamp = Number(item.timestamp || 0);
+
+    // B. Old notification suppression:
+    // If the notification was created before the app was opened (older than 25 seconds before session start),
+    // do NOT fire duplicate sound, vibration or OS push when opening the app.
+    const isHistorical = notifTimestamp > 0 && notifTimestamp < (sessionStartTime - 25000);
+    if (isHistorical) {
       if (notifKey) {
         remove(ref(rtdb, `user_notifications/${safeUserId}/${notifKey}`)).catch(() => {});
       }
       return;
     }
 
-    // Check user preferences
+    // C. Discard ancient notifications older than 30 minutes
+    const now = Date.now();
+    if (notifTimestamp > 0 && now - notifTimestamp > 30 * 60 * 1000) {
+      if (notifKey) {
+        remove(ref(rtdb, `user_notifications/${safeUserId}/${notifKey}`)).catch(() => {});
+      }
+      return;
+    }
+
+    // D. Universal Class Filter Check:
+    // Only students belonging to the target class should receive class-targeted messages
+    const targetClass = String(
+      item.classId ||
+      item.classLevel ||
+      item.targetClass ||
+      item.className ||
+      ''
+    ).trim();
+
+    if (
+      targetClass &&
+      !['ALL', 'ALL_CLASSES', 'EVERYONE', 'GLOBAL', 'PUBLIC'].includes(targetClass.toUpperCase())
+    ) {
+      let userRole = '';
+      let userClass = '';
+      try {
+        const uRaw = localStorage.getItem('nst_current_user');
+        if (uRaw) {
+          const u = JSON.parse(uRaw);
+          userRole = String(u.role || u.schoolRole || '').toUpperCase();
+        }
+        userClass = (localStorage.getItem('nst_user_class') || localStorage.getItem('nst_session_class') || '').trim();
+        const stRaw = localStorage.getItem('nst_active_student') || localStorage.getItem('nst_cached_student');
+        if (stRaw) {
+          const st = JSON.parse(stRaw);
+          if (st?.classId || st?.className || st?.classLevel) {
+            userClass = String(st.classId || st.className || st.classLevel).trim();
+          }
+        }
+      } catch (_) {}
+
+      // Staff (Teachers/Admins) can monitor class groups; students are strictly class-scoped:
+      const isStaff = userRole === 'TEACHER' || userRole === 'ADMIN' || userRole === 'SUPERADMIN' || userRole === 'PRINCIPAL';
+      if (!isStaff) {
+        const cleanTarget = targetClass.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const cleanUserClass = userClass.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+        const isMatch =
+          cleanUserClass === cleanTarget ||
+          (cleanUserClass && cleanTarget && (cleanTarget.includes(cleanUserClass) || cleanUserClass.includes(cleanTarget)));
+
+        if (!isMatch) {
+          console.log(`[NotificationManager] Class filter: Dropping notification for class "${targetClass}" (user class: "${userClass}")`);
+          if (notifKey) {
+            remove(ref(rtdb, `user_notifications/${safeUserId}/${notifKey}`)).catch(() => {});
+          }
+          return;
+        }
+      }
+    }
+
+    // E. Direct recipient verification (Teacher <-> Student 1-on-1):
+    if (item.targetUserId && item.targetUserId !== safeUserId && item.targetUserId !== userId) {
+      if (notifKey) {
+        remove(ref(rtdb, `user_notifications/${safeUserId}/${notifKey}`)).catch(() => {});
+      }
+      return;
+    }
+
+    // F. User category preferences check
     const prefs = loadNotificationPreferences(userId);
     if (item.type && !isCategoryEnabled(prefs, item.type)) {
       if (notifKey) {
@@ -944,74 +1026,56 @@ export const subscribeToUserNotifications = (
       return;
     }
 
-    // Class filter check for Study Room broadcasts: only notify matching class students
-    if (item.type === 'STUDY_ROOM' && item.classLevel) {
-      try {
-        const storedClass = (localStorage.getItem('nst_user_class') || localStorage.getItem('nst_session_class') || '').trim();
-        const targetClass = String(item.classLevel).trim();
-        if (storedClass && targetClass && storedClass !== targetClass) {
-          if (notifKey) {
-            remove(ref(rtdb, `user_notifications/${safeUserId}/${notifKey}`)).catch(() => {});
-          }
-          return;
-        }
-      } catch {}
-    }
-
-    console.log('[NotificationManager] Real-time user notification received:', item.title, item.type);
+    console.log('[NotificationManager] Delivering new verified notification:', item.title, item.type);
 
     // 1. Invoke custom callback
     if (onNotificationReceived) {
       try { onNotificationReceived(item); } catch (_) {}
     }
 
-    // 2. Dispatch custom DOM event for in-app toast
-    try {
-      window.dispatchEvent(
-        new CustomEvent('nst_foreground_notification', {
-          detail: {
-            title: item.title,
-            body: item.body,
-            payload: item,
-          },
-        })
-      );
-    } catch (_) {}
-
-    // 3. Audio Chime
+    // 2. Audio Chime (only for fresh real-time messages)
     try {
       const audio = new Audio('/branding/notification.mp3');
       audio.volume = 0.6;
       audio.play().catch(() => {});
     } catch (_) {}
 
-    // 4. Mobile Hardware Vibration
-    const isUrgent = item.type === 'FRIEND_REQUEST' || item.type === 'STUDY_ROOM';
+    // 3. Mobile Hardware Vibration
+    const isUrgent = item.type === 'FRIEND_REQUEST' || item.type === 'STUDY_ROOM' || item.type === 'CHAT' || item.type === 'NSTA_MESSAGE';
     if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
       try {
         navigator.vibrate(isUrgent ? [250, 100, 250] : [100, 50, 100]);
       } catch (_) {}
     }
 
-    // 5. Native OS Notification via Service Worker (Works even when app tab is in background!)
-    // NSTA Messenger Rule:
-    // When app is in background (document.hidden), do NOT spam private CHAT push notifications.
-    // Private CHAT alerts notify inside the app. FRIEND_REQUEST, STUDY_ROOM, ROUTINE trigger OS push even in background!
+    // 4. Native OS Notification via Service Worker (when app is in background or lock-screen)
     const isAppHidden = typeof document !== 'undefined' && document.hidden;
-    const allowOsNotification = !(item.type === 'CHAT' && isAppHidden);
+    const allowOsNotification = isAppHidden || item.urgent;
 
     if (allowOsNotification && typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
       try {
         if ('serviceWorker' in navigator) {
+          const getAbsoluteUrl = (path: string) => {
+            if (!path) return '';
+            if (path.startsWith('http://') || path.startsWith('https://')) return path;
+            try {
+              return new URL(path, window.location.origin).href;
+            } catch {
+              return path;
+            }
+          };
+          const resolvedIcon = getAbsoluteUrl(item.icon || item.senderPhoto || '/icons/icon-192.png');
+          const resolvedBadge = getAbsoluteUrl('/icons/badge-monochrome.png');
+
           const reg = await getFcmServiceWorkerRegistration();
           reg.showNotification(item.title, {
             body: item.body,
-            icon: item.icon || item.senderPhoto || '/icons/icon-192.png',
-            badge: '/icons/badge-monochrome.png?v=4',
+            icon: resolvedIcon,
+            badge: resolvedBadge,
             tag: item.senderId ? `nst-${item.type}-${item.senderId}` : `nst-${item.type}-${item.id}`,
             vibrate: isUrgent ? [250, 100, 250] : [100, 50, 100],
             renotify: true,
-            requireInteraction: isUrgent,
+            requireInteraction: false,
             data: { url: item.url || '/', ...item },
             actions: [
               { action: 'open', title: 'Open App' },
@@ -1019,14 +1083,15 @@ export const subscribeToUserNotifications = (
             ],
           } as any);
         } else {
-          new Notification(item.title, { body: item.body, icon: item.icon || '/icons/icon-192.png' });
+          const directIcon = item.icon || '/icons/icon-192.png';
+          new Notification(item.title, { body: item.body, icon: directIcon });
         }
       } catch (err) {
         console.warn('[NotificationManager] Native showNotification warning:', err);
       }
     }
 
-    // 6. Clean up from RTDB queue once handled
+    // 5. Clean up from user_notifications queue in RTDB so it is NEVER processed again
     if (notifKey) {
       try {
         await remove(ref(rtdb, `user_notifications/${safeUserId}/${notifKey}`));
@@ -1034,7 +1099,7 @@ export const subscribeToUserNotifications = (
     }
   };
 
-  // Subscribe to personal notifications
+  // Subscribe to personal notifications inbox
   const userNotifRef = ref(rtdb, `user_notifications/${safeUserId}`);
   const unsubUser = onValue(
     userNotifRef,

@@ -35,8 +35,19 @@ const showNstaNotification = (payload: NstaPushPayload) => {
   const type = data.type || 'DEFAULT';
   const url = data.url || '/';
 
+  const toAbsoluteUrl = (path: string) => {
+    if (!path) return '';
+    if (path.startsWith('http://') || path.startsWith('https://')) return path;
+    try {
+      return new URL(path, self.location.origin).href;
+    } catch {
+      return path;
+    }
+  };
+
   const rawIcon = notification.icon || data.icon || data.senderPhoto;
-  const icon = (rawIcon && !rawIcon.endsWith('.svg')) ? rawIcon : '/icons/icon-192.png?v=3';
+  const icon = toAbsoluteUrl((rawIcon && !rawIcon.endsWith('.svg')) ? rawIcon : '/icons/icon-192.png');
+  const badge = toAbsoluteUrl('/icons/badge-monochrome.png');
 
   // Unique tag per notification with renotify=true ensures Android OS plays sound & pops banner every time
   const tagKey = data.messageId
@@ -53,7 +64,7 @@ const showNstaNotification = (payload: NstaPushPayload) => {
   } = {
     body,
     icon,
-    badge: '/icons/badge-monochrome.png?v=4',
+    badge,
     tag: tagKey,
     renotify: true,
     requireInteraction: true,
@@ -70,8 +81,8 @@ const showNstaNotification = (payload: NstaPushPayload) => {
     // Graceful fallback for mobile browsers that reject actions/vibrate
     return self.registration.showNotification(title, {
       body,
-      icon: '/icons/icon-192.png?v=3',
-      badge: '/icons/badge-monochrome.png?v=4',
+      icon,
+      badge,
       tag: tagKey,
       renotify: true,
       requireInteraction: true,

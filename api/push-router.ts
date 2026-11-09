@@ -286,13 +286,19 @@ async function dispatchFcmToUsers(
   for (const [key, entry] of Object.entries(allTokens)) {
     if (!entry?.token) continue;
     if (filter?.schoolId && entry.schoolId && entry.schoolId !== filter.schoolId) continue;
-    if (filter?.classId && entry.classId && entry.classId !== filter.classId) continue;
+    if (filter?.classId) {
+      const cleanTargetClass = String(filter.classId).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+      const entryClass = String(entry.classId || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (!entryClass || (!entryClass.includes(cleanTargetClass) && !cleanTargetClass.includes(entryClass))) {
+        continue;
+      }
+    }
 
     const entryUserId = entry.userId ? String(entry.userId).trim() : "";
     const entryStudentId = entry.studentId ? String(entry.studentId).trim() : "";
 
     const isMatch =
-      broadcast ||
+      (broadcast && !filter?.classId) ||
       cleanSet.size === 0 ||
       cleanSet.has(key) ||
       (entryUserId && (rawSet.has(entryUserId) || cleanSet.has(entryUserId.replace(/[.#$[\]/]/g, "_")))) ||
@@ -529,17 +535,22 @@ export default async function handler(req: any, res: any) {
         if (!matchedStudent && targetStudentSet) {
           matchedStudent = (record.students || []).find((s) => targetStudentSet.has(String(s.id)));
         }
-        if (!matchedStudent && schoolId && !targetStudentSet && !userId) {
-          matchedStudent = (record.students || []).find((s) => {
-            if (s.schoolId && s.schoolId !== schoolId) return false;
-            if (classId && s.classId && s.classId !== classId) return false;
-            return true;
-          }) || record.students?.[0];
-        }
-
-        // If it is a school broadcast without target students, deliver to all subscribers
         if (!matchedStudent && !targetStudentSet && !userId) {
-          matchedStudent = record.students?.[0] || ({ id: "all", schoolId: schoolId || "" } as any);
+          if (classId) {
+            // STRICT CLASS MATCHING: ONLY match students belonging to this class
+            const cleanTargetClass = String(classId).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+            matchedStudent = (record.students || []).find((s) => {
+              if (schoolId && s.schoolId && s.schoolId !== schoolId) return false;
+              const sClass = String(s.classId || s.className || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+              return sClass === cleanTargetClass || (sClass && cleanTargetClass && (sClass.includes(cleanTargetClass) || cleanTargetClass.includes(sClass)));
+            });
+            // If class does not match, DO NOT deliver to this device!
+            if (!matchedStudent) continue;
+          } else if (schoolId) {
+            matchedStudent = (record.students || []).find((s) => !s.schoolId || s.schoolId === schoolId) || record.students?.[0];
+          } else {
+            matchedStudent = record.students?.[0] || ({ id: "all", schoolId: schoolId || "" } as any);
+          }
         }
 
         if (!matchedStudent && !(userId && record.userId === String(userId))) continue;

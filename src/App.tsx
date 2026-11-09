@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { PwaInstallPrompt } from './components/PwaInstallPrompt';
 import { NotificationPrompt } from './components/NotificationPrompt';
+import { NotificationPermissionGate } from './components/NotificationPermissionGate';
 import { GlobalNotificationPopup } from './components/GlobalNotificationPopup';
 import { subscribeToUserNotifications, listenToForegroundMessages } from './components/NotificationManager';
 import { auth, logoutUser, getFreshUserData, getUserData } from './firebase';
@@ -650,6 +651,8 @@ export function App() {
           onSubmitName={handleGuestJoinStudyRoom}
           appName={settings?.appName || 'NSTA'}
         />
+
+        <NotificationPermissionGate userId="" />
       </div>
     );
   }
@@ -776,6 +779,7 @@ export function App() {
       <GlobalNotificationPopup />
       <PwaInstallPrompt />
       <NotificationPrompt userId={user?.uid || user?.id || ''} />
+      <NotificationPermissionGate userId={user?.uid || user?.id || ''} />
     </div>
   );
 }

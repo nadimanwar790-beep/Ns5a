@@ -1054,6 +1054,82 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     setActiveTab(tab);
   };
 
+  // Strict, targeted push notification dispatcher for NSTA Messenger Suite
+  const dispatchMessengerPush = (msg: NstaMessage, overrideTitle?: string, overrideBody?: string) => {
+    try {
+      const isClassGroup = msg.threadType === "CLASS_GROUP" || activeTab === "class";
+      const isSchoolDesk = msg.threadType === "SCHOOL_DESK" || activeTab === "school";
+      const isTeacherChat = msg.threadType === "TEACHER_CHAT" || activeTab === "teacher";
+
+      const senderTitle = msg.senderName || (msg.senderRole === "ADMIN" ? "School Admin" : msg.senderRole === "TEACHER" ? "Teacher" : "Student");
+      const defaultTitle = isClassGroup
+        ? `👥 ${senderTitle} (${activeClass?.name || "Class Group"})`
+        : isSchoolDesk
+        ? `🏫 ${school?.name || "School"} • Official Notice`
+        : `💬 ${senderTitle}`;
+      const title = overrideTitle || defaultTitle;
+      const body = overrideBody || msg.text || "Naya sandesh aaya hai";
+
+      if (isTeacherChat) {
+        // 1-on-1 Teacher <-> Student private routing:
+        if (msg.senderRole === "STUDENT") {
+          // Student sent message to teacher -> notify EXCLUSIVELY this teacher!
+          const teacherTargetId = msg.teacherId || activeTeacher?.id;
+          if (teacherTargetId) {
+            void sendSchoolPushNotification({
+              schoolId: msg.schoolId,
+              userId: teacherTargetId,
+              title: `💬 Student: ${senderTitle}`,
+              body,
+              type: "NSTA_MESSAGE",
+              url: `/?schoolPortal=1&schoolTab=messenger&subTab=teacher`,
+              urgent: true,
+            });
+          }
+        } else {
+          // Teacher or Admin sent message to student -> notify EXCLUSIVELY this student!
+          const studentTargetId = msg.studentId || activeStudent?.id;
+          if (studentTargetId) {
+            void sendSchoolPushNotification({
+              schoolId: msg.schoolId,
+              studentIds: [studentTargetId],
+              title: `💬 Teacher: ${senderTitle}`,
+              body,
+              type: "NSTA_MESSAGE",
+              url: `/?schoolPortal=1&schoolTab=messenger&subTab=teacher`,
+              urgent: true,
+            });
+          }
+        }
+      } else if (isClassGroup) {
+        // Send strictly to students of this class
+        void sendSchoolPushNotification({
+          schoolId: msg.schoolId,
+          classId: msg.classId || activeClass?.id,
+          title,
+          body,
+          type: "NSTA_MESSAGE",
+          url: `/?schoolPortal=1&schoolTab=messenger&subTab=class`,
+          urgent: true,
+        });
+      } else if (isSchoolDesk) {
+        // If specific student selected in School Desk, send only to them; otherwise school broadcast
+        const targetStudent = msg.studentId || (selectedStudentId !== "all" ? selectedStudentId : undefined);
+        void sendSchoolPushNotification({
+          schoolId: msg.schoolId,
+          studentIds: targetStudent ? [targetStudent] : undefined,
+          title,
+          body,
+          type: "SCHOOL_NOTICE",
+          url: `/?schoolPortal=1&schoolTab=messenger&subTab=school`,
+          urgent: true,
+        });
+      }
+    } catch (e) {
+      console.warn("[NstaMessenger] dispatchMessengerPush error:", e);
+    }
+  };
+
   // Handle Send Text Message
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -1112,29 +1188,8 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       await saveNstaMessage(newMsg);
       setInputText("");
 
-      // Dispatch real lock-screen push notification to receiver
-      try {
-        const isClassGroup = newMsg.threadType === "CLASS_GROUP";
-        const isSchoolDesk = newMsg.threadType === "SCHOOL_DESK";
-        const senderTitle = newMsg.senderName || (newMsg.senderRole === "ADMIN" ? "School Admin" : "Teacher");
-        const title = isClassGroup
-          ? `👥 ${senderTitle} (${activeClass?.name || "Class Group"})`
-          : isSchoolDesk
-          ? `🏫 ${school?.name || "School"} • Official Notice`
-          : `💬 ${senderTitle}`;
-        const body = newMsg.text || "Naya sandesh aaya hai";
-
-        void sendSchoolPushNotification({
-          schoolId: newMsg.schoolId,
-          classId: isClassGroup ? newMsg.classId : undefined,
-          studentIds: isClassGroup ? undefined : (newMsg.studentId ? [newMsg.studentId] : undefined),
-          title,
-          body,
-          type: isSchoolDesk ? "SCHOOL_NOTICE" : "DEFAULT",
-          url: `/?schoolPortal=1&schoolTab=messenger`,
-          urgent: true,
-        });
-      } catch (_) {}
+      // Dispatch targeted lock-screen push notification
+      dispatchMessengerPush(newMsg);
     } catch (err) {
       console.error("[NstaMessenger] Send error:", err);
     } finally {
@@ -1359,22 +1414,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       };
 
       await saveNstaMessage(newMsg);
-      try {
-        void sendSchoolPushNotification({
-          schoolId: newMsg.schoolId,
-          classId: newMsg.threadType === "CLASS_GROUP" ? newMsg.classId : undefined,
-          studentIds: newMsg.threadType === "CLASS_GROUP" ? undefined : (newMsg.studentId ? [newMsg.studentId] : undefined),
-          title: newMsg.threadType === "CLASS_GROUP"
-            ? `👥 ${newMsg.senderName} (${activeClass?.name || "Class Group"})`
-            : newMsg.threadType === "SCHOOL_DESK"
-            ? `🏫 ${school?.name || "School"} • Official Notice`
-            : `📷 Photo: ${newMsg.senderName}`,
-          body: newMsg.text || "📷 Photo bheji gayi hai",
-          type: "SCHOOL_NOTICE",
-          url: `/?schoolPortal=1&schoolTab=messenger`,
-          urgent: true,
-        });
-      } catch (_) {}
+      dispatchMessengerPush(newMsg, undefined, newMsg.text || "📷 Photo bheji gayi hai");
       setSelectedImageFile(null);
       setImagePreviewUrl(null);
       setImageCaption("");
@@ -1439,22 +1479,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       };
 
       await saveNstaMessage(newMsg);
-      try {
-        void sendSchoolPushNotification({
-          schoolId: newMsg.schoolId,
-          classId: newMsg.threadType === "CLASS_GROUP" ? newMsg.classId : undefined,
-          studentIds: newMsg.threadType === "CLASS_GROUP" ? undefined : (newMsg.studentId ? [newMsg.studentId] : undefined),
-          title: newMsg.threadType === "CLASS_GROUP"
-            ? `👥 ${newMsg.senderName} (${activeClass?.name || "Class Group"})`
-            : newMsg.threadType === "SCHOOL_DESK"
-            ? `🏫 ${school?.name || "School"} • Official Notice`
-            : `🎥 Video: ${newMsg.senderName}`,
-          body: newMsg.text || "🎥 Video bheja gaya hai",
-          type: "SCHOOL_NOTICE",
-          url: `/?schoolPortal=1&schoolTab=messenger`,
-          urgent: true,
-        });
-      } catch (_) {}
+      dispatchMessengerPush(newMsg, undefined, newMsg.text || "🎥 Video bheja gaya hai");
       setSelectedVideoFile(null);
       setVideoPreviewUrl(null);
       setVideoCaption("");
@@ -1549,22 +1574,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       setToastNotification(`📎 ${file.name} safaltapoorvak bhej diya gaya`);
       setTimeout(() => setToastNotification(null), 3000);
 
-      try {
-        void sendSchoolPushNotification({
-          schoolId: newMsg.schoolId,
-          classId: newMsg.threadType === "CLASS_GROUP" ? newMsg.classId : undefined,
-          studentIds: newMsg.threadType === "CLASS_GROUP" ? undefined : (newMsg.studentId ? [newMsg.studentId] : undefined),
-          title: newMsg.threadType === "CLASS_GROUP"
-            ? `👥 ${newMsg.senderName} (${activeClass?.name || "Class Group"})`
-            : newMsg.threadType === "SCHOOL_DESK"
-            ? `🏫 ${school?.name || "School"} • Official Notice`
-            : `📄 Document: ${newMsg.senderName}`,
-          body: `📄 ${file.name} bheja gaya hai`,
-          type: "SCHOOL_NOTICE",
-          url: `/?schoolPortal=1&schoolTab=messenger`,
-          urgent: true,
-        });
-      } catch (_) {}
+      dispatchMessengerPush(newMsg, undefined, `📄 ${file.name} bheja gaya hai`);
     } catch (err: any) {
       alert(err?.message || "File upload nahi ho saki. Kripya punah prayas karein.");
     } finally {
@@ -1628,22 +1638,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       setToastNotification("🎙️ Voice note bhej diya gaya!");
       setTimeout(() => setToastNotification(null), 3000);
 
-      try {
-        void sendSchoolPushNotification({
-          schoolId: newMsg.schoolId,
-          classId: newMsg.threadType === "CLASS_GROUP" ? newMsg.classId : undefined,
-          studentIds: newMsg.threadType === "CLASS_GROUP" ? undefined : (newMsg.studentId ? [newMsg.studentId] : undefined),
-          title: newMsg.threadType === "CLASS_GROUP"
-            ? `👥 ${newMsg.senderName} (${activeClass?.name || "Class Group"})`
-            : newMsg.threadType === "SCHOOL_DESK"
-            ? `🏫 ${school?.name || "School"} • Official Notice`
-            : `🎙️ Voice Note: ${newMsg.senderName}`,
-          body: noteLabel || "🎙️ Ek naya voice message bheja gaya hai",
-          type: "SCHOOL_NOTICE",
-          url: `/?schoolPortal=1&schoolTab=messenger`,
-          urgent: true,
-        });
-      } catch (_) {}
+      dispatchMessengerPush(newMsg, undefined, noteLabel || "🎙️ Ek naya voice message bheja gaya hai");
     } catch (err: any) {
       alert(err?.message || "Voice note bhejne me samasya aayi.");
     } finally {
@@ -1804,18 +1799,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       setToastNotification("🎙️ Audio note safaltapoorvak bhej diya gaya");
       setTimeout(() => setToastNotification(null), 3000);
 
-      try {
-        void sendSchoolPushNotification({
-          schoolId: newMsg.schoolId,
-          classId: newMsg.threadType === "CLASS_GROUP" ? newMsg.classId : undefined,
-          studentIds: newMsg.threadType === "CLASS_GROUP" ? undefined : (newMsg.studentId ? [newMsg.studentId] : undefined),
-          title: `🎙️ Audio Note: ${newMsg.senderName}`,
-          body: "🎙️ Ek naya audio message bheja gaya hai",
-          type: "SCHOOL_NOTICE",
-          url: `/?schoolPortal=1&schoolTab=messenger`,
-          urgent: true,
-        });
-      } catch (_) {}
+      dispatchMessengerPush(newMsg, `🎙️ Audio Note: ${newMsg.senderName}`, "🎙️ Ek naya audio message bheja gaya hai");
     } catch (err: any) {
       alert("Audio message bhejne me samasya aayi. Kripya punah prayas karein.");
     } finally {
@@ -2006,18 +1990,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     setToastNotification(`👤 ${contact.name} ka contact bhej diya gaya`);
     setTimeout(() => setToastNotification(null), 3000);
 
-    try {
-      void sendSchoolPushNotification({
-        schoolId: newMsg.schoolId,
-        classId: newMsg.threadType === "CLASS_GROUP" ? newMsg.classId : undefined,
-        studentIds: newMsg.threadType === "CLASS_GROUP" ? undefined : (newMsg.studentId ? [newMsg.studentId] : undefined),
-        title: `👤 Contact: ${contact.name}`,
-        body: `${newMsg.senderName} ne contact share kiya`,
-        type: "SCHOOL_NOTICE",
-        url: `/?schoolPortal=1&schoolTab=messenger`,
-        urgent: true,
-      });
-    } catch (_) {}
+    dispatchMessengerPush(newMsg, `👤 Contact: ${contact.name}`, `${newMsg.senderName} ne contact share kiya`);
   };
 
   // 9. Location Sharing Handler
@@ -2067,18 +2040,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     setToastNotification("📍 Location safaltapoorvak bhej di gayi");
     setTimeout(() => setToastNotification(null), 3000);
 
-    try {
-      void sendSchoolPushNotification({
-        schoolId: newMsg.schoolId,
-        classId: newMsg.threadType === "CLASS_GROUP" ? newMsg.classId : undefined,
-        studentIds: newMsg.threadType === "CLASS_GROUP" ? undefined : (newMsg.studentId ? [newMsg.studentId] : undefined),
-        title: `📍 Location: ${locName}`,
-        body: `${newMsg.senderName} ne location share ki`,
-        type: "SCHOOL_NOTICE",
-        url: `/?schoolPortal=1&schoolTab=messenger`,
-        urgent: true,
-      });
-    } catch (_) {}
+    dispatchMessengerPush(newMsg, `📍 Location: ${locName}`, `${newMsg.senderName} ne location share ki`);
   };
 
   // Strictly filter messages by active tab threadType and matching IDs

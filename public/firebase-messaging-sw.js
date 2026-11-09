@@ -22,20 +22,32 @@ function isDuplicatePush(id) {
   return false;
 }
 
+function toAbsoluteUrl(path) {
+  if (!path) return '';
+  if (path.startsWith('http://') || path.startsWith('https://')) return path;
+  try {
+    return new URL(path, self.location.origin).href;
+  } catch (_) {
+    return path;
+  }
+}
+
 function displayPushNotification(title, body, data, iconUrl) {
   const notifId = data.id || data.messageId || (title + '_' + (data.timestamp || ''));
   if (isDuplicatePush(notifId)) {
     return Promise.resolve();
   }
 
-  const icon = (iconUrl && !iconUrl.endsWith('.svg')) ? iconUrl : '/icons/icon-192.png?v=3';
+  const rawIcon = (iconUrl && !iconUrl.endsWith('.svg')) ? iconUrl : '/icons/icon-192.png';
+  const icon = toAbsoluteUrl(rawIcon);
+  const badge = toAbsoluteUrl('/icons/badge-monochrome.png');
   // Fresh unique tag forces Android to pop up a heads-up banner over other apps instead of silently collapsing
   const tagKey = 'nsta-alert-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
 
   const richOptions = {
     body: body || 'New update received!',
     icon: icon,
-    badge: '/icons/badge-monochrome.png?v=4',
+    badge: badge,
     tag: tagKey,
     renotify: true,
     requireInteraction: true,
@@ -53,8 +65,8 @@ function displayPushNotification(title, body, data, iconUrl) {
     // Fallback without actions for mobile browsers with strict notification action policies
     return self.registration.showNotification(title || 'NSTA Alert', {
       body: body || 'New update received!',
-      icon: '/icons/icon-192.png?v=3',
-      badge: '/icons/badge-monochrome.png?v=4',
+      icon: icon,
+      badge: badge,
       tag: tagKey,
       renotify: true,
       requireInteraction: true,
