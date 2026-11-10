@@ -69,7 +69,6 @@ import {
   QrCode,
 } from "lucide-react";
 import { TeacherIdCardModal } from "./TeacherIdCardModal";
-import { AdminIdCardModal } from "./AdminIdCardModal";
 import { speakNotification } from "../../utils/voiceNotifyEngine";
 
 interface Props {
@@ -383,12 +382,6 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
       "एडमिन हाजिरी दर्ज",
       `स्कूल एडमिन का ${type === "in" ? "आगमन" : "प्रस्थान"} समय ${nowTime} दर्ज किया गया है।`
     );
-  };
-
-  const [showAdminIdCardModal, setShowAdminIdCardModal] = useState(false);
-
-  const handleOpenAdminIdCard = () => {
-    setShowAdminIdCardModal(true);
   };
 
   const loadData = async () => {
@@ -723,14 +716,6 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            <button
-              type="button"
-              onClick={handleOpenAdminIdCard}
-              className="px-3.5 py-2 bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-md shadow-amber-600/20 cursor-pointer transition-all active:scale-95"
-            >
-              <Award className="w-4 h-4 text-amber-200" /> 👑 Official Admin ID Card
-            </button>
-
             {activeTab === "directory" && (
               <button
                 onClick={() => setShowAddStaff(true)}
@@ -795,14 +780,6 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
                 className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black flex items-center gap-1.5 shadow-md shadow-indigo-600/30 transition-all cursor-pointer active:scale-95"
               >
                 <Clock size={14} /> Punch Out (प्रस्थान)
-              </button>
-              <button
-                type="button"
-                onClick={handleOpenAdminIdCard}
-                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 transition-colors"
-                title="Print Official Admin ID Card"
-              >
-                <Printer size={16} />
               </button>
             </div>
           </div>
@@ -2428,14 +2405,6 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
             teacher={selectedStaffForIdCard as any}
             school={school}
             onClose={() => setSelectedStaffForIdCard(null)}
-          />
-        )}
-
-        {school && showAdminIdCardModal && (
-          <AdminIdCardModal
-            isOpen={showAdminIdCardModal}
-            school={school}
-            onClose={() => setShowAdminIdCardModal(false)}
           />
         )}
       </div>

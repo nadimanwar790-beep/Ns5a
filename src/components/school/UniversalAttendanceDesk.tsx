@@ -18,8 +18,6 @@ import {
 } from "../../school-firebase";
 import { calculateDistanceMeters, formatDistance, getLiveBrowserPosition } from "../../utils/geoUtils";
 import { playSoundCorrect } from "../../utils/soundEffects";
-import { speakNotification } from "../../utils/voiceNotifyEngine";
-import { AdminIdCardModal } from "./AdminIdCardModal";
 import { SchoolLocationModal } from "./SchoolLocationModal";
 import { TeacherIdCardModal } from "./TeacherIdCardModal";
 
@@ -34,7 +32,7 @@ interface Props {
   onViewClassAttendance?: (classId: string) => void;
 }
 
-type RoleTab = "admin" | "teachers" | "students";
+type RoleTab = "teachers" | "students";
 
 export const UniversalAttendanceDesk: React.FC<Props> = ({
   school,
@@ -49,14 +47,13 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
   const schoolId = school?.id || "";
   const today = todayStr();
 
-  const [activeTab, setActiveTab] = useState<RoleTab>("admin");
+  const [activeTab, setActiveTab] = useState<RoleTab>("teachers");
   const [selectedClassId, setSelectedClassId] = useState<string>(classes[0]?.id || "");
   const [studentSearchQuery, setStudentSearchQuery] = useState("");
   const [teacherSearchQuery, setTeacherSearchQuery] = useState("");
   const [toastMessage, setToastMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   // Modals
-  const [showAdminIdCard, setShowAdminIdCard] = useState(false);
   const [showLocationModal, setShowLocationModal] = useState(false);
   const [selectedTeacherForIdCard, setSelectedTeacherForIdCard] = useState<SchoolTeacher | null>(null);
 
@@ -98,19 +95,6 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
     }
   }, [school?.latitude, school?.longitude, school?.locationRadiusMeters]);
 
-  // ── ADMIN ATTENDANCE STATE ──
-  const [adminAttendance, setAdminAttendance] = useState<AdminAttendanceRecord>(() =>
-    schoolId
-      ? getAdminAttendance(schoolId, today)
-      : {
-          schoolId: "",
-          adminId: "ADMIN-01",
-          adminName: "",
-          date: today,
-          present: false,
-        }
-  );
-
   // ── TEACHERS ATTENDANCE STATE ──
   const [staffAttendance, setStaffAttendance] = useState<StaffDailyAttendanceRecord>(() =>
     schoolId
@@ -125,69 +109,9 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
   // Keep attendance in sync whenever schoolId or today changes
   useEffect(() => {
     if (schoolId) {
-      setAdminAttendance(getAdminAttendance(schoolId, today));
       setStaffAttendance(getStaffDailyAttendance(schoolId, today));
     }
   }, [schoolId, today]);
-
-  const handleAdminPunch = async (type: "in" | "out") => {
-    if (!schoolId) return;
-    const nowTime = new Date().toLocaleTimeString("en-IN", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: true,
-    });
-
-    let stayDuration = adminAttendance.stayDuration;
-    if (type === "out" && adminAttendance.inTime) {
-      try {
-        const inParts = adminAttendance.inTime.split(" ");
-        const [ih, im] = inParts[0].split(":").map(Number);
-        const [oh, om] = nowTime.split(" ")[0].split(":").map(Number);
-        const isPmIn = inParts[1]?.toUpperCase() === "PM" && ih !== 12;
-        const isPmOut = nowTime.split(" ")[1]?.toUpperCase() === "PM" && oh !== 12;
-        const totalInMin = (ih + (isPmIn ? 12 : 0)) * 60 + im;
-        const totalOutMin = (oh + (isPmOut ? 12 : 0)) * 60 + om;
-        const diff = Math.max(0, totalOutMin - totalInMin);
-        const hours = Math.floor(diff / 60);
-        const mins = diff % 60;
-        stayDuration = `${hours} hrs ${mins} mins`;
-      } catch {
-        stayDuration = "Active Session";
-      }
-    }
-
-    const updated: AdminAttendanceRecord = {
-      ...adminAttendance,
-      schoolId: schoolId,
-      adminId: "ADMIN-01",
-      adminName: school?.principalName || "Dr. Arvind Swaminathan",
-      date: today,
-      present: true,
-      inTime: type === "in" ? nowTime : (adminAttendance.inTime || nowTime),
-      outTime: type === "out" ? nowTime : adminAttendance.outTime,
-      stayDuration,
-      locationStatus: campusDistanceInfo?.isInside ? "inside_campus" : "verified",
-      distanceMeters: campusDistanceInfo?.distanceMeters || 0,
-      updatedAt: new Date().toISOString(),
-    };
-
-    setAdminAttendance(updated);
-    await saveAdminAttendance(updated);
-    playSoundCorrect();
-
-    const actionText = type === "in" ? "आगमन पंच (Punch-In)" : "प्रस्थान पंच (Punch-Out)";
-    setToastMessage({
-      type: "success",
-      text: `✓ स्कूल एडमिन का ${actionText} समय (${nowTime}) दर्ज हो गया!`,
-    });
-    speakNotification(
-      "एडमिन हाजिरी",
-      `स्कूल एडमिन का ${type === "in" ? "आगमन" : "प्रस्थान"} समय ${nowTime} दर्ज हुआ।`
-    );
-    setTimeout(() => setToastMessage(null), 4000);
-  };
 
   const handleTeacherPunch = async (teacher: SchoolTeacher, action: "in" | "out" | "absent") => {
     if (!schoolId) return;
@@ -557,24 +481,8 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* ── ROLE TABS (ADMIN, TEACHERS, STUDENTS) ── */}
+      {/* ── ROLE TABS (TEACHERS, STUDENTS) ── */}
       <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-2 overflow-x-auto">
-        <button
-          type="button"
-          onClick={() => setActiveTab("admin")}
-          className={`px-4 py-2 rounded-xl text-xs font-black flex items-center gap-2 transition cursor-pointer shrink-0 ${
-            activeTab === "admin"
-              ? "bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20"
-              : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200"
-          }`}
-        >
-          <Crown className="w-4 h-4 fill-current" />
-          <span>👑 School Admin (एडमिन हाजिरी)</span>
-          {adminAttendance.present && (
-            <span className="w-2 h-2 rounded-full bg-emerald-700 dark:bg-emerald-400" />
-          )}
-        </button>
-
         <button
           type="button"
           onClick={() => setActiveTab("teachers")}
@@ -601,98 +509,6 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
           <span>🎓 Students ({students.length} छात्र • All Classes)</span>
         </button>
       </div>
-
-      {/* ── TAB 1: SCHOOL ADMIN ATTENDANCE ── */}
-      {activeTab === "admin" && (
-        <div className="space-y-4">
-          <div className="p-5 rounded-3xl bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-950 text-white border border-amber-400/40 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-5">
-            <div className="flex items-center gap-4">
-              <div className="w-16 h-16 rounded-2xl bg-amber-500/20 border-2 border-amber-400/50 text-amber-400 flex items-center justify-center text-3xl shadow-inner shrink-0">
-                👑
-              </div>
-              <div className="space-y-1">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h3 className="font-black text-lg text-white">
-                    {school.principalName || "Dr. Arvind Swaminathan"}
-                  </h3>
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-400 text-slate-950 uppercase tracking-wider">
-                    School Administrator &amp; Head
-                  </span>
-                  <span
-                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-black border ${
-                      adminAttendance.present
-                        ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
-                        : "bg-rose-500/20 text-rose-300 border-rose-500/40"
-                    }`}
-                  >
-                    {adminAttendance.present ? "✅ Present In Campus" : "⏳ Attendance Pending"}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-300">
-                  Employee ID: <strong className="text-amber-300 font-mono">ADMIN-01</strong> • Session: {school.session || "2026-27"}
-                </p>
-
-                {/* In & Out Time Badges */}
-                <div className="flex items-center gap-4 pt-1 text-xs font-mono">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-slate-400">आगमन (In Time):</span>
-                    <strong className="text-emerald-400 font-bold bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-800">
-                      {adminAttendance.inTime || "--:--"}
-                    </strong>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-slate-400">प्रस्थान (Out Time):</span>
-                    <strong className="text-amber-400 font-bold bg-amber-950/60 px-2 py-0.5 rounded border border-amber-800">
-                      {adminAttendance.outTime || "--:--"}
-                    </strong>
-                  </div>
-                  {adminAttendance.stayDuration && (
-                    <div className="hidden sm:flex items-center gap-1 text-teal-300 text-[11px]">
-                      <span>⏱️ Stay: {adminAttendance.stayDuration}</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="flex items-center gap-2.5 flex-wrap shrink-0">
-              <button
-                type="button"
-                onClick={() => handleAdminPunch("in")}
-                className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs flex items-center gap-2 shadow-lg shadow-emerald-600/30 transition active:scale-95 cursor-pointer"
-              >
-                <LogIn className="w-4 h-4" />
-                <span>🟢 Punch In (आगमन)</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleAdminPunch("out")}
-                className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs flex items-center gap-2 shadow-lg shadow-amber-500/30 transition active:scale-95 cursor-pointer"
-              >
-                <LogOut className="w-4 h-4" />
-                <span>🏃 Punch Out (प्रस्थान)</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setShowAdminIdCard(true)}
-                className="px-3.5 py-2.5 rounded-2xl bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-400/40 text-xs font-black flex items-center gap-1.5 transition active:scale-95 cursor-pointer shadow-sm"
-                title="Print Official Admin Identity Card"
-              >
-                <Printer className="w-4 h-4" />
-                <span>🪪 Admin ID Card</span>
-              </button>
-            </div>
-          </div>
-
-          <p className="text-[11px] text-slate-400 flex items-center gap-1">
-            <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-            <span>एडमिन का आगमन व प्रस्थान समय NSTA सिस्टम में सुरक्षित रहता है और QR स्कैनर से भी स्वतः दर्ज होता है।</span>
-          </p>
-        </div>
-      )}
 
       {/* ── TAB 2: TEACHERS & STAFF ATTENDANCE ── */}
       {activeTab === "teachers" && (
@@ -949,15 +765,6 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
             })}
           </div>
         </div>
-      )}
-
-      {/* Admin ID Card Modal */}
-      {showAdminIdCard && (
-        <AdminIdCardModal
-          isOpen={showAdminIdCard}
-          onClose={() => setShowAdminIdCard(false)}
-          school={school}
-        />
       )}
 
       {/* School Location Modal */}

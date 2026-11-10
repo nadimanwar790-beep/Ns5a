@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import type { LucentNoteEntry, LucentNotePage } from "../../types";
 import { formatSamsungNotesToHtml } from "./ClassCurriculumNotesManager";
+import { toast } from "sonner";
 
 interface Props {
   entry: LucentNoteEntry;
@@ -58,7 +59,7 @@ export const SchoolNotebookReader: React.FC<Props> = ({
 
   const handleTogglePlay = () => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      alert("Aapke browser mein Text-to-Speech support nahi hai.");
+      toast.error("Aapke browser mein Text-to-Speech support nahi hai.");
       return;
     }
 
@@ -75,7 +76,7 @@ export const SchoolNotebookReader: React.FC<Props> = ({
 
     const textToSpeak = getPlainText();
     if (!textToSpeak) {
-      alert("Is page par koi text nahi hai sunne ke liye.");
+      toast.error("Is page par koi text nahi hai sunne ke liye.");
       return;
     }
 

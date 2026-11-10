@@ -602,9 +602,9 @@ export function generateFull1YearDemoDataset(schoolId: string = "demo_school", a
     email: principalStaff.email,
     phone: principalStaff.phone,
     designation: principalStaff.designation,
-    department: principalStaff.department,
+    department: principalStaff.department || "Administration",
     monthlySalary: 25000,
-    joinDate: principalStaff.joinDate,
+    joinDate: principalStaff.joinDate || "2024-04-01",
     active: true,
     createdAt: primarySession.createdAt,
   });

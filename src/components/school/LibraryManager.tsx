@@ -1,5 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect, useMemo } from "react";
+import { toast } from "sonner";
 import {
   Book, BookOpen, Plus, Search, CheckCircle2, Clock, AlertTriangle,
   RotateCcw, ArrowRight, Printer, Trash2, Edit3, Filter, Users,
@@ -187,7 +188,7 @@ export const LibraryManager: React.FC<Props> = ({
   // Add new book
   const handleAddBook = () => {
     if (!bookFormTitle.trim() || !bookFormAuthor.trim()) {
-      alert("Kripya Book Title aur Author ka naam enter karein.");
+      toast.error("Kripya Book Title aur Author ka naam enter karein.");
       return;
     }
 
@@ -213,7 +214,7 @@ export const LibraryManager: React.FC<Props> = ({
   // Issue Book
   const handleConfirmIssue = () => {
     if (!issuingBook || !selectedBorrowerId) {
-      alert("Kripya student ya teacher select karein.");
+      toast.error("Kripya student ya teacher select karein.");
       return;
     }
 
@@ -261,7 +262,7 @@ export const LibraryManager: React.FC<Props> = ({
     setIssues(prev => [newIssue, ...prev]);
     setIssuingBook(null);
     setSelectedBorrowerId("");
-    alert(`📖 "${issuingBook.title}" successfully issue ho gayi!`);
+    toast.success(`📖 "${issuingBook.title}" successfully issue ho gayi!`);
   };
 
   // Return Book

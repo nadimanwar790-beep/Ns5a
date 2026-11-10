@@ -1,5 +1,6 @@
 // @ts-nocheck
 import React, { useState, useMemo, useEffect } from "react";
+import { toast } from "sonner";
 import type { SchoolStudent, SchoolClass, SchoolEvent, SchoolEventType } from "../../school-types";
 import {
   isStudentBirthdayOnDate,
@@ -196,7 +197,7 @@ export const SchoolBirthdayCalendar: React.FC<Props> = ({
   const handleSaveEvent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!eventForm.title.trim()) {
-      alert("कृपया कार्यक्रम का नाम (Title) दर्ज करें।");
+      toast.error("कृपया कार्यक्रम का नाम (Title) दर्ज करें।");
       return;
     }
     setSavingEvent(true);
@@ -238,7 +239,7 @@ export const SchoolBirthdayCalendar: React.FC<Props> = ({
       });
       setTimeout(() => setToastMessage(null), 5000);
     } catch (err: any) {
-      alert("इवेंट सेव करने में त्रुटि: " + (err?.message || "Error"));
+      toast.error("इवेंट सेव करने में त्रुटि: " + (err?.message || "Error"));
     } finally {
       setSavingEvent(false);
     }
@@ -252,7 +253,7 @@ export const SchoolBirthdayCalendar: React.FC<Props> = ({
       setToastMessage(`📢 ${res.delivered} शिक्षकों के NSTA Messenger पर कार्यक्रम सूचना सफलतापूर्वक भेजी गई!`);
       setTimeout(() => setToastMessage(null), 4500);
     } catch (err: any) {
-      alert("अलर्ट भेजने में त्रुटि: " + (err?.message || "Error"));
+      toast.error("अलर्ट भेजने में त्रुटि: " + (err?.message || "Error"));
     } finally {
       setDispatchingEventId(null);
     }
@@ -260,13 +261,12 @@ export const SchoolBirthdayCalendar: React.FC<Props> = ({
 
   // Delete event
   const handleDeleteEvent = async (eventId: string) => {
-    if (!confirm("क्या आप वाकई इस कार्यक्रम को हटाना चाहते हैं?")) return;
     try {
       await deleteSchoolEvent(schoolId, eventId);
       setToastMessage("कार्यक्रम सफलतापूर्वक हटाया गया।");
       setTimeout(() => setToastMessage(null), 3000);
     } catch (err: any) {
-      alert("हटाने में त्रुटि: " + (err?.message || "Error"));
+      toast.error("हटाने में त्रुटि: " + (err?.message || "Error"));
     }
   };
 
@@ -289,7 +289,7 @@ export const SchoolBirthdayCalendar: React.FC<Props> = ({
       setToastMessage(`🎉 ${student.name} को जन्मदिन की आधिकारिक बधाई व आशीर्वाद पत्र भेजा गया!`);
       setTimeout(() => setToastMessage(null), 4500);
     } catch (e: any) {
-      alert("शुभकामना भेजने में त्रुटि: " + (e?.message || "Error"));
+      toast.error("शुभकामना भेजने में त्रुटि: " + (e?.message || "Error"));
     } finally {
       setWishingId(null);
     }

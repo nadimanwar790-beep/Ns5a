@@ -9,6 +9,7 @@ import type { School, BusLiveLocation } from "../../school-types";
 import { speakNotification } from "../../utils/voiceNotifyEngine";
 import { rtdb } from "../../firebase";
 import { ref as dbRef, set, onValue } from "firebase/database";
+import { toast } from "sonner";
 
 interface Props {
   school: School;
@@ -137,7 +138,7 @@ export const DriverTripConsole: React.FC<Props> = ({ school, onBack, initialBusI
   const handleStartTrip = () => {
     if (!navigator.geolocation) {
       setGpsError("GPS is not supported on this device.");
-      alert("आपके मोबाइल में GPS उपलब्ध नहीं है।");
+      toast.error("आपके मोबाइल में GPS उपलब्ध नहीं है।");
       return;
     }
 

@@ -47,6 +47,14 @@ function lazyWithRetry<T extends React.ComponentType<any>>(
       }
     }
     console.error(`[lazyWithRetry] All attempts failed for ${moduleName}:`, lastError);
+    try {
+      const reloadKey = '__nsta_lazy_chunk_reload';
+      const lastReload = Number(sessionStorage.getItem(reloadKey) || 0);
+      if (Date.now() - lastReload > 8000) {
+        sessionStorage.setItem(reloadKey, String(Date.now()));
+        window.location.reload();
+      }
+    } catch {}
     // Return a self-contained fallback screen instead of throwing to avoid crashing the whole root app
     const FailureFallback: React.FC<any> = (props) => (
       <div className="flex-1 min-h-[50vh] flex flex-col items-center justify-center p-6 text-center text-slate-100">

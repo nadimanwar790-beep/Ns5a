@@ -83,7 +83,6 @@ import { SchoolBirthdayCalendar } from "./SchoolBirthdayCalendar";
 import { UniversalAttendanceDesk } from "./UniversalAttendanceDesk";
 import { UniversalAttendanceScannerModal } from "./UniversalAttendanceScannerModal";
 import { SchoolLocationModal } from "./SchoolLocationModal";
-import { AdminIdCardModal } from "./AdminIdCardModal";
 import { FaceAttendanceKioskModal } from "./FaceAttendanceKioskModal";
 
 interface Props {
@@ -162,6 +161,13 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const [expiryPopupExpired, setExpiryPopupExpired] = useState(false);
   const [studentSearchQuery, setStudentSearchQuery] = useState("");
   const [studentPage, setStudentPage] = useState(1);
+  const [duesSettlementModal, setDuesSettlementModal] = useState<{
+    student: SchoolStudent;
+    type: "admission" | "advance";
+    amount: string;
+    mode: "Cash" | "UPI" | "Bank";
+    saving: boolean;
+  } | null>(null);
 
   // School info card
   const [schoolCardExpanded, setSchoolCardExpanded] = useState(false);
@@ -473,6 +479,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   // Forms
   const [sessionForm, setSessionForm] = useState({ name: "", startDate: "", endDate: "" });
   const [showSessionModal, setShowSessionModal] = useState<boolean>(false);
+  const [showHowToUseModal, setShowHowToUseModal] = useState<boolean>(false);
+  const [howToUseSearch, setHowToUseSearch] = useState<string>("");
+  const [universalSearchQuery, setUniversalSearchQuery] = useState<string>("");
   const [copyClassesFromCurrent, setCopyClassesFromCurrent] = useState<boolean>(true);
   const [classForm, setClassForm] = useState({ name: "", section: "", stream: "Science", autoAddSubjects: true, defaultFee: 0 });
   const [subjectForm, setSubjectForm] = useState({ name: "" });
@@ -533,7 +542,6 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   // Universal Attendance & School Live Location Modals State
   const [showUniversalScannerModal, setShowUniversalScannerModal] = useState(false);
   const [showSchoolLocationModal, setShowSchoolLocationModal] = useState(false);
-  const [showAdminIdCardModal, setShowAdminIdCardModal] = useState(false);
   const [showFaceKioskModal, setShowFaceKioskModal] = useState(false);
 
   // Fee summary state
@@ -1739,14 +1747,14 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               )}
             </div>
             <div className="min-w-0 flex-1">
-              <h2 className="font-black text-xs text-white truncate leading-tight">
+              <h2 className="font-black text-xs text-white truncate leading-tight" title={school?.name || "School ERP"}>
                 {school?.name || "School ERP"}
               </h2>
-              <div className="flex items-center gap-1 mt-0.5">
-                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-blue-500/20 text-blue-300 border border-blue-400/30">
-                  {activeSession?.name || "2026-27"}
+              <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-500/20 text-blue-300 border border-blue-400/30 whitespace-nowrap shrink-0">
+                  {activeSession?.name ? activeSession.name.replace(/Academic Session |Session /i, "") : "2026-27"}
                 </span>
-                <span className="text-[9.5px] text-slate-400 truncate">
+                <span className="text-[9.5px] text-slate-400 truncate min-w-0">
                   ID: {school?.code || school?.id?.slice(0, 6)}
                 </span>
               </div>
@@ -2058,23 +2066,6 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
           {/* Center / Right: Screen Rotate & Actions */}
           <div className="flex items-center gap-2 shrink-0">
-            {/* Dummy Session (1-Year Model) Toggle */}
-            <button
-              type="button"
-              onClick={() => handleToggleDemoData(!schoolDemoActive)}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl font-black text-xs transition cursor-pointer active:scale-95 shadow-md border ${
-                schoolDemoActive
-                  ? "bg-gradient-to-r from-amber-400 via-orange-400 to-amber-500 text-slate-950 border-amber-300 ring-2 ring-amber-300/40 shadow-amber-500/20"
-                  : "bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-700"
-              }`}
-              title={schoolDemoActive ? "डमी सत्र बंद करें (असली स्कूल डेटा देखें)" : "डमी सत्र चालू करें (1-Year Full Model • 10 छात्र/क्लास)"}
-            >
-              <span>{schoolDemoActive ? "🧪 डमी सत्र: ON" : "🧪 डमी सत्र: OFF"}</span>
-              <span className="hidden sm:inline text-[10px] font-bold opacity-85">
-                {schoolDemoActive ? "(10 छात्र/क्लास)" : "(असली डेटा)"}
-              </span>
-            </button>
-
             {/* Screen Rotate Toggle */}
             <button
               type="button"
@@ -2130,6 +2121,479 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           </div>
         </header>
 
+        {/* ── SINGLE GLOBAL UNIVERSAL SEARCH BAR (SEARCH EVERYTHING FROM ANYWHERE) ── */}
+        {(() => {
+          const qRaw = universalSearchQuery.trim();
+          const q = qRaw.toLowerCase();
+
+          const extraSubFeatures: Array<{
+            id: string;
+            label: string;
+            desc: string;
+            keywords: string;
+            icon: any;
+            action: () => void;
+          }> = [
+            {
+              id: "sub_quick_admission",
+              label: "नया एडमिशन (Quick New Admission)",
+              desc: "नए छात्र का तुरंत एडमिशन फॉर्म भरें व रसीद काटें",
+              keywords: "admission new student dakhila नामांकन दाखिला प्रवेश form",
+              icon: UserPlus,
+              action: () => setShowDirectAdmissionModal(true),
+            },
+            {
+              id: "sub_sibling_discount",
+              label: "भाई-बहन अटैच व अलग-अलग फीस छूट (Sibling & Discount)",
+              desc: "एक पेरेंट के 2-3 बच्चों को जोड़ें व अलग-अलग मासिक छूट (₹/%) दें",
+              keywords: "sibling brother sister discount chhoot concession bhai behan छूट भाई बहन मल्टीपल",
+              icon: Users,
+              action: () => setView("students"),
+            },
+            {
+              id: "sub_demo_session",
+              label: "डमी सत्र (Demo Session ON/OFF)",
+              desc: "1-Year Full Model (10 छात्र/क्लास) चालू या बंद करें",
+              keywords: "demo dummy session डमी डेमो सत्र test",
+              icon: Sparkles,
+              action: () => setShowHowToUseModal(true),
+            },
+            {
+              id: "sub_switch_session",
+              label: "शैक्षणिक सत्र बदलें / नया सत्र (Academic Session)",
+              desc: "2025-26, 2026-27 सत्र बदलें या नया सत्र बनाएं",
+              keywords: "session year academic satra सत्र साल",
+              icon: Calendar,
+              action: () => setShowSessionModal(true),
+            },
+            {
+              id: "sub_lock_code",
+              label: "स्कूल लॉक कोड / पासवर्ड / पिन (Lock Code & Settings)",
+              desc: "स्कूल कोड, लोगो, पता व सुरक्षा लॉक कोड बदलें",
+              keywords: "lock code pin password settings logo address लॉक पिन सेटिंग",
+              icon: Lock,
+              action: () => setView("school_profile"),
+            },
+            {
+              id: "sub_face_attendance",
+              label: "फेस अटेंडेंस / रोज़ाना हाजिरी (Face & Daily Attendance)",
+              desc: "कैमरे से चेहरा पहचान हाजिरी या क्लास-वार उपस्थिति",
+              keywords: "face attendance kiosk hajiri camera चेहरा हाजिरी उपस्थिति",
+              icon: Camera,
+              action: () => setView("classes"),
+            },
+            {
+              id: "sub_advance_due",
+              label: "अधूरा एडमिशन व बकाया फीस (Due List & Reminders)",
+              desc: "बकाया फीस सूची देखें व WhatsApp रिमाइंडर भेजें",
+              keywords: "due pending balance bakaya arrears reminder whatsapp बकाया फीस",
+              icon: IndianRupee,
+              action: () => setView("fees"),
+            },
+            {
+              id: "sub_teacher_salary",
+              label: "स्टाफ सैलरी व पेरोल (Teacher Salary & Attendance)",
+              desc: "शिक्षकों व कर्मचारियों की हाजिरी और मासिक वेतन",
+              keywords: "salary payroll vetan staff teacher attendance सैलरी वेतन",
+              icon: Briefcase,
+              action: () => setView("staff_hrm"),
+            },
+            {
+              id: "sub_digital_signature",
+              label: "प्रिंसिपल हस्ताक्षर व लेटरहेड (Signature & Receipt Header)",
+              desc: "रसीद, मार्कशीट और सर्टिफिकेट के लिए डिजिटल सिग्नेचर व हेडर",
+              keywords: "signature sign letterhead receipt header print हस्ताक्षर रसीद",
+              icon: PenTool,
+              action: () => setView("receipt_header"),
+            },
+            {
+              id: "sub_account_hub",
+              label: "अकाउंट व रोल स्विच (Teacher / Accountant / Student)",
+              desc: "शिक्षक, अकाउंटेंट या छात्र पोर्टल व्यू में स्विच करें",
+              keywords: "teacher accountant student portal role switch पोर्टल रोल",
+              icon: Shield,
+              action: () => setView("account_hub"),
+            },
+            {
+              id: "sub_how_to_use",
+              label: "How to Use (पूरी ERP गाइड)",
+              desc: "किस विकल्प से क्या काम होता है — पूरी जानकारी",
+              keywords: "help guide how to use tutorial madad गाइड मदद",
+              icon: BookOpen,
+              action: () => setShowHowToUseModal(true),
+            },
+          ];
+
+          const navItemsFlattened = navCategories.flatMap((cat) =>
+            cat.items.map((item) => ({
+              id: `nav_${item.id}`,
+              label: item.label,
+              desc: `${cat.title} • ${item.desc}`,
+              keywords: `${item.label} ${item.desc} ${cat.title} ${item.id}`.toLowerCase(),
+              icon: item.icon,
+              action: () => setView(item.id),
+            }))
+          );
+
+          const allFeatureMatches = q
+            ? [...extraSubFeatures, ...navItemsFlattened]
+                .filter(
+                  (f) =>
+                    f.label.toLowerCase().includes(q) ||
+                    f.desc.toLowerCase().includes(q) ||
+                    f.keywords.toLowerCase().includes(q)
+                )
+                .slice(0, 8)
+            : [];
+
+          const matchedStudents = q
+            ? displayedStudents
+                .filter((st) => {
+                  const clsName =
+                    displayedClasses.find((c) => c.id === st.classId)?.name || "";
+                  return (
+                    (st.name || "").toLowerCase().includes(q) ||
+                    (st.fatherName || "").toLowerCase().includes(q) ||
+                    (st.motherName || "").toLowerCase().includes(q) ||
+                    (st.rollNumber || "").toString().toLowerCase().includes(q) ||
+                    (st.admissionNo || "").toString().toLowerCase().includes(q) ||
+                    (st.phone || "").toLowerCase().includes(q) ||
+                    (st.parentPhone || "").toLowerCase().includes(q) ||
+                    (st.address || "").toLowerCase().includes(q) ||
+                    clsName.toLowerCase().includes(q)
+                  );
+                })
+                .slice(0, 8)
+            : [];
+
+          const matchedTeachers = q
+            ? displayedTeachers
+                .filter((t) => {
+                  const subj = Array.isArray(t.subjects)
+                    ? t.subjects.join(" ")
+                    : String(t.subjects || "");
+                  return (
+                    (t.name || "").toLowerCase().includes(q) ||
+                    (t.phone || "").toLowerCase().includes(q) ||
+                    (t.designation || "").toLowerCase().includes(q) ||
+                    (t.qualification || "").toLowerCase().includes(q) ||
+                    subj.toLowerCase().includes(q)
+                  );
+                })
+                .slice(0, 6)
+            : [];
+
+          const matchedClasses = q
+            ? displayedClasses
+                .filter(
+                  (c) =>
+                    (c.name || "").toLowerCase().includes(q) ||
+                    (c.section || "").toLowerCase().includes(q) ||
+                    (c.stream || "").toLowerCase().includes(q)
+                )
+                .slice(0, 6)
+            : [];
+
+          const matchedSubjects = q
+            ? subjects
+                .filter((sub) => (sub.name || "").toLowerCase().includes(q))
+                .slice(0, 6)
+            : [];
+
+          const matchedSessions = q
+            ? displayedSessions
+                .filter((ses) => (ses.name || "").toLowerCase().includes(q))
+                .slice(0, 4)
+            : [];
+
+          const totalMatches =
+            allFeatureMatches.length +
+            matchedStudents.length +
+            matchedTeachers.length +
+            matchedClasses.length +
+            matchedSubjects.length +
+            matchedSessions.length;
+
+          return (
+            <div className="bg-white/95 dark:bg-slate-900/95 border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 py-2 shrink-0 relative z-20">
+              <div className="max-w-7xl mx-auto">
+                <div className="relative flex items-center">
+                  <Search className="w-4 h-4 text-blue-500 absolute left-3.5 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={universalSearchQuery}
+                    onChange={(e) => setUniversalSearchQuery(e.target.value)}
+                    placeholder="🔍 एक ही सर्च बार से सब कुछ खोजें: छात्र, रोल नं., पिता/मोबाइल, शिक्षक, क्लास, विषय, फीस, छूट, भाई-बहन, बस, TC या कोई भी फीचर..."
+                    className="w-full pl-10 pr-24 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
+                  />
+                  {qRaw && (
+                    <div className="absolute right-2 flex items-center gap-1.5">
+                      <span className="px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-300 text-[10px] font-black">
+                        {totalMatches} परिणाम
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setUniversalSearchQuery("")}
+                        className="p-1 rounded-lg bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-200 cursor-pointer"
+                        aria-label="Clear universal search"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {q && (
+                  <div className="mt-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl p-3 sm:p-4 space-y-4 max-h-[65vh] overflow-y-auto">
+                    {totalMatches === 0 ? (
+                      <div className="py-5 text-center text-xs sm:text-sm text-slate-500 dark:text-slate-400 font-semibold">
+                        &ldquo;{qRaw}&rdquo; से मिलता कोई छात्र, शिक्षक, क्लास, विषय या फीचर नहीं मिला।
+                      </div>
+                    ) : (
+                      <>
+                        {/* 1. Features & Actions */}
+                        {allFeatureMatches.length > 0 && (
+                          <div className="space-y-1.5">
+                            <p className="text-[11px] font-black uppercase tracking-wider text-indigo-600 dark:text-indigo-400 px-1">
+                              ⚡ फीचर्स व टूल्स ({allFeatureMatches.length})
+                            </p>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              {allFeatureMatches.map((feat) => {
+                                const FIcon = feat.icon;
+                                return (
+                                  <button
+                                    key={feat.id}
+                                    type="button"
+                                    onClick={() => {
+                                      feat.action();
+                                      setUniversalSearchQuery("");
+                                    }}
+                                    className="flex items-center justify-between gap-2.5 p-2.5 rounded-xl bg-slate-50 hover:bg-indigo-50 dark:bg-slate-800/70 dark:hover:bg-indigo-950/40 border border-slate-200/80 dark:border-slate-700 hover:border-indigo-400 text-left transition cursor-pointer group"
+                                  >
+                                    <div className="flex items-center gap-2.5 min-w-0">
+                                      <div className="w-8 h-8 rounded-lg bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-300 flex items-center justify-center shrink-0">
+                                        <FIcon className="w-4 h-4" />
+                                      </div>
+                                      <div className="min-w-0">
+                                        <p className="text-xs font-black text-slate-800 dark:text-white truncate">
+                                          {feat.label}
+                                        </p>
+                                        <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                                          {feat.desc}
+                                        </p>
+                                      </div>
+                                    </div>
+                                    <span className="text-[10px] font-black text-indigo-600 dark:text-indigo-400 shrink-0">
+                                      खोलें →
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 2. Students */}
+                        {matchedStudents.length > 0 && (
+                          <div className="space-y-1.5">
+                            <p className="text-[11px] font-black uppercase tracking-wider text-blue-600 dark:text-blue-400 px-1">
+                              🎓 छात्र ({matchedStudents.length})
+                            </p>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              {matchedStudents.map((st) => {
+                                const clsName =
+                                  displayedClasses.find((c) => c.id === st.classId)?.name ||
+                                  "Class";
+                                return (
+                                  <div
+                                    key={st.id}
+                                    className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700 hover:border-blue-400 transition"
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setQuickActionStudent(st);
+                                        setQuickActionInitialTab("profile");
+                                        setUniversalSearchQuery("");
+                                      }}
+                                      className="flex items-center gap-2.5 min-w-0 text-left flex-1 cursor-pointer"
+                                    >
+                                      <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 flex items-center justify-center font-black text-xs shrink-0">
+                                        {(st.name || "S").charAt(0).toUpperCase()}
+                                      </div>
+                                      <div className="min-w-0">
+                                        <p className="text-xs font-black text-slate-800 dark:text-white truncate">
+                                          {st.name}
+                                        </p>
+                                        <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                                          {clsName}
+                                          {st.rollNumber ? ` • Roll #${st.rollNumber}` : ""}
+                                          {st.fatherName ? ` • S/o ${st.fatherName}` : ""}
+                                        </p>
+                                      </div>
+                                    </button>
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setQuickActionStudent(st);
+                                          setQuickActionInitialTab("fees");
+                                          setUniversalSearchQuery("");
+                                        }}
+                                        className="px-2 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-700 dark:text-emerald-300 text-[10px] font-black cursor-pointer"
+                                      >
+                                        💰 फीस
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setQuickActionStudent(st);
+                                          setQuickActionInitialTab("siblings");
+                                          setUniversalSearchQuery("");
+                                        }}
+                                        className="px-2 py-1 rounded-lg bg-purple-500/15 hover:bg-purple-500/25 text-purple-700 dark:text-purple-300 text-[10px] font-black cursor-pointer"
+                                      >
+                                        👨‍👧‍👦 छूट
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 3. Teachers */}
+                        {matchedTeachers.length > 0 && (
+                          <div className="space-y-1.5">
+                            <p className="text-[11px] font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400 px-1">
+                              👩‍🏫 शिक्षक व स्टाफ ({matchedTeachers.length})
+                            </p>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              {matchedTeachers.map((t) => (
+                                <button
+                                  key={t.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setView("teachers");
+                                    setUniversalSearchQuery("");
+                                  }}
+                                  className="flex items-center justify-between gap-2.5 p-2.5 rounded-xl bg-slate-50 hover:bg-emerald-50 dark:bg-slate-800/70 dark:hover:bg-emerald-950/30 border border-slate-200/80 dark:border-slate-700 hover:border-emerald-400 text-left transition cursor-pointer"
+                                >
+                                  <div className="flex items-center gap-2.5 min-w-0">
+                                    <div className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 flex items-center justify-center font-black text-xs shrink-0">
+                                      {(t.name || "T").charAt(0).toUpperCase()}
+                                    </div>
+                                    <div className="min-w-0">
+                                      <p className="text-xs font-black text-slate-800 dark:text-white truncate">
+                                        {t.name}
+                                      </p>
+                                      <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                                        {t.designation || "Teacher"}
+                                        {t.phone ? ` • ${t.phone}` : ""}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <span className="text-[10px] font-black text-emerald-600 dark:text-emerald-400 shrink-0">
+                                    देखें →
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 4. Classes & Subjects & Sessions */}
+                        {(matchedClasses.length > 0 || matchedSubjects.length > 0 || matchedSessions.length > 0) && (
+                          <div className="space-y-2">
+                            {matchedClasses.length > 0 && (
+                              <div className="space-y-1.5">
+                                <p className="text-[11px] font-black uppercase tracking-wider text-purple-600 dark:text-purple-400 px-1">
+                                  📚 कक्षाएं ({matchedClasses.length})
+                                </p>
+                                <div className="flex flex-wrap gap-2">
+                                  {matchedClasses.map((cls) => (
+                                    <button
+                                      key={cls.id}
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedClass(cls);
+                                        setView("students");
+                                        setUniversalSearchQuery("");
+                                      }}
+                                      className="px-3 py-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 dark:bg-purple-950/40 dark:hover:bg-purple-900/50 border border-purple-200 dark:border-purple-800 text-xs font-black text-purple-800 dark:text-purple-200 transition cursor-pointer flex items-center gap-1.5"
+                                    >
+                                      <BookOpen className="w-3.5 h-3.5" />
+                                      <span>
+                                        {cls.name}
+                                        {cls.section ? ` (${cls.section})` : ""}
+                                      </span>
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {matchedSubjects.length > 0 && (
+                              <div className="space-y-1.5">
+                                <p className="text-[11px] font-black uppercase tracking-wider text-cyan-600 dark:text-cyan-400 px-1">
+                                  📖 विषय / किताबें ({matchedSubjects.length})
+                                </p>
+                                <div className="flex flex-wrap gap-2">
+                                  {matchedSubjects.map((sub) => {
+                                    const subCls = displayedClasses.find((c) => c.id === sub.classId);
+                                    return (
+                                      <button
+                                        key={sub.id}
+                                        type="button"
+                                        onClick={() => {
+                                          if (subCls) setSelectedClass(subCls);
+                                          setView("subjects");
+                                          setUniversalSearchQuery("");
+                                        }}
+                                        className="px-3 py-1.5 rounded-xl bg-cyan-50 hover:bg-cyan-100 dark:bg-cyan-950/40 dark:hover:bg-cyan-900/50 border border-cyan-200 dark:border-cyan-800 text-xs font-black text-cyan-800 dark:text-cyan-200 transition cursor-pointer"
+                                      >
+                                        {sub.name}{subCls ? ` (${subCls.name})` : ""}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+
+                            {matchedSessions.length > 0 && (
+                              <div className="space-y-1.5">
+                                <p className="text-[11px] font-black uppercase tracking-wider text-amber-600 dark:text-amber-400 px-1">
+                                  📅 शैक्षणिक सत्र ({matchedSessions.length})
+                                </p>
+                                <div className="flex flex-wrap gap-2">
+                                  {matchedSessions.map((ses) => (
+                                    <button
+                                      key={ses.id}
+                                      type="button"
+                                      onClick={() => {
+                                        setShowSessionModal(true);
+                                        setUniversalSearchQuery("");
+                                      }}
+                                      className="px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/40 dark:hover:bg-amber-900/50 border border-amber-200 dark:border-amber-800 text-xs font-black text-amber-800 dark:text-amber-200 transition cursor-pointer"
+                                    >
+                                      {ses.name}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
         {/* ── DUMMY SESSION ACTIVE NOTICE BAR ── */}
         {schoolDemoActive && (
           <div className="bg-gradient-to-r from-amber-500/20 via-orange-500/15 to-amber-500/20 border-b border-amber-500/40 px-4 sm:px-6 py-2.5 flex items-center justify-between gap-3 text-xs text-amber-950 dark:text-amber-200 font-bold shrink-0">
@@ -2168,6 +2632,38 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             </button>
           </div>
         )}
+
+        {/* How to Use & Demo Session Quick Card */}
+        <button
+          type="button"
+          onClick={() => setShowHowToUseModal(true)}
+          className="w-full text-left bg-gradient-to-r from-indigo-600 via-blue-600 to-cyan-600 hover:from-indigo-500 hover:via-blue-500 hover:to-cyan-500 text-white p-3.5 sm:p-4 rounded-2xl shadow-md hover:shadow-lg transition-all cursor-pointer active:scale-[0.995] flex items-center justify-between gap-3 group border border-white/15"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-xl bg-white/15 backdrop-blur-xs flex items-center justify-center shrink-0 group-hover:scale-105 transition">
+              <BookOpen className="w-5 h-5 text-white" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-sm sm:text-base font-black tracking-tight">
+                  📖 How to Use (स्कूल ERP गाइड)
+                </h3>
+                {schoolDemoActive && (
+                  <span className="px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black">
+                    🧪 डमी सत्र ON
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] sm:text-xs text-blue-100 font-medium truncate sm:whitespace-normal">
+                किस विकल्प से क्या काम होता है? पूरी लिस्ट देखें, सीधे खोलें और डमी सत्र (Demo Session) यहीं से चालू/बंद करें
+              </p>
+            </div>
+          </div>
+          <span className="px-3 py-1.5 rounded-xl bg-white/20 group-hover:bg-white/30 text-white text-xs font-black shrink-0 flex items-center gap-1 transition">
+            <span>खोलें</span>
+            <ChevronRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
+          </span>
+        </button>
 
         {/* Top Summary KPI Strip */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -2258,20 +2754,11 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                 ⚡ त्वरित हाजिरी पंच (Universal 1-Tap Attendance Desk)
               </h3>
               <p className="text-xs text-indigo-200/90 leading-relaxed">
-                स्कूल एडमिन, सभी शिक्षक और किसी भी क्लास (Nursery से 12वीं) के छात्र का <strong>Punch IN (आगमन)</strong> व <strong>Punch OUT (प्रस्थान)</strong> सीधे यहीं से लगाएं।
+                सभी शिक्षक और किसी भी क्लास (Nursery से 12वीं) के छात्र का <strong>Punch IN (आगमन)</strong> व <strong>Punch OUT (प्रस्थान)</strong> सीधे यहीं से लगाएं।
               </p>
             </div>
 
             <div className="flex items-center gap-2 pt-1 flex-wrap">
-              <button
-                type="button"
-                onClick={() => setShowAdminIdCardModal(true)}
-                className="px-3 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs transition active:scale-95 shadow-md flex items-center gap-1.5 cursor-pointer"
-              >
-                <Crown className="w-3.5 h-3.5 fill-slate-950" />
-                <span>🪪 Admin ID Card</span>
-              </button>
-
               <button
                 type="button"
                 onClick={() => setShowSchoolLocationModal(true)}
@@ -2344,6 +2831,347 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           />
         )}
 
+        {/* ── HOME DASHBOARD DUES TRACKING: ADMISSION BALANCE & 1-MONTH ADVANCE FEE ── */}
+        {(() => {
+          const studentsWithAdmissionDues = displayedStudents.filter(
+            (s) => Number(s.admissionDueBalance || 0) > 0
+          );
+          const totalAdmissionDue = studentsWithAdmissionDues.reduce(
+            (sum, s) => sum + Number(s.admissionDueBalance || 0),
+            0
+          );
+
+          const studentsWithAdvanceDues = displayedStudents.filter(
+            (s) =>
+              s.advanceMonthlyFeePaid === false &&
+              Number(s.advanceMonthlyFeeDue || s.monthlyFee || 0) > 0
+          );
+          const totalAdvanceDue = studentsWithAdvanceDues.reduce(
+            (sum, s) => sum + Number(s.advanceMonthlyFeeDue || s.monthlyFee || 0),
+            0
+          );
+
+          const getClassLabel = (clsId: string) =>
+            displayedClasses.find((c) => c.id === clsId)?.name || "Class";
+
+          const openWhatsAppReminder = (
+            st: SchoolStudent,
+            headLabel: string,
+            dueAmt: number
+          ) => {
+            const phone = (st.parentPhone || st.phone || "").replace(/\D/g, "");
+            const targetPhone = phone.length === 10 ? `91${phone}` : phone;
+            const msg = encodeURIComponent(
+              `नमस्ते ${st.fatherName || "अभिभावक जी"},\n${school?.name || "School"} से सूचना:\nछात्र/छात्रा: *${st.name}* (${getClassLabel(st.classId)}, Roll #${st.rollNo || "—"})\nबकाया शीर्षक: *${headLabel}*\nबकाया राशि: *₹${dueAmt.toLocaleString("en-IN")}*\nकृपया शीघ्र शुल्क जमा कराने की कृपा करें। धन्यवाद!`
+            );
+            const url = targetPhone
+              ? `https://wa.me/${targetPhone}?text=${msg}`
+              : `https://wa.me/?text=${msg}`;
+            window.open(url, "_blank", "noopener,noreferrer");
+          };
+
+          const handleSettleDue = async () => {
+            if (!duesSettlementModal || !schoolId) return;
+            const { student: st, type, amount, mode } = duesSettlementModal;
+            const payAmt = Math.max(0, Number(amount) || 0);
+            if (payAmt <= 0) return;
+
+            setDuesSettlementModal((prev) => (prev ? { ...prev, saving: true } : null));
+            const todayIso = new Date().toISOString().slice(0, 10);
+            const receiptNo = `ADM-${Date.now().toString().slice(-6)}`;
+
+            try {
+              let patch: Partial<SchoolStudent> = {};
+              if (type === "admission") {
+                const curDue = Number(st.admissionDueBalance || 0);
+                const applied = Math.min(curDue, payAmt);
+                const rem = Math.max(0, curDue - applied);
+                patch = {
+                  admissionDueBalance: rem,
+                  admissionPaidAmount: Number(st.admissionPaidAmount || 0) + applied,
+                  admissionBalanceHistory: [
+                    ...(st.admissionBalanceHistory || []),
+                    {
+                      date: todayIso,
+                      paidAmount: applied,
+                      remainingDue: rem,
+                      receiptNo,
+                      paymentMode: mode,
+                    },
+                  ],
+                };
+              } else {
+                patch = {
+                  advanceMonthlyFeePaid: true,
+                  advanceMonthlyFeeDue: 0,
+                };
+              }
+
+              await updateStudent(schoolId, st.id, patch);
+              setStudents((prev) =>
+                prev.map((item) => (item.id === st.id ? { ...item, ...patch } : item))
+              );
+              setDuesSettlementModal(null);
+            } catch (err) {
+              console.error("Failed to settle due:", err);
+              setDuesSettlementModal((prev) => (prev ? { ...prev, saving: false } : null));
+            }
+          };
+
+          return (
+            <>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {/* CARD 1: PENDING ADMISSION BALANCE (अधूरा एडमिशन शुल्क) */}
+                <div className="rounded-2xl border border-rose-200 dark:border-rose-900 bg-rose-50/40 dark:bg-rose-950/20 p-4 sm:p-5 flex flex-col justify-between gap-3">
+                  <div className="flex items-start justify-between gap-3 border-b border-rose-200/70 dark:border-rose-900/60 pb-3">
+                    <div>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-rose-700 dark:text-rose-400">
+                        Pending Admission Balance
+                      </span>
+                      <h3 className="text-base font-black text-slate-900 dark:text-white mt-0.5">
+                        अधूरा एडमिशन शुल्क (Admission Arrears)
+                      </h3>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="text-lg font-black font-mono tabular-nums text-rose-700 dark:text-rose-300">
+                        ₹{totalAdmissionDue.toLocaleString("en-IN")}
+                      </p>
+                      <p className="text-[11px] font-bold font-mono tabular-nums text-rose-600 dark:text-rose-400">
+                        {studentsWithAdmissionDues.length} Students
+                      </p>
+                    </div>
+                  </div>
+
+                  {studentsWithAdmissionDues.length === 0 ? (
+                    <div className="py-5 text-center text-xs font-semibold text-slate-500 dark:text-slate-400">
+                      सभी छात्रों का एडमिशन शुल्क पूर्ण जमा है।
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                      {studentsWithAdmissionDues.slice(0, 12).map((st) => {
+                        const due = Number(st.admissionDueBalance || 0);
+                        return (
+                          <div
+                            key={st.id}
+                            className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-white dark:bg-slate-900/80 border border-rose-200/70 dark:border-rose-900/50"
+                          >
+                            <div className="min-w-0">
+                              <p className="text-xs font-black text-slate-900 dark:text-white truncate">
+                                {st.name}
+                              </p>
+                              <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                                {getClassLabel(st.classId)} • Roll #{st.rollNo || "—"}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <span className="text-xs font-black font-mono tabular-nums text-rose-700 dark:text-rose-300 mr-1">
+                                ₹{due.toLocaleString("en-IN")}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setDuesSettlementModal({
+                                    student: st,
+                                    type: "admission",
+                                    amount: String(due),
+                                    mode: "Cash",
+                                    saving: false,
+                                  })
+                                }
+                                className="px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-bold transition cursor-pointer"
+                              >
+                                💰 जमा करें
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  openWhatsAppReminder(st, "बकाया एडमिशन शुल्क", due)
+                                }
+                                className="px-2 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold transition cursor-pointer"
+                                title="WhatsApp Reminder"
+                              >
+                                📲
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* CARD 2: 1-MONTH ADVANCE FEE UNPAID (1-माह एडवांस फीस बकाया) */}
+                <div className="rounded-2xl border border-amber-200 dark:border-amber-900 bg-amber-50/40 dark:bg-amber-950/20 p-4 sm:p-5 flex flex-col justify-between gap-3">
+                  <div className="flex items-start justify-between gap-3 border-b border-amber-200/70 dark:border-amber-900/60 pb-3">
+                    <div>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">
+                        Unpaid 1-Month Advance Fee
+                      </span>
+                      <h3 className="text-base font-black text-slate-900 dark:text-white mt-0.5">
+                        1-माह एडवांस फीस बकाया (Advance Tuition)
+                      </h3>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="text-lg font-black font-mono tabular-nums text-amber-700 dark:text-amber-300">
+                        ₹{totalAdvanceDue.toLocaleString("en-IN")}
+                      </p>
+                      <p className="text-[11px] font-bold font-mono tabular-nums text-amber-600 dark:text-amber-400">
+                        {studentsWithAdvanceDues.length} Students
+                      </p>
+                    </div>
+                  </div>
+
+                  {studentsWithAdvanceDues.length === 0 ? (
+                    <div className="py-5 text-center text-xs font-semibold text-slate-500 dark:text-slate-400">
+                      सभी नए छात्रों की 1-माह एडवांस फीस जमा है।
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                      {studentsWithAdvanceDues.slice(0, 12).map((st) => {
+                        const advDue = Number(st.advanceMonthlyFeeDue || st.monthlyFee || 0);
+                        return (
+                          <div
+                            key={st.id}
+                            className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-white dark:bg-slate-900/80 border border-amber-200/70 dark:border-amber-900/50"
+                          >
+                            <div className="min-w-0">
+                              <p className="text-xs font-black text-slate-900 dark:text-white truncate">
+                                {st.name}
+                              </p>
+                              <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                                {getClassLabel(st.classId)} • Roll #{st.rollNo || "—"}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <span className="text-xs font-black font-mono tabular-nums text-amber-700 dark:text-amber-300 mr-1">
+                                ₹{advDue.toLocaleString("en-IN")}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setDuesSettlementModal({
+                                    student: st,
+                                    type: "advance",
+                                    amount: String(advDue),
+                                    mode: "Cash",
+                                    saving: false,
+                                  })
+                                }
+                                className="px-2.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold transition cursor-pointer"
+                              >
+                                ⚡ जमा करें
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  openWhatsAppReminder(st, "1-माह एडवांस ट्यूशन फीस", advDue)
+                                }
+                                className="px-2 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold transition cursor-pointer"
+                                title="WhatsApp Reminder"
+                              >
+                                📲
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* IN-PLACE 1-TAP DUES SETTLEMENT MODAL */}
+              {duesSettlementModal && (
+                <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+                  <div className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 shadow-2xl space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+                      <div>
+                        <h4 className="text-base font-black text-slate-900 dark:text-white">
+                          {duesSettlementModal.type === "admission"
+                            ? "💰 अधूरा एडमिशन शुल्क जमा करें"
+                            : "⚡ 1-माह एडवांस फीस जमा करें"}
+                        </h4>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">
+                          {duesSettlementModal.student.name} ({getClassLabel(duesSettlementModal.student.classId)})
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setDuesSettlementModal(null)}
+                        className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 cursor-pointer"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                          जमा राशि (Amount in ₹)
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          value={duesSettlementModal.amount}
+                          onChange={(e) =>
+                            setDuesSettlementModal((prev) =>
+                              prev ? { ...prev, amount: e.target.value } : null
+                            )
+                          }
+                          className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-white font-mono tabular-nums font-bold text-sm"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                          भुगतान माध्यम (Payment Mode)
+                        </label>
+                        <div className="grid grid-cols-3 gap-2">
+                          {(["Cash", "UPI", "Bank"] as const).map((m) => (
+                            <button
+                              key={m}
+                              type="button"
+                              onClick={() =>
+                                setDuesSettlementModal((prev) =>
+                                  prev ? { ...prev, mode: m } : null
+                                )
+                              }
+                              className={`py-2 rounded-xl text-xs font-bold border transition cursor-pointer ${
+                                duesSettlementModal.mode === m
+                                  ? "bg-indigo-600 text-white border-indigo-600"
+                                  : "bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700"
+                              }`}
+                            >
+                              {m}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => setDuesSettlementModal(null)}
+                        className="px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 cursor-pointer"
+                      >
+                        रद्द करें
+                      </button>
+                      <button
+                        type="button"
+                        disabled={duesSettlementModal.saving}
+                        onClick={handleSettleDue}
+                        className="px-4 py-2 rounded-xl text-xs font-black bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer disabled:opacity-50"
+                      >
+                        {duesSettlementModal.saving ? "सहेजा जा रहा है..." : "✓ भुगतान दर्ज करें"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
+          );
+        })()}
 
         {/* ── BIRTHDAY WISH SENT TOAST ── */}
         {birthdayWishToast && (
@@ -3006,8 +3834,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Box 3 & 4: Campus Live GPS Location & Official Admin ID Card */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+        {/* Box 3: Campus Live GPS Location */}
+        <div className="grid grid-cols-1 gap-5">
           {/* School Live GPS Geofence */}
           <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm space-y-3">
             <div className="flex items-center justify-between">
@@ -3044,32 +3872,6 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                   <ExternalLink className="w-3.5 h-3.5" />
                 </a>
               )}
-            </div>
-          </div>
-
-          {/* Official Admin Identity Card */}
-          <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Crown className="w-4 h-4 text-amber-500" />
-                <h4 className="font-bold text-sm text-slate-800 dark:text-white">Official Admin Identity Card</h4>
-              </div>
-              <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-                👑 ADMIN-01
-              </span>
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              प्रिंसिपल व स्कूल हेड का आधिकारिक डिजिटल पहचान पत्र, बारकोड व त्वरित हाजिरी QR कोड।
-            </p>
-            <div className="pt-2">
-              <button
-                type="button"
-                onClick={() => setShowAdminIdCardModal(true)}
-                className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-xs active:scale-95"
-              >
-                <Printer className="w-3.5 h-3.5" />
-                <span>🪪 Admin ID Card देखें / प्रिंट करें</span>
-              </button>
             </div>
           </div>
         </div>
@@ -3543,15 +4345,6 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             onLocationSaved={(newLoc) => {
               setSchool(prev => prev ? ({ ...prev, ...newLoc }) : null);
             }}
-          />
-        )}
-
-        {/* Official Admin ID Card Modal */}
-        {school && showAdminIdCardModal && (
-          <AdminIdCardModal
-            isOpen={showAdminIdCardModal}
-            onClose={() => setShowAdminIdCardModal(false)}
-            school={school}
           />
         )}
 
@@ -4049,6 +4842,194 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                   className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white dark:bg-slate-800 dark:hover:bg-slate-700 text-xs font-bold transition cursor-pointer"
                 >
                   बंद करें (Done)
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {/* ── HOW TO USE & DEMO SESSION MODAL ── */}
+        {showHowToUseModal && (
+          <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 animate-in fade-in duration-150">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+              {/* Modal Header */}
+              <div className="px-5 py-4 bg-gradient-to-r from-indigo-600 via-blue-600 to-cyan-600 text-white flex items-center justify-between gap-3 shrink-0">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-10 h-10 rounded-2xl bg-white/15 flex items-center justify-center shrink-0">
+                    <BookOpen className="w-5 h-5 text-white" />
+                  </div>
+                  <div className="min-w-0">
+                    <h2 className="text-base sm:text-lg font-black truncate">
+                      📖 How to Use — स्कूल ERP की पूरी जानकारी
+                    </h2>
+                    <p className="text-[11px] sm:text-xs text-blue-100 font-medium">
+                      हर मॉड्यूल का काम जानें, 1-टैप में खोलें और डेमो सत्र (Demo Session) कंट्रोल करें
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowHowToUseModal(false)}
+                  className="p-2 rounded-xl bg-white/15 hover:bg-white/25 text-white transition cursor-pointer shrink-0"
+                  aria-label="Close How to Use"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-5">
+                {/* Demo Session Control Card */}
+                <div
+                  className={`p-4 rounded-2xl border-2 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition ${
+                    schoolDemoActive
+                      ? "bg-amber-50 dark:bg-amber-950/30 border-amber-400/70"
+                      : "bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700"
+                  }`}
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-lg">🧪</span>
+                      <h3 className="text-sm sm:text-base font-black text-slate-800 dark:text-white">
+                        डमी सत्र (Demo Session • 1-Year Full Model)
+                      </h3>
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                          schoolDemoActive
+                            ? "bg-amber-400 text-slate-950"
+                            : "bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200"
+                        }`}
+                      >
+                        {schoolDemoActive ? "अभी ON है" : "अभी OFF है (असली डेटा)"}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-600 dark:text-slate-300 font-medium">
+                      सीखने या डेमो दिखाने के लिए इसे ON करें — 13 क्लास, 10 छात्र प्रति क्लास, 1-साल की फीस, हाजिरी, 6 परीक्षाएं और स्टाफ सैलरी अपने-आप दिख जाएगी।
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleDemoData(!schoolDemoActive)}
+                    className={`px-4 py-2.5 rounded-xl font-black text-xs sm:text-sm transition cursor-pointer active:scale-95 shrink-0 shadow-md ${
+                      schoolDemoActive
+                        ? "bg-amber-500 hover:bg-amber-600 text-slate-950"
+                        : "bg-indigo-600 hover:bg-indigo-500 text-white"
+                    }`}
+                  >
+                    {schoolDemoActive ? "डमी सत्र बंद करें (Turn OFF)" : "🧪 डमी सत्र चालू करें (Turn ON)"}
+                  </button>
+                </div>
+
+                {/* Search Box */}
+                <div className="relative">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={howToUseSearch}
+                    onChange={(e) => setHowToUseSearch(e.target.value)}
+                    placeholder="कोई भी फीचर खोजें (जैसे: फीस, रिजल्ट, बस, भाई-बहन, नोटिस, स्टाफ)..."
+                    className="w-full pl-10 pr-9 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs sm:text-sm font-medium text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  {howToUseSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setHowToUseSearch("")}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Categorized ERP Features */}
+                <div className="space-y-5">
+                  {navCategories.map((cat) => {
+                    const q = howToUseSearch.trim().toLowerCase();
+                    const filteredItems = q
+                      ? cat.items.filter(
+                          (item) =>
+                            item.label.toLowerCase().includes(q) ||
+                            item.desc.toLowerCase().includes(q) ||
+                            cat.title.toLowerCase().includes(q)
+                        )
+                      : cat.items;
+                    if (filteredItems.length === 0) return null;
+                    return (
+                      <div key={cat.id} className="space-y-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-2.5 h-2.5 rounded-full ${cat.theme.accentDot}`} />
+                          <h4 className="text-xs sm:text-sm font-black uppercase tracking-wide text-slate-700 dark:text-slate-200">
+                            {cat.title}
+                          </h4>
+                          <span className="text-[10px] font-bold text-slate-400">
+                            ({filteredItems.length})
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          {filteredItems.map((item) => {
+                            const IconComp = item.icon;
+                            return (
+                              <button
+                                key={item.id}
+                                type="button"
+                                onClick={() => {
+                                  setView(item.id);
+                                  setShowHowToUseModal(false);
+                                }}
+                                className="flex items-start justify-between gap-3 p-3 rounded-2xl bg-slate-50 hover:bg-blue-50/70 dark:bg-slate-800/70 dark:hover:bg-slate-800 border border-slate-200/80 dark:border-slate-700/80 hover:border-blue-400 dark:hover:border-blue-500 text-left transition cursor-pointer group"
+                              >
+                                <div className="flex items-start gap-2.5 min-w-0">
+                                  <div className="w-8 h-8 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 flex items-center justify-center shrink-0 text-blue-600 dark:text-blue-400 group-hover:scale-105 transition">
+                                    <IconComp className="w-4 h-4" />
+                                  </div>
+                                  <div className="min-w-0">
+                                    <p className="text-xs sm:text-sm font-black text-slate-800 dark:text-white truncate">
+                                      {item.label}
+                                    </p>
+                                    <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium leading-snug mt-0.5">
+                                      {item.desc}
+                                    </p>
+                                  </div>
+                                </div>
+                                <span className="text-[11px] font-black text-blue-600 dark:text-blue-400 shrink-0 mt-1 group-hover:translate-x-0.5 transition-transform">
+                                  खोलें →
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Extra Tips: Student 360 & Multi-Role Portals */}
+                <div className="p-4 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/60 space-y-2.5">
+                  <h4 className="text-xs sm:text-sm font-black text-indigo-900 dark:text-indigo-200 flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-indigo-500" />
+                    <span>खास टिप्स (Student 360° व अन्य पोर्टल)</span>
+                  </h4>
+                  <ul className="text-[11px] sm:text-xs text-slate-700 dark:text-slate-300 space-y-1.5 font-medium">
+                    <li>
+                      • <strong>👨‍👧‍👦 भाई-बहन अटैच व अलग-अलग फीस छूट:</strong> किसी भी छात्र पर क्लिक करें → <strong>भाई-बहन व छूट</strong> टैब में एक ही माता-पिता के 2-3 बच्चों को जोड़ें और हर बच्चे के लिए अलग-अलग मासिक छूट (₹ या %) सेट करें।
+                    </li>
+                    <li>
+                      • <strong>⚡ 1-टैप एडमिशन व बकाया निपटान:</strong> Home Dashboard पर अधूरा एडमिशन शुल्क और 1-माह एडवांस फीस बकाया कार्ड से सीधे फीस जमा करें या WhatsApp रिमाइंडर भेजें।
+                    </li>
+                    <li>
+                      • <strong>👥 अन्य रोल पोर्टल:</strong> बाएँ Sidebar में नीचे से <strong>👩‍🏫 Teacher</strong>, <strong>💼 Accountant</strong> और <strong>🎓 Student</strong> व्यू में सीधे स्विच करें।
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="px-5 py-3 bg-slate-50 dark:bg-slate-800/80 border-t border-slate-200 dark:border-slate-800 flex items-center justify-end shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowHowToUseModal(false)}
+                  className="px-5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-slate-700 dark:hover:bg-slate-600 text-white text-xs font-black transition cursor-pointer"
+                >
+                  बंद करें (Close)
                 </button>
               </div>
             </div>

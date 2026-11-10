@@ -434,7 +434,7 @@ export const getSchool = async (schoolId: string): Promise<School | null> => {
   if (db) {
     try {
       const snap = await withTimeout(getDoc(d(`schools/${schoolId}`)), 2500);
-      if (snap.exists() && !deletedIds.has(schoolId)) return sanitize({ id: schoolId, ...(snap.data() as School) });
+      if (snap.exists() && !deletedIds.has(schoolId)) return sanitize({ ...(snap.data() as School), id: schoolId });
     } catch {}
   }
 
@@ -527,7 +527,7 @@ export const subscribeToSchool = (schoolId: string, cb: (s: School | null) => vo
         d(`schools/${schoolId}`),
         snap => {
           if (getDeletedSchoolIds().has(schoolId)) { cb(null); return; }
-          if (snap.exists()) cb(stripNestedSchoolCollections({ id: schoolId, ...(snap.data() as School) }));
+          if (snap.exists()) cb(stripNestedSchoolCollections({ ...(snap.data() as School), id: schoolId }));
         },
         err => { console.warn(`[school-firebase] subscribeToSchool error:`, err?.code || err); }
       );
@@ -603,7 +603,7 @@ export const subscribeToAllSchools = (
         col("schools"),
         snap => {
           if (!snap.empty) {
-            const list = snap.docs.map(docSnap => stripNestedSchoolCollections({ id: docSnap.id, ...(docSnap.data() as School) }));
+            const list = snap.docs.map(docSnap => stripNestedSchoolCollections({ ...(docSnap.data() as School), id: docSnap.id }));
             mergeAndDeliver(list);
           }
         },
@@ -1333,7 +1333,7 @@ export const getTeachers = async (schoolId: string): Promise<SchoolTeacher[]> =>
   try {
     const snap = await withTimeout(getDocs(col(`schools/${schoolId}/teachers`)), 2500);
     const list = (snap as any).docs.map((doc: any) => doc.data() as SchoolTeacher);
-    return !isDemoDataEnabled() ? list.filter(t => !isDemoRecord(t)) : list;
+    return !isDemoDataEnabled() ? list.filter((t: SchoolTeacher) => !isDemoRecord(t)) : list;
   } catch {
     return [];
   }

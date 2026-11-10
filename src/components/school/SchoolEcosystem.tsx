@@ -3,6 +3,7 @@ import React, { useState, useEffect, lazy, Suspense } from "react";
 import {
   getSchoolUserProfile,
   getLocalStudents,
+  getStudents,
   setLocalStudents,
   getTeachers,
   saveUserLinkedStudents,
@@ -486,6 +487,49 @@ export const SchoolEcosystem: React.FC<Props> = ({
       mounted = false;
     };
   }, [uid, isExplicitAdmin, isTeacherRole]);
+
+  // Auto-attach siblings linked via Admin (familyGroupId / siblingStudentIds) to the Parent's linkedStudents list
+  useEffect(() => {
+    const schoolIdToCheck = linkedEntity?.schoolId;
+    if (!schoolIdToCheck || !linkedEntity?.id || isExplicitAdmin || isTeacherRole) return;
+    let mounted = true;
+    getStudents(schoolIdToCheck)
+      .then((schoolList) => {
+        if (!mounted || !Array.isArray(schoolList) || schoolList.length === 0) return;
+        const freshSelf = schoolList.find((s) => s.id === linkedEntity.id) || linkedEntity;
+        const famId = freshSelf.familyGroupId;
+        const sibIds: string[] = Array.isArray(freshSelf.siblingStudentIds) ? freshSelf.siblingStudentIds : [];
+        if (!famId && sibIds.length === 0) return;
+
+        const matchingSiblings = schoolList.filter((s) => {
+          if (!s || s.id === freshSelf.id) return false;
+          if (sibIds.includes(s.id)) return true;
+          if (famId && s.familyGroupId === famId) return true;
+          return false;
+        });
+        if (matchingSiblings.length === 0) return;
+
+        setLinkedStudents((prev) => {
+          const map = new Map<string, any>();
+          prev.forEach((s: any) => map.set(getStudentLinkKey(s, defaultSchoolId), s));
+          let changed = false;
+          matchingSiblings.forEach((sib) => {
+            const sanitized = sanitizeStudentLink({ ...sib, schoolId: sib.schoolId || schoolIdToCheck });
+            if (!sanitized) return;
+            const k = getStudentLinkKey(sanitized, defaultSchoolId);
+            if (!map.has(k)) {
+              map.set(k, sanitized);
+              changed = true;
+            }
+          });
+          return changed ? Array.from(map.values()) : prev;
+        });
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, [linkedEntity?.id, linkedEntity?.schoolId, isExplicitAdmin, isTeacherRole]);
 
   // Listen for ServiceWorker Lock Screen notification click navigation while app is open
   useEffect(() => {

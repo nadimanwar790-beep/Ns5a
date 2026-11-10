@@ -1,5 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect, useMemo } from "react";
+import { toast } from "sonner";
 import {
   IndianRupee, Save, RotateCcw, Sparkles, CheckCircle2,
   GraduationCap, Search, AlertCircle, RefreshCw, ChevronLeft,
@@ -482,7 +483,7 @@ export const ClassFeeStructureSection: React.FC<Props> = ({
   const handleCreateNewTeacherWithSalary = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTeacherForm.name.trim()) {
-      alert("Kripya Teacher ka naam likhein.");
+      toast.error("Kripya Teacher ka naam likhein.");
       return;
     }
     const base = Number(newTeacherForm.monthlyBaseSalary) || 0;
@@ -543,7 +544,7 @@ export const ClassFeeStructureSection: React.FC<Props> = ({
       showNotification(`Naye teacher "${newTeacherRecord.name}" aur unka monthly salary structure add ho gaya!`);
       if (onTeachersUpdated) onTeachersUpdated();
     } catch (err: any) {
-      alert("Error adding teacher: " + (err?.message || "Failed"));
+      toast.error("Error adding teacher: " + (err?.message || "Failed"));
     }
   };
 

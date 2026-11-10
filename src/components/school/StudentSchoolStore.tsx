@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import type { School, SchoolStudent, StoreInventoryItem, StoreReservationBooking } from "../../school-types";
 import { speakNotification } from "../../utils/voiceNotifyEngine";
+import { toast } from "sonner";
 
 interface Props {
   school: School;
@@ -114,7 +115,7 @@ export const StudentSchoolStore: React.FC<Props> = ({ school, student, onBack })
   const handleConfirmBooking = () => {
     if (!bookingItem || bookingQty <= 0) return;
     if (bookingItem.stockQuantity < bookingQty) {
-      alert("माफ़ करें, पर्याप्त स्टॉक उपलब्ध नहीं है।");
+      toast.error("माफ़ करें, पर्याप्त स्टॉक उपलब्ध नहीं है।");
       return;
     }
 
@@ -168,7 +169,7 @@ export const StudentSchoolStore: React.FC<Props> = ({ school, student, onBack })
         `आपका ऑर्डर ${orderId} 24 घंटे के लिए बुक हो गया है। कृपया स्कूल काउंटर से प्राप्त करें।`
       );
     } catch (e) {
-      alert("Booking error: " + (e?.message || "Retry"));
+      toast.error("Booking error: " + (e?.message || "Retry"));
     }
   };
 

@@ -466,9 +466,23 @@ export interface SchoolStudent {
   previousTcNo?: string;
   previousTcDate?: string;
   transportModeIfNo?: 'Walking' | 'Guardian';
-  transportDistanceKm?: string | number;
+  transportDistanceKm?: number | string;
   childSensitivity?: boolean;
   childSensitivityRemarks?: string;
+  // Admission Dues & 1-Month Advance Fee Tracking
+  admissionTotalAmount?: number; // Total admission fees payable
+  admissionPaidAmount?: number; // Total admission fee amount paid at admission
+  admissionDueBalance?: number; // Remaining unpaid admission amount (बकाया एडमिशन शुल्क)
+  admissionBalanceHistory?: {
+    date: string;
+    paidAmount: number;
+    remainingDue: number;
+    receiptNo?: string;
+    paymentMode?: string;
+  }[];
+  advanceMonthlyFeePaid?: boolean; // Whether 1-month advance fee was paid at admission
+  advanceMonthlyFeeDue?: number; // Unpaid 1-month advance fee amount (1 माह एडवांस फीस बकाया)
+  advanceMonthlyFeeMonth?: string; // e.g. "April" or first active month
   siblingDetails?: Array<{ slNo: number; name: string; relation: string; className: string; rollNo?: string }>;
   bankAccountName?: string;
   bankName?: string;

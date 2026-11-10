@@ -92,7 +92,7 @@ export default defineConfig(async ({ command }) => {
       minifyWhitespace: isBuild,
     },
     optimizeDeps: {
-      entries: ['src/main.tsx'],
+      entries: ['src/**/*.{ts,tsx}'],
       include: [
         'react',
         'react-dom',

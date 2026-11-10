@@ -69,10 +69,12 @@ import {
   deleteSchoolExpenseVoucher,
   getAdmissions,
   saveStudent,
+  updateStudent,
   getLocalStudents,
   getAttendance,
   todayStr
 } from "../../school-firebase";
+import { toast } from "sonner";
 import { FeeManager } from "./FeeManager";
 import { OnlineAdmissionManager } from "./OnlineAdmissionManager";
 import { AbsenteeActionPage } from "./AbsenteeActionPage";
@@ -178,6 +180,13 @@ export const AccountantPanel: React.FC<Props> = ({
   // Fast Quick Collect modal state
   const [quickSearchQuery, setQuickSearchQuery] = useState("");
   const [selectedStudentForDues, setSelectedStudentForDues] = useState<SchoolStudent | null>(null);
+  const [duesSettlementModal, setDuesSettlementModal] = useState<{
+    student: SchoolStudent;
+    type: "admission" | "advance";
+    amount: string;
+    mode: "Cash" | "UPI" | "Bank";
+    saving: boolean;
+  } | null>(null);
 
   // Screen rotation helper
   const handleToggleOrientation = () => {
@@ -391,7 +400,7 @@ export const AccountantPanel: React.FC<Props> = ({
   const handleSaveExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newExpense.amount || Number(newExpense.amount) <= 0 || !newExpense.paidTo.trim()) {
-      alert("कृपया मान्य राशि व प्राप्तकर्ता का नाम दर्ज करें।");
+      toast.error("कृपया मान्य राशि व प्राप्तकर्ता का नाम दर्ज करें।");
       return;
     }
 
@@ -420,10 +429,10 @@ export const AccountantPanel: React.FC<Props> = ({
         paymentMode: "Cash",
         description: ""
       });
-      alert(`वाउचर #${voucher.voucherNo} सफलता पूर्वक सहेजा गया!`);
+      toast.success(`वाउचर #${voucher.voucherNo} सफलता पूर्वक सहेजा गया!`);
     } catch (err) {
       console.error("Expense save failed:", err);
-      alert("वाउचर सुरक्षित करने में त्रुटि हुई। पुनः प्रयास करें।");
+      toast.error("वाउचर सुरक्षित करने में त्रुटि हुई। पुनः प्रयास करें।");
     }
   };
 
@@ -1107,6 +1116,346 @@ export const AccountantPanel: React.FC<Props> = ({
                   </p>
                 </div>
               </div>
+
+              {/* ── ADMISSION BALANCE & 1-MONTH ADVANCE FEE DUES CARDS ──────── */}
+              {(() => {
+                const studentsWithAdmissionDues = students.filter(
+                  (s) => Number(s.admissionDueBalance || 0) > 0
+                );
+                const totalAdmissionDue = studentsWithAdmissionDues.reduce(
+                  (sum, s) => sum + Number(s.admissionDueBalance || 0),
+                  0
+                );
+
+                const studentsWithAdvanceDues = students.filter(
+                  (s) =>
+                    s.advanceMonthlyFeePaid === false &&
+                    Number(s.advanceMonthlyFeeDue || s.monthlyFee || 0) > 0
+                );
+                const totalAdvanceDue = studentsWithAdvanceDues.reduce(
+                  (sum, s) => sum + Number(s.advanceMonthlyFeeDue || s.monthlyFee || 0),
+                  0
+                );
+
+                const getClassLabel = (clsId: string) =>
+                  classes.find((c) => c.id === clsId)?.name || "Class";
+
+                const openWhatsAppReminder = (
+                  st: SchoolStudent,
+                  headLabel: string,
+                  dueAmt: number
+                ) => {
+                  const phone = (st.parentPhone || st.phone || "").replace(/\D/g, "");
+                  const targetPhone = phone.length === 10 ? `91${phone}` : phone;
+                  const msg = encodeURIComponent(
+                    `नमस्ते ${st.fatherName || "अभिभावक जी"},\n${school?.name || "School"} से सूचना:\nछात्र/छात्रा: *${st.name}* (${getClassLabel(st.classId)}, Roll #${st.rollNo || "—"})\nबकाया शीर्षक: *${headLabel}*\nबकाया राशि: *₹${dueAmt.toLocaleString("en-IN")}*\nकृपया शीघ्र शुल्क जमा कराने की कृपा करें। धन्यवाद!`
+                  );
+                  const url = targetPhone
+                    ? `https://wa.me/${targetPhone}?text=${msg}`
+                    : `https://wa.me/?text=${msg}`;
+                  window.open(url, "_blank", "noopener,noreferrer");
+                };
+
+                const handleSettleDue = async () => {
+                  if (!duesSettlementModal || !schoolId) return;
+                  const { student: st, type, amount, mode } = duesSettlementModal;
+                  const payAmt = Math.max(0, Number(amount) || 0);
+                  if (payAmt <= 0) return;
+
+                  setDuesSettlementModal((prev) => (prev ? { ...prev, saving: true } : null));
+                  const todayIso = new Date().toISOString().slice(0, 10);
+                  const receiptNo = `ADM-${Date.now().toString().slice(-6)}`;
+
+                  try {
+                    let patch: Partial<SchoolStudent> = {};
+                    if (type === "admission") {
+                      const curDue = Number(st.admissionDueBalance || 0);
+                      const applied = Math.min(curDue, payAmt);
+                      const rem = Math.max(0, curDue - applied);
+                      patch = {
+                        admissionDueBalance: rem,
+                        admissionPaidAmount: Number(st.admissionPaidAmount || 0) + applied,
+                        admissionBalanceHistory: [
+                          ...(st.admissionBalanceHistory || []),
+                          {
+                            date: todayIso,
+                            paidAmount: applied,
+                            remainingDue: rem,
+                            receiptNo,
+                            paymentMode: mode,
+                          },
+                        ],
+                      };
+                    } else {
+                      patch = {
+                        advanceMonthlyFeePaid: true,
+                        advanceMonthlyFeeDue: 0,
+                      };
+                    }
+
+                    await updateStudent(schoolId, st.id, patch);
+                    setStudents((prev) =>
+                      prev.map((item) => (item.id === st.id ? { ...item, ...patch } : item))
+                    );
+                    toast.success("भुगतान सफलतापूर्वक दर्ज किया गया!");
+                    setDuesSettlementModal(null);
+                  } catch (err) {
+                    console.error("Accountant settle due failed:", err);
+                    toast.error("भुगतान सहेजने में त्रुटि हुई।");
+                    setDuesSettlementModal((prev) => (prev ? { ...prev, saving: false } : null));
+                  }
+                };
+
+                return (
+                  <>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      {/* CARD 1: PENDING ADMISSION BALANCE */}
+                      <div className="rounded-2xl border border-rose-900/70 bg-rose-950/25 p-5 flex flex-col justify-between gap-3">
+                        <div className="flex items-start justify-between gap-3 border-b border-rose-900/50 pb-3">
+                          <div>
+                            <span className="text-[11px] font-bold uppercase tracking-wider text-rose-400">
+                              Pending Admission Balance
+                            </span>
+                            <h3 className="text-base font-black text-white mt-0.5">
+                              अधूरा एडमिशन शुल्क (Admission Arrears)
+                            </h3>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <p className="text-lg font-black font-mono tabular-nums text-rose-300">
+                              ₹{totalAdmissionDue.toLocaleString("en-IN")}
+                            </p>
+                            <p className="text-[11px] font-bold font-mono tabular-nums text-rose-400">
+                              {studentsWithAdmissionDues.length} Students
+                            </p>
+                          </div>
+                        </div>
+
+                        {studentsWithAdmissionDues.length === 0 ? (
+                          <div className="py-5 text-center text-xs font-semibold text-slate-400">
+                            सभी छात्रों का एडमिशन शुल्क पूर्ण जमा है।
+                          </div>
+                        ) : (
+                          <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                            {studentsWithAdmissionDues.slice(0, 12).map((st) => {
+                              const due = Number(st.admissionDueBalance || 0);
+                              return (
+                                <div
+                                  key={st.id}
+                                  className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-950/80 border border-rose-900/40"
+                                >
+                                  <div className="min-w-0">
+                                    <p className="text-xs font-black text-white truncate">{st.name}</p>
+                                    <p className="text-[11px] text-slate-400 truncate">
+                                      {getClassLabel(st.classId)} • Roll #{st.rollNo || "—"}
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    <span className="text-xs font-black font-mono tabular-nums text-rose-300 mr-1">
+                                      ₹{due.toLocaleString("en-IN")}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setDuesSettlementModal({
+                                          student: st,
+                                          type: "admission",
+                                          amount: String(due),
+                                          mode: "Cash",
+                                          saving: false,
+                                        })
+                                      }
+                                      className="px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-bold transition cursor-pointer"
+                                    >
+                                      💰 जमा करें
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        openWhatsAppReminder(st, "बकाया एडमिशन शुल्क", due)
+                                      }
+                                      className="px-2 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold transition cursor-pointer"
+                                      title="WhatsApp Reminder"
+                                    >
+                                      📲
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* CARD 2: 1-MONTH ADVANCE FEE UNPAID */}
+                      <div className="rounded-2xl border border-amber-900/70 bg-amber-950/25 p-5 flex flex-col justify-between gap-3">
+                        <div className="flex items-start justify-between gap-3 border-b border-amber-900/50 pb-3">
+                          <div>
+                            <span className="text-[11px] font-bold uppercase tracking-wider text-amber-400">
+                              Unpaid 1-Month Advance Fee
+                            </span>
+                            <h3 className="text-base font-black text-white mt-0.5">
+                              1-माह एडवांस फीस बकाया (Advance Tuition)
+                            </h3>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <p className="text-lg font-black font-mono tabular-nums text-amber-300">
+                              ₹{totalAdvanceDue.toLocaleString("en-IN")}
+                            </p>
+                            <p className="text-[11px] font-bold font-mono tabular-nums text-amber-400">
+                              {studentsWithAdvanceDues.length} Students
+                            </p>
+                          </div>
+                        </div>
+
+                        {studentsWithAdvanceDues.length === 0 ? (
+                          <div className="py-5 text-center text-xs font-semibold text-slate-400">
+                            सभी नए छात्रों की 1-माह एडवांस फीस जमा है।
+                          </div>
+                        ) : (
+                          <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                            {studentsWithAdvanceDues.slice(0, 12).map((st) => {
+                              const advDue = Number(st.advanceMonthlyFeeDue || st.monthlyFee || 0);
+                              return (
+                                <div
+                                  key={st.id}
+                                  className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-950/80 border border-amber-900/40"
+                                >
+                                  <div className="min-w-0">
+                                    <p className="text-xs font-black text-white truncate">{st.name}</p>
+                                    <p className="text-[11px] text-slate-400 truncate">
+                                      {getClassLabel(st.classId)} • Roll #{st.rollNo || "—"}
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    <span className="text-xs font-black font-mono tabular-nums text-amber-300 mr-1">
+                                      ₹{advDue.toLocaleString("en-IN")}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setDuesSettlementModal({
+                                          student: st,
+                                          type: "advance",
+                                          amount: String(advDue),
+                                          mode: "Cash",
+                                          saving: false,
+                                        })
+                                      }
+                                      className="px-2.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold transition cursor-pointer"
+                                    >
+                                      ⚡ जमा करें
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        openWhatsAppReminder(st, "1-माह एडवांस ट्यूशन फीस", advDue)
+                                      }
+                                      className="px-2 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold transition cursor-pointer"
+                                      title="WhatsApp Reminder"
+                                    >
+                                      📲
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* 1-TAP DUES SETTLEMENT MODAL */}
+                    {duesSettlementModal && (
+                      <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+                        <div className="w-full max-w-md rounded-2xl bg-slate-900 border border-slate-700 p-5 shadow-2xl space-y-4">
+                          <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                            <div>
+                              <h4 className="text-base font-black text-white">
+                                {duesSettlementModal.type === "admission"
+                                  ? "💰 अधूरा एडमिशन शुल्क जमा करें"
+                                  : "⚡ 1-माह एडवांस फीस जमा करें"}
+                              </h4>
+                              <p className="text-xs text-slate-400">
+                                {duesSettlementModal.student.name} ({getClassLabel(duesSettlementModal.student.classId)})
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setDuesSettlementModal(null)}
+                              className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 cursor-pointer"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+
+                          <div className="space-y-3">
+                            <div>
+                              <label className="block text-xs font-bold text-slate-300 mb-1">
+                                जमा राशि (Amount in ₹)
+                              </label>
+                              <input
+                                type="number"
+                                min={1}
+                                value={duesSettlementModal.amount}
+                                onChange={(e) =>
+                                  setDuesSettlementModal((prev) =>
+                                    prev ? { ...prev, amount: e.target.value } : null
+                                  )
+                                }
+                                className="w-full px-3 py-2 rounded-xl border border-slate-700 bg-slate-950 text-white font-mono tabular-nums font-bold text-sm"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-xs font-bold text-slate-300 mb-1">
+                                भुगतान माध्यम (Payment Mode)
+                              </label>
+                              <div className="grid grid-cols-3 gap-2">
+                                {(["Cash", "UPI", "Bank"] as const).map((m) => (
+                                  <button
+                                    key={m}
+                                    type="button"
+                                    onClick={() =>
+                                      setDuesSettlementModal((prev) =>
+                                        prev ? { ...prev, mode: m } : null
+                                      )
+                                    }
+                                    className={`py-2 rounded-xl text-xs font-bold border transition cursor-pointer ${
+                                      duesSettlementModal.mode === m
+                                        ? "bg-indigo-600 text-white border-indigo-600"
+                                        : "bg-slate-800 text-slate-300 border-slate-700"
+                                    }`}
+                                  >
+                                    {m}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+                            <button
+                              type="button"
+                              onClick={() => setDuesSettlementModal(null)}
+                              className="px-4 py-2 rounded-xl text-xs font-bold bg-slate-800 text-slate-300 cursor-pointer"
+                            >
+                              रद्द करें
+                            </button>
+                            <button
+                              type="button"
+                              disabled={duesSettlementModal.saving}
+                              onClick={handleSettleDue}
+                              className="px-4 py-2 rounded-xl text-xs font-black bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer disabled:opacity-50"
+                            >
+                              {duesSettlementModal.saving ? "सहेजा जा रहा है..." : "✓ भुगतान दर्ज करें"}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
 
               {/* ── URGENT ABSENTEE ALERT BANNER ──────────────────────────────── */}
               <div className="p-5 rounded-3xl bg-gradient-to-r from-rose-950/80 via-slate-900 to-amber-950/60 border border-rose-500/30 shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">

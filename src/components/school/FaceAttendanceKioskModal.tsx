@@ -23,6 +23,7 @@ import {
   getSchoolFaceDescriptors,
   saveFaceDescriptor,
   extractDescriptorFromCanvas,
+  enrollStudentFromPhotoUrl,
   playAttendanceSuccessChime,
   playCooldownTick,
   FaceDescriptorRecord,
@@ -30,6 +31,7 @@ import {
 } from "../../utils/faceRecognitionEngine";
 import { markStudentQrAttendance, todayStr } from "../../school-firebase";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
+import { speakNotification } from "../../utils/voiceNotifyEngine";
 import { hapticStrong, hapticMedium } from "../../utils/haptic";
 import { FaceEnrollmentModal } from "./FaceEnrollmentModal";
 
@@ -95,11 +97,13 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
   const [showManualSearch, setShowManualSearch] = useState<boolean>(false);
   const [showEnrollmentModal, setShowEnrollmentModal] = useState<boolean>(false);
   const [currentTimeStr, setCurrentTimeStr] = useState<string>("");
+  const [hasFaceInView, setHasFaceInView] = useState<boolean>(false);
 
   // Scan cooldown tracker: studentId -> timestamp
   const scanCooldownsRef = useRef<Map<string, number>>(new Map());
   const isProcessingRef = useRef<boolean>(false);
   const streamRef = useRef<MediaStream | null>(null);
+  const lastLiveDescriptorRef = useRef<number[] | null>(null);
 
   // Live Clock Ticker
   useEffect(() => {
@@ -119,18 +123,51 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
     return () => clearInterval(interval);
   }, []);
 
-  // Load Enrolled Descriptors from IndexedDB
+  // Load Enrolled Descriptors from IndexedDB & Auto-Enroll Roster
   const loadDescriptors = useCallback(async () => {
     setLoadingDescriptors(true);
     try {
-      const map = await getSchoolFaceDescriptors(schoolId);
+      let map = await getSchoolFaceDescriptors(schoolId);
       setEnrolledMap(map);
+
+      // Auto-enroll students who have real ID/admission photos in background
+      if (students && students.length > 0) {
+        const toEnroll = students.filter(
+          (st) => st && st.photoUrl && typeof st.photoUrl === "string" && st.photoUrl.trim() && !map[st.id]
+        );
+        if (toEnroll.length > 0) {
+          const enrolledRecords = await Promise.all(
+            toEnroll.slice(0, 60).map((st) =>
+              enrollStudentFromPhotoUrl({
+                id: st.id,
+                schoolId: schoolId || "default_school",
+                name: st.name,
+                rollNo: String(st.rollNo || ""),
+                classId: st.classId || classId,
+                className: st.className || className,
+                photoUrl: st.photoUrl,
+              })
+            )
+          );
+          const updatedMap = { ...map };
+          let anyAdded = false;
+          enrolledRecords.forEach((rec) => {
+            if (rec) {
+              updatedMap[rec.studentId] = rec;
+              anyAdded = true;
+            }
+          });
+          if (anyAdded) {
+            setEnrolledMap(updatedMap);
+          }
+        }
+      }
     } catch (e) {
       console.warn("Error loading face descriptors:", e);
     } finally {
       setLoadingDescriptors(false);
     }
-  }, [schoolId]);
+  }, [schoolId, students, classId, className]);
 
   useEffect(() => {
     if (isOpen) {
@@ -273,6 +310,14 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           url: `/?schoolPortal=1&studentId=${encodeURIComponent(match.studentId)}&schoolTab=attendance`
         }).catch(() => {});
 
+        // Speak Hindi Voice Confirmation
+        try {
+          speakNotification(
+            "हाजिरी",
+            `${match.name} की ${action === "out" ? "प्रस्थान" : "उपस्थिति"} दर्ज हुई।`
+          );
+        } catch {}
+
         if (onAttendanceUpdated) {
           onAttendanceUpdated();
         }
@@ -283,8 +328,24 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
     [schoolId, classId, className, teacherId, kioskScanMode, onAttendanceUpdated]
   );
 
-  // Manual Attendance Mark (Fallback)
+  // Manual Attendance Mark + Live Face Auto-Enrollment
   const handleManualMark = (st: any) => {
+    if (lastLiveDescriptorRef.current && lastLiveDescriptorRef.current.length === 128) {
+      const liveRec: FaceDescriptorRecord = {
+        studentId: st.id,
+        schoolId: schoolId || "default_school",
+        name: st.name,
+        rollNo: String(st.rollNo || ""),
+        classId: st.classId || classId,
+        className: st.className || className,
+        photoUrl: st.photoUrl,
+        descriptor: lastLiveDescriptorRef.current,
+        enrolledAt: new Date().toISOString(),
+        source: "live_kiosk",
+      };
+      void saveFaceDescriptor(liveRec);
+      setEnrolledMap((prev) => ({ ...prev, [st.id]: liveRec }));
+    }
     handleMarkAttendanceSuccess({
       studentId: st.id,
       name: st.name,
@@ -324,6 +385,8 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
 
           try {
             const detected = await detectFacesInFrame(video, enrolledMap);
+            setHasFaceInView(detected.length > 0);
+            lastLiveDescriptorRef.current = detected[0]?.descriptor || null;
 
             detected.forEach((face: DetectedFaceBox) => {
               const { x, y, width, height, matchedStudent } = face;
@@ -634,6 +697,46 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                   lastMatchedAlert.action === "out" ? "text-rose-400" : "text-emerald-400"
                 }`}
               />
+            </div>
+          </div>
+        )}
+        {/* Live 1-Tap Candidate Bar on Viewfinder */}
+        {students && students.length > 0 && (
+          <div className="absolute left-4 right-20 bottom-4 z-20 pointer-events-auto">
+            <div className="bg-slate-900/90 border border-slate-700/80 backdrop-blur-md rounded-2xl p-2.5 shadow-2xl flex items-center justify-between gap-2 flex-wrap sm:flex-nowrap">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${hasFaceInView ? "bg-emerald-400 animate-pulse" : "bg-amber-400"}`} />
+                <div className="min-w-0">
+                  <p className="text-[11px] font-black text-white truncate">
+                    {hasFaceInView ? "⚡ कैमरा में चेहरा सक्रिय (Face Detected)" : "📷 1-टैप हाजिरी (Quick Attendance)"}
+                  </p>
+                  <p className="text-[10px] text-slate-400 truncate">
+                    नाम पर टैप करके तुरंत हाजिरी लगाएं:
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 overflow-x-auto py-0.5 max-w-full sm:max-w-md">
+                {students.slice(0, 5).map((st) => (
+                  <button
+                    key={st.id}
+                    type="button"
+                    onClick={() => handleManualMark(st)}
+                    className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-bold text-xs shrink-0 flex items-center gap-1 shadow-sm transition cursor-pointer"
+                    title={`Mark ${st.name} attendance`}
+                  >
+                    <span>✓ {st.name.split(" ")[0]} (#{st.rollNo})</span>
+                  </button>
+                ))}
+                {students.length > 5 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowManualSearch(true)}
+                    className="px-2 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-[11px] shrink-0"
+                  >
+                    +{students.length - 5}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         )}

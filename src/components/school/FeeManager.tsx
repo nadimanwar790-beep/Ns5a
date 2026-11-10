@@ -367,6 +367,13 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
         });
       }
 
+      // Carry forward unpaid Admission Fee Balance as explicit arrears
+      const admDueBal = Number(student.admissionDueBalance || 0);
+      if (admDueBal > 0 && !existing?.paid) {
+        calculatedArrears += admDueBal;
+        unpaidMonthsSet.add("Admission Arrears (बकाया एडमिशन शुल्क)");
+      }
+
       const arrearsAmount = calculatedArrears;
       const arrearsMonths = Array.from(unpaidMonthsSet).sort();
 
@@ -386,7 +393,11 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       const annFee = includeAnnualCharges ? Number(struct?.annualCharges ?? 23320) : 0;
       const busRate = Number(student.busFee !== undefined ? student.busFee : (existing?.busFeeAmount !== undefined ? existing.busFeeAmount : (struct?.busFee !== undefined ? struct.busFee : 1000)));
       const busFee = includeBusFee ? busRate : 0;
-      const concession = Number(existing?.concession || 0);
+      const pctDisc = Number(student.siblingDiscountPct || 0) > 0
+        ? Math.round((monthlyAmount * Number(student.siblingDiscountPct)) / 100)
+        : 0;
+      const permanentStudentDiscount = Math.max(Number(student.siblingDiscountAmount || 0), pctDisc);
+      const concession = Number(existing?.concession ?? permanentStudentDiscount);
 
       const currentMonthHeadsTotal = Math.max(0, monthlyAmount + admFee + cauFee + annFee + busFee - concession);
 
@@ -601,14 +612,19 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     const paymentDay = dayParts.length >= 3 ? parseInt(dayParts[2], 10) : new Date().getDate();
     const isEarlyBird = paymentDay <= 10;
     const earlyDisc = isEarlyBird && baseMonthly > 0 ? Math.round(baseMonthly * 0.05) : 0;
+    const pctDisc = Number(student?.siblingDiscountPct || 0) > 0
+      ? Math.round((baseMonthly * Number(student?.siblingDiscountPct)) / 100)
+      : 0;
+    const permanentDisc = Math.max(Number(student?.siblingDiscountAmount || 0), pctDisc);
+    const baseConcession = Number(fee.concession ?? permanentDisc);
     const effectiveConcession = (fee.earlyDiscount && fee.earlyDiscount > 0)
-      ? fee.earlyDiscount
-      : (earlyDisc > 0 ? earlyDisc : Number(fee.concession || 0));
+      ? fee.earlyDiscount + permanentDisc
+      : (earlyDisc > 0 ? earlyDisc + permanentDisc : baseConcession);
     setCustomConcession(effectiveConcession > 0 ? String(effectiveConcession) : "");
 
-    // Auto calculate net payable: Old Arrears (no discount) + Discounted Current Tuition (5% off)
+    // Auto calculate net payable: Old Arrears (no discount) + Discounted Current Tuition
     const arrears = Number(fee.arrearsAmount || 0);
-    const autoNetPayable = arrears + Math.max(0, baseMonthly - earlyDisc);
+    const autoNetPayable = arrears + Math.max(0, baseMonthly - effectiveConcession);
 
     // Auto pre-fill with net payable (e.g. 300 arrears + 360 current = 660) if new collection, or prior paidAmount
     const initialPaid = fee.paid && Number(fee.paidAmount || 0) > 0
@@ -1021,6 +1037,26 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
         }
         if (customIncludeBusFee && Number(customBusFeeAmount) !== student.busFee) {
           studentPatch.busFee = Number(customBusFeeAmount);
+        }
+        // Clear or reduce carry-forward admission due balance when monthly fee payment is collected
+        const curAdmDue = Number(student.admissionDueBalance || 0);
+        if (curAdmDue > 0 && effectivePaid > 0) {
+          const clearedAdm = updatedFee.paid
+            ? curAdmDue
+            : Math.min(curAdmDue, effectivePaid);
+          const remainingAdm = Math.max(0, curAdmDue - clearedAdm);
+          studentPatch.admissionDueBalance = remainingAdm;
+          studentPatch.admissionPaidAmount = Number(student.admissionPaidAmount || 0) + clearedAdm;
+          studentPatch.admissionBalanceHistory = [
+            ...(student.admissionBalanceHistory || []),
+            {
+              date: paidDate,
+              paidAmount: clearedAdm,
+              remainingDue: remainingAdm,
+              receiptNo,
+              paymentMode: customPayMode || "Cash",
+            },
+          ];
         }
         if (Object.keys(studentPatch).length > 0) {
           try {
