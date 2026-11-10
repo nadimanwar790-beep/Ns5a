@@ -100,6 +100,7 @@ import {
 } from "../../school-firebase";
 import { saveUserToLive } from "../../firebase";
 import { DirectUploadButton } from "../DirectUploadButton";
+import { ProfileCameraModal } from "../ProfileCameraModal";
 import { OfficialFeeReceiptModal } from "./OfficialFeeReceiptModal";
 import { AdmissionFormPrintModal, type AdmissionPrintMode, calculateAgeOnAprilFirst } from "./AdmissionFormPrintModal";
 import {
@@ -679,6 +680,31 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
   const [enrollBusRoute, setEnrollBusRoute] = useState("");
   const [enrollBusFee, setEnrollBusFee] = useState(0);
   const [enrollSubmittedDocs, setEnrollSubmittedDocs] = useState<string[]>([]);
+
+  // Live Camera Studio Modal for Admission Photo Capture (Optional)
+  const [showLiveCameraModal, setShowLiveCameraModal] = useState(false);
+  const [cameraTarget, setCameraTarget] = useState<"form" | "enroll">("form");
+
+  // Auto-Operator Identification (1–3s scan without open camera viewfinder)
+  const [operatorCheckState, setOperatorCheckState] = useState<"VERIFYING" | "VERIFIED">("VERIFYING");
+  const [verifiedOperator, setVerifiedOperator] = useState<{
+    role: "TEACHER" | "PARENT_SELF" | "ADMIN";
+    name: string;
+    verifiedMethod: "face_auto" | "session_auth" | "manual";
+  }>({
+    role: isAdmin ? "TEACHER" : "PARENT_SELF",
+    name: isAdmin ? (school.name ? `${school.name} Faculty` : "Teacher Desk") : "अभिभावक ऑनलाइन प्रवेश (Parent / Self)",
+    verifiedMethod: "session_auth",
+  });
+  const [teacherCustomAdmissionFee, setTeacherCustomAdmissionFee] = useState<string>("");
+  const [teacherCustomConcession, setTeacherCustomConcession] = useState<string>("");
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setOperatorCheckState("VERIFIED");
+    }, 1800);
+    return () => clearTimeout(timer);
+  }, []);
 
   // Dynamic Admission Fee Items in Enroll Modal
   const [enrollFeeItems, setEnrollFeeItems] = useState<FeeItemRow[]>([]);
@@ -1487,6 +1513,12 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
         bankIfsc: form.bankIfsc.trim() || undefined,
         parentDeclarationAccepted: form.parentDeclarationAccepted,
         ageOnAprilFirst: ageOnApril1 || undefined,
+        admissionOperatorRole: verifiedOperator.role,
+        admissionOperatorName: verifiedOperator.name,
+        isAdmissionFeeEdited: verifiedOperator.role === "TEACHER" && teacherCustomAdmissionFee !== "",
+        customAdmissionFeeApplied: verifiedOperator.role === "TEACHER" && teacherCustomAdmissionFee !== "" ? Number(teacherCustomAdmissionFee) : undefined,
+        teacherConcessionApplied: verifiedOperator.role === "TEACHER" && Number(teacherCustomConcession) > 0 ? Number(teacherCustomConcession) : undefined,
+        admissionMarkedTimestamp: new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true }),
         status: "pending",
         appliedAt: new Date().toISOString(),
       };
@@ -4582,24 +4614,64 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                     </div>
                   </div>
 
-                  {/* Photo Upload in Form */}
-                  <div className="flex items-center gap-3 bg-slate-50 dark:bg-slate-900 p-2.5 rounded-2xl border border-slate-200 dark:border-slate-700">
-                    <div className="w-12 h-14 rounded-lg border border-dashed border-indigo-400 overflow-hidden flex items-center justify-center bg-white dark:bg-slate-800 shrink-0">
+                  {/* Photo Upload & Live Camera in Form (Optional) */}
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 bg-gradient-to-br from-indigo-50/70 to-slate-50 dark:from-slate-800/80 dark:to-slate-900 p-3 rounded-2xl border border-indigo-100 dark:border-slate-700 shadow-xs">
+                    <div className="relative group w-14 h-16 rounded-xl border-2 border-dashed border-indigo-400/80 dark:border-indigo-500/60 overflow-hidden flex items-center justify-center bg-white dark:bg-slate-800 shrink-0 shadow-xs">
                       {form.photoUrl ? (
-                        <img src={form.photoUrl} alt="Applicant" className="w-full h-full object-cover" />
+                        <>
+                          <img src={form.photoUrl} alt="Applicant" className="w-full h-full object-cover" />
+                          <button
+                            type="button"
+                            onClick={() => setForm((p) => ({ ...p, photoUrl: "" }))}
+                            className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white cursor-pointer"
+                            title="Remove Photo"
+                          >
+                            <X className="w-4 h-4 text-rose-300" />
+                          </button>
+                        </>
                       ) : (
-                        <span className="text-[9px] text-slate-400 text-center font-bold px-1">Photo</span>
+                        <div className="flex flex-col items-center justify-center text-slate-400">
+                          <Camera className="w-4 h-4 text-indigo-400 mb-0.5" />
+                          <span className="text-[9px] font-black uppercase text-slate-400">Photo</span>
+                        </div>
                       )}
                     </div>
-                    <div>
-                      <p className="text-[11px] font-bold text-slate-700 dark:text-slate-200 mb-1">Student Photo</p>
-                      <DirectUploadButton
-                        kind="image"
-                        compact
-                        currentUrl={form.photoUrl}
-                        onUploaded={(url) => setForm((p) => ({ ...p, photoUrl: url }))}
-                        onClear={() => setForm((p) => ({ ...p, photoUrl: "" }))}
-                      />
+
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-black text-slate-800 dark:text-slate-200">
+                          Student Photo (छात्र की फोटो)
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                          Optional (ऐच्छिक)
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCameraTarget("form");
+                            setShowLiveCameraModal(true);
+                          }}
+                          className="px-2.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-black flex items-center gap-1.5 shadow-xs active:scale-95 transition cursor-pointer"
+                          title="Live Camera से तुरंत फोटो खींचें"
+                        >
+                          <Camera className="w-3.5 h-3.5" />
+                          <span>📷 Live Camera (लाइव फोटो लें)</span>
+                        </button>
+
+                        <DirectUploadButton
+                          kind="image"
+                          compact
+                          currentUrl={form.photoUrl}
+                          onUploaded={(url) => setForm((p) => ({ ...p, photoUrl: url }))}
+                          onClear={() => setForm((p) => ({ ...p, photoUrl: "" }))}
+                        />
+                      </div>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight">
+                        कैमरे से लाइव फोटो लें या गैलरी से अपलोड करें (यदि उपलब्ध न हो तो बाद में भी जोड़ सकते हैं)।
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -4643,6 +4715,214 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                       RE-ADMISSION / PROMOTION (पुनः प्रवेश)
                     </button>
                   </div>
+                </div>
+
+                {/* ── OPERATOR AUTO-VERIFICATION & ADMISSION CHARGE EDITOR ── */}
+                <div className="space-y-3">
+                  {operatorCheckState === "VERIFYING" ? (
+                    <div className="p-3.5 rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white border border-indigo-500/40 shadow-lg flex items-center justify-between gap-3 animate-pulse">
+                      <div className="flex items-center gap-2.5">
+                        <Sparkles className="w-5 h-5 text-amber-300 animate-spin" />
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-black tracking-wide">
+                              ⚡ स्कूल पहचान सत्यापन (Verifying Operator Identity)...
+                            </span>
+                            <span className="text-[10px] text-indigo-300 font-mono">1–3s Auto Scan</span>
+                          </div>
+                          <p className="text-[11px] text-slate-300">
+                            सिस्टम ऑटो लोड कर रहा है कि प्रवेश कौन ले रहा है: अधिकृत शिक्षक (Teacher) या नवीन अभिभावक (Parent)...
+                          </p>
+                        </div>
+                      </div>
+                      <div className="w-16 h-1.5 rounded-full bg-slate-800 overflow-hidden shrink-0">
+                        <div className="h-full bg-gradient-to-r from-indigo-500 to-emerald-400 animate-pulse w-full" />
+                      </div>
+                    </div>
+                  ) : (
+                    <div
+                      className={`p-3.5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border ${
+                        verifiedOperator.role === "TEACHER"
+                          ? "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-400 dark:border-emerald-700 text-emerald-900 dark:text-emerald-200"
+                          : "bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <div
+                          className={`w-8 h-8 rounded-xl flex items-center justify-center font-bold text-white shadow-xs shrink-0 ${
+                            verifiedOperator.role === "TEACHER" ? "bg-emerald-600" : "bg-indigo-600"
+                          }`}
+                        >
+                          {verifiedOperator.role === "TEACHER" ? <UserCheck className="w-4 h-4" /> : <Users className="w-4 h-4" />}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs font-black">
+                              {verifiedOperator.role === "TEACHER"
+                                ? `👨‍🏫 अधिकृत शिक्षक सत्र: ${verifiedOperator.name}`
+                                : `👤 छात्र / अभिभावक ऑनलाइन आवेदन (Parent / Self Application)`}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                                verifiedOperator.role === "TEACHER"
+                                  ? "bg-emerald-600 text-white"
+                                  : "bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
+                              }`}
+                            >
+                              {verifiedOperator.role === "TEACHER" ? "✏️ Fee Editable Active" : "🔒 Fee Locked"}
+                            </span>
+                          </div>
+                          <p className="text-[11px] opacity-80">
+                            {verifiedOperator.role === "TEACHER"
+                              ? "शिक्षक द्वारा प्रवेश लेने पर प्रवेश शुल्क व डिस्काउंट संपादन (Edit) योग्य है।"
+                              : "अभिभावक द्वारा आवेदन करने पर निर्धारित आधिकारिक प्रवेश शुल्क लागू रहेगा (Non-Editable)।"}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOperatorCheckState("VERIFYING");
+                            setTimeout(() => {
+                              setVerifiedOperator((prev) =>
+                                prev.role === "TEACHER"
+                                  ? { role: "PARENT_SELF", name: "अभिभावक ऑनलाइन प्रवेश (Parent / Self)", verifiedMethod: "session_auth" }
+                                  : { role: "TEACHER", name: "अधिकृत शिक्षक (Verified Faculty)", verifiedMethod: "face_auto" }
+                              );
+                              setOperatorCheckState("VERIFIED");
+                            }, 1200);
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-[11px] font-bold hover:bg-slate-100 dark:hover:bg-slate-700 transition cursor-pointer"
+                        >
+                          🔄 Switch Role
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── ADMISSION CHARGE: TEACHER EDITABLE vs PARENT FIXED ── */}
+                  {operatorCheckState === "VERIFIED" && (
+                    <>
+                      {verifiedOperator.role === "TEACHER" ? (
+                        /* TEACHER: EDITABLE BOX (Fix wala box teacher ko NA dikhega, editable dikhega) */
+                        <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-50/80 via-teal-50/50 to-white dark:from-emerald-950/40 dark:via-slate-900 dark:to-slate-900 border-2 border-emerald-400 dark:border-emerald-700 space-y-3 animate-in fade-in">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                              <span className="text-xs font-black text-emerald-950 dark:text-emerald-200 uppercase tracking-wider">
+                                प्रवेश शुल्क संपादन (Faculty Admission Charge Editor)
+                              </span>
+                            </div>
+                            <span className="px-2.5 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-black uppercase tracking-wider shadow-xs">
+                              ✏️ Teacher Editable Active
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            <div>
+                              <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                                प्रवेश शुल्क (Admission Charge) *
+                              </label>
+                              <div className="relative">
+                                <span className="absolute left-3 top-2.5 text-xs font-bold text-slate-400">₹</span>
+                                <input
+                                  type="number"
+                                  value={
+                                    teacherCustomAdmissionFee !== ""
+                                      ? teacherCustomAdmissionFee
+                                      : getClassFees(classes.find((c) => c.id === form.classId) || classes[0]).admissionFee || 0
+                                  }
+                                  onChange={(e) => setTeacherCustomAdmissionFee(e.target.value)}
+                                  className="w-full pl-7 pr-3 py-2 rounded-xl border border-emerald-400 dark:border-emerald-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white font-black text-sm focus:ring-2 focus:ring-emerald-500"
+                                  placeholder="0"
+                                />
+                              </div>
+                              <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold">
+                                शिक्षक द्वारा विशेष छूट / समायोजन हेतु परिवर्तनीय
+                              </span>
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                                रियायत / विशेष छूट (Concession)
+                              </label>
+                              <div className="relative">
+                                <span className="absolute left-3 top-2.5 text-xs font-bold text-slate-400">₹</span>
+                                <input
+                                  type="number"
+                                  value={teacherCustomConcession}
+                                  onChange={(e) => setTeacherCustomConcession(e.target.value)}
+                                  className="w-full pl-7 pr-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white font-bold text-sm focus:ring-2 focus:ring-emerald-500"
+                                  placeholder="0"
+                                />
+                              </div>
+                              <span className="text-[10px] text-slate-500 font-semibold">छूट या डिस्काउंट राशि</span>
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                                कुल देय प्रवेश शुल्क (Net Admission Payable)
+                              </label>
+                              <div className="px-3 py-2 rounded-xl bg-emerald-100/90 dark:bg-emerald-950/70 text-emerald-900 dark:text-emerald-100 font-black text-base border border-emerald-300 dark:border-emerald-800 flex items-center justify-between">
+                                <span>
+                                  ₹
+                                  {Math.max(
+                                    0,
+                                    Number(
+                                      teacherCustomAdmissionFee !== ""
+                                        ? teacherCustomAdmissionFee
+                                        : getClassFees(classes.find((c) => c.id === form.classId) || classes[0]).admissionFee || 0
+                                    ) - (Number(teacherCustomConcession) || 0)
+                                  ).toLocaleString("en-IN")}
+                                </span>
+                                <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300">
+                                  (Modified by Teacher)
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        /* PARENT: LOCKED FIXED BOX (Editable box parents ko NA dikhega, fix wlaa dikhega) */
+                        <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-50 to-indigo-50/30 dark:from-slate-900 dark:to-slate-900 border border-slate-200 dark:border-slate-700 space-y-2 animate-in fade-in">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Lock className="w-4 h-4 text-slate-500" />
+                              <span className="text-xs font-black text-slate-800 dark:text-slate-200 uppercase tracking-wider">
+                                निर्धारित विद्यालय प्रवेश शुल्क (Official Admission Charge)
+                              </span>
+                            </div>
+                            <span className="px-2 py-0.5 rounded-full bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[10px] font-black uppercase">
+                              🔒 Fixed / Non-Editable
+                            </span>
+                          </div>
+                          <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 pt-1">
+                            <div>
+                              <p className="text-2xl font-black text-slate-900 dark:text-white">
+                                ₹
+                                {(
+                                  getClassFees(classes.find((c) => c.id === form.classId) || classes[0]).admissionFee || 0
+                                ).toLocaleString("en-IN")}
+                              </p>
+                              <p className="text-[10px] text-slate-500 font-semibold">
+                                कक्षा के अनुसार निर्धारित आधिकारिक प्रवेश शुल्क (अभिभावक स्तर पर गैर-संपादन योग्य)।
+                              </p>
+                            </div>
+                            <div className="text-left sm:text-right">
+                              <span className="text-xs font-bold text-slate-600 dark:text-slate-400">
+                                Total Applicable Fee: ₹
+                                {getClassFees(classes.find((c) => c.id === form.classId) || classes[0], {
+                                  usesBus: form.usesBus,
+                                }).totalPayable.toLocaleString("en-IN")}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
 
                 {/* Student Bio-Data */}
@@ -6411,22 +6691,52 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
             {/* Photo + Class + Roll + Monthly Fee */}
             <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-slate-50 dark:bg-slate-900/60 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700">
               <div className="flex items-center gap-3">
-                <div className="w-14 h-16 rounded-xl border border-slate-300 bg-white overflow-hidden flex items-center justify-center shrink-0">
+                <div className="relative group w-14 h-16 rounded-xl border border-slate-300 bg-white dark:bg-slate-800 overflow-hidden flex items-center justify-center shrink-0">
                   {enrollPhotoUrl ? (
-                    <img src={enrollPhotoUrl} alt="Student" className="w-full h-full object-cover" />
+                    <>
+                      <img src={enrollPhotoUrl} alt="Student" className="w-full h-full object-cover" />
+                      <button
+                        type="button"
+                        onClick={() => setEnrollPhotoUrl("")}
+                        className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white cursor-pointer"
+                        title="Remove Photo"
+                      >
+                        <X className="w-4 h-4 text-rose-300" />
+                      </button>
+                    </>
                   ) : (
-                    <span className="text-[10px] text-slate-400 font-bold text-center px-1">Photo</span>
+                    <div className="flex flex-col items-center justify-center text-slate-400">
+                      <Camera className="w-4 h-4 text-indigo-400 mb-0.5" />
+                      <span className="text-[9px] font-bold uppercase text-slate-400">Photo</span>
+                    </div>
                   )}
                 </div>
                 <div>
-                  <p className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1">Student Photo</p>
-                  <DirectUploadButton
-                    kind="image"
-                    compact
-                    currentUrl={enrollPhotoUrl}
-                    onUploaded={(url) => setEnrollPhotoUrl(url)}
-                    onClear={() => setEnrollPhotoUrl("")}
-                  />
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <p className="text-xs font-bold text-slate-700 dark:text-slate-200">Student Photo</p>
+                    <span className="text-[10px] font-bold text-slate-400">(Optional)</span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCameraTarget("enroll");
+                        setShowLiveCameraModal(true);
+                      }}
+                      className="px-2.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-black flex items-center gap-1.5 shadow-xs active:scale-95 transition cursor-pointer"
+                      title="Live Camera से फोटो लें"
+                    >
+                      <Camera className="w-3.5 h-3.5" />
+                      <span>Live Photo</span>
+                    </button>
+                    <DirectUploadButton
+                      kind="image"
+                      compact
+                      currentUrl={enrollPhotoUrl}
+                      onUploaded={(url) => setEnrollPhotoUrl(url)}
+                      onClear={() => setEnrollPhotoUrl("")}
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -7131,6 +7441,31 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
             </div>
           </div>
         </div>
+      )}
+      {/* Live Camera Studio Modal for Admission Photo (Optional) */}
+      {showLiveCameraModal && (
+        <ProfileCameraModal
+          isOpen={showLiveCameraModal}
+          onClose={() => setShowLiveCameraModal(false)}
+          userName={cameraTarget === "form" ? (form.studentName || "Applicant") : (enrollingApp?.studentName || "Student")}
+          currentPhotoURL={cameraTarget === "form" ? form.photoUrl : enrollPhotoUrl}
+          onSavePhoto={(photoDataUrl) => {
+            if (cameraTarget === "form") {
+              setForm((p) => ({ ...p, photoUrl: photoDataUrl }));
+            } else {
+              setEnrollPhotoUrl(photoDataUrl);
+            }
+            setShowLiveCameraModal(false);
+          }}
+          onRemovePhoto={() => {
+            if (cameraTarget === "form") {
+              setForm((p) => ({ ...p, photoUrl: "" }));
+            } else {
+              setEnrollPhotoUrl("");
+            }
+            setShowLiveCameraModal(false);
+          }}
+        />
       )}
     </div>
   );

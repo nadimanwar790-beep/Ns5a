@@ -139,9 +139,12 @@ export default defineConfig(async ({ command }) => {
         onwarn(warning, defaultHandler) {
           if (
             warning.code === 'MODULE_LEVEL_DIRECTIVE' ||
+            warning.code === 'CIRCULAR_DEPENDENCY' ||
             (typeof warning.message === 'string' &&
               (warning.message.includes('Module level directives cause errors when bundled') ||
-                warning.message.includes('"use client"')))
+                warning.message.includes('"use client"') ||
+                (warning.message.includes('is dynamically imported by') &&
+                  warning.message.includes('statically imported by'))))
           ) {
             return;
           }

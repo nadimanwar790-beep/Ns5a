@@ -1,3 +1,6 @@
+import { rtdb } from "../firebase";
+import { ref, set } from "firebase/database";
+
 export interface LinkedStudentPushPayload {
   id: string;
   schoolId: string;
@@ -189,8 +192,6 @@ export async function sendSchoolPushNotification(payload: {
 }): Promise<{ delivered: number; matchedDevices: number }> {
   // 1. Dual-write to RTDB for instantaneous in-app wake up & chime
   try {
-    const { rtdb } = await import("../firebase");
-    const { ref, set } = await import("firebase/database");
     if (rtdb) {
       const timestamp = Date.now();
       const notifId = `school_notif_${timestamp}_${Math.random().toString(36).slice(2, 7)}`;

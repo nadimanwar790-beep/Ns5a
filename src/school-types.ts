@@ -194,7 +194,51 @@ export interface School {
   lockCodeActive?: boolean;
   // School-level lock — set by super admin, blocks all students from logging in
   locked?: boolean;
+  // Live GPS School Location & Geofence
+  latitude?: number;
+  longitude?: number;
+  locationRadiusMeters?: number; // e.g. 200m or 500m geofence radius
+  locationAddress?: string; // Campus landmark/address
+  geoFenceEnabled?: boolean; // Geofence verification on punch
+  locationUpdatedAt?: string;
 }
+
+export interface AdminAttendanceRecord {
+  schoolId: string;
+  adminId: string;
+  adminName: string;
+  date: string;
+  inTime?: string;
+  outTime?: string;
+  present: boolean;
+  stayDuration?: string;
+  locationStatus?: "inside_campus" | "outside_campus" | "gps_disabled" | "verified";
+  distanceMeters?: number;
+  latitude?: number;
+  longitude?: number;
+  notes?: string;
+  updatedAt: string;
+}
+
+export interface StaffDailyAttendanceEntry {
+  id: string;
+  name: string;
+  role: "TEACHER" | "ACCOUNTANT" | "STAFF" | "ADMIN";
+  employeeId?: string;
+  inTime?: string;
+  outTime?: string;
+  stayDuration?: string;
+  present: boolean;
+  status: "present" | "absent" | "late" | "half_day" | "leave";
+  locationStatus?: string;
+}
+
+export interface StaffDailyAttendanceRecord {
+  schoolId: string;
+  date: string;
+  records: Record<string, StaffDailyAttendanceEntry>;
+}
+
 
 export interface SchoolSession {
   id: string;
@@ -1475,6 +1519,51 @@ export interface StoreSaleRecord {
   paymentMode: 'cash' | 'online_upi' | 'card';
   date: string;
   soldBy: string;
+}
+
+export interface StoreReservationBooking {
+  id: string; // e.g. "ORD-24H-8921"
+  schoolId: string;
+  studentId: string;
+  studentName: string;
+  className?: string;
+  rollNo?: string;
+  phone?: string;
+  items: {
+    itemId: string;
+    itemName: string;
+    category?: string;
+    sizeOrVariant?: string;
+    quantity: number;
+    unitPrice: number;
+    subtotal: number;
+  }[];
+  totalAmount: number;
+  bookedAt: string; // ISO string
+  expiresAt: string; // ISO string (+24 hours)
+  status: 'reserved' | 'collected' | 'expired' | 'cancelled';
+  collectedAt?: string;
+  collectedBy?: string;
+  notes?: string;
+}
+
+export interface BusLiveLocation {
+  busId: string;
+  busNumber: string;
+  route: string;
+  driverName: string;
+  driverPhone: string;
+  latitude: number;
+  longitude: number;
+  speed: number; // km/h
+  heading?: number;
+  accuracy?: number;
+  tripStatus: 'idle' | 'started' | 'ended';
+  tripType: 'morning_pickup' | 'afternoon_drop' | 'special';
+  lastUpdated: string;
+  currentStop?: string;
+  totalStops?: number;
+  completedStops?: string[];
 }
 
 // ── 6. NSTA MESSENGER SUITE (WhatsApp-Style 3-Screen Architecture) ──

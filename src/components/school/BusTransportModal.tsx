@@ -7,6 +7,8 @@ import {
 } from "lucide-react";
 import type { SchoolClass, SchoolStudent } from "../../school-types";
 import { updateClassFeeStructure, updateStudent } from "../../school-firebase";
+import { AdminBusFleetRadar } from "./AdminBusFleetRadar";
+import { DriverTripConsole } from "./DriverTripConsole";
 
 interface Props {
   isOpen: boolean;
@@ -41,6 +43,7 @@ export const BusTransportModal: React.FC<Props> = ({
 
   // Local student bus state map: { [studentId]: { usesBus: boolean, busRoute: string, busFee: number } }
   const [studentBusMap, setStudentBusMap] = useState<Record<string, { usesBus: boolean; busRoute: string; busFee: number }>>({});
+  const [activeViewTab, setActiveViewTab] = useState<"students" | "live_radar" | "driver_console">("students");
   const [searchQuery, setSearchQuery] = useState("");
   const [saving, setSaving] = useState(false);
   const [successMsg, setSuccessMsg] = useState("");
@@ -233,14 +236,72 @@ export const BusTransportModal: React.FC<Props> = ({
           </button>
         </div>
 
+        {/* View Switcher Tabs */}
+        <div className="bg-slate-100 dark:bg-slate-950 px-4 py-2 border-b border-slate-200 dark:border-slate-800 flex items-center gap-2 overflow-x-auto">
+          <button
+            type="button"
+            onClick={() => setActiveViewTab("students")}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+              activeViewTab === "students"
+                ? "bg-teal-700 text-white shadow-sm"
+                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+            }`}
+          >
+            <Users size={14} /> 1. Student Bus Roster (विद्यार्थी सूची)
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveViewTab("live_radar")}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+              activeViewTab === "live_radar"
+                ? "bg-amber-600 text-white shadow-sm"
+                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+            }`}
+          >
+            <MapPin size={14} /> 2. Live Bus GPS Radar (लाइव बस ट्रैकर)
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveViewTab("driver_console")}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+              activeViewTab === "driver_console"
+                ? "bg-emerald-600 text-white shadow-sm"
+                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+            }`}
+          >
+            <Bus size={14} /> 3. Driver Mobile Console (ड्राइवर मोड)
+          </button>
+        </div>
+
+        {activeViewTab === "live_radar" && (
+          <div className="p-4 flex-1 overflow-y-auto">
+            <AdminBusFleetRadar
+              school={{ id: schoolId, name: "Institutional Campus" } as any}
+              onOpenDriverConsole={() => setActiveViewTab("driver_console")}
+            />
+          </div>
+        )}
+
+        {activeViewTab === "driver_console" && (
+          <div className="flex-1 overflow-y-auto">
+            <DriverTripConsole
+              school={{ id: schoolId, name: "Institutional Campus" } as any}
+              onBack={() => setActiveViewTab("live_radar")}
+            />
+          </div>
+        )}
+
         {/* Content Body */}
-        <div className="p-5 flex-1 overflow-y-auto space-y-4">
-          {successMsg && (
-            <div className="p-3 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-700 rounded-xl text-xs font-bold text-emerald-800 dark:text-emerald-200 flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>{successMsg}</span>
-            </div>
-          )}
+        {activeViewTab === "students" && (
+          <div className="p-5 flex-1 overflow-y-auto space-y-4">
+            {successMsg && (
+              <div className="p-3 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-700 rounded-xl text-xs font-bold text-emerald-800 dark:text-emerald-200 flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{successMsg}</span>
+              </div>
+            )}
 
           {/* Section 1: Class Selector & Class Bus Fee Setting */}
           <div className="p-4 rounded-2xl bg-teal-50/60 dark:bg-teal-950/20 border border-teal-200 dark:border-teal-800 space-y-3">
@@ -432,27 +493,30 @@ export const BusTransportModal: React.FC<Props> = ({
             </div>
           </div>
         </div>
+      )}
 
-        {/* Footer Actions */}
-        <div className="p-4 bg-slate-50 dark:bg-slate-800/80 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 shrink-0">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 cursor-pointer"
-          >
-            Cancel
-          </button>
+        {/* Footer Actions (Only for students bus roster tab) */}
+        {activeViewTab === "students" && (
+          <div className="p-4 bg-slate-50 dark:bg-slate-800/80 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 shrink-0">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 cursor-pointer"
+            >
+              Cancel
+            </button>
 
-          <button
-            type="button"
-            onClick={handleSaveAll}
-            disabled={saving}
-            className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 disabled:opacity-50 text-white text-xs font-black shadow-md shadow-teal-700/20 flex items-center gap-2 cursor-pointer transition active:scale-95"
-          >
-            <Save className="w-4 h-4" />
-            <span>{saving ? "Saving Changes..." : "✓ Save Bus Settings & Apply to Fee Slip"}</span>
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={handleSaveAll}
+              disabled={saving}
+              className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 disabled:opacity-50 text-white text-xs font-black shadow-md shadow-teal-700/20 flex items-center gap-2 cursor-pointer transition active:scale-95"
+            >
+              <Save className="w-4 h-4" />
+              <span>{saving ? "Saving Changes..." : "✓ Save Bus Settings & Apply to Fee Slip"}</span>
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -76,6 +76,11 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
   const [showBusModal, setShowBusModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [duesFilter, setDuesFilter] = useState<string>("all");
+  const [feePage, setFeePage] = useState<number>(1);
+
+  React.useEffect(() => {
+    setFeePage(1);
+  }, [searchQuery, duesFilter, classId]);
   const [dpsReceiptFee, setDpsReceiptFee] = useState<MonthlyFee | null>(null);
   const [dpsModalFormat, setDpsModalFormat] = useState<"a6" | "pos">("pos");
   const [selectedStudentForModal, setSelectedStudentForModal] = useState<SchoolStudent | null>(null);
@@ -211,16 +216,16 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     if (!isSilent) setLoading(true);
     setFeeError(null);
     const [fetchedStudents, allFeeData, schoolClasses, feeHistory] = await Promise.all([
-      getStudents(schoolId, classId, className),
-      getMonthlyFees(schoolId, month, classId),
+      getStudents(schoolId, classId, className, sessionId),
+      getMonthlyFees(schoolId, month, classId, sessionId),
       getClasses(schoolId, sessionId),
-      getSchoolFeeHistory(schoolId),
+      getSchoolFeeHistory(schoolId, sessionId),
     ]);
 
     let allStudents = fetchedStudents || [];
     if (allStudents.length === 0 && classId) {
       // Fallback: fetch all school students and filter with isStudentInClass
-      const allSchoolStudents = await getStudents(schoolId);
+      const allSchoolStudents = await getStudents(schoolId, undefined, undefined, sessionId);
       allStudents = allSchoolStudents.filter(s => isStudentInClass(s, classId, className));
     }
 
@@ -263,12 +268,33 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       return Math.max(0, total - paid);
     };
 
+    // Pre-index history by studentId: Map<studentId, Map<month, MonthlyFee>>
+    // and legacy unpaid fees for 0ms instantaneous O(1) lookups
+    const studentHistoryByMonth = new Map<string, Map<string, MonthlyFee>>();
+    const studentLegacyMap = new Map<string, MonthlyFee[]>();
+    history.forEach(h => {
+      if (!h.studentId) return;
+      let monthMap = studentHistoryByMonth.get(h.studentId);
+      if (!monthMap) {
+        monthMap = new Map<string, MonthlyFee>();
+        studentHistoryByMonth.set(h.studentId, monthMap);
+      }
+      if (h.month) {
+        monthMap.set(h.month, h);
+      }
+    });
+
+    const classLookupMap = new Map<string, SchoolClass>();
+    schoolClasses.forEach(c => classLookupMap.set(c.id, c));
+
     // Create fee records for students without one
     const feeMap = new Map(feeData.map(f => [f.studentId, f]));
     const allFees: MonthlyFee[] = sts.map(student => {
       const existing = feeMap.get(student.id);
 
-      const targetClass = schoolClasses.find((c: SchoolClass) => c.id === student.classId || isStudentInClass(student, c.id, c.name)) || schoolClasses.find(c => c.id === classId) || rawClasses[0];
+      const targetClass = classLookupMap.get(student.classId || "") ||
+        schoolClasses.find((c: SchoolClass) => isStudentInClass(student, c.id, c.name)) ||
+        classLookupMap.get(classId || "") || rawClasses[0];
       const struct = targetClass?.feeStructure;
       const defaultTuition = Number(student.monthlyFee || struct?.tuitionFee || 2000);
       const studentBusRate = student.usesBus ? Number(student.busFee !== undefined ? student.busFee : (struct?.busFee !== undefined ? struct.busFee : 1000)) : 0;
@@ -306,12 +332,13 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
         if (priorSessionMonths.length > 24) break;
       }
 
-      // Check each prior month in running session
+      // Check each prior month in running session using O(1) map
       let calculatedArrears = 0;
       const unpaidMonthsSet = new Set<string>();
+      const studentMonthMap = studentHistoryByMonth.get(student.id);
 
       priorSessionMonths.forEach(pMonth => {
-        const histFee = history.find(h => h.studentId === student.id && h.month === pMonth);
+        const histFee = studentMonthMap?.get(pMonth);
         if (histFee) {
           if (histFee.paid && (!histFee.balanceDue || histFee.balanceDue === 0)) {
             // Paid, no arrears
@@ -330,12 +357,15 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
         }
       });
 
-      // Also include any legacy unpaid fees strictly prior to studentStartMonth
-      const legacyUnpaid = history.filter(h => h.studentId === student.id && h.month < studentStartMonth && getUnpaidDue(h) > 0);
-      legacyUnpaid.forEach(lf => {
-        calculatedArrears += getUnpaidDue(lf);
-        unpaidMonthsSet.add(lf.month);
-      });
+      // Also include any legacy unpaid fees strictly prior to studentStartMonth from studentMonthMap
+      if (studentMonthMap) {
+        studentMonthMap.forEach((lf, mKey) => {
+          if (mKey < studentStartMonth && getUnpaidDue(lf) > 0) {
+            calculatedArrears += getUnpaidDue(lf);
+            unpaidMonthsSet.add(lf.month);
+          }
+        });
+      }
 
       const arrearsAmount = calculatedArrears;
       const arrearsMonths = Array.from(unpaidMonthsSet).sort();
@@ -1093,11 +1123,14 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
   };
 
+  const studentByIdMap = React.useMemo(() => new Map(students.map(s => [s.id, s])), [students]);
+  const classByIdMap = React.useMemo(() => new Map(rawClasses.map(c => [c.id, c])), [rawClasses]);
+
   const paidFees = fees.filter(f => f.paid && (!f.balanceDue || f.balanceDue === 0));
   const partialFees = fees.filter(f => (Number(f.paidAmount || 0) > 0 && Number(f.balanceDue || 0) > 0) || (!f.paid && Number(f.paidAmount || 0) > 0));
   const unpaidFees = fees.filter(f => !f.paid || (f.balanceDue !== undefined && f.balanceDue > 0));
   const busFees = fees.filter(f => {
-    const s = students.find(item => item.id === f.studentId);
+    const s = studentByIdMap.get(f.studentId);
     return Boolean(f.includeBusFee || s?.usesBus);
   });
   const totalAmount = fees.reduce((sum, f) => sum + (f.amount || 0), 0);
@@ -1107,7 +1140,7 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
   const filteredFees = fees.filter(f => {
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
-      const s = students.find(item => item.id === f.studentId);
+      const s = studentByIdMap.get(f.studentId);
       const nameMatch = (f.studentName || "").toLowerCase().includes(q);
       const rollMatch = (f.rollNo || "").toLowerCase().includes(q);
       const admMatch = (s?.admissionNo || "").toLowerCase().includes(q);
@@ -1118,7 +1151,7 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     if (duesFilter === "partial") return (Number(f.paidAmount || 0) > 0 && Number(f.balanceDue || 0) > 0) || (!f.paid && Number(f.paidAmount || 0) > 0);
     if (duesFilter === "unpaid") return !f.paid || (f.balanceDue !== undefined && f.balanceDue > 0);
     if (duesFilter === "bus") {
-      const s = students.find(item => item.id === f.studentId);
+      const s = studentByIdMap.get(f.studentId);
       return Boolean(f.includeBusFee || s?.usesBus);
     }
     if (duesFilter === "due3") return !f.paid && (f.arrearsMonths?.length || 0) >= 3;
@@ -1126,6 +1159,14 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     if (duesFilter === "due8") return !f.paid && (f.arrearsMonths?.length || 0) >= 8;
     return true;
   });
+
+  const feePageSize = 50;
+  const totalFeePages = Math.max(1, Math.ceil(filteredFees.length / feePageSize));
+  const currentFeePage = Math.min(feePage, totalFeePages);
+  const paginatedFees = React.useMemo(() => {
+    const start = (currentFeePage - 1) * feePageSize;
+    return filteredFees.slice(start, start + feePageSize);
+  }, [filteredFees, currentFeePage, feePageSize]);
 
   const toggleReceiptSelection = (studentId: string) => {
     setSelectedReceiptIds(current => current.includes(studentId)
@@ -2452,10 +2493,10 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
           </div>
 
           <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm overflow-hidden border border-slate-200 dark:border-slate-700">
-            {filteredFees.map((fee, idx) => {
-              const student = students.find(s => s.id === fee.studentId);
+            {paginatedFees.map((fee, idx) => {
+              const student = studentByIdMap.get(fee.studentId) || students.find(s => s.id === fee.studentId);
               const isBusActive = Boolean(fee.includeBusFee || student?.usesBus);
-              const targetClass = rawClasses.find(c => c.id === fee.classId);
+              const targetClass = classByIdMap.get(fee.classId) || rawClasses.find(c => c.id === fee.classId);
               const busRate = Number(student?.busFee || fee.busFeeAmount || targetClass?.feeStructure?.busFee || 1000);
               const totalFee = Number(fee.amount || fee.monthlyAmount || 0);
               const isFullPaid = Boolean(fee.paid && (!fee.balanceDue || fee.balanceDue === 0));
@@ -2737,13 +2778,45 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                 </div>
               );
             })}
-            {fees.length === 0 && (
+            {filteredFees.length === 0 && (
               <div className="text-center py-12 text-slate-400">
                 <Users className="w-10 h-10 mx-auto mb-2 opacity-30" />
                 <p>No students found</p>
               </div>
             )}
           </div>
+
+          {/* Fee Manager Pagination Controls */}
+          {totalFeePages > 1 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 text-xs">
+              <span className="text-slate-500 font-medium">
+                Showing <strong className="text-slate-800 dark:text-white tabular-nums font-mono">{(currentFeePage - 1) * feePageSize + 1}</strong> to <strong className="text-slate-800 dark:text-white tabular-nums font-mono">{Math.min(currentFeePage * feePageSize, filteredFees.length)}</strong> of <strong className="text-slate-800 dark:text-white tabular-nums font-mono">{filteredFees.length}</strong> students
+              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={currentFeePage <= 1}
+                  onClick={() => setFeePage(p => Math.max(1, p - 1))}
+                  className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 font-semibold text-slate-700 dark:text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50 dark:hover:bg-slate-700/60 transition cursor-pointer"
+                >
+                  Previous
+                </button>
+                <div className="flex items-center gap-1 px-2 font-mono font-bold text-slate-600 dark:text-slate-300">
+                  <span className="tabular-nums text-blue-600 dark:text-blue-400">{currentFeePage}</span>
+                  <span>/</span>
+                  <span className="tabular-nums">{totalFeePages}</span>
+                </div>
+                <button
+                  type="button"
+                  disabled={currentFeePage >= totalFeePages}
+                  onClick={() => setFeePage(p => Math.min(totalFeePages, p + 1))}
+                  className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 font-semibold text-slate-700 dark:text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50 dark:hover:bg-slate-700/60 transition cursor-pointer"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
           </>
         )}
 

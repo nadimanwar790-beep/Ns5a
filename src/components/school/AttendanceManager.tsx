@@ -15,6 +15,7 @@ import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 import { QrAttendanceScannerModal } from "./QrAttendanceScannerModal";
 import { ClassQrCodeModal } from "./ClassQrCodeModal";
 import { StudentQuickActionModal } from "./StudentQuickActionModal";
+import { FaceAttendanceKioskModal } from "./FaceAttendanceKioskModal";
 
 interface Props {
   schoolId: string;
@@ -35,6 +36,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
   const [monthlyData, setMonthlyData] = useState<AttendanceRecord[]>([]);
   const [selectedMonth, setSelectedMonth] = useState(currentMonthStr());
   const [loading, setLoading] = useState(true);
+  const [showFaceKiosk, setShowFaceKiosk] = useState(false);
   const [showQrScanner, setShowQrScanner] = useState(false);
   const [selectedStudentForModal, setSelectedStudentForModal] = useState<SchoolStudent | null>(null);
   const [modalInitialTab, setModalInitialTab] = useState<"id_card" | "fees" | "attendance">("attendance");
@@ -509,22 +511,30 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
             </div>
           )}
 
-          {/* QR Code Quick Actions */}
-          <div className="grid grid-cols-2 gap-2">
+          {/* Smart Attendance Actions: AI Face Kiosk, Camera QR, and Class QR */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <button
+              type="button"
+              onClick={() => setShowFaceKiosk(true)}
+              className="py-2.5 px-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-95 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/20 transition cursor-pointer"
+            >
+              <Sparkles size={15} className="text-amber-300" />
+              <span>✨ AI Face Kiosk (फेस अटेंडेंस)</span>
+            </button>
             <button
               type="button"
               onClick={() => setShowQrScanner(true)}
               className="py-2.5 px-3 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/20 transition cursor-pointer"
             >
               <Camera size={15} />
-              <span>📷 Camera / 🖼️ Media QR Scan</span>
+              <span>📷 Camera / Media QR Scan</span>
             </button>
             <button
               type="button"
               onClick={() => setShowClassQrModal(true)}
-              className="py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/20 transition cursor-pointer"
+              className="py-2.5 px-3 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 border border-slate-700 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition cursor-pointer"
             >
-              <QrCode size={15} />
+              <QrCode size={15} className="text-emerald-400" />
               <span>📱 Class Attendance QR</span>
             </button>
           </div>
@@ -1266,6 +1276,30 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
           </button>
         </div>
       ) : null}
+
+      {/* AI Face Attendance Kiosk Modal */}
+      <FaceAttendanceKioskModal
+        isOpen={showFaceKiosk}
+        onClose={() => setShowFaceKiosk(false)}
+        schoolId={schoolId}
+        schoolName={className ? `${className} Face Attendance` : "School Campus"}
+        classId={classId}
+        className={className}
+        students={students}
+        teacherId={teacherId}
+        onAttendanceUpdated={() => {
+          getAttendance(schoolId, classId, selectedDate).then((rec) => {
+            setExistingRecord(rec);
+            if (rec?.students) {
+              const map: { [id: string]: boolean } = {};
+              Object.entries(rec.students).forEach(([id, st]) => {
+                map[id] = st.present;
+              });
+              setAttendance(map);
+            }
+          });
+        }}
+      />
 
       {/* QR Code Scanner for Teacher / Admin */}
       <QrAttendanceScannerModal

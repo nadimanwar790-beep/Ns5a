@@ -277,6 +277,21 @@ export async function seedDemoSchoolData(schoolId: string, adminUid: string) {
   };
   await saveSession(session);
 
+  // Seed default School Live GPS Location & Geofence if missing
+  try {
+    const sch = await getSchool(schoolId);
+    if (sch && (!sch.latitude || !sch.longitude)) {
+      await updateSchool(schoolId, {
+        latitude: 28.441822,
+        longitude: 77.067319,
+        locationRadiusMeters: 250,
+        locationAddress: "Sector 45, Urban Estate, Gurgaon, Haryana 122003",
+        geoFenceEnabled: true,
+        principalName: sch.principalName || "Dr. Arvind Swaminathan",
+      });
+    }
+  } catch {}
+
   const today = new Date().toISOString().slice(0, 10);
   const currentMonth = currentMonthStr();
 

@@ -49,6 +49,7 @@ import {
   ChevronDown,
   Check,
   X,
+  ShoppingBag,
 } from "lucide-react";
 import QRCode from "react-qr-code";
 import { ClassroomVideoArchive } from "./ClassroomVideoArchive";
@@ -97,6 +98,7 @@ import { SchoolClassChannelView } from "./SchoolClassChannelView";
 import { NstaMessengerSuite } from "./NstaMessengerSuite";
 import { SchoolWelcomeModal } from "./SchoolWelcomeModal";
 import { SchoolBirthdayModal } from "./SchoolBirthdayModal";
+import { StudentSchoolStore } from "./StudentSchoolStore";
 import { downloadFeeDocument, shareFeeReceiptOnWhatsApp } from "./feeDocument";
 import {
   getSchoolPushEnabledState,
@@ -143,6 +145,7 @@ type TabType =
   | "holidays"
   | "events_memories"
   | "explore_plus"
+  | "store"
   | "profile";
 
 export const StudentSchoolPanel: React.FC<Props> = ({
@@ -167,10 +170,11 @@ export const StudentSchoolPanel: React.FC<Props> = ({
     if (t === "feed" || t === "community" || t === "notices") return "holidays";
     if (t === "memories" || t === "events") return "events_memories";
     if (t === "explore") return "explore_plus";
+    if (t === "store" || t === "shop" || t === "school_store") return "store";
     if ([
       "overview", "channel", "attendance", "fees", "exams", "homework",
       "idcard", "teachers", "videos", "holidays", "events_memories",
-      "explore_plus"
+      "explore_plus", "store"
     ].includes(t)) {
       return t as TabType;
     }
@@ -303,73 +307,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
     return () => window.removeEventListener("nst-school-welcome-received", handleWelcomeEvent);
   }, []);
 
-  const [birthdayModalData, setBirthdayModalData] = useState<NstaBirthdayData | null>(null);
 
-  // Automated Birthday Detection & School Dispatch
-  useEffect(() => {
-    if (!studentId) return;
-    const currentYear = new Date().getFullYear();
-    const sentKey = `nst_birthday_wish_sent_${schoolId || "dps_gurgaon_sector45"}_${studentId}_${currentYear}`;
-    const pendingPopupKey = `nst_show_birthday_popup_${studentId}`;
-
-    // 1. Check if pending popup flag was already queued
-    try {
-      const hasPopup = localStorage.getItem(pendingPopupKey);
-      if (hasPopup) {
-        localStorage.removeItem(pendingPopupKey);
-        let parsed: NstaBirthdayData | null = null;
-        try {
-          parsed = JSON.parse(hasPopup);
-        } catch {}
-        if (parsed && parsed.studentName) {
-          setBirthdayModalData(parsed);
-          return;
-        }
-      }
-    } catch {}
-
-    // 2. Check if today is student's birthday!
-    const targetStudent = activeStudent || currentStudent;
-    if (targetStudent && targetStudent.dateOfBirth && isStudentBirthdayToday(targetStudent.dateOfBirth)) {
-      try {
-        const alreadyWished = localStorage.getItem(sentKey);
-        void dispatchOfficialSchoolBirthdayWish(targetStudent, {
-          force: false,
-          triggerPopup: true,
-          schoolName: schoolDisplayName || school?.name || undefined,
-          schoolLogo: resolvedSchoolLogo || undefined,
-        }).then((msg) => {
-          if (msg?.birthdayData) {
-            setBirthdayModalData(msg.birthdayData);
-          } else if (!alreadyWished) {
-            setBirthdayModalData({
-              studentId: targetStudent.id,
-              studentName: targetStudent.name,
-              admissionNo: targetStudent.admissionNo,
-              rollNo: targetStudent.rollNo,
-              className: targetStudent.className || formatClassLabel(studentClassLabel),
-              schoolName: schoolDisplayName || school?.name || "NSTA Digital School",
-              schoolLogo: resolvedSchoolLogo || undefined,
-              dateOfBirth: targetStudent.dateOfBirth,
-              wishedYear: currentYear,
-              issuedAt: new Date().toISOString(),
-            });
-          }
-        });
-      } catch {}
-    }
-  }, [studentId, activeStudent, currentStudent, schoolId, schoolDisplayName, school?.name, resolvedSchoolLogo, studentClassLabel]);
-
-  // Listen for real-time birthday wish event
-  useEffect(() => {
-    const handleBirthdayEvent = (e: any) => {
-      if (e?.detail) {
-        setBirthdayModalData(e.detail);
-      }
-    };
-    window.addEventListener("nst-school-birthday-received", handleBirthdayEvent);
-    return () => window.removeEventListener("nst-school-birthday-received", handleBirthdayEvent);
-  }, []);
 
   // Load demo dataset for fallback / syllabus / calendar
   const dataset = useMemo(() => getDemoSchoolDataset(), []);
@@ -1628,6 +1566,74 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   const schoolInitials = (schoolDisplayName || "NS").slice(0, 2).toUpperCase();
   const resolvedSchoolLogo = getSavedSchoolLogo(school?.logoUrl || (activeStudent as any)?.schoolLogo, schoolId);
 
+  const [birthdayModalData, setBirthdayModalData] = useState<NstaBirthdayData | null>(null);
+
+  // Automated Birthday Detection & School Dispatch
+  useEffect(() => {
+    if (!studentId) return;
+    const currentYear = new Date().getFullYear();
+    const sentKey = `nst_birthday_wish_sent_${schoolId || "dps_gurgaon_sector45"}_${studentId}_${currentYear}`;
+    const pendingPopupKey = `nst_show_birthday_popup_${studentId}`;
+
+    // 1. Check if pending popup flag was already queued
+    try {
+      const hasPopup = localStorage.getItem(pendingPopupKey);
+      if (hasPopup) {
+        localStorage.removeItem(pendingPopupKey);
+        let parsed: NstaBirthdayData | null = null;
+        try {
+          parsed = JSON.parse(hasPopup);
+        } catch {}
+        if (parsed && parsed.studentName) {
+          setBirthdayModalData(parsed);
+          return;
+        }
+      }
+    } catch {}
+
+    // 2. Check if today is student's birthday!
+    const targetStudent = activeStudent || currentStudent;
+    if (targetStudent && targetStudent.dateOfBirth && isStudentBirthdayToday(targetStudent.dateOfBirth)) {
+      try {
+        const alreadyWished = localStorage.getItem(sentKey);
+        void dispatchOfficialSchoolBirthdayWish(targetStudent, {
+          force: false,
+          triggerPopup: true,
+          schoolName: schoolDisplayName || school?.name || undefined,
+          schoolLogo: resolvedSchoolLogo || undefined,
+        }).then((msg) => {
+          if (msg?.birthdayData) {
+            setBirthdayModalData(msg.birthdayData);
+          } else if (!alreadyWished) {
+            setBirthdayModalData({
+              studentId: targetStudent.id,
+              studentName: targetStudent.name,
+              admissionNo: targetStudent.admissionNo,
+              rollNo: targetStudent.rollNo,
+              className: targetStudent.className || formatClassLabel(studentClassLabel),
+              schoolName: schoolDisplayName || school?.name || "NSTA Digital School",
+              schoolLogo: resolvedSchoolLogo || undefined,
+              dateOfBirth: targetStudent.dateOfBirth,
+              wishedYear: currentYear,
+              issuedAt: new Date().toISOString(),
+            });
+          }
+        });
+      } catch {}
+    }
+  }, [studentId, activeStudent, currentStudent, schoolId, schoolDisplayName, school?.name, resolvedSchoolLogo, studentClassLabel]);
+
+  // Listen for real-time birthday wish event
+  useEffect(() => {
+    const handleBirthdayEvent = (e: any) => {
+      if (e?.detail) {
+        setBirthdayModalData(e.detail);
+      }
+    };
+    window.addEventListener("nst-school-birthday-received", handleBirthdayEvent);
+    return () => window.removeEventListener("nst-school-birthday-received", handleBirthdayEvent);
+  }, []);
+
   // Sync active student's pending fee balance to the Web Push server so monthly auto-reminders always have exact ₹ due!
   useEffect(() => {
     if (!activeStudent?.id || !schoolId) return;
@@ -2252,6 +2258,28 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                     <p className="text-xs sm:text-sm font-bold text-white">Digital ID Card</p>
                     <p className="text-[10px] text-slate-400 mt-0.5">
                       स्मार्ट पहचान पत्र
+                    </p>
+                  </div>
+                </button>
+
+                {/* Dedicated Card 7: School Store (24H Booking) */}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("store")}
+                  className="p-3.5 rounded-2xl bg-gradient-to-br from-slate-900 to-amber-950/40 hover:bg-slate-800/90 border border-slate-800 hover:border-amber-500/50 text-left transition cursor-pointer flex flex-col justify-between gap-3 group shadow-sm"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 group-hover:scale-105 transition-transform">
+                      <ShoppingBag className="w-4 h-4" />
+                    </div>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/25 text-amber-300 border border-amber-500/40 font-black uppercase animate-pulse">
+                      24h Book
+                    </span>
+                  </div>
+                  <div>
+                    <p className="text-xs sm:text-sm font-bold text-white">School Store</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      ड्रेस, किताबें व सामग्री
                     </p>
                   </div>
                 </button>
@@ -4345,6 +4373,22 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                 })}
               </div>
             )}
+          </div>
+        )}
+
+        {/* TAB: SCHOOL STORE & 24-HOUR ITEM BOOKING ──────────────────────────── */}
+        {activeTab === "store" && (
+          <div className="space-y-4 animate-in fade-in">
+            <StudentSchoolStore
+              school={{
+                ...(school || {}),
+                id: schoolId,
+                name: schoolDisplayName,
+                logoUrl: resolvedSchoolLogo,
+              } as any}
+              student={activeStudent}
+              onBack={() => setActiveTab("overview")}
+            />
           </div>
         )}
       </main>

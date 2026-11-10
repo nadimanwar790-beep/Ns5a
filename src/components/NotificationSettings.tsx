@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Bell, BellOff, Check, Clock, Settings, X, Smartphone, ShieldCheck, AlertCircle, Play } from 'lucide-react';
+import { Bell, BellOff, Check, Clock, Settings, X, Smartphone, ShieldCheck, AlertCircle, Play, Volume2, VolumeX } from 'lucide-react';
 import {
   hydrateNotificationPreferences,
   loadNotificationPreferences,
@@ -11,6 +11,12 @@ import {
   testDelayedBackgroundNotification,
   type NotificationPreferences,
 } from './NotificationManager';
+import {
+  getVoiceNotifyConfig,
+  saveVoiceNotifyConfig,
+  testVoiceNotificationSample,
+  type VoiceNotifyConfig,
+} from '../utils/voiceNotifyEngine';
 
 interface Props {
   userId: string;
@@ -24,6 +30,7 @@ export const NotificationSettings: React.FC<Props> = ({ userId, placement = 'flo
   const [saved, setSaved] = useState(false);
   const [testCountdown, setTestCountdown] = useState<number | null>(null);
   const [permissionStatus, setPermissionStatus] = useState<string>('default');
+  const [voiceConfig, setVoiceConfig] = useState<VoiceNotifyConfig>(() => getVoiceNotifyConfig());
   const isTopbar = placement === 'topbar';
 
   useEffect(() => {
@@ -179,7 +186,7 @@ export const NotificationSettings: React.FC<Props> = ({ userId, placement = 'flo
               </div>
             )}
 
-            <label className="mb-5 flex cursor-pointer items-center justify-between rounded-2xl border border-indigo-100 bg-indigo-50 p-4 dark:border-indigo-900/50 dark:bg-indigo-950/30">
+            <label className="mb-4 flex cursor-pointer items-center justify-between rounded-2xl border border-indigo-100 bg-indigo-50 p-4 dark:border-indigo-900/50 dark:bg-indigo-950/30">
               <span>
                 <span className="block text-sm font-bold text-slate-900 dark:text-white">All notifications</span>
                 <span className="block text-xs text-slate-500 dark:text-slate-400">Ek switch se push alerts pause karein</span>
@@ -191,6 +198,71 @@ export const NotificationSettings: React.FC<Props> = ({ userId, placement = 'flo
                 className="h-5 w-5 accent-indigo-600"
               />
             </label>
+
+            {/* Voice Notification Card */}
+            <div className="mb-5 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4">
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400">
+                    {voiceConfig.enabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
+                  </div>
+                  <div>
+                    <span className="block text-sm font-bold text-slate-900 dark:text-white">
+                      Voice Notification (बोलकर सुनाएं)
+                    </span>
+                    <span className="block text-xs text-slate-600 dark:text-slate-300">
+                      नोटिफिकेशन आने पर हिंदी/इंग्लिश में पढ़कर सुनाएं
+                    </span>
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={voiceConfig.enabled}
+                  onChange={(e) => {
+                    const next = saveVoiceNotifyConfig({ enabled: e.target.checked });
+                    setVoiceConfig(next);
+                  }}
+                  className="h-5 w-5 accent-emerald-600 cursor-pointer"
+                />
+              </div>
+
+              {voiceConfig.enabled && (
+                <div className="mt-3 pt-3 border-t border-emerald-500/20 space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-slate-600 dark:text-slate-300 font-medium">बोलने की गति (Speed):</span>
+                    <div className="flex items-center gap-1.5">
+                      {[0.8, 1.0, 1.2].map((rate) => (
+                        <button
+                          key={rate}
+                          type="button"
+                          onClick={() => {
+                            const next = saveVoiceNotifyConfig({ rate });
+                            setVoiceConfig(next);
+                          }}
+                          className={`px-2 py-0.5 rounded-lg text-[11px] font-bold transition-all ${
+                            voiceConfig.rate === rate
+                              ? "bg-emerald-600 text-white shadow-sm"
+                              : "bg-white/10 text-slate-600 dark:text-slate-300 hover:bg-white/20"
+                          }`}
+                        >
+                          {rate === 0.8 ? "धीमी" : rate === 1.0 ? "सामान्य (1x)" : "तेज़"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-end pt-1">
+                    <button
+                      type="button"
+                      onClick={() => testVoiceNotificationSample()}
+                      className="px-3 py-1.5 rounded-xl bg-emerald-600/30 hover:bg-emerald-600 text-emerald-300 hover:text-white text-xs font-bold flex items-center gap-1.5 transition-colors"
+                    >
+                      <Play size={12} fill="currentColor" /> टेस्ट आवाज़ सुनें
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
 
             <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label className="rounded-2xl border border-slate-200 p-3 dark:border-slate-700">

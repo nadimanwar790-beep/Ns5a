@@ -61,8 +61,24 @@ export const IdCardManager: React.FC<Props> = ({
         employeeId: t.employeeId || `TEA-${(t.id || Date.now().toString()).slice(-4).toUpperCase()}`,
         createdAt: t.createdAt || new Date().toISOString(),
       }));
-    return [...(staff || []), ...teacherStaff];
-  }, [staff, teachers, school?.id]);
+
+    const adminStaffMember: StaffEmployee = {
+      id: "admin_principal_head",
+      schoolId: school?.id || "",
+      name: school?.principalName || "Dr. Arvind Swaminathan (School Admin)",
+      email: school?.email || school?.adminEmail || "admin@dps.edu.in",
+      phone: school?.phone || school?.mobile || "9811023450",
+      designation: "👑 School Administrator & Principal",
+      department: "Administration & Institutional Head",
+      joinDate: new Date().toISOString().split("T")[0],
+      monthlySalary: 75000,
+      active: true,
+      photoUrl: school?.logoUrl,
+      employeeId: "ADMIN-01",
+      createdAt: new Date().toISOString(),
+    };
+    return [adminStaffMember, ...(staff || []), ...teacherStaff];
+  }, [staff, teachers, school?.id, school?.principalName, school?.email, school?.phone, school?.mobile, school?.logoUrl]);
 
   const [activeTab, setActiveTab] = useState<"students" | "staff">(initialTab);
   const [selectedClassId, setSelectedClassId] = useState<string>("all");

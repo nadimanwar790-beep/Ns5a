@@ -2863,10 +2863,8 @@ const AdminDashboardInner: React.FC<Props> = ({ onNavigate, settings, onUpdateSe
   const handleRestoreFromIndexedDbTrash = async (item: any) => {
       if (!window.confirm(`"${item.name || item.id}" ko Firebase pe wapas bhejein?\n\nCollection: ${item.collectionName}`)) return;
       try {
-          const { ref: fbRef, set: fbSet } = await import('firebase/database');
-          const { doc, setDoc } = await import('firebase/firestore');
           // Restore to RTDB
-          await fbSet(fbRef(rtdb, `${item.rtdbBasePath || item.collectionName}/${item.id}`), item.data);
+          await set(ref(rtdb, `${item.rtdbBasePath || item.collectionName}/${item.id}`), item.data);
           // Restore to Firestore
           await setDoc(doc(db, item.collectionName, item.id), item.data);
           // Remove from IndexedDB trash

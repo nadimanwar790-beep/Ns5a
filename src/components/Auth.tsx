@@ -47,7 +47,8 @@ import {
   School,
   ChevronDown,
   ChevronUp,
-  X
+  X,
+  ScanFace
 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import jsQR from 'jsqr';
@@ -55,6 +56,7 @@ import { LoginGuide } from './LoginGuide';
 import { CustomAlert } from './CustomDialogs';
 import { GuestRoomJoinModal } from './GuestRoomJoinModal';
 import { QrLoginOtpChallengeModal } from './QrLoginOtpChallengeModal';
+import { FaceLoginModal } from './school/FaceLoginModal';
 import {
   parseLoginQrToken,
   checkActiveRemoteSession,
@@ -119,9 +121,10 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
   const [recoveryStep, setRecoveryStep] = useState<1 | 2>(1);
   const [userEnteredAnswer, setUserEnteredAnswer] = useState('');
 
-  // QR Scanner States
+  // QR Scanner & Face ID Login States
   const [cameraActive, setCameraActive] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
+  const [showFaceLoginModal, setShowFaceLoginModal] = useState(false);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const scannerInstanceRef = useRef<Html5Qrcode | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1147,6 +1150,114 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
     onLogin(userToLogin);
   };
 
+  // ── ON-DEVICE AI FACE ID LOGIN HANDLER (BINA QR & BINA PASSWORD) ──
+  const handleFaceLoginSuccess = async (matched: any) => {
+    setShowFaceLoginModal(false);
+    setLoading(true);
+    setError(null);
+
+    try {
+      const studentId = matched.studentId || matched.id;
+      const targetSchoolId = matched.schoolId || 'dps_gurgaon_sector45';
+      const cleanSchoolId = targetSchoolId;
+
+      // 1. Resolve student record
+      let matchedStudent = getStudent(studentId, cleanSchoolId);
+      if (!matchedStudent) {
+        matchedStudent = getStudentOrAdmissionRecord(studentId, cleanSchoolId);
+      }
+      if (!matchedStudent) {
+        const pool = getLocalStudents(cleanSchoolId);
+        matchedStudent = pool.find((s: any) => s.id === studentId || s.rollNo === matched.rollNo || s.name?.toLowerCase() === matched.name?.toLowerCase());
+      }
+      if (!matchedStudent) {
+        const dpsPool = getLocalStudents('dps_gurgaon_sector45');
+        matchedStudent = dpsPool.find((s: any) => s.id === studentId || s.rollNo === matched.rollNo || s.name?.toLowerCase() === matched.name?.toLowerCase());
+      }
+
+      const rollVal = matched.rollNo || matchedStudent?.rollNo || '01';
+      const studentName = matched.name || matchedStudent?.name || 'DPS Student';
+      const classLevel = matched.classId || matchedStudent?.classId || 'cls_10';
+      const className = matched.className || matchedStudent?.className || 'Class 10-A';
+      const studentPhoto = matched.photoUrl || matchedStudent?.photoUrl || '';
+      const admNo = matchedStudent?.admissionNo || matched.admissionNo || `DPS-ADM-${rollVal}`;
+      const parentPhone = matchedStudent?.phone || matched.phone || '9876543210';
+
+      const studentUser: User = {
+        id: studentId || `student_${Date.now()}`,
+        name: studentName,
+        email: matchedStudent?.email || `${(studentName || 'student').toLowerCase().replace(/\s+/g, '')}@dps.edu.in`,
+        role: 'STUDENT',
+        displayId: `ROLL-${rollVal}`,
+        schoolId: cleanSchoolId,
+        userType: 'SCHOOL_STUDENT',
+        classLevel: classLevel,
+        className: className,
+        admissionNo: admNo,
+        mobile: parentPhone,
+        avatar: studentPhoto,
+        fatherName: matchedStudent?.fatherName || matched.fatherName || 'Guardian',
+        motherName: matchedStudent?.motherName || matched.motherName || '',
+        bloodGroup: matchedStudent?.bloodGroup || matched.bloodGroup || 'O+',
+        monthlyFee: matchedStudent?.monthlyFee || 1800,
+        provider: 'face_recognition_login',
+        isFaceLogin: true,
+        loginTimestamp: new Date().toISOString()
+      };
+
+      // 2. Ensure student exists in local student roster
+      try {
+        const studentEntry = {
+          id: studentUser.id,
+          schoolId: cleanSchoolId,
+          name: studentUser.name,
+          rollNo: rollVal,
+          admissionNo: admNo,
+          phone: parentPhone,
+          classId: classLevel,
+          className: className,
+          photoUrl: studentPhoto,
+          monthlyFee: 1800,
+          active: true,
+          createdAt: new Date().toISOString()
+        };
+        const curPool = getLocalStudents(cleanSchoolId);
+        setLocalStudents(cleanSchoolId, [studentEntry, ...curPool.filter((s: any) => s.id !== studentUser.id && (!admNo || s.admissionNo !== admNo))]);
+      } catch {}
+
+      // 3. Complete login instantly in UI
+      triggerLoginSuccess(studentUser);
+
+      // 4. Dispatch official welcome message in NSTA Messenger School Desk
+      try {
+        void dispatchOfficialSchoolWelcomeMessage(studentUser, {
+          force: false,
+          triggerPopup: true,
+          schoolName: 'Delhi Public School'
+        });
+        localStorage.setItem(`nst_show_welcome_popup_${studentUser.id}`, 'true');
+      } catch {}
+
+      // 5. Non-blocking background sync
+      saveUserToLive(studentUser).catch(() => {});
+      saveSchoolUserProfile({
+        uid: studentUser.id,
+        schoolId: cleanSchoolId,
+        role: 'SCHOOL_STUDENT',
+        name: studentUser.name,
+        email: studentUser.email,
+        studentRef: studentUser.id,
+        classId: studentUser.classLevel,
+        sessionId: '2026-27'
+      }).catch(() => {});
+    } catch (err: any) {
+      console.error("[FaceLogin] Error processing login:", err);
+      setError("Face ID Login me samasya aayi. Kripya punah prayas karein.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // ── FAST 1-TAP DEMO CHIPS ──────────────────────────────────────────────────
   const handleQuickStudentLogin = () => {
     const studentUser: User = {
@@ -1837,6 +1948,33 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
                 <ArrowRight size={16} />
               </button>
 
+              {/* ── 1-TAP FACE ID LOGIN BUTTON (BINA QR BINA PASSWORD) ── */}
+              <button
+                type="button"
+                onClick={() => {
+                  setError(null);
+                  setShowFaceLoginModal(true);
+                }}
+                disabled={loading}
+                className="w-full py-3 px-4 rounded-xl text-sm font-bold tracking-wide text-slate-800 dark:text-slate-100 bg-gradient-to-r from-emerald-500/15 via-teal-500/15 to-cyan-500/15 hover:from-emerald-500/25 hover:via-teal-500/25 hover:to-cyan-500/25 border border-emerald-500/40 dark:border-emerald-400/40 shadow-xs transition-all flex items-center justify-between gap-2.5 cursor-pointer active:scale-[0.99]"
+              >
+                <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                  <ScanFace size={18} />
+                </div>
+                <div className="text-left flex-1 min-w-0">
+                  <p className="text-xs font-black tracking-wide text-slate-900 dark:text-white leading-tight flex items-center gap-1.5">
+                    Face ID Login (फेस से लॉगिन)
+                    <span className="px-1.5 py-0.5 rounded text-[9px] bg-emerald-600 text-white font-black uppercase tracking-wide">
+                      AI Instant
+                    </span>
+                  </p>
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight">
+                    बिना QR व बिना पासवर्ड के केवल चेहरा दिखाएं
+                  </p>
+                </div>
+                <ArrowRight size={16} className="text-emerald-500 shrink-0" />
+              </button>
+
               <button
                 type="button"
                 onClick={() => {
@@ -2169,6 +2307,13 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
           setQrChallengeData({ ...qrChallengeData, isOpen: false });
           setError('Login challenge cancel ho gaya.');
         }}
+      />
+
+      {/* ── ON-DEVICE AI FACE ID LOGIN MODAL ── */}
+      <FaceLoginModal
+        isOpen={showFaceLoginModal}
+        onClose={() => setShowFaceLoginModal(false)}
+        onStudentMatched={handleFaceLoginSuccess}
       />
     </div>
   );

@@ -3,12 +3,13 @@ import React, { useState, useEffect, useMemo } from "react";
 import {
   ShoppingBag, Plus, Search, Tag, AlertTriangle, Printer, Trash2,
   Edit3, CheckCircle2, IndianRupee, QrCode, Filter, ChevronLeft,
-  Package, Receipt, ArrowRight, Sparkles, RefreshCw
+  Package, Receipt, ArrowRight, Sparkles, RefreshCw, Clock
 } from "lucide-react";
 import type {
   School, SchoolStudent, SchoolClass,
-  StoreInventoryItem, StoreSaleRecord
+  StoreInventoryItem, StoreSaleRecord, StoreReservationBooking
 } from "../../school-types";
+import { speakNotification } from "../../utils/voiceNotifyEngine";
 
 interface Props {
   school: School;
@@ -36,6 +37,7 @@ export const InventoryStoreManager: React.FC<Props> = ({
 }) => {
   const invStorageKey = useMemo(() => `nst_school_store_items_${school?.id || "default"}`, [school?.id]);
   const salesStorageKey = useMemo(() => `nst_school_store_sales_${school?.id || "default"}`, [school?.id]);
+  const resStorageKey = useMemo(() => `nst_school_store_reservations_${school?.id || "default"}`, [school?.id]);
 
   // Inventory Items List
   const [items, setItems] = useState<StoreInventoryItem[]>(() => {
@@ -126,6 +128,22 @@ export const InventoryStoreManager: React.FC<Props> = ({
     return [];
   });
 
+  // Online Student 24-Hour Reservations List
+  const [reservations, setReservations] = useState<StoreReservationBooking[]>(() => {
+    try {
+      const saved = localStorage.getItem(resStorageKey);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [];
+  });
+
+  // Clock ticker for countdown
+  const [currentEpoch, setCurrentEpoch] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setCurrentEpoch(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
   // Sync with LocalStorage
   useEffect(() => {
     try {
@@ -139,10 +157,111 @@ export const InventoryStoreManager: React.FC<Props> = ({
     } catch {}
   }, [sales, salesStorageKey]);
 
-  // Tab View: "inventory" vs "billing" vs "sales_history"
-  const [activeTab, setActiveTab] = useState<"inventory" | "sales_history">("inventory");
+  useEffect(() => {
+    try {
+      localStorage.setItem(resStorageKey, JSON.stringify(reservations));
+    } catch {}
+  }, [reservations, resStorageKey]);
+
+  // Check auto-expiry of bookings and restore stock
+  useEffect(() => {
+    let stockChanged = false;
+    let invCopy = [...items];
+
+    const updatedRes = reservations.map((res) => {
+      if (res.status === "reserved" && new Date(res.expiresAt).getTime() <= currentEpoch) {
+        stockChanged = true;
+        res.items.forEach((booked) => {
+          const itm = invCopy.find((i) => i.id === booked.itemId);
+          if (itm) {
+            itm.stockQuantity += booked.quantity;
+          }
+        });
+        return { ...res, status: "expired" as const };
+      }
+      return res;
+    });
+
+    if (stockChanged) {
+      setItems(invCopy);
+      setReservations(updatedRes);
+      try {
+        localStorage.setItem(invStorageKey, JSON.stringify(invCopy));
+        localStorage.setItem(resStorageKey, JSON.stringify(updatedRes));
+      } catch {}
+    }
+  }, [currentEpoch]);
+
+  // Tab View: "inventory" vs "bookings" vs "sales_history"
+  const [activeTab, setActiveTab] = useState<"inventory" | "bookings" | "sales_history">("inventory");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCat, setSelectedCat] = useState("all");
+
+  // Fulfill a reservation (Mark Handed Over & Paid)
+  const handleFulfillReservation = (res: StoreReservationBooking) => {
+    const receiptNo = `STR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const saleRecord: StoreSaleRecord = {
+      id: `sale-${Date.now()}`,
+      schoolId: school.id,
+      receiptNo,
+      studentId: res.studentId,
+      studentName: res.studentName,
+      className: res.className,
+      rollNo: res.rollNo,
+      items: res.items.map((line) => ({
+        itemId: line.itemId,
+        itemName: `${line.itemName} ${line.sizeOrVariant ? `(${line.sizeOrVariant})` : ""}`,
+        quantity: line.quantity,
+        unitPrice: line.unitPrice,
+        subtotal: line.subtotal,
+      })),
+      totalAmount: res.totalAmount,
+      paymentMode: "cash",
+      date: new Date().toISOString().split("T")[0],
+      soldBy: "Store Manager",
+    };
+
+    const nextSales = [saleRecord, ...sales];
+    const nextReservations = reservations.map((r) =>
+      r.id === res.id ? { ...r, status: "collected" as const, collectedAt: new Date().toISOString() } : r
+    );
+
+    setSales(nextSales);
+    setReservations(nextReservations);
+    localStorage.setItem(salesStorageKey, JSON.stringify(nextSales));
+    localStorage.setItem(resStorageKey, JSON.stringify(nextReservations));
+
+    setPrintableReceipt(saleRecord);
+    speakNotification(
+      "स्टोर रसीद जारी",
+      `${res.studentName} का आर्डर ${res.id} का सामान सौंप दिया गया और रसीद जारी हो गई।`
+    );
+  };
+
+  // Cancel reservation and restore stock
+  const handleCancelReservation = (res: StoreReservationBooking) => {
+    const nextItems = items.map((itm) => {
+      const match = res.items.find((i) => i.itemId === itm.id);
+      if (match) {
+        return { ...itm, stockQuantity: itm.stockQuantity + match.quantity };
+      }
+      return itm;
+    });
+
+    const nextReservations = reservations.map((r) =>
+      r.id === res.id ? { ...r, status: "cancelled" as const } : r
+    );
+
+    setItems(nextItems);
+    setReservations(nextReservations);
+    localStorage.setItem(invStorageKey, JSON.stringify(nextItems));
+    localStorage.setItem(resStorageKey, JSON.stringify(nextReservations));
+    speakNotification("बुकिंग रद्द", `ऑर्डर ${res.id} रद्द करके स्टॉक वापस जोड़ दिया गया।`);
+  };
+
+  const activeReservationsCount = useMemo(() => {
+    return reservations.filter((r) => r.status === "reserved" && new Date(r.expiresAt).getTime() > currentEpoch).length;
+  }, [reservations, currentEpoch]);
 
   // Add Item Modal
   const [showAddItemModal, setShowAddItemModal] = useState(false);
@@ -391,7 +510,24 @@ export const InventoryStoreManager: React.FC<Props> = ({
             }`}
           >
             <Package className="w-4 h-4" />
-            <span>Store Inventory Catalog ({items.length})</span>
+            <span>Store Catalog ({items.length})</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("bookings")}
+            className={`flex-1 py-2.5 rounded-xl text-xs font-black transition cursor-pointer flex items-center justify-center gap-2 ${
+              activeTab === "bookings"
+                ? "bg-amber-600 text-white shadow-xs"
+                : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+            }`}
+          >
+            <Clock className="w-4 h-4" />
+            <span>Online Bookings ({reservations.length})</span>
+            {activeReservationsCount > 0 && (
+              <span className="px-2 py-0.5 rounded-full bg-emerald-500 text-white text-[10px] font-black animate-pulse">
+                {activeReservationsCount} Active
+              </span>
+            )}
           </button>
           <button
             type="button"
@@ -403,7 +539,7 @@ export const InventoryStoreManager: React.FC<Props> = ({
             }`}
           >
             <Receipt className="w-4 h-4" />
-            <span>Sales & Receipts History ({sales.length})</span>
+            <span>Sales &amp; Receipts ({sales.length})</span>
           </button>
         </div>
 
@@ -522,7 +658,127 @@ export const InventoryStoreManager: React.FC<Props> = ({
           </div>
         )}
 
-        {/* ── 2. SALES HISTORY TAB ── */}
+        {/* ── 2. ONLINE 24-HOUR STUDENT BOOKINGS TAB ── */}
+        {activeTab === "bookings" && (
+          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xs overflow-hidden">
+            <div className="p-4 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+              <div>
+                <h3 className="font-black text-sm text-slate-900 dark:text-white flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-amber-500" />
+                  <span>Student Online Bookings (24-Hour Reservations)</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  छात्रों द्वारा 24 घंटे के लिए बुक की गई सामग्री। समय समाप्त होने पर स्टॉक अपने आप वापस रिस्टोर हो जाएगा।
+                </p>
+              </div>
+              <span className="text-xs font-bold px-3 py-1 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                {activeReservationsCount} Pending Collection
+              </span>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-slate-100 dark:bg-slate-700/60 border-b border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200">
+                    <th className="p-3 font-black">Order ID</th>
+                    <th className="p-3 font-black">Student</th>
+                    <th className="p-3 font-black">Items Booked</th>
+                    <th className="p-3 font-black">Booked Time</th>
+                    <th className="p-3 font-black">24H Window Timer</th>
+                    <th className="p-3 font-black text-right">Amount</th>
+                    <th className="p-3 font-black text-center">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                  {reservations.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="p-8 text-center text-slate-400">
+                        अभी कोई ऑनलाइन बुकिंग प्राप्त नहीं हुई है।
+                      </td>
+                    </tr>
+                  ) : (
+                    reservations.map((booking) => {
+                      const isReserved = booking.status === "reserved";
+                      const isCollected = booking.status === "collected";
+                      const isExpired = booking.status === "expired" || (isReserved && new Date(booking.expiresAt).getTime() <= currentEpoch);
+
+                      const diffMs = new Date(booking.expiresAt).getTime() - currentEpoch;
+                      let timeRemaining = "EXPIRED";
+                      if (diffMs > 0) {
+                        const totalSecs = Math.floor(diffMs / 1000);
+                        const h = Math.floor(totalSecs / 3600);
+                        const m = Math.floor((totalSecs % 3600) / 60);
+                        const s = totalSecs % 60;
+                        timeRemaining = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+                      }
+
+                      return (
+                        <tr key={booking.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-750/30 transition">
+                          <td className="p-3 font-mono font-bold text-amber-600 dark:text-amber-400">
+                            {booking.id}
+                          </td>
+                          <td className="p-3 font-bold text-slate-800 dark:text-white">
+                            <p>{booking.studentName}</p>
+                            <span className="text-[10px] text-slate-400 font-normal">
+                              {booking.className} • Roll {booking.rollNo || "--"}
+                            </span>
+                          </td>
+                          <td className="p-3 text-slate-600 dark:text-slate-300">
+                            {booking.items.map((i) => `${i.itemName} (x${i.quantity})`).join(", ")}
+                          </td>
+                          <td className="p-3 font-mono text-slate-500">
+                            {new Date(booking.bookedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          </td>
+                          <td className="p-3">
+                            {isCollected ? (
+                              <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 font-black text-[10px]">
+                                ✓ Collected &amp; Paid
+                              </span>
+                            ) : isExpired ? (
+                              <span className="px-2 py-0.5 rounded-full bg-rose-100 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 font-bold text-[10px]">
+                                Expired (Stock Restored)
+                              </span>
+                            ) : (
+                              <span className="px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-500 font-mono font-black text-xs animate-pulse">
+                                ⏳ {timeRemaining} remaining
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-3 font-black text-right text-emerald-600 dark:text-emerald-400 font-mono text-sm">
+                            ₹{booking.totalAmount}
+                          </td>
+                          <td className="p-3 text-center">
+                            {isReserved && !isExpired && (
+                              <div className="flex items-center justify-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleFulfillReservation(booking)}
+                                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] shadow-sm transition active:scale-95 cursor-pointer flex items-center gap-1"
+                                >
+                                  <Check className="w-3 h-3" /> Hand Over &amp; Paid
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCancelReservation(booking)}
+                                  className="p-1 rounded-lg bg-slate-100 dark:bg-slate-700 hover:bg-rose-50 hover:text-rose-600 text-slate-500 text-[11px] cursor-pointer"
+                                  title="Cancel Booking & Restore Stock"
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ── 3. SALES HISTORY TAB ── */}
         {activeTab === "sales_history" && (
           <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xs overflow-hidden">
             <div className="overflow-x-auto">

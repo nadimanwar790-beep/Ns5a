@@ -1824,27 +1824,33 @@ export function generateFull1YearDemoDataset(schoolId: string = "demo_school", a
   inMemoryDataset = dataset;
   setSchoolCacheSync(DEMO_STORAGE_KEY, dataset);
 
-  // Sync to local storage keys so all isolated managers read data out-of-the-box
-  try {
-    if (typeof localStorage !== "undefined") {
-      localStorage.setItem(`nst_school_timetable_${schoolId}`, JSON.stringify(timetables));
-      localStorage.setItem(`nst_school_homework_${schoolId}`, JSON.stringify(homeworkList));
-      localStorage.setItem(`nst_school_lib_books_${schoolId}`, JSON.stringify(libraryBooks));
-      localStorage.setItem(`nst_school_lib_issues_${schoolId}`, JSON.stringify(libraryIssues));
-      localStorage.setItem(`nst_school_store_items_${schoolId}`, JSON.stringify(storeItems));
-      localStorage.setItem(`nst_school_store_sales_${schoolId}`, JSON.stringify(storeSales));
-      localStorage.setItem(`nst_school_pt_queries_${schoolId}`, JSON.stringify(parentQueries));
-      localStorage.setItem(`nst_school_accountants_${schoolId}`, JSON.stringify(accountants));
-      localStorage.setItem(`nst_school_expenses_${schoolId}`, JSON.stringify(expenseVouchers));
-      localStorage.setItem(`nst_school_events_${schoolId}`, JSON.stringify(events));
-      localStorage.setItem(`nst_school_admissions_${schoolId}`, JSON.stringify(admissions));
-      localStorage.setItem(`nst_school_attendance_${schoolId}`, JSON.stringify(attendanceRecords));
-      localStorage.setItem(`nst_school_exams_${schoolId}`, JSON.stringify(exams));
-      localStorage.setItem(`nst_school_staff_${schoolId}`, JSON.stringify(staffEmployees));
-      localStorage.setItem(`nst_school_leaves_${schoolId}`, JSON.stringify(staffLeaves));
-      localStorage.setItem(`nst_school_lectures_${schoolId}`, JSON.stringify(videoLectures));
+  // Sync to local storage keys safely with quota protection (heavy data resides in IndexedDB & memory)
+  const safeSetItem = (k: string, v: any) => {
+    try {
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem(k, JSON.stringify(v));
+      }
+    } catch {
+      // LocalStorage quota reached; data is preserved in IndexedDB and in-memory cache
     }
-  } catch {}
+  };
+
+  safeSetItem(`nst_school_timetable_${schoolId}`, timetables);
+  safeSetItem(`nst_school_homework_${schoolId}`, homeworkList);
+  safeSetItem(`nst_school_lib_books_${schoolId}`, libraryBooks);
+  safeSetItem(`nst_school_lib_issues_${schoolId}`, libraryIssues);
+  safeSetItem(`nst_school_store_items_${schoolId}`, storeItems);
+  safeSetItem(`nst_school_store_sales_${schoolId}`, storeSales);
+  safeSetItem(`nst_school_pt_queries_${schoolId}`, parentQueries);
+  safeSetItem(`nst_school_accountants_${schoolId}`, accountants);
+  safeSetItem(`nst_school_expenses_${schoolId}`, expenseVouchers);
+  safeSetItem(`nst_school_events_${schoolId}`, events);
+  safeSetItem(`nst_school_admissions_${schoolId}`, admissions);
+  safeSetItem(`nst_school_attendance_${schoolId}`, attendanceRecords);
+  safeSetItem(`nst_school_exams_${schoolId}`, exams);
+  safeSetItem(`nst_school_staff_${schoolId}`, staffEmployees);
+  safeSetItem(`nst_school_leaves_${schoolId}`, staffLeaves);
+  safeSetItem(`nst_school_lectures_${schoolId}`, videoLectures);
 
   return dataset;
 }
@@ -1902,14 +1908,17 @@ export function getDemoSchoolDataset(): FullDemoSchoolDataset {
     inMemoryDataset = cached;
     try {
       if (typeof localStorage !== "undefined" && !localStorage.getItem(`nst_school_timetable_${cached.session.schoolId}`)) {
-        localStorage.setItem(`nst_school_timetable_${cached.session.schoolId}`, JSON.stringify(cached.timetables || {}));
-        localStorage.setItem(`nst_school_homework_${cached.session.schoolId}`, JSON.stringify(cached.homeworkList || []));
-        localStorage.setItem(`nst_school_lib_books_${cached.session.schoolId}`, JSON.stringify(cached.libraryBooks || []));
-        localStorage.setItem(`nst_school_lib_issues_${cached.session.schoolId}`, JSON.stringify(cached.libraryIssues || []));
-        localStorage.setItem(`nst_school_store_items_${cached.session.schoolId}`, JSON.stringify(cached.storeItems || []));
-        localStorage.setItem(`nst_school_store_sales_${cached.session.schoolId}`, JSON.stringify(cached.storeSales || []));
-        localStorage.setItem(`nst_school_pt_queries_${cached.session.schoolId}`, JSON.stringify(cached.parentQueries || []));
-        localStorage.setItem(`nst_school_lectures_${cached.session.schoolId}`, JSON.stringify(cached.videoLectures || []));
+        const safePrime = (k: string, v: any) => {
+          try { localStorage.setItem(k, JSON.stringify(v)); } catch {}
+        };
+        safePrime(`nst_school_timetable_${cached.session.schoolId}`, cached.timetables || {});
+        safePrime(`nst_school_homework_${cached.session.schoolId}`, cached.homeworkList || []);
+        safePrime(`nst_school_lib_books_${cached.session.schoolId}`, cached.libraryBooks || []);
+        safePrime(`nst_school_lib_issues_${cached.session.schoolId}`, cached.libraryIssues || []);
+        safePrime(`nst_school_store_items_${cached.session.schoolId}`, cached.storeItems || []);
+        safePrime(`nst_school_store_sales_${cached.session.schoolId}`, cached.storeSales || []);
+        safePrime(`nst_school_pt_queries_${cached.session.schoolId}`, cached.parentQueries || []);
+        safePrime(`nst_school_lectures_${cached.session.schoolId}`, cached.videoLectures || []);
       }
     } catch {}
     return cached;
@@ -1965,4 +1974,139 @@ export function isHolidayDate(dateStr: string): FestivalHoliday | undefined {
     return false;
   });
 }
+
+// ── Demo Session Management (Session Add, Edit, Delete, Switch) ──
+const demoSessionListeners = new Set<(sessions: SchoolSession[]) => void>();
+let isNotifyingDemoSessions = false;
+
+export function subscribeDemoSessions(cb: (sessions: SchoolSession[]) => void): () => void {
+  demoSessionListeners.add(cb);
+  const current = getDemoSchoolDataset();
+  const list = current.sessions && current.sessions.length > 0 ? current.sessions : (current.session ? [current.session] : []);
+  // Deliver initial state asynchronously to avoid interrupting React mount cycles
+  queueMicrotask(() => {
+    if (demoSessionListeners.has(cb)) {
+      try { cb(list); } catch (e) { console.error("Error in initial demo session callback:", e); }
+    }
+  });
+  return () => {
+    demoSessionListeners.delete(cb);
+  };
+}
+
+function notifyDemoSessionListeners() {
+  if (isNotifyingDemoSessions) return;
+  isNotifyingDemoSessions = true;
+  try {
+    const current = getDemoSchoolDataset();
+    const list = current.sessions && current.sessions.length > 0 ? current.sessions : (current.session ? [current.session] : []);
+    demoSessionListeners.forEach(cb => {
+      try { cb(list); } catch (e) { console.error("Error in demo session listener:", e); }
+    });
+  } finally {
+    isNotifyingDemoSessions = false;
+  }
+}
+
+export function addDemoSession(session: SchoolSession): SchoolSession {
+  const current = getDemoSchoolDataset();
+  if (!current.sessions) current.sessions = [];
+  const existingIndex = current.sessions.findIndex(s => s.id === session.id);
+  let changed = false;
+  if (existingIndex >= 0) {
+    const existing = current.sessions[existingIndex];
+    if (
+      existing.name !== session.name ||
+      existing.active !== session.active ||
+      existing.startDate !== session.startDate ||
+      existing.endDate !== session.endDate
+    ) {
+      current.sessions[existingIndex] = { ...existing, ...session };
+      changed = true;
+    }
+  } else {
+    current.sessions.push(session);
+    changed = true;
+  }
+  if (session.active) {
+    current.sessions.forEach(s => {
+      if (s.id !== session.id && s.active) {
+        s.active = false;
+        changed = true;
+      }
+    });
+    if (current.session?.id !== session.id) {
+      current.session = session;
+      changed = true;
+    }
+  }
+  if (changed) {
+    inMemoryDataset = current;
+    setSchoolCacheSync(DEMO_STORAGE_KEY, current);
+    notifyDemoSessionListeners();
+  }
+  return session;
+}
+
+export function updateDemoSession(sessionId: string, data: Partial<SchoolSession>): SchoolSession | null {
+  const current = getDemoSchoolDataset();
+  if (!current.sessions) current.sessions = [];
+  const index = current.sessions.findIndex(s => s.id === sessionId);
+  if (index === -1) {
+    if (current.session && current.session.id === sessionId) {
+      current.session = { ...current.session, ...data };
+      if (!current.sessions.some(s => s.id === sessionId)) {
+        current.sessions.push(current.session);
+      }
+    } else {
+      return null;
+    }
+  } else {
+    current.sessions[index] = { ...current.sessions[index], ...data };
+  }
+  const updated = current.sessions.find(s => s.id === sessionId) || current.session;
+  if (data.active) {
+    current.sessions.forEach(s => {
+      s.active = s.id === sessionId;
+    });
+    if (updated) current.session = updated;
+  }
+  inMemoryDataset = current;
+  setSchoolCacheSync(DEMO_STORAGE_KEY, current);
+  notifyDemoSessionListeners();
+  return updated;
+}
+
+export function deleteDemoSession(sessionId: string): boolean {
+  const current = getDemoSchoolDataset();
+  if (!current.sessions) return false;
+  if (current.sessions.length <= 1) return false;
+  const wasActive = current.sessions.some(s => s.id === sessionId && s.active);
+  current.sessions = current.sessions.filter(s => s.id !== sessionId);
+  if (wasActive && current.sessions.length > 0) {
+    current.sessions[0].active = true;
+    current.session = current.sessions[0];
+  }
+  inMemoryDataset = current;
+  setSchoolCacheSync(DEMO_STORAGE_KEY, current);
+  notifyDemoSessionListeners();
+  return true;
+}
+
+export function setActiveDemoSession(sessionId: string): SchoolSession | null {
+  const current = getDemoSchoolDataset();
+  if (!current.sessions) return null;
+  const target = current.sessions.find(s => s.id === sessionId);
+  if (!target) return null;
+  current.sessions.forEach(s => {
+    s.active = s.id === sessionId;
+  });
+  target.active = true;
+  current.session = target;
+  inMemoryDataset = current;
+  setSchoolCacheSync(DEMO_STORAGE_KEY, current);
+  notifyDemoSessionListeners();
+  return target;
+}
+
 

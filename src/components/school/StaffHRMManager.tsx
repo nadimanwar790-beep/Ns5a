@@ -66,8 +66,11 @@ import {
   Check,
   X,
   Sparkles,
+  QrCode,
 } from "lucide-react";
 import { TeacherIdCardModal } from "./TeacherIdCardModal";
+import { AdminIdCardModal } from "./AdminIdCardModal";
+import { speakNotification } from "../../utils/voiceNotifyEngine";
 
 interface Props {
   school: School;
@@ -346,6 +349,46 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
     setTimeout(() => {
       setFeedback((prev) => (prev?.text === text ? null : prev));
     }, 4000);
+  };
+
+  // School Admin Official Attendance & ID Card State
+  const adminAttKey = `nst_admin_att_${school?.id || "default"}_${todayStr()}`;
+  const [adminAttendanceRecord, setAdminAttendanceRecord] = useState<{
+    date: string;
+    inTime?: string;
+    outTime?: string;
+    present: boolean;
+  }>(() => {
+    try {
+      const saved = localStorage.getItem(`nst_admin_att_${school?.id || "default"}_${todayStr()}`);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return { date: todayStr(), present: false };
+  });
+
+  const handleAdminPunch = (type: "in" | "out") => {
+    const nowTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true });
+    const updated = {
+      date: todayStr(),
+      present: true,
+      inTime: type === "in" ? nowTime : (adminAttendanceRecord.inTime || nowTime),
+      outTime: type === "out" ? nowTime : adminAttendanceRecord.outTime,
+    };
+    setAdminAttendanceRecord(updated);
+    try {
+      localStorage.setItem(adminAttKey, JSON.stringify(updated));
+    } catch {}
+    showToast("success", `✓ एडमिन ${type === "in" ? "Punch-In (आगमन)" : "Punch-Out (प्रस्थान)"} समय (${nowTime}) सफलतापूर्वक दर्ज हो गया!`);
+    speakNotification(
+      "एडमिन हाजिरी दर्ज",
+      `स्कूल एडमिन का ${type === "in" ? "आगमन" : "प्रस्थान"} समय ${nowTime} दर्ज किया गया है।`
+    );
+  };
+
+  const [showAdminIdCardModal, setShowAdminIdCardModal] = useState(false);
+
+  const handleOpenAdminIdCard = () => {
+    setShowAdminIdCardModal(true);
   };
 
   const loadData = async () => {
@@ -679,22 +722,90 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
               Shikshakon ka record, 10% student referral commission, chhutti aur salary slips ek jagah manage karein.
             </p>
           </div>
-          {activeTab === "directory" && (
+          <div className="flex items-center gap-2 flex-wrap">
             <button
-              onClick={() => setShowAddStaff(true)}
-              className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow cursor-pointer"
+              type="button"
+              onClick={handleOpenAdminIdCard}
+              className="px-3.5 py-2 bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-md shadow-amber-600/20 cursor-pointer transition-all active:scale-95"
             >
-              <Plus className="w-4 h-4" /> Naya Staff Add Karein
+              <Award className="w-4 h-4 text-amber-200" /> 👑 Official Admin ID Card
             </button>
-          )}
-          {activeTab === "leaves" && (
-            <button
-              onClick={() => setShowApplyLeave(true)}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow cursor-pointer"
-            >
-              <Plus className="w-4 h-4" /> Chhutti (Leave) Apply Karein
-            </button>
-          )}
+
+            {activeTab === "directory" && (
+              <button
+                onClick={() => setShowAddStaff(true)}
+                className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow cursor-pointer"
+              >
+                <Plus className="w-4 h-4" /> Naya Staff Add Karein
+              </button>
+            )}
+            {activeTab === "leaves" && (
+              <button
+                onClick={() => setShowApplyLeave(true)}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow cursor-pointer"
+              >
+                <Plus className="w-4 h-4" /> Chhutti (Leave) Apply Karein
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Dedicated Admin Daily Attendance & Verification Desk */}
+        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border border-indigo-500/30 rounded-2xl p-4 shadow-xl text-white print:hidden">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center font-bold text-xl shadow-inner">
+                🏛️
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-black text-white tracking-wide">
+                    School Admin &amp; Principal Desk (एडमिन हाजिरी)
+                  </h3>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-black border ${
+                    adminAttendanceRecord.present
+                      ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
+                      : "bg-amber-500/20 text-amber-300 border-amber-500/40"
+                  }`}>
+                    {adminAttendanceRecord.present ? "✅ Present Today" : "⏳ Attendance Pending"}
+                  </span>
+                </div>
+                <p className="text-xs text-indigo-200 mt-0.5">
+                  {school.principalName || "Dr. Arvind Swaminathan"} • ID: <span className="font-mono font-bold text-amber-300">ADMIN-01</span>
+                </p>
+                <div className="flex items-center gap-3 text-[11px] text-slate-300 mt-1 font-mono">
+                  <span>In Time: <strong className="text-emerald-400">{adminAttendanceRecord.inTime || "--:--"}</strong></span>
+                  <span>•</span>
+                  <span>Out Time: <strong className="text-amber-400">{adminAttendanceRecord.outTime || "--:--"}</strong></span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => handleAdminPunch("in")}
+                className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black flex items-center gap-1.5 shadow-md shadow-emerald-600/30 transition-all cursor-pointer active:scale-95"
+              >
+                <Clock size={14} /> Punch In (आगमन)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleAdminPunch("out")}
+                className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black flex items-center gap-1.5 shadow-md shadow-indigo-600/30 transition-all cursor-pointer active:scale-95"
+              >
+                <Clock size={14} /> Punch Out (प्रस्थान)
+              </button>
+              <button
+                type="button"
+                onClick={handleOpenAdminIdCard}
+                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 transition-colors"
+                title="Print Official Admin ID Card"
+              >
+                <Printer size={16} />
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* TAB 1: STAFF DIRECTORY */}
@@ -2317,6 +2428,14 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
             teacher={selectedStaffForIdCard as any}
             school={school}
             onClose={() => setSelectedStaffForIdCard(null)}
+          />
+        )}
+
+        {school && showAdminIdCardModal && (
+          <AdminIdCardModal
+            isOpen={showAdminIdCardModal}
+            school={school}
+            onClose={() => setShowAdminIdCardModal(false)}
           />
         )}
       </div>

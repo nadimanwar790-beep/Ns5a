@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   subscribeToSessions, subscribeToClasses, subscribeToSubjects, subscribeToTeachers,
   subscribeToAllStudents, saveSession, saveClass, saveSubject, saveMultipleSubjects, saveTeacher, saveStudent,
@@ -80,6 +80,11 @@ import { BusTransportModal } from "./BusTransportModal";
 import { ClassCurriculumNotesManager } from "./ClassCurriculumNotesManager";
 import { isSchoolEliteCurriculum } from "../../school-types";
 import { SchoolBirthdayCalendar } from "./SchoolBirthdayCalendar";
+import { UniversalAttendanceDesk } from "./UniversalAttendanceDesk";
+import { UniversalAttendanceScannerModal } from "./UniversalAttendanceScannerModal";
+import { SchoolLocationModal } from "./SchoolLocationModal";
+import { AdminIdCardModal } from "./AdminIdCardModal";
+import { FaceAttendanceKioskModal } from "./FaceAttendanceKioskModal";
 
 interface Props {
   schoolId: string;
@@ -155,6 +160,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const [saving, setSaving] = useState(false);
   const [showExpiryPopup, setShowExpiryPopup] = useState(false);
   const [expiryPopupExpired, setExpiryPopupExpired] = useState(false);
+  const [studentSearchQuery, setStudentSearchQuery] = useState("");
+  const [studentPage, setStudentPage] = useState(1);
 
   // School info card
   const [schoolCardExpanded, setSchoolCardExpanded] = useState(false);
@@ -465,6 +472,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
   // Forms
   const [sessionForm, setSessionForm] = useState({ name: "", startDate: "", endDate: "" });
+  const [showSessionModal, setShowSessionModal] = useState<boolean>(false);
+  const [copyClassesFromCurrent, setCopyClassesFromCurrent] = useState<boolean>(true);
   const [classForm, setClassForm] = useState({ name: "", section: "", stream: "Science", autoAddSubjects: true, defaultFee: 0 });
   const [subjectForm, setSubjectForm] = useState({ name: "" });
   const [multiBookQueue, setMultiBookQueue] = useState<string[]>([]);
@@ -521,6 +530,12 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     mode?: "combined" | "form_only" | "receipt_only";
   } | null>(null);
 
+  // Universal Attendance & School Live Location Modals State
+  const [showUniversalScannerModal, setShowUniversalScannerModal] = useState(false);
+  const [showSchoolLocationModal, setShowSchoolLocationModal] = useState(false);
+  const [showAdminIdCardModal, setShowAdminIdCardModal] = useState(false);
+  const [showFaceKioskModal, setShowFaceKioskModal] = useState(false);
+
   // Fee summary state
   const [feeMonth, setFeeMonth] = useState(currentMonthStr());
   const [allFees, setAllFees] = useState<MonthlyFee[]>([]);
@@ -553,35 +568,68 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const displayedStudents = React.useMemo(() => {
     if (schoolDemoActive) {
       const demo = getDemoSchoolDataset();
-      return demo?.students && demo.students.length > 0 ? demo.students : students;
+      const all = demo?.students && demo.students.length > 0 ? demo.students : students;
+      if (activeSession?.id) {
+        const filtered = all.filter(s => s.sessionId === activeSession.id || !s.sessionId);
+        if (filtered.length > 0) return filtered;
+      }
+      return all;
     }
-    return students.filter(s => !isDemoRecord(s));
-  }, [students, schoolDemoActive]);
+    const realStudents = students.filter(s => !isDemoRecord(s));
+    if (activeSession?.id) {
+      const filtered = realStudents.filter(s => s.sessionId === activeSession.id || !s.sessionId);
+      if (filtered.length > 0) return filtered;
+    }
+    return realStudents;
+  }, [students, schoolDemoActive, activeSession]);
 
   const displayedClasses = React.useMemo(() => {
     if (schoolDemoActive) {
       const demo = getDemoSchoolDataset();
-      return demo?.classes && demo.classes.length > 0 ? demo.classes : classes;
+      const all = demo?.classes && demo.classes.length > 0 ? demo.classes : classes;
+      if (activeSession?.id) {
+        const filtered = all.filter(c => c.sessionId === activeSession.id || !c.sessionId);
+        if (filtered.length > 0) return filtered;
+      }
+      return all;
     }
-    return classes.filter(c => !isDemoRecord(c));
-  }, [classes, schoolDemoActive]);
+    const realClasses = classes.filter(c => !isDemoRecord(c));
+    if (activeSession?.id) {
+      const filtered = realClasses.filter(c => c.sessionId === activeSession.id || !c.sessionId);
+      if (filtered.length > 0) return filtered;
+    }
+    return realClasses;
+  }, [classes, schoolDemoActive, activeSession]);
 
   const displayedTeachers = React.useMemo(() => {
     if (schoolDemoActive) {
       const demo = getDemoSchoolDataset();
-      return demo?.teachers && demo.teachers.length > 0 ? demo.teachers : teachers;
+      const all = demo?.teachers && demo.teachers.length > 0 ? demo.teachers : teachers;
+      if (activeSession?.id) {
+        const activeClassIds = new Set(displayedClasses.map(c => c.id));
+        const filtered = all.filter(t => !t.classes || t.classes.length === 0 || t.classes.some(cid => activeClassIds.has(cid)));
+        if (filtered.length > 0) return filtered;
+      }
+      return all;
     }
     return teachers.filter(t => !isDemoRecord(t));
-  }, [teachers, schoolDemoActive]);
+  }, [teachers, schoolDemoActive, displayedClasses, activeSession]);
 
   const displayedSessions = React.useMemo(() => {
+    let list: SchoolSession[] = [];
     if (schoolDemoActive) {
       const demo = getDemoSchoolDataset();
+      const demoSessions = demo?.sessions && demo.sessions.length > 0 ? demo.sessions : (demo?.session ? [demo.session] : []);
       const realSess = sessions.filter(s => !isDemoRecord(s));
-      return demo?.session ? [demo.session, ...realSess] : sessions;
+      list = demoSessions.length > 0 ? [...demoSessions, ...realSess.filter(r => !demoSessions.some(d => d.id === r.id))] : sessions;
+    } else {
+      list = sessions.filter(s => !isDemoRecord(s));
     }
-    return sessions.filter(s => !isDemoRecord(s));
-  }, [sessions, schoolDemoActive]);
+    if (activeSession?.id) {
+      return list.map(s => ({ ...s, active: s.id === activeSession.id }));
+    }
+    return list;
+  }, [sessions, schoolDemoActive, activeSession]);
 
   // Today's Birthdays automated detection
   const todaysBirthdayStudents = React.useMemo(() => {
@@ -676,9 +724,24 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     loadSubAdmins();
     getStaffEmployees(schoolId).then(setStaffList).catch(() => {});
     const unsubSessions = subscribeToSessions(schoolId, (sess) => {
-      setSessions(sess);
-      const active = sess.find(s => s.active) || sess[0] || null;
-      setActiveSession(active);
+      setSessions(prev => {
+        if (
+          prev.length === sess.length &&
+          prev.every((p, i) => p.id === sess[i]?.id && p.active === sess[i]?.active && p.name === sess[i]?.name)
+        ) {
+          return prev;
+        }
+        return sess;
+      });
+      const savedSessionId = typeof localStorage !== "undefined" ? localStorage.getItem(`nst_active_session_${schoolId}`) : null;
+      const active = (savedSessionId && sess.find(s => s.id === savedSessionId)) || sess.find(s => s.active) || sess[0] || null;
+      setActiveSession(prev => {
+        if (!prev && !active) return null;
+        if (prev?.id === active?.id && prev?.name === active?.name && prev?.active === active?.active) {
+          return prev;
+        }
+        return active;
+      });
     });
     const unsubTeachers = subscribeToTeachers(schoolId, setTeachers);
     const unsubStudents = subscribeToAllStudents(schoolId, (stList) => {
@@ -694,21 +757,32 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     let isCurrentView = true;
     if (!school) setSchoolLoading(true);
     getSchool(schoolId).then(s => {
-      if (!isCurrentView) return;
-      setSchool(s);
-      if (s) {
-        setLockCodeInput(s.lockCode || "");
-        setLockCodeActive(s.lockCodeActive ?? false);
-      }
+      if (!isCurrentView || !s) return;
+      setSchool(prev => {
+        if (
+          prev &&
+          prev.id === s.id &&
+          prev.name === s.name &&
+          prev.logoUrl === s.logoUrl &&
+          prev.lockCode === s.lockCode &&
+          prev.lockCodeActive === s.lockCodeActive &&
+          JSON.stringify(prev.subscription) === JSON.stringify(s.subscription)
+        ) {
+          return prev;
+        }
+        return s;
+      });
+      setLockCodeInput(s.lockCode || "");
+      setLockCodeActive(s.lockCodeActive ?? false);
     }).catch(() => {
-      if (isCurrentView) setSchool(null);
+      if (isCurrentView && !school) setSchool(null);
     }).finally(() => {
       if (isCurrentView) setSchoolLoading(false);
     });
     return () => {
       isCurrentView = false;
     };
-  }, [schoolId, view]);
+  }, [schoolId]);
 
   useEffect(() => {
     const handleSchoolUpdated = (e: any) => {
@@ -731,21 +805,36 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   }, [schoolId]);
 
   useEffect(() => {
-    if (!activeSession) return;
-    const unsubClasses = subscribeToClasses(schoolId, activeSession.id, setClasses);
+    if (!activeSession?.id) return;
+    const unsubClasses = subscribeToClasses(schoolId, activeSession.id, (clsList) => {
+      setClasses(prev => {
+        if (prev.length === clsList.length && prev.every((c, i) => c.id === clsList[i]?.id)) {
+          return prev;
+        }
+        return clsList;
+      });
+    });
     return unsubClasses;
-  }, [schoolId, activeSession]);
+  }, [schoolId, activeSession?.id]);
 
+  const autoUpgradeCheckedRef = useRef(false);
   useEffect(() => {
     // Only auto upgrade demo dataset if demo mode is active for the default demo school
-    if (!schoolDemoActive) return;
+    if (!schoolDemoActive || autoUpgradeCheckedRef.current || demoGenerating) return;
     if (activeSession?.id === DEMO_SESSION_ID && classes.length > 0) {
-      const hasOldSplit = classes.some(c => c.id.includes("_a") || c.id.includes("_b"));
-      if (hasOldSplit && !demoGenerating) {
-        seedDemoSchoolData(schoolId, adminUid).catch(err => console.warn("Auto demo upgrade:", err));
+      // Strictly match old section-split IDs (ending in _a or _b), never matching _arts
+      const hasOldSplit = classes.some(c => /_(?:section_)?[ab]$/i.test(c.id) && !c.id.includes("_arts"));
+      if (hasOldSplit) {
+        autoUpgradeCheckedRef.current = true;
+        setDemoGenerating(true);
+        seedDemoSchoolData(schoolId, adminUid)
+          .catch(err => console.warn("Auto demo upgrade:", err))
+          .finally(() => setDemoGenerating(false));
+      } else {
+        autoUpgradeCheckedRef.current = true;
       }
     }
-  }, [activeSession, classes, demoGenerating, schoolId, adminUid, schoolDemoActive]);
+  }, [activeSession?.id, classes, demoGenerating, schoolId, adminUid, schoolDemoActive]);
 
   useEffect(() => {
     if (!selectedClass) return;
@@ -756,15 +845,36 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const addSession = async () => {
     if (!sessionForm.name.trim()) return;
     setSaving(true);
-    const id = generateId();
-    await saveSession({
-      id, schoolId, name: sessionForm.name,
-      startDate: sessionForm.startDate, endDate: sessionForm.endDate, active: true,
+    const id = `sess_${schoolId}_${Date.now()}`;
+    const newSession: SchoolSession = {
+      id,
+      schoolId,
+      name: sessionForm.name.trim(),
+      startDate: sessionForm.startDate || "2027-04-01",
+      endDate: sessionForm.endDate || "2028-03-31",
+      active: true,
       createdAt: new Date().toISOString()
-    });
+    };
+    await saveSession(newSession);
+
+    // If copyClassesFromCurrent is checked, copy existing class structure to new session
+    if (copyClassesFromCurrent && displayedClasses.length > 0) {
+      const clonedClasses: SchoolClass[] = displayedClasses.map(cls => ({
+        ...cls,
+        id: generateId(),
+        sessionId: id,
+        createdAt: new Date().toISOString()
+      }));
+      await Promise.all(clonedClasses.map(c => saveClass(c)));
+    }
+
+    await handleActivateSession(newSession);
     setSessionForm({ name: "", startDate: "", endDate: "" });
     setShowForm(null);
+    setShowSessionModal(false);
     setSaving(false);
+    setDemoMessage(`✅ नया सत्र सफलतापूर्वक जोड़ा गया: ${newSession.name}`);
+    setTimeout(() => setDemoMessage(null), 3500);
   };
 
   const addClass = async () => {
@@ -951,13 +1061,19 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const saveEditSession = async () => {
     if (!editingSessionId || !editSessionForm.name.trim()) return;
     setSaving(true);
-    await updateSession(schoolId, editingSessionId, {
+    const updatedData = {
       name: editSessionForm.name.trim(),
       startDate: editSessionForm.startDate,
       endDate: editSessionForm.endDate,
-    });
+    };
+    await updateSession(schoolId, editingSessionId, updatedData);
+    if (activeSession?.id === editingSessionId) {
+      setActiveSession(prev => prev ? { ...prev, ...updatedData } : null);
+    }
     setEditingSessionId(null);
     setSaving(false);
+    setDemoMessage("✅ सत्र विवरण सफलतापूर्वक अपडेट किया गया।");
+    setTimeout(() => setDemoMessage(null), 3000);
   };
 
   const saveEditClass = async () => {
@@ -996,30 +1112,42 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
   const handleActivateSession = async (session: SchoolSession) => {
     setSaving(true);
-    await Promise.all(sessions.map(item =>
+    try {
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem(`nst_active_session_${schoolId}`, session.id);
+      }
+    } catch {}
+    setActiveSession({ ...session, active: true });
+    await Promise.all(displayedSessions.map(item =>
       updateSession(schoolId, item.id, { active: item.id === session.id })
     ));
-    setActiveSession(session);
     setSaving(false);
+    setShowSessionModal(false);
+    setDemoMessage(`✅ सत्र बदला गया: ${session.name}`);
+    setTimeout(() => setDemoMessage(null), 3000);
   };
 
   const handleDeleteSession = async (session: SchoolSession) => {
-    if (sessions.length <= 1) {
+    if (displayedSessions.length <= 1) {
       setDemoMessage("⚠️ Aap aakhiri session delete nahi kar sakte. School me kam se kam ek academic session hona zaroori hai.");
+      setTimeout(() => setDemoMessage(null), 3500);
       return;
     }
 
     setSaving(true);
     try {
       await deleteSession(schoolId, session.id);
-      const remainingSessions = sessions.filter(s => s.id !== session.id);
+      const remainingSessions = displayedSessions.filter(s => s.id !== session.id);
       setSessions(remainingSessions);
       if (activeSession?.id === session.id && remainingSessions.length > 0) {
         await handleActivateSession(remainingSessions[0]);
       }
+      setDemoMessage(`🗑️ सत्र हटा दिया गया: ${session.name}`);
+      setTimeout(() => setDemoMessage(null), 3000);
     } catch (err) {
       console.error("Error deleting session:", err);
       setDemoMessage("⚠️ Session delete karne me samasya aayi.");
+      setTimeout(() => setDemoMessage(null), 3500);
     } finally {
       setSaving(false);
     }
@@ -1488,6 +1616,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         hoverBg: "hover:bg-emerald-950/40 hover:text-emerald-200",
       },
       items: [
+        { id: "sessions" as AdminView, label: "Academic Sessions (सत्र)", icon: Calendar, desc: "सत्र बदलें, नया सत्र जोड़ें व एडिट करें" },
         { id: "classes" as AdminView, label: "Classes & Sections", icon: BookOpen, desc: "कक्षाएं, वर्ग व अटेंडेंस" },
         { id: "class_notes_manager" as AdminView, label: "Class 1-12 Notes Manager", icon: Sparkles, desc: "स्कूल पाठ्यक्रम नोट्स, MCQ, Video व PDF" },
         { id: "students" as AdminView, label: "Students Directory", icon: Users, desc: "नामांकन व छात्र प्रोफाइल" },
@@ -1749,7 +1878,19 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               </div>
               <div className="min-w-0">
                 <h3 className="font-black text-xs text-white truncate">{school?.name || "School ERP"}</h3>
-                <p className="text-[9px] text-blue-300 font-bold">{activeSession?.name || "2026-27"}</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsSidebarOpen(false);
+                    setShowSessionModal(true);
+                  }}
+                  className="text-[9.5px] text-emerald-400 hover:text-emerald-300 font-bold flex items-center gap-1 cursor-pointer transition"
+                  title="सत्र बदलें / Switch Session"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                  <span className="truncate">{activeSession?.name ? activeSession.name.replace(/Academic Session |Session /i, "") : "2026-27"}</span>
+                  <ChevronDown className="w-2.5 h-2.5 opacity-80 shrink-0" />
+                </button>
               </div>
             </div>
             <button
@@ -1950,10 +2091,19 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               <span className="xs:hidden">{isNativeLandscape ? "📱" : "🔄 Rotate"}</span>
             </button>
 
-            <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 text-[11px] font-bold">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              <span>सत्र: {activeSession?.name || "2026-27"}</span>
-            </span>
+            <button
+              type="button"
+              onClick={() => setShowSessionModal(true)}
+              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-800 dark:text-emerald-200 border border-emerald-500/35 text-xs font-black transition cursor-pointer active:scale-95 shadow-xs"
+              title="सत्र बदलें, नया सत्र जोड़ें या एडिट करें (Click to Switch/Edit Academic Session)"
+            >
+              <Calendar className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+              <span className="tabular-nums font-mono truncate max-w-[120px] sm:max-w-none">
+                सत्र: {activeSession?.name ? activeSession.name.replace(/Academic Session |Session /i, "") : "2026-27"}
+              </span>
+              <ChevronDown className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-300 opacity-80 shrink-0" />
+            </button>
 
             {canExitSchool && (
               <button
@@ -2089,6 +2239,111 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             <p className="text-[10px] text-teal-500 font-medium mt-0.5">Average weekly rate →</p>
           </button>
         </div>
+
+        {/* ── TWO MAJOR ATTENDANCE FEATURES ON HOME DASHBOARD ── */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* FEATURE 1 HERO CARD: UNIVERSAL 1-TAP IN/OUT ATTENDANCE DESK */}
+          <div className="bg-gradient-to-br from-indigo-950 via-slate-900 to-blue-950 rounded-3xl p-5 border-2 border-indigo-500/40 shadow-xl text-white relative overflow-hidden flex flex-col justify-between space-y-4">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-indigo-500 text-white shadow-xs">
+                  FEATURE 1 • होम हाजिरी डेस्क
+                </span>
+                <span className="text-xs font-mono text-amber-300 font-bold flex items-center gap-1">
+                  <Clock className="w-3.5 h-3.5 text-amber-400" />
+                  <span>All In / Out</span>
+                </span>
+              </div>
+              <h3 className="font-black text-lg text-white">
+                ⚡ त्वरित हाजिरी पंच (Universal 1-Tap Attendance Desk)
+              </h3>
+              <p className="text-xs text-indigo-200/90 leading-relaxed">
+                स्कूल एडमिन, सभी शिक्षक और किसी भी क्लास (Nursery से 12वीं) के छात्र का <strong>Punch IN (आगमन)</strong> व <strong>Punch OUT (प्रस्थान)</strong> सीधे यहीं से लगाएं।
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 pt-1 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setShowAdminIdCardModal(true)}
+                className="px-3 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs transition active:scale-95 shadow-md flex items-center gap-1.5 cursor-pointer"
+              >
+                <Crown className="w-3.5 h-3.5 fill-slate-950" />
+                <span>🪪 Admin ID Card</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowSchoolLocationModal(true)}
+                className="px-3 py-2 rounded-xl bg-white/15 hover:bg-white/25 text-white font-bold text-xs transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
+              >
+                <MapPin className="w-3.5 h-3.5 text-blue-300" />
+                <span>📍 School GPS Location</span>
+              </button>
+            </div>
+          </div>
+
+          {/* FEATURE 2 HERO CARD: UNIVERSAL QR & FACE SCANNER DESK */}
+          <div className="bg-gradient-to-br from-purple-950 via-slate-900 to-indigo-950 rounded-3xl p-5 border-2 border-purple-500/40 shadow-xl text-white relative overflow-hidden flex flex-col justify-between space-y-4">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-purple-500 text-white shadow-xs">
+                  FEATURE 2 • क्यूआर व फेस स्कैनर
+                </span>
+                <span className="text-xs font-mono text-emerald-300 font-bold flex items-center gap-1">
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Auto Detect</span>
+                </span>
+              </div>
+              <h3 className="font-black text-lg text-white">
+                📷 यूनिवर्सल स्कैनर (Universal QR &amp; Face Punch Desk)
+              </h3>
+              <p className="text-xs text-purple-200/90 leading-relaxed">
+                किसी भी क्लास के छात्र, शिक्षक या स्कूल एडमिन का ID Card QR कोड स्कैन करें। आगमन या प्रस्थान अपने-आप ऑडियो आवाज़ के साथ दर्ज होगा।
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 pt-1 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setShowUniversalScannerModal(true)}
+                className="px-4 py-2 rounded-xl bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-400 hover:to-indigo-400 text-white font-black text-xs transition active:scale-95 shadow-md flex items-center gap-1.5 cursor-pointer"
+              >
+                <Camera className="w-4 h-4" />
+                <span>📷 Open QR Scanner</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowFaceKioskModal(true)}
+                className="px-3.5 py-2 rounded-xl bg-white/15 hover:bg-white/25 text-white font-bold text-xs transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
+              >
+                <span>🤖 AI Face Kiosk</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* ── EMBEDDED UNIVERSAL ATTENDANCE DESK ── */}
+        {school && (
+          <UniversalAttendanceDesk
+            school={school}
+            classes={displayedClasses}
+            students={displayedStudents}
+            teachers={displayedTeachers}
+            staff={staffList}
+            onOpenScanner={() => setShowUniversalScannerModal(true)}
+            onOpenLocationModal={() => setShowSchoolLocationModal(true)}
+            onViewClassAttendance={(clsId) => {
+              const found = displayedClasses.find(c => c.id === clsId);
+              if (found) {
+                setSelectedClass(found);
+                setView("attendance");
+              }
+            }}
+          />
+        )}
+
 
         {/* ── BIRTHDAY WISH SENT TOAST ── */}
         {birthdayWishToast && (
@@ -2751,6 +3006,74 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           </div>
         </div>
 
+        {/* Box 3 & 4: Campus Live GPS Location & Official Admin ID Card */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+          {/* School Live GPS Geofence */}
+          <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <MapPin className="w-4 h-4 text-blue-600" />
+                <h4 className="font-bold text-sm text-slate-800 dark:text-white">Campus Live GPS &amp; Geofence</h4>
+              </div>
+              <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${school.latitude ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-slate-100 dark:bg-slate-700 text-slate-500'}`}>
+                {school.latitude ? '📍 GPS Configured' : 'Not Set'}
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {school.latitude && school.longitude
+                ? `Coordinates: ${school.latitude.toFixed(4)}° N, ${school.longitude.toFixed(4)}° E • Radius: ${school.locationRadiusMeters || 200}m`
+                : "स्कूल परिसर की लाइव GPS लोकेशन सेट करें जिससे हाजिरी केवल कैंपस के अंदर लग सके।"}
+            </p>
+            <div className="pt-2 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowSchoolLocationModal(true)}
+                className="flex-1 py-2.5 px-3 rounded-xl bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 font-bold text-xs border border-blue-200 dark:border-blue-800 transition cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <Compass className="w-3.5 h-3.5" />
+                <span>लाइव GPS सेट / बदलें</span>
+              </button>
+              {school.latitude && school.longitude && (
+                <a
+                  href={`https://www.google.com/maps?q=${school.latitude},${school.longitude}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="p-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs transition cursor-pointer"
+                  title="Google Maps पर देखें"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              )}
+            </div>
+          </div>
+
+          {/* Official Admin Identity Card */}
+          <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Crown className="w-4 h-4 text-amber-500" />
+                <h4 className="font-bold text-sm text-slate-800 dark:text-white">Official Admin Identity Card</h4>
+              </div>
+              <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                👑 ADMIN-01
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              प्रिंसिपल व स्कूल हेड का आधिकारिक डिजिटल पहचान पत्र, बारकोड व त्वरित हाजिरी QR कोड।
+            </p>
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => setShowAdminIdCardModal(true)}
+                className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-xs active:scale-95"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>🪪 Admin ID Card देखें / प्रिंट करें</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
         {/* Sub-Admin Authorization Management */}
         <div className="bg-white dark:bg-slate-800 rounded-3xl p-6 border border-slate-200 dark:border-slate-700 shadow-sm space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -3198,6 +3521,52 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           />
         )}
 
+        {/* Universal Attendance Scanner Modal */}
+        {school && showUniversalScannerModal && (
+          <UniversalAttendanceScannerModal
+            isOpen={showUniversalScannerModal}
+            onClose={() => setShowUniversalScannerModal(false)}
+            school={school}
+            classes={displayedClasses}
+            students={displayedStudents}
+            teachers={displayedTeachers}
+            onOpenFaceKiosk={() => setShowFaceKioskModal(true)}
+          />
+        )}
+
+        {/* School Location Modal */}
+        {school && showSchoolLocationModal && (
+          <SchoolLocationModal
+            isOpen={showSchoolLocationModal}
+            onClose={() => setShowSchoolLocationModal(false)}
+            school={school}
+            onLocationSaved={(newLoc) => {
+              setSchool(prev => prev ? ({ ...prev, ...newLoc }) : null);
+            }}
+          />
+        )}
+
+        {/* Official Admin ID Card Modal */}
+        {school && showAdminIdCardModal && (
+          <AdminIdCardModal
+            isOpen={showAdminIdCardModal}
+            onClose={() => setShowAdminIdCardModal(false)}
+            school={school}
+          />
+        )}
+
+        {/* AI Face Attendance Kiosk Modal */}
+        {school && showFaceKioskModal && (
+          <FaceAttendanceKioskModal
+            isOpen={showFaceKioskModal}
+            onClose={() => setShowFaceKioskModal(false)}
+            schoolId={school.id}
+            schoolName={school.name}
+            classes={displayedClasses}
+            students={displayedStudents}
+          />
+        )}
+
         {/* Digital Signature & School Header Modals */}
         {school && showFullSchoolProfileEditor && (
           <SchoolHeaderEditorModal
@@ -3368,6 +3737,318 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                 >
                   {leavingSchoolLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <LogOut className="w-4 h-4" />}
                   <span>हाँ, स्कूल छोड़ें</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {/* Academic Session Manager Modal (Switch, Add, Edit Sessions) */}
+        {showSessionModal && (
+          <div className="fixed inset-0 z-[9999] bg-black/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in">
+            <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-xl w-full p-5 sm:p-6 border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+              {/* Modal Header */}
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center shrink-0">
+                    <Calendar className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                  </div>
+                  <div>
+                    <h3 className="font-black text-base sm:text-lg text-slate-800 dark:text-white">
+                      सत्र प्रबंधन (Academic Session Manager)
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      सत्र बदलें, नया सत्र जोड़ें या तारीखें संपादित करें
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowSessionModal(false)}
+                  className="p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Active Session Highlight Banner */}
+              <div className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-500/15 via-teal-500/10 to-emerald-500/15 border border-emerald-500/30 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                    <span className="text-xs font-bold text-emerald-800 dark:text-emerald-300 uppercase tracking-wider">
+                      वर्तमान सक्रिय सत्र (Active Session)
+                    </span>
+                  </div>
+                  <h4 className="text-sm sm:text-base font-black text-slate-900 dark:text-white mt-0.5 truncate">
+                    {activeSession?.name || "Academic Session 2026-27"}
+                  </h4>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono mt-0.5">
+                    {activeSession?.startDate || "2026-04-01"} → {activeSession?.endDate || "2027-03-31"}
+                  </p>
+                </div>
+                <div className="text-right shrink-0">
+                  <span className="text-[10px] px-2.5 py-1 rounded-full bg-emerald-600 text-white font-bold shadow-xs">
+                    Current Active
+                  </span>
+                </div>
+              </div>
+
+              {/* Add New Session Toggle / Form */}
+              <div className="border border-slate-200 dark:border-slate-800 rounded-2xl p-4 bg-slate-50/70 dark:bg-slate-800/40 space-y-3">
+                {showForm !== "session_modal" ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowForm("session_modal");
+                      setEditingSessionId(null);
+                      setSessionForm({
+                        name: "Session 2027-28",
+                        startDate: "2027-04-01",
+                        endDate: "2028-03-31"
+                      });
+                    }}
+                    className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer shadow-md shadow-blue-600/20 active:scale-98"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>+ नया सत्र जोड़ें (+ Add New Session)</span>
+                  </button>
+                ) : (
+                  <div className="space-y-3 pt-1 animate-in fade-in">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-black uppercase tracking-wider text-blue-600 dark:text-blue-400 flex items-center gap-1.5">
+                        <Plus className="w-3.5 h-3.5" /> नया शैक्षणिक सत्र जोड़ें
+                      </h4>
+                      <button
+                        type="button"
+                        onClick={() => setShowForm(null)}
+                        className="text-xs text-slate-400 hover:text-slate-600"
+                      >
+                        बंद करें (Cancel)
+                      </button>
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-600 dark:text-slate-300 block mb-1">
+                        सत्र का नाम (Session Name) *
+                      </label>
+                      <input
+                        type="text"
+                        value={sessionForm.name}
+                        onChange={e => setSessionForm(p => ({ ...p, name: e.target.value }))}
+                        placeholder="e.g. Session 2027-28 ya 2027-28"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-800 dark:text-white focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-600 dark:text-slate-300 block mb-1">
+                          आरंभ तिथि (Start Date)
+                        </label>
+                        <input
+                          type="date"
+                          value={sessionForm.startDate}
+                          onChange={e => setSessionForm(p => ({ ...p, startDate: e.target.value }))}
+                          className="w-full px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-800 dark:text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-600 dark:text-slate-300 block mb-1">
+                          समाप्ति तिथि (End Date)
+                        </label>
+                        <input
+                          type="date"
+                          value={sessionForm.endDate}
+                          onChange={e => setSessionForm(p => ({ ...p, endDate: e.target.value }))}
+                          className="w-full px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-800 dark:text-white"
+                        />
+                      </div>
+                    </div>
+
+                    <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-700 dark:text-slate-300 pt-1">
+                      <input
+                        type="checkbox"
+                        checked={copyClassesFromCurrent}
+                        onChange={e => setCopyClassesFromCurrent(e.target.checked)}
+                        className="w-4 h-4 rounded text-blue-600 accent-blue-600"
+                      />
+                      <span>वर्तमान सत्र से कक्षाएं कॉपी करें (Copy existing classes structure)</span>
+                    </label>
+
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={addSession}
+                        disabled={saving || !sessionForm.name.trim()}
+                        className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+                      >
+                        {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                        <span>सत्र सहेजें व सक्रिय करें (Save &amp; Activate)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowForm(null)}
+                        className="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                      >
+                        रद्द करें
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Sessions List */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs font-bold text-slate-500 dark:text-slate-400 px-1">
+                  <span>उपलब्ध सत्र सूची (Available Sessions)</span>
+                  <span className="tabular-nums font-mono">कुल: {displayedSessions.length} सत्र</span>
+                </div>
+
+                <div className="space-y-2">
+                  {displayedSessions.map((s, idx) => {
+                    const isActive = s.active || s.id === activeSession?.id;
+                    const isEditing = editingSessionId === s.id;
+                    const sessionClassesCount = classes.filter(c => c.sessionId === s.id).length;
+
+                    if (isEditing) {
+                      return (
+                        <div key={s.id || idx} className="p-3.5 rounded-2xl bg-blue-50/60 dark:bg-blue-950/30 border border-blue-300 dark:border-blue-800 space-y-3 animate-in fade-in">
+                          <p className="text-xs font-black text-blue-600 dark:text-blue-400 uppercase tracking-wider">
+                            सत्र संपादित करें (Edit Session)
+                          </p>
+                          <input
+                            type="text"
+                            value={editSessionForm.name}
+                            onChange={e => setEditSessionForm(p => ({ ...p, name: e.target.value }))}
+                            placeholder="Session Name"
+                            className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-xs font-bold text-slate-800 dark:text-white"
+                          />
+                          <div className="grid grid-cols-2 gap-2">
+                            <input
+                              type="date"
+                              value={editSessionForm.startDate}
+                              onChange={e => setEditSessionForm(p => ({ ...p, startDate: e.target.value }))}
+                              className="w-full px-3 py-1.5 border border-slate-300 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-xs text-slate-800 dark:text-white"
+                            />
+                            <input
+                              type="date"
+                              value={editSessionForm.endDate}
+                              onChange={e => setEditSessionForm(p => ({ ...p, endDate: e.target.value }))}
+                              className="w-full px-3 py-1.5 border border-slate-300 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-xs text-slate-800 dark:text-white"
+                            />
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={saveEditSession}
+                              disabled={saving}
+                              className="flex-1 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1 cursor-pointer"
+                            >
+                              <Save className="w-3.5 h-3.5" /> सहेजें (Save)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingSessionId(null)}
+                              className="px-3 py-2 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold cursor-pointer"
+                            >
+                              रद्द करें
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div
+                        key={s.id || idx}
+                        className={`p-3 sm:p-3.5 rounded-2xl border transition flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
+                          isActive
+                            ? "bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-500/40 ring-1 ring-emerald-500/30"
+                            : "bg-white dark:bg-slate-800/80 border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600"
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="font-black text-sm text-slate-900 dark:text-white">
+                              {s.name}
+                            </h4>
+                            {isActive && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300 font-extrabold flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                <span>सक्रिय सत्र (Active)</span>
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 font-mono mt-0.5">
+                            {s.startDate || "N/A"} → {s.endDate || "N/A"}
+                            {sessionClassesCount > 0 && ` • ${sessionClassesCount} कक्षाएं`}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-2 w-full sm:w-auto justify-end shrink-0">
+                          {!isActive && (
+                            <button
+                              type="button"
+                              onClick={() => handleActivateSession(s)}
+                              disabled={saving}
+                              className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1 shadow-sm transition cursor-pointer active:scale-95 disabled:opacity-50"
+                              title="इस सत्र को चालू करें"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                              <span>सक्रिय करें</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingSessionId(s.id);
+                              setEditSessionForm({
+                                name: s.name,
+                                startDate: s.startDate || "",
+                                endDate: s.endDate || ""
+                              });
+                            }}
+                            className="p-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-xs font-bold transition cursor-pointer"
+                            title="सत्र संपादित करें (Edit Session)"
+                          >
+                            <Edit3 className="w-3.5 h-3.5 text-blue-500" />
+                          </button>
+                          {displayedSessions.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteSession(s)}
+                              disabled={saving}
+                              className="p-1.5 rounded-xl bg-red-50 hover:bg-red-100 dark:bg-red-950/40 text-red-600 dark:text-red-400 text-xs font-bold transition cursor-pointer disabled:opacity-50"
+                              title="सत्र हटाएं (Delete Session)"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="pt-2 flex items-center justify-between border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSessionModal(false);
+                    setView("sessions");
+                  }}
+                  className="text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                >
+                  पूरा सत्र प्रबंधन पेज खोलें →
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowSessionModal(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white dark:bg-slate-800 dark:hover:bg-slate-700 text-xs font-bold transition cursor-pointer"
+                >
+                  बंद करें (Done)
                 </button>
               </div>
             </div>
@@ -3846,8 +4527,14 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   }
 
   if (view === "holidays") {
-    setView("notices");
-    return null;
+    return renderErpShell(
+      <NoticeBoardManager
+        schoolId={schoolId}
+        adminUid={adminUid}
+        isAdmin={true}
+        onBack={() => setView("dashboard")}
+      />
+    );
   }
 
   if (view === "staff_hrm") {
@@ -4407,89 +5094,289 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     }
     if (view === "sessions") {
       return (
-        <div className="p-4 space-y-3 max-w-2xl mx-auto">
-          <button onClick={() => { setShowForm("session"); setEditingSessionId(null); }}
-            className="w-full py-3 bg-blue-600 text-white rounded-xl font-medium flex items-center justify-center gap-2">
-            <Plus className="w-4 h-4" /> Add Session
-          </button>
-          {showForm === "session" && !editingSessionId && (
-            <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm space-y-3">
-              <input value={sessionForm.name} onChange={e => setSessionForm(p => ({ ...p, name: e.target.value }))}
-                placeholder="Session Name (e.g. 2026-27)"
-                className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white" />
-              <div className="flex gap-2">
-                <input type="date" value={sessionForm.startDate} onChange={e => setSessionForm(p => ({ ...p, startDate: e.target.value }))}
-                  className="flex-1 px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
-                <input type="date" value={sessionForm.endDate} onChange={e => setSessionForm(p => ({ ...p, endDate: e.target.value }))}
-                  className="flex-1 px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
+        <div className="p-4 sm:p-6 space-y-5 max-w-4xl mx-auto animate-in fade-in duration-200">
+          {/* Top Header Card with Back Button */}
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setView("dashboard")}
+                className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition cursor-pointer active:scale-95"
+                title="डैशबोर्ड पर वापस लौटें"
+              >
+                <ChevronLeft className="w-5 h-5" />
+              </button>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
+                    शैक्षणिक सत्र (Academic Sessions)
+                  </h2>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 font-bold">
+                    सत्र: {displayedSessions.length}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  सत्र बदलें, नया सत्र जोड़ें, संपादित करें व वार्षिक डेटा पृथक रखें
+                </p>
               </div>
-              <div className="flex gap-2">
-                <button onClick={addSession} disabled={saving} className="flex-1 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-60">Save</button>
-                <button onClick={() => setShowForm(null)} className="flex-1 py-2 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg text-sm">Cancel</button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowForm(showForm === "session" ? null : "session");
+                setEditingSessionId(null);
+                setSessionForm({
+                  name: "Session 2027-28",
+                  startDate: "2027-04-01",
+                  endDate: "2028-03-31"
+                });
+              }}
+              className="w-full sm:w-auto px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-blue-600/20 transition cursor-pointer active:scale-95 shrink-0"
+            >
+              <Plus className="w-4 h-4" />
+              <span>+ नया सत्र जोड़ें (+ Add Session)</span>
+            </button>
+          </div>
+
+          {/* Active Session Highlight Banner */}
+          <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-500/15 via-teal-500/10 to-emerald-500/15 border border-emerald-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                <span className="text-xs font-bold text-emerald-800 dark:text-emerald-300 uppercase tracking-wider">
+                  वर्तमान सक्रिय सत्र (Current Active Academic Year)
+                </span>
+              </div>
+              <h3 className="text-base sm:text-lg font-black text-slate-900 dark:text-white mt-1">
+                {activeSession?.name || "Academic Session 2026-27"}
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 font-mono mt-0.5">
+                अवधि: {activeSession?.startDate || "2026-04-01"} → {activeSession?.endDate || "2027-03-31"} • {displayedClasses.length} कक्षाएं • {displayedStudents.length} छात्र
+              </p>
+            </div>
+            <span className="text-xs px-3 py-1 rounded-full bg-emerald-600 text-white font-black shadow-xs shrink-0">
+              Active Session
+            </span>
+          </div>
+
+          {/* Add Session Form */}
+          {showForm === "session" && !editingSessionId && (
+            <div className="bg-white dark:bg-slate-800 rounded-2xl p-5 border border-blue-300 dark:border-blue-700 shadow-md space-y-4 animate-in fade-in">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-700">
+                <h4 className="text-sm font-black text-blue-600 dark:text-blue-400 flex items-center gap-2">
+                  <Plus className="w-4 h-4" /> नया शैक्षणिक सत्र जोड़ें (Create New Academic Session)
+                </h4>
+                <button
+                  type="button"
+                  onClick={() => setShowForm(null)}
+                  className="text-xs text-slate-400 hover:text-slate-600 font-bold"
+                >
+                  ✕ Cancel
+                </button>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                  सत्र का नाम (Session Name) *
+                </label>
+                <input
+                  type="text"
+                  value={sessionForm.name}
+                  onChange={e => setSessionForm(p => ({ ...p, name: e.target.value }))}
+                  placeholder="e.g. Session 2027-28 ya 2027-28"
+                  className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900 text-sm font-bold text-slate-800 dark:text-white focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                    आरंभ तिथि (Session Start Date)
+                  </label>
+                  <input
+                    type="date"
+                    value={sessionForm.startDate}
+                    onChange={e => setSessionForm(p => ({ ...p, startDate: e.target.value }))}
+                    className="w-full px-3.5 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900 text-xs font-medium text-slate-800 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                    समाप्ति तिथि (Session End Date)
+                  </label>
+                  <input
+                    type="date"
+                    value={sessionForm.endDate}
+                    onChange={e => setSessionForm(p => ({ ...p, endDate: e.target.value }))}
+                    className="w-full px-3.5 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900 text-xs font-medium text-slate-800 dark:text-white"
+                  />
+                </div>
+              </div>
+
+              <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-700 dark:text-slate-300 pt-1">
+                <input
+                  type="checkbox"
+                  checked={copyClassesFromCurrent}
+                  onChange={e => setCopyClassesFromCurrent(e.target.checked)}
+                  className="w-4 h-4 rounded text-blue-600 accent-blue-600"
+                />
+                <span>वर्तमान सत्र की कक्षा संरचना (Classes &amp; Sections) नए सत्र में कॉपी करें</span>
+              </label>
+
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={addSession}
+                  disabled={saving || !sessionForm.name.trim()}
+                  className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer shadow-md shadow-blue-600/25 disabled:opacity-50"
+                >
+                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  <span>सत्र सहेजें व सक्रिय करें (Save &amp; Set Active)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowForm(null)}
+                  className="px-5 py-3 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
+                >
+                  रद्द करें
+                </button>
               </div>
             </div>
           )}
-          {displayedSessions.map((s, idx) => (
-            <div key={s.id || `session-${s.name || idx}-${idx}`} className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm">
-              {editingSessionId === s.id ? (
-                <div className="space-y-3">
-                  <p className="text-xs font-semibold text-blue-500 uppercase tracking-wider">Edit Session</p>
-                  <input value={editSessionForm.name} onChange={e => setEditSessionForm(p => ({ ...p, name: e.target.value }))}
-                    placeholder="Session Name" className="w-full px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
-                  <div className="flex gap-2">
-                    <input type="date" value={editSessionForm.startDate} onChange={e => setEditSessionForm(p => ({ ...p, startDate: e.target.value }))}
-                      className="flex-1 px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
-                    <input type="date" value={editSessionForm.endDate} onChange={e => setEditSessionForm(p => ({ ...p, endDate: e.target.value }))}
-                      className="flex-1 px-3 py-2 border dark:border-slate-600 rounded-lg bg-transparent text-slate-800 dark:text-white text-sm" />
-                  </div>
-                  <div className="flex gap-2">
-                    <button onClick={saveEditSession} disabled={saving} className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-60">
-                      <Save className="w-3.5 h-3.5" /> {saving ? "Saving..." : "Save"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteSession(s)}
-                      disabled={saving}
-                      className="px-3 py-2 bg-red-50 hover:bg-red-100 dark:bg-red-950/40 text-red-600 dark:text-red-400 rounded-lg text-sm font-medium flex items-center gap-1 transition cursor-pointer"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" /> Delete
-                    </button>
-                    <button onClick={() => setEditingSessionId(null)} className="px-3 py-2 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg text-sm">Cancel</button>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-center gap-3">
-                  <div className="flex-1">
-                    <p className="font-bold text-slate-800 dark:text-white">{s.name}</p>
-                    <p className="text-xs text-slate-400">{s.startDate} → {s.endDate}</p>
-                  </div>
-                  {s.active && <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">Active</span>}
-                  {!s.active && (
-                    <button
-                      onClick={() => handleActivateSession(s)}
-                      disabled={saving}
-                      className="px-2.5 py-1.5 rounded-lg bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 text-xs font-semibold disabled:opacity-50"
-                    >
-                      Use this session
-                    </button>
+
+          {/* Sessions List */}
+          <div className="space-y-3">
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 px-1">
+              सभी शैक्षणिक सत्र (All School Sessions)
+            </h3>
+
+            {displayedSessions.map((s, idx) => {
+              const isActive = s.active || s.id === activeSession?.id;
+              const isEditing = editingSessionId === s.id;
+              const sessionClassesCount = classes.filter(c => c.sessionId === s.id).length;
+
+              return (
+                <div
+                  key={s.id || `session-${s.name || idx}-${idx}`}
+                  className={`rounded-2xl p-4 sm:p-5 border transition-all ${
+                    isActive
+                      ? "bg-white dark:bg-slate-800/95 border-emerald-500/50 shadow-md ring-1 ring-emerald-500/30"
+                      : "bg-white dark:bg-slate-800/70 border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 shadow-sm"
+                  }`}
+                >
+                  {isEditing ? (
+                    <div className="space-y-3 animate-in fade-in">
+                      <p className="text-xs font-black text-blue-600 dark:text-blue-400 uppercase tracking-wider">
+                        सत्र संपादित करें (Edit Session Details)
+                      </p>
+                      <input
+                        type="text"
+                        value={editSessionForm.name}
+                        onChange={e => setEditSessionForm(p => ({ ...p, name: e.target.value }))}
+                        placeholder="Session Name"
+                        className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-xl bg-slate-50 dark:bg-slate-900 text-xs font-bold text-slate-800 dark:text-white"
+                      />
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <input
+                          type="date"
+                          value={editSessionForm.startDate}
+                          onChange={e => setEditSessionForm(p => ({ ...p, startDate: e.target.value }))}
+                          className="w-full px-3 py-1.5 border border-slate-300 dark:border-slate-600 rounded-xl bg-slate-50 dark:bg-slate-900 text-xs text-slate-800 dark:text-white"
+                        />
+                        <input
+                          type="date"
+                          value={editSessionForm.endDate}
+                          onChange={e => setEditSessionForm(p => ({ ...p, endDate: e.target.value }))}
+                          className="w-full px-3 py-1.5 border border-slate-300 dark:border-slate-600 rounded-xl bg-slate-50 dark:bg-slate-900 text-xs text-slate-800 dark:text-white"
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={saveEditSession}
+                          disabled={saving}
+                          className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold disabled:opacity-60 transition cursor-pointer"
+                        >
+                          <Save className="w-3.5 h-3.5" /> {saving ? "Saving..." : "सहेजें (Save)"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingSessionId(null)}
+                          className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-bold transition cursor-pointer"
+                        >
+                          रद्द करें
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h4 className="font-black text-base text-slate-900 dark:text-white">
+                            {s.name}
+                          </h4>
+                          {isActive && (
+                            <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300 font-extrabold flex items-center gap-1 shadow-xs">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                              <span>वर्तमान सक्रिय (Current Active)</span>
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 font-mono mt-1">
+                          {s.startDate || "N/A"} → {s.endDate || "N/A"}
+                          {sessionClassesCount > 0 && ` • ${sessionClassesCount} कक्षाएं`}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2 w-full sm:w-auto justify-end shrink-0">
+                        {!isActive && (
+                          <button
+                            type="button"
+                            onClick={() => handleActivateSession(s)}
+                            disabled={saving}
+                            className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-emerald-600/20 transition cursor-pointer active:scale-95 disabled:opacity-50"
+                            title="इस सत्र को चालू करें"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>सक्रिय करें (Switch to this)</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingSessionId(s.id);
+                            setEditSessionForm({
+                              name: s.name,
+                              startDate: s.startDate || "",
+                              endDate: s.endDate || ""
+                            });
+                            setShowForm(null);
+                          }}
+                          className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                          title="सत्र विवरण बदलें"
+                        >
+                          <Edit3 className="w-3.5 h-3.5 text-blue-500" />
+                          <span>Edit</span>
+                        </button>
+                        {displayedSessions.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteSession(s)}
+                            disabled={saving}
+                            className="p-2 rounded-xl bg-red-50 hover:bg-red-100 dark:bg-red-950/40 text-red-600 dark:text-red-400 transition cursor-pointer disabled:opacity-50"
+                            title="सत्र हटाएं"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
                   )}
-                  <button onClick={() => { setEditingSessionId(s.id); setEditSessionForm({ name: s.name, startDate: s.startDate || "", endDate: s.endDate || "" }); setShowForm(null); }}
-                    className="p-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-500" title="Edit Session">
-                    <Edit3 className="w-4 h-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteSession(s)}
-                    disabled={saving}
-                    className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-red-500 transition cursor-pointer"
-                    title="Delete Session"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
                 </div>
-              )}
-            </div>
-          ))}
+              );
+            })}
+          </div>
         </div>
       );
     }
@@ -6046,24 +6933,65 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     }
 
     if (view === "students") {
-      const classStudents = selectedClass ? displayedStudents.filter(s => isStudentInClass(s, selectedClass.id, selectedClass.name)) : displayedStudents;
+      const rawClassStudents = selectedClass ? displayedStudents.filter(s => isStudentInClass(s, selectedClass.id, selectedClass.name)) : displayedStudents;
+      const filteredStudents = rawClassStudents.filter(s => {
+        if (!studentSearchQuery.trim()) return true;
+        const q = studentSearchQuery.toLowerCase().trim();
+        return (
+          (s.name && s.name.toLowerCase().includes(q)) ||
+          (s.admissionNo && s.admissionNo.toLowerCase().includes(q)) ||
+          (s.rollNo && String(s.rollNo).includes(q)) ||
+          (s.fatherName && s.fatherName.toLowerCase().includes(q)) ||
+          (s.phone && s.phone.includes(q))
+        );
+      });
+
+      const pageSize = 50;
+      const totalPages = Math.max(1, Math.ceil(filteredStudents.length / pageSize));
+      const currentStudentPage = Math.min(studentPage, totalPages);
+      const paginatedStudents = filteredStudents.slice((currentStudentPage - 1) * pageSize, currentStudentPage * pageSize);
+
       return (
         <div className="p-4 space-y-3 max-w-2xl mx-auto">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-sm text-slate-500">
               {selectedClass ? (
-                <>Students in <strong className="text-slate-700 dark:text-slate-200">{selectedClass.name}</strong> ({classStudents.length})</>
+                <>Students in <strong className="text-slate-700 dark:text-slate-200">{selectedClass.name}</strong> ({filteredStudents.length}{rawClassStudents.length !== filteredStudents.length ? ` of ${rawClassStudents.length}` : ""})</>
               ) : (
-                <>All Enrolled Students (<strong className="text-slate-700 dark:text-slate-200">{classStudents.length}</strong>)</>
+                <>Enrolled Students (<strong className="text-slate-700 dark:text-slate-200">{filteredStudents.length}</strong>{rawClassStudents.length !== filteredStudents.length ? ` of ${rawClassStudents.length}` : ""})</>
               )}
             </p>
             {selectedClass && (
               <button
                 type="button"
-                onClick={() => setSelectedClass(null)}
+                onClick={() => { setSelectedClass(null); setStudentPage(1); }}
                 className="text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
               >
                 Show All Classes
+              </button>
+            )}
+          </div>
+
+          {/* Quick Search Bar */}
+          <div className="relative">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              value={studentSearchQuery}
+              onChange={e => {
+                setStudentSearchQuery(e.target.value);
+                setStudentPage(1);
+              }}
+              placeholder="Search by name, roll no, admission no, or phone..."
+              className="w-full pl-9 pr-8 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
+            />
+            {studentSearchQuery && (
+              <button
+                type="button"
+                onClick={() => { setStudentSearchQuery(""); setStudentPage(1); }}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-xs font-bold"
+              >
+                ✕
               </button>
             )}
           </div>
@@ -6080,7 +7008,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             <span>+ New Student Admission (Quick / Full Form + Receipt)</span>
           </button>
 
-          {classStudents.map((s, idx) => (
+          {paginatedStudents.map((s, idx) => (
             <div key={s.id || `student-${s.rollNo || idx}-${idx}`} className="bg-white dark:bg-slate-800 rounded-xl p-3 shadow-sm border border-slate-100 dark:border-slate-700">
               {editingStudentId === s.id ? (
                 <div className="space-y-3">
@@ -6257,10 +7185,40 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               )}
             </div>
           ))}
-          {classStudents.length === 0 && (
+          {filteredStudents.length === 0 && (
             <div className="text-center py-10 text-slate-400">
               <Users className="w-10 h-10 mx-auto mb-2 opacity-30" />
-              <p>No students yet</p>
+              <p>No students found</p>
+            </div>
+          )}
+
+          {/* Pagination Controls */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between gap-2 p-3 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm text-xs">
+              <div className="text-slate-500 font-medium">
+                Page <strong className="text-slate-800 dark:text-slate-200">{currentStudentPage}</strong> of <strong>{totalPages}</strong> ({filteredStudents.length} students)
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={currentStudentPage <= 1}
+                  onClick={() => setStudentPage(p => Math.max(1, p - 1))}
+                  className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  Previous
+                </button>
+                <span className="px-2 py-1 font-mono font-bold text-slate-600 dark:text-slate-300">
+                  {currentStudentPage} / {totalPages}
+                </span>
+                <button
+                  type="button"
+                  disabled={currentStudentPage >= totalPages}
+                  onClick={() => setStudentPage(p => Math.min(totalPages, p + 1))}
+                  className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  Next
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -6275,7 +7233,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       };
       const loadFeeSummary = async () => {
         setFeeSummaryLoading(true);
-        const fees = await getAllMonthlyFees(schoolId, feeMonth);
+        const fees = await getAllMonthlyFees(schoolId, feeMonth, undefined, activeSession?.id);
         setAllFees(fees);
         setFeeSummaryLoading(false);
       };
@@ -6284,6 +7242,23 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       const schoolTotal = displayedStudents.reduce((sum, s) => sum + (s.monthlyFee || 0), 0);
       const schoolCollected = allFees.filter(f => f.paid).reduce((sum, f) => sum + (f.amount || 0), 0);
       const schoolDue = allFees.filter(f => !f.paid).reduce((sum, f) => sum + (f.amount || 0), 0);
+
+      // Pre-group students and fees by classId for 0ms instantaneous rendering
+      const classStudentsMap = new Map<string, SchoolStudent[]>();
+      displayedStudents.forEach(s => {
+        const k = s.classId || "none";
+        const arr = classStudentsMap.get(k) || [];
+        arr.push(s);
+        classStudentsMap.set(k, arr);
+      });
+
+      const classFeesMap = new Map<string, MonthlyFee[]>();
+      allFees.forEach(f => {
+        const k = f.classId || "none";
+        const arr = classFeesMap.get(k) || [];
+        arr.push(f);
+        classFeesMap.set(k, arr);
+      });
 
       return (
         <div className="p-4 max-w-2xl mx-auto space-y-3">
@@ -6321,8 +7296,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           {feeSummaryLoading ? (
             <div className="text-center py-10 text-slate-400 text-sm">Loading fees...</div>
           ) : sortedClasses.map((cls, idx) => {
-            const classStudents = displayedStudents.filter(s => isStudentInClass(s, cls.id, cls.name));
-            const classFees = allFees.filter(f => f.classId === cls.id);
+            const classStudents = classStudentsMap.get(cls.id) || displayedStudents.filter(s => isStudentInClass(s, cls.id, cls.name));
+            const classFees = classFeesMap.get(cls.id) || allFees.filter(f => f.classId === cls.id || isStudentInClass(f, cls.id, cls.name));
             const expected = classStudents.reduce((sum, s) => sum + (s.monthlyFee || 0), 0);
             const collected = classFees.filter(f => f.paid).reduce((sum, f) => sum + (f.amount || 0), 0);
             const due = classFees.filter(f => !f.paid).reduce((sum, f) => sum + (f.amount || 0), 0);

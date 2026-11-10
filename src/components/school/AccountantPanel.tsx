@@ -196,19 +196,25 @@ export const AccountantPanel: React.FC<Props> = ({
     const loadAll = async () => {
       setLoading(true);
       try {
-        const [schData, clsData, sessData, stdData, feeData, expData, accData] = await Promise.all([
+        const [schData, clsData, sessData, expData, accData] = await Promise.all([
           getSchool(schoolId),
           getClasses(schoolId),
           getSessions(schoolId),
-          getStudents(schoolId),
-          getMonthlyFees(schoolId, currentMonthStr()),
           getSchoolExpenseVouchers(schoolId),
           getAccountants(schoolId)
         ]);
 
+        const currentSess = sessData?.find((s: any) => s.active) || sessData?.[0];
+        const targetSessionId = currentSess?.id;
+
+        const [stdData, feeData] = await Promise.all([
+          getStudents(schoolId, undefined, undefined, targetSessionId),
+          getMonthlyFees(schoolId, currentMonthStr(), undefined, targetSessionId)
+        ]);
+
         if (!mounted) return;
         setSchool(schData);
-        setClasses(clsData || []);
+        setClasses(targetSessionId ? (clsData || []).filter(c => !c.sessionId || c.sessionId === targetSessionId) : (clsData || []));
         setSessions(sessData || []);
         setStudents(stdData || []);
         setFees(feeData || []);
@@ -350,22 +356,35 @@ export const AccountantPanel: React.FC<Props> = ({
     };
   }, [fees, expenses, todayStr]);
 
-  // Defaulters List
+  // Defaulters List - O(N) optimized with hash map lookups
   const defaultersList = useMemo(() => {
-    const map = new Map<string, { student: SchoolStudent; unpaidAmount: number; unpaidMonths: string[] }>();
-    students.forEach(s => {
-      const studentFees = fees.filter(f => f.studentId === s.id);
-      const unpaid = studentFees.filter(f => !f.paid);
-      if (unpaid.length > 0) {
-        const dueSum = unpaid.reduce((sum, f) => sum + (f.balanceDue || f.amount || 0), 0);
-        map.set(s.id, {
-          student: s,
-          unpaidAmount: dueSum,
-          unpaidMonths: unpaid.map(f => f.month)
-        });
+    const studentMap = new Map<string, SchoolStudent>();
+    students.forEach(s => studentMap.set(s.id, s));
+
+    const unpaidMap = new Map<string, { student: SchoolStudent; unpaidAmount: number; unpaidMonths: string[] }>();
+    fees.forEach(f => {
+      const isDue = !f.paid || (f.balanceDue !== undefined && Number(f.balanceDue) > 0);
+      if (isDue) {
+        const student = studentMap.get(f.studentId);
+        if (student) {
+          const due = f.balanceDue !== undefined ? Number(f.balanceDue) : Number(f.amount || 0);
+          const existing = unpaidMap.get(f.studentId);
+          if (existing) {
+            existing.unpaidAmount += due;
+            if (f.month && !existing.unpaidMonths.includes(f.month)) {
+              existing.unpaidMonths.push(f.month);
+            }
+          } else {
+            unpaidMap.set(f.studentId, {
+              student,
+              unpaidAmount: due,
+              unpaidMonths: f.month ? [f.month] : []
+            });
+          }
+        }
       }
     });
-    return Array.from(map.values()).sort((a, b) => b.unpaidAmount - a.unpaidAmount);
+    return Array.from(unpaidMap.values()).sort((a, b) => b.unpaidAmount - a.unpaidAmount);
   }, [students, fees]);
 
   // Handle adding expense voucher
