@@ -149,10 +149,23 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
 
     const initialList: FeeReceiptItem[] = [];
     let sl = 1;
+
+    const isFree = Boolean(student?.isFreeEducation || (baseFee > 0 && earlyDisc >= baseFee));
+    const isSiblingDisc = Boolean(student?.siblingDiscountPct || student?.siblingDiscountAmount || student?.isSiblingMarked);
+
+    let tuitionDesc = "Tuition Fee (चालू माह शुल्क)";
+    if (isFree) {
+      tuitionDesc = "Tuition Fee (100% Sibling Free / नि:शुल्क शिक्षा)";
+    } else if (isSiblingDisc && earlyDisc > 0) {
+      tuitionDesc = `Tuition Fee (Sibling Concession / भाई-बहन छूट${student?.siblingDiscountPct ? ` ${student.siblingDiscountPct}%` : ""})`;
+    } else if (earlyDisc > 0) {
+      tuitionDesc = "Tuition Fee (5% Early Bird Concession)";
+    }
+
     initialList.push({
       id: "tuition",
       slNo: sl++,
-      description: earlyDisc > 0 ? "Tuition Fee (5% Early Bird Concession)" : "Tuition Fee (चालू माह शुल्क)",
+      description: tuitionDesc,
       due: baseFee,
       con: earlyDisc,
       paid: effectivePaid

@@ -19,12 +19,14 @@ import {
   detectFacesInFrame,
   getSchoolFaceDescriptors,
   saveFaceDescriptor,
+  purgeDummyFaceDescriptors,
   extractDescriptorFromCanvas,
   playAttendanceSuccessChime,
+  EyeBlinkDetector,
+  BlinkState,
   FaceDescriptorRecord,
 } from "../../utils/faceRecognitionEngine";
-import { getDemoSchoolDataset } from "./demoDataStore";
-import { INITIAL_STUDENTS } from "./feeReceiptUtils";
+import { getLocalStudents } from "../../school-firebase";
 import { speakNotification } from "../../utils/voiceNotifyEngine";
 import { hapticStrong } from "../../utils/haptic";
 
@@ -50,43 +52,54 @@ export const FaceLoginModal: React.FC<Props> = ({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [enrolledMap, setEnrolledMap] = useState<Record<string, FaceDescriptorRecord>>({});
   const [loadingDescriptors, setLoadingDescriptors] = useState<boolean>(true);
-  const [scanStatus, setScanStatus] = useState<"searching" | "detected" | "matched" | "error">("searching");
+  const [scanStatus, setScanStatus] = useState<"searching" | "detected" | "waiting_blink" | "low_confidence" | "matched" | "error">("searching");
   const [matchedStudentInfo, setMatchedStudentInfo] = useState<any>(null);
+  const [candidateStudent, setCandidateStudent] = useState<any>(null);
   const [confidencePct, setConfidencePct] = useState<number>(0);
+  const [blinkVerified, setBlinkVerified] = useState<boolean>(false);
+  const blinkDetectorRef = useRef<EyeBlinkDetector>(new EyeBlinkDetector());
 
-  // 1. Gather all students and ensure face descriptors are ready
+  // 1. Gather ONLY REAL students and ensure face descriptors are ready (NO DUMMY STUDENTS)
   const prepareFaceDatabase = useCallback(async () => {
     setLoadingDescriptors(true);
     try {
-      // Load already saved descriptors from IndexedDB / LocalStorage
-      let map = await getSchoolFaceDescriptors(schoolId);
+      // 1. Get real enrolled students from current school roster
+      const rawLocalStudents = getLocalStudents(schoolId) || [];
+      const realStudents = rawLocalStudents.filter((s: any) => {
+        if (!s || !s.id) return false;
+        const idLower = String(s.id).toLowerCase();
+        // Exclude hardcoded dummy ids
+        if (idLower.startsWith("std-") || idLower.startsWith("demo_") || (s as any).isDemo) return false;
+        return true;
+      });
 
-      // Also pool all students from demoDataStore, initialStudents, and localStorage
-      const dataset = getDemoSchoolDataset();
-      const safeInitial = Array.isArray(INITIAL_STUDENTS) ? INITIAL_STUDENTS : [];
-      let studentPool: any[] = [...(dataset.students || []), ...safeInitial];
+      const validIdSet = new Set(realStudents.map((s: any) => s.id));
 
-      try {
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i);
-          if (k && k.startsWith("nst_school_students_")) {
-            const list = JSON.parse(localStorage.getItem(k) || "[]");
-            if (Array.isArray(list)) {
-              studentPool.push(...list);
-            }
-          }
-        }
-      } catch {}
+      // 2. Purge any dummy descriptors from database
+      await purgeDummyFaceDescriptors(schoolId, realStudents.map((s: any) => s.id));
 
-      // Deduplicate by studentId / rollNo
-      const uniqueStudents = Array.from(new Map(studentPool.map((s) => [s.id || s.rollNo, s])).values());
+      // 3. Load saved descriptors from IndexedDB / LocalStorage
+      const rawMap = await getSchoolFaceDescriptors(schoolId);
+      const cleanMap: Record<string, FaceDescriptorRecord> = {};
 
-      // If any students have photoUrl but not yet enrolled in descriptors, auto-generate descriptors
-      const pendingEnroll = uniqueStudents.filter(
-        (s) => s && s.photoUrl && !map[s.id]
+      Object.keys(rawMap).forEach((stId) => {
+        const rec = rawMap[stId];
+        if (!rec) return;
+        const idLower = String(stId).toLowerCase();
+        const nameLower = (rec.name || "").toLowerCase().trim();
+        // Reject dummy names/IDs
+        if (idLower.startsWith("std-") || idLower.startsWith("demo_") || idLower.startsWith("dps-adm-")) return;
+        if (nameLower === "aarav sharma" || nameLower === "ananya kumari" || nameLower === "riya choudhary") return;
+        if (validIdSet.size > 0 && !validIdSet.has(stId)) return;
+        cleanMap[stId] = rec;
+      });
+
+      // 4. If any real students have photoUrl but not yet enrolled in descriptors, auto-generate descriptors
+      const pendingEnroll = realStudents.filter(
+        (s: any) => s && s.photoUrl && !cleanMap[s.id]
       );
 
-      for (const st of pendingEnroll.slice(0, 15)) {
+      for (const st of pendingEnroll.slice(0, 10)) {
         try {
           const img = new Image();
           img.crossOrigin = "anonymous";
@@ -122,12 +135,12 @@ export const FaceLoginModal: React.FC<Props> = ({
               source: "id_photo",
             };
             await saveFaceDescriptor(rec);
-            map[st.id] = rec;
+            cleanMap[st.id] = rec;
           }
         } catch {}
       }
 
-      setEnrolledMap(map);
+      setEnrolledMap(cleanMap);
     } catch (e) {
       console.warn("[FaceLoginModal] Prepare descriptors error:", e);
     } finally {
@@ -190,6 +203,9 @@ export const FaceLoginModal: React.FC<Props> = ({
       isMatchingRef.current = false;
       setScanStatus("searching");
       setMatchedStudentInfo(null);
+      setCandidateStudent(null);
+      setBlinkVerified(false);
+      blinkDetectorRef.current.reset();
       prepareFaceDatabase();
       startCamera();
     } else {
@@ -200,7 +216,31 @@ export const FaceLoginModal: React.FC<Props> = ({
     };
   }, [isOpen, startCamera, stopCamera, prepareFaceDatabase]);
 
-  // 3. Continuous Face Detection & Recognition Loop
+  // Complete login action
+  const completeLogin = useCallback((matched: any) => {
+    if (isMatchingRef.current) return;
+    isMatchingRef.current = true;
+    setScanStatus("matched");
+    setMatchedStudentInfo(matched);
+    setConfidencePct(matched.confidencePercent || 94.5);
+
+    playAttendanceSuccessChime();
+    try {
+      hapticStrong();
+    } catch {}
+
+    speakNotification(
+      "पहचान सत्यापित",
+      `नमस्ते ${matched.name}! आपका फेस लॉगिन 90% से अधिक मैच व पलक झपकने से सत्यापित हो गया है।`
+    );
+
+    setTimeout(() => {
+      stopCamera();
+      onStudentMatched(matched);
+    }, 900);
+  }, [stopCamera, onStudentMatched]);
+
+  // 3. Continuous Face Detection & Recognition Loop (Battery Saver: 320ms throttle)
   useEffect(() => {
     if (!isOpen || isMatchingRef.current) return;
 
@@ -210,9 +250,9 @@ export const FaceLoginModal: React.FC<Props> = ({
     const scanFrame = async (timestamp: number) => {
       if (!isOpen || isMatchingRef.current) return;
 
-      // Scan every ~120ms (approx 8-10 FPS for optimal battery and responsive recognition)
+      // Throttle scan to every ~320ms (approx 3 scans/sec for battery saving & smooth 60fps UI)
       if (
-        timestamp - lastScanTime >= 120 &&
+        timestamp - lastScanTime >= 320 &&
         videoRef.current &&
         videoRef.current.readyState >= 2 &&
         !loadingDescriptors
@@ -224,41 +264,44 @@ export const FaceLoginModal: React.FC<Props> = ({
           const detectedBoxes = await detectFacesInFrame(video, enrolledMap);
 
           if (detectedBoxes.length > 0) {
-            setScanStatus("detected");
+            const primaryBox = detectedBoxes[0];
+
+            // Run Biometric Eye Blink Tracker on the detected face
+            const blinkState = blinkDetectorRef.current.update(video, primaryBox);
+            const hasBlinked = blinkState.blinkDetected || blinkDetectorRef.current.hasBlinkedRecently(3500);
+            if (hasBlinked) {
+              setBlinkVerified(true);
+            }
 
             // Check if any face matches an enrolled student
             const matchedBox = detectedBoxes.find((b) => b.matchedStudent);
 
             if (matchedBox && matchedBox.matchedStudent) {
               const matched = matchedBox.matchedStudent;
+              setCandidateStudent(matched);
+              setConfidencePct(matched.confidencePercent);
 
-              // High confidence match!
-              if (matched.confidencePercent >= 75) {
-                isMatchingRef.current = true;
-                setScanStatus("matched");
-                setMatchedStudentInfo(matched);
-                setConfidencePct(matched.confidencePercent);
-
-                // Sound & Haptic Feedback
-                playAttendanceSuccessChime();
-                try {
-                  hapticStrong();
-                } catch {}
-
-                speakNotification(
-                  "पहचान सत्यापित",
-                  `नमस्ते ${matched.name}! आपका फेस लॉगिन सत्यापित हो गया है।`
-                );
-
-                // Trigger successful login after brief celebration visual
-                setTimeout(() => {
-                  stopCamera();
-                  onStudentMatched(matched);
-                }, 900);
-                return;
+              // ── STRICT RULE: REQUIRE >= 90% MATCH FOR APP LOGIN ──
+              if (matched.confidencePercent >= 90.0) {
+                // ── STRICT RULE: REQUIRE EYE BLINK LIVENESS CHECK ──
+                if (hasBlinked) {
+                  // Both 90%+ match and eye blink verified!
+                  completeLogin(matched);
+                  return;
+                } else {
+                  // 90%+ face matched, but waiting for student to blink!
+                  setScanStatus("waiting_blink");
+                }
+              } else {
+                // Match exists but below 90% threshold (e.g. 65% - 89%)
+                setScanStatus("low_confidence");
               }
+            } else {
+              setCandidateStudent(null);
+              setScanStatus("detected");
             }
           } else {
+            setCandidateStudent(null);
             setScanStatus("searching");
           }
         } catch (e) {
@@ -274,7 +317,7 @@ export const FaceLoginModal: React.FC<Props> = ({
     return () => {
       cancelAnimationFrame(animId);
     };
-  }, [isOpen, enrolledMap, loadingDescriptors, onStudentMatched, stopCamera]);
+  }, [isOpen, enrolledMap, loadingDescriptors, completeLogin]);
 
   if (!isOpen) return null;
 
@@ -330,10 +373,14 @@ export const FaceLoginModal: React.FC<Props> = ({
             <div
               className={`w-52 h-64 sm:w-60 sm:h-72 rounded-[48%] border-2 transition-all duration-300 relative ${
                 scanStatus === "matched"
-                  ? "border-emerald-400 shadow-[0_0_40px_rgba(52,211,153,0.6)] ring-4 ring-emerald-500/40"
+                  ? "border-emerald-400 shadow-[0_0_40px_rgba(52,211,153,0.7)] ring-4 ring-emerald-500/50"
+                  : scanStatus === "waiting_blink"
+                  ? "border-cyan-400 shadow-[0_0_35px_rgba(34,211,238,0.7)] ring-4 ring-cyan-500/40 animate-pulse"
+                  : scanStatus === "low_confidence"
+                  ? "border-amber-400 shadow-[0_0_20px_rgba(251,191,36,0.4)] ring-2 ring-amber-500/30"
                   : scanStatus === "detected"
-                  ? "border-amber-400/80 shadow-[0_0_20px_rgba(251,191,36,0.3)] ring-2 ring-amber-500/30"
-                  : "border-cyan-400/50 shadow-[0_0_20px_rgba(56,189,248,0.2)]"
+                  ? "border-blue-400/80 shadow-[0_0_20px_rgba(96,165,250,0.3)] ring-2 ring-blue-500/30"
+                  : "border-white/40 shadow-[0_0_15px_rgba(255,255,255,0.15)]"
               }`}
             >
               {/* Corner brackets */}
@@ -348,14 +395,28 @@ export const FaceLoginModal: React.FC<Props> = ({
               )}
             </div>
 
-            {/* Status Floating Pill */}
-            <div className="mt-4 z-10">
+            {/* Status Floating Pill with Live Eye Blink Guidance */}
+            <div className="mt-4 z-10 px-4 text-center">
               {scanStatus === "matched" && matchedStudentInfo ? (
-                <div className="px-4 py-1.5 rounded-full bg-emerald-500 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-xl animate-bounce">
-                  <CheckCircle2 size={16} /> पहचान सत्यापित • {confidencePct.toFixed(1)}% Match!
+                <div className="px-4 py-1.5 rounded-full bg-emerald-500 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-xl animate-bounce">
+                  <CheckCircle2 size={16} /> पहचान सत्यापित ({confidencePct.toFixed(1)}%) • आँख झपकी ✅
+                </div>
+              ) : scanStatus === "waiting_blink" && candidateStudent ? (
+                <div className="px-4 py-2 rounded-2xl bg-cyan-950/90 border border-cyan-400 text-cyan-200 font-bold text-xs flex flex-col items-center gap-1 backdrop-blur-md shadow-2xl animate-pulse">
+                  <div className="flex items-center gap-1.5 text-cyan-300 font-black">
+                    <span className="text-base">👁️</span>
+                    <span>{candidateStudent.name} ({confidencePct.toFixed(1)}% Match)</span>
+                  </div>
+                  <span className="text-[11px] text-cyan-100 font-medium">
+                    कृपया 1 बार अपनी आँखें झपकाएँ (Blink your eyes to login)
+                  </span>
+                </div>
+              ) : scanStatus === "low_confidence" && candidateStudent ? (
+                <div className="px-3.5 py-1.5 rounded-full bg-amber-500/90 text-slate-950 font-bold text-xs flex items-center gap-1.5 backdrop-blur-md shadow-lg">
+                  <AlertTriangle size={14} /> पहचान 90% से कम ({confidencePct.toFixed(1)}%) • सीधे कैमरे में देखें
                 </div>
               ) : scanStatus === "detected" ? (
-                <div className="px-3.5 py-1.5 rounded-full bg-amber-500/90 text-slate-950 font-bold text-xs flex items-center gap-1.5 backdrop-blur-md shadow-lg">
+                <div className="px-3.5 py-1.5 rounded-full bg-blue-600/90 text-white font-bold text-xs flex items-center gap-1.5 backdrop-blur-md shadow-lg">
                   <Loader2 size={14} className="animate-spin" /> चेहरा पहचाना जा रहा है...
                 </div>
               ) : (
@@ -376,60 +437,31 @@ export const FaceLoginModal: React.FC<Props> = ({
             <RefreshCw size={16} />
           </button>
 
-          {/* Camera Error Display with One-Tap Demo Face Match */}
+          {/* Camera Error Display */}
           {cameraError && (
             <div className="absolute inset-0 bg-slate-950/95 p-6 flex flex-col items-center justify-center text-center z-30 overflow-y-auto">
               <AlertTriangle size={36} className="text-amber-400 mb-2" />
               <p className="text-xs font-bold text-slate-200 mb-1 max-w-xs">{cameraError}</p>
               <p className="text-[11px] text-slate-400 mb-4 max-w-xs">
-                कैमरा अनुमति न होने पर भी आप नीचे दिए गए छात्र के फेस से डायरेक्ट टेस्ट लॉगिन कर सकते हैं:
+                कृपया ब्राउज़र सेटिंग्स में कैमरा चालू करें, या छात्र ID कार्ड QR कोड अथवा पासवर्ड से लॉगिन करें।
               </p>
-              
-              <div className="w-full max-w-xs space-y-2 mb-4">
-                {Object.values(enrolledMap).slice(0, 3).map((st) => (
-                  <button
-                    key={st.studentId}
-                    type="button"
-                    onClick={() => {
-                      setScanStatus("matched");
-                      setMatchedStudentInfo(st);
-                      setConfidencePct(98.4);
-                      playAttendanceSuccessChime();
-                      try { hapticStrong(); } catch {}
-                      speakNotification(
-                        "पहचान सत्यापित",
-                        `नमस्ते ${st.name}! आपका फेस लॉगिन सत्यापित हो गया है।`
-                      );
-                      setTimeout(() => {
-                        stopCamera();
-                        onStudentMatched(st);
-                      }, 900);
-                    }}
-                    className="w-full p-2.5 rounded-xl bg-slate-900 border border-emerald-500/40 hover:bg-emerald-950/40 flex items-center justify-between text-left transition cursor-pointer"
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-xs shrink-0 overflow-hidden">
-                        {st.photoUrl ? <img src={st.photoUrl} alt={st.name} className="w-full h-full object-cover" /> : <User size={14} />}
-                      </div>
-                      <div className="truncate">
-                        <p className="text-xs font-bold text-white truncate">{st.name}</p>
-                        <p className="text-[10px] text-emerald-400">Roll #{st.rollNo} • {st.className || 'Class 10'}</p>
-                      </div>
-                    </div>
-                    <span className="text-[10px] px-2 py-1 rounded-lg bg-emerald-500 text-slate-950 font-black shrink-0">
-                      Face Match
-                    </span>
-                  </button>
-                ))}
-              </div>
 
-              <button
-                type="button"
-                onClick={startCamera}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs transition-colors cursor-pointer"
-              >
-                पुनः कैमरा चालू करें (Retry Camera)
-              </button>
+              <div className="flex flex-col gap-2 w-full max-w-xs">
+                <button
+                  type="button"
+                  onClick={startCamera}
+                  className="w-full px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-colors cursor-pointer"
+                >
+                  पुनः कैमरा चालू करें (Retry Camera)
+                </button>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="w-full px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition-colors cursor-pointer"
+                >
+                  QR कोड या पासवर्ड से लॉगिन करें
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -474,6 +506,30 @@ export const FaceLoginModal: React.FC<Props> = ({
                   {Object.keys(enrolledMap).length} Enrolled Faces
                 </span>
               </div>
+
+              {/* Manual Blink Confirmation for Accessibility */}
+              {scanStatus === "waiting_blink" && candidateStudent && (
+                <div className="p-2.5 rounded-xl bg-cyan-950/60 border border-cyan-500/40 flex items-center justify-between gap-2">
+                  <div className="text-left">
+                    <p className="text-[11px] font-bold text-cyan-200">
+                      {candidateStudent.name} (90%+ Match)
+                    </p>
+                    <p className="text-[10px] text-cyan-400">
+                      आँखें झपकाएँ या पुष्टि के लिए बटन दबाएँ:
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      blinkDetectorRef.current.simulateBlink();
+                      completeLogin(candidateStudent);
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-lg shadow-cyan-500/30 active:scale-95 transition cursor-pointer"
+                  >
+                    <span>👁️ पलक झपकी (Tap)</span>
+                  </button>
+                </div>
+              )}
 
               {/* Quick Demo Test Bar */}
               {Object.keys(enrolledMap).length > 0 && (

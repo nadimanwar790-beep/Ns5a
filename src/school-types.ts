@@ -455,6 +455,9 @@ export interface SchoolStudent {
   siblingDiscountPct?: number;
   siblingDiscountAmount?: number; // Monthly concession amount if applied to monthly fee
   admissionSiblingDiscount?: number; // One-time admission fee concession/discount for sibling
+  isFreeEducation?: boolean; // 100% Free / नि:शुल्क शिक्षा (Zero Tuition Fee)
+  concessionType?: 'NONE' | 'SIBLING_DISCOUNT' | 'FREE_EDUCATION' | 'STAFF_CHILD' | 'MERIT_SCHOLARSHIP' | 'CUSTOM';
+  concessionReason?: string; // e.g. "भाई-बहन 100% नि:शुल्क शिक्षा", "भाई-बहन 50% छूट"
   stream?: SeniorStream | string; // Senior Secondary stream: Science, Commerce, Arts
   fatherQualification?: string;
   motherQualification?: string;
@@ -775,6 +778,8 @@ export interface MonthlyFee {
     date: string;
     bank: string;
     number: string;
+    onlineAmount?: number;
+    offlineAmount?: number;
   };
   items?: {
     id: string;

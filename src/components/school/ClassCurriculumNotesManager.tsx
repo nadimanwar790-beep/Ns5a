@@ -159,7 +159,7 @@ const CLASS_OPTIONS = [
   { id: "12", label: "Class 12" },
 ];
 
-const DEFAULT_SUBJECTS_BY_CLASS: Record<string, { id: string; name: string }[]> = {
+export const DEFAULT_SUBJECTS_BY_CLASS: Record<string, { id: string; name: string }[]> = {
   "1": [
     { id: "hindi", name: "Hindi (हिंदी)" },
     { id: "english", name: "English (अंग्रेजी)" },

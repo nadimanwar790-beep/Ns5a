@@ -1143,6 +1143,25 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
     setLoading(false);
     localStorage.setItem('nst_current_user', JSON.stringify(userToLogin));
     localStorage.removeItem('nst_logged_out');
+    
+    // Direct School Routing: Ensure school student accounts open directly in SCHOOL_ERP
+    const isSchoolAccount = Boolean(
+      userToLogin?.schoolId ||
+      userToLogin?.userType === 'SCHOOL_STUDENT' ||
+      userToLogin?.admissionNo ||
+      (userToLogin?.email && userToLogin.email.toLowerCase().endsWith('.edu.in')) ||
+      userToLogin?.role === 'SCHOOL_ADMIN' ||
+      userToLogin?.role === 'TEACHER'
+    );
+    if (isSchoolAccount) {
+      try {
+        localStorage.setItem('nst_app_view_mode', 'SCHOOL_ERP');
+        if (userToLogin.schoolId) {
+          localStorage.setItem('nst_active_school_id', userToLogin.schoolId);
+        }
+      } catch {}
+    }
+
     if (logActivity) logActivity('LOGIN', `Logged in as: ${userToLogin.name}`, userToLogin);
     try {
       window.dispatchEvent(new CustomEvent('user-signed-up-prompt-notifications'));
@@ -1158,10 +1177,10 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
 
     try {
       const studentId = matched.studentId || matched.id;
-      const targetSchoolId = matched.schoolId || 'dps_gurgaon_sector45';
+      const targetSchoolId = matched.schoolId || localStorage.getItem('nst_active_school_id') || 'dps_gurgaon_sector45';
       const cleanSchoolId = targetSchoolId;
 
-      // 1. Resolve student record
+      // 1. Resolve student record strictly from active school roster
       let matchedStudent = getStudent(studentId, cleanSchoolId);
       if (!matchedStudent) {
         matchedStudent = getStudentOrAdmissionRecord(studentId, cleanSchoolId);
@@ -1170,23 +1189,36 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
         const pool = getLocalStudents(cleanSchoolId);
         matchedStudent = pool.find((s: any) => s.id === studentId || s.rollNo === matched.rollNo || s.name?.toLowerCase() === matched.name?.toLowerCase());
       }
-      if (!matchedStudent) {
-        const dpsPool = getLocalStudents('dps_gurgaon_sector45');
-        matchedStudent = dpsPool.find((s: any) => s.id === studentId || s.rollNo === matched.rollNo || s.name?.toLowerCase() === matched.name?.toLowerCase());
+
+      // Check if existing user account exists for this student's email/phone to retain auth identity
+      let existingAccount: any = null;
+      if (matchedStudent?.email) {
+        try {
+          existingAccount = await getUserByEmail(matchedStudent.email);
+        } catch {}
+      }
+      if (!existingAccount && (matchedStudent?.phone || matched.phone)) {
+        try {
+          existingAccount = await getUserByMobileOrId(matchedStudent?.phone || matched.phone);
+        } catch {}
       }
 
       const rollVal = matched.rollNo || matchedStudent?.rollNo || '01';
-      const studentName = matched.name || matchedStudent?.name || 'DPS Student';
-      const classLevel = matched.classId || matchedStudent?.classId || 'cls_10';
-      const className = matched.className || matchedStudent?.className || 'Class 10-A';
-      const studentPhoto = matched.photoUrl || matchedStudent?.photoUrl || '';
-      const admNo = matchedStudent?.admissionNo || matched.admissionNo || `DPS-ADM-${rollVal}`;
-      const parentPhone = matchedStudent?.phone || matched.phone || '9876543210';
+      const studentName = matchedStudent?.name || matched.name || 'Student';
+      const classLevel = matchedStudent?.classId || matched.classId || 'cls_10';
+      const className = matchedStudent?.className || matched.className || 'Class 10';
+      const studentPhoto = matchedStudent?.photoUrl || matched.photoUrl || '';
+      const admNo = matchedStudent?.admissionNo || matched.admissionNo || `ADM-${rollVal}`;
+      const parentPhone = matchedStudent?.phone || matched.phone || existingAccount?.mobile || '9876543210';
+      const finalEmail = matchedStudent?.email || existingAccount?.email || `${(studentName || 'student').toLowerCase().replace(/\s+/g, '')}@student.dps.edu.in`;
+      const finalUserId = existingAccount?.id || existingAccount?.uid || studentId || `student_${Date.now()}`;
 
       const studentUser: User = {
-        id: studentId || `student_${Date.now()}`,
+        ...(existingAccount || {}),
+        id: finalUserId,
+        uid: finalUserId,
         name: studentName,
-        email: matchedStudent?.email || `${(studentName || 'student').toLowerCase().replace(/\s+/g, '')}@dps.edu.in`,
+        email: finalEmail,
         role: 'STUDENT',
         displayId: `ROLL-${rollVal}`,
         schoolId: cleanSchoolId,
@@ -1194,11 +1226,12 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
         classLevel: classLevel,
         className: className,
         admissionNo: admNo,
+        rollNo: rollVal,
         mobile: parentPhone,
         avatar: studentPhoto,
-        fatherName: matchedStudent?.fatherName || matched.fatherName || 'Guardian',
-        motherName: matchedStudent?.motherName || matched.motherName || '',
-        bloodGroup: matchedStudent?.bloodGroup || matched.bloodGroup || 'O+',
+        fatherName: matchedStudent?.fatherName || matched.fatherName || existingAccount?.fatherName || 'Guardian',
+        motherName: matchedStudent?.motherName || matched.motherName || existingAccount?.motherName || '',
+        bloodGroup: matchedStudent?.bloodGroup || matched.bloodGroup || existingAccount?.bloodGroup || 'O+',
         monthlyFee: matchedStudent?.monthlyFee || 1800,
         provider: 'face_recognition_login',
         isFaceLogin: true,
@@ -1554,6 +1587,43 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
         matchedUser.role = 'ADMIN';
       } else if (isDpsSchoolLogin && matchedUser) {
         matchedUser.role = 'SCHOOL_ADMIN';
+      }
+
+      // Auto-attach school student affiliation if user belongs to school roster
+      if (matchedUser && matchedUser.role === 'STUDENT') {
+        const activeSchool = matchedUser.schoolId || localStorage.getItem('nst_active_school_id') || 'dps_gurgaon_sector45';
+        const locals = getLocalStudents(activeSchool);
+        const emailLower = (matchedUser.email || '').toLowerCase().trim();
+        const phoneDigits = (matchedUser.mobile || matchedUser.phone || '').replace(/\D/g, '');
+        const foundLocal = locals.find((s: any) =>
+          (s.id === matchedUser.id || s.id === matchedUser.uid) ||
+          (s.email && s.email.toLowerCase().trim() === emailLower) ||
+          (phoneDigits && s.phone && s.phone.replace(/\D/g, '').endsWith(phoneDigits.slice(-10))) ||
+          (matchedUser.admissionNo && s.admissionNo && s.admissionNo.toLowerCase() === matchedUser.admissionNo.toLowerCase())
+        );
+
+        if (foundLocal) {
+          matchedUser = {
+            ...matchedUser,
+            schoolId: foundLocal.schoolId || activeSchool,
+            userType: 'SCHOOL_STUDENT',
+            admissionNo: foundLocal.admissionNo || matchedUser.admissionNo,
+            rollNo: foundLocal.rollNo || matchedUser.rollNo,
+            classLevel: foundLocal.classId || matchedUser.classLevel,
+            className: foundLocal.className || matchedUser.className,
+            avatar: foundLocal.photoUrl || matchedUser.avatar,
+          };
+          try {
+            localStorage.setItem('nst_app_view_mode', 'SCHOOL_ERP');
+            localStorage.setItem('nst_active_school_id', matchedUser.schoolId);
+          } catch {}
+        } else if (matchedUser.schoolId) {
+          matchedUser.userType = 'SCHOOL_STUDENT';
+          try {
+            localStorage.setItem('nst_app_view_mode', 'SCHOOL_ERP');
+            localStorage.setItem('nst_active_school_id', matchedUser.schoolId);
+          } catch {}
+        }
       }
 
       triggerLoginSuccess(matchedUser);

@@ -25,6 +25,7 @@ import { getDemoSchoolDataset, isDemoDataEnabled, setDemoDataEnabled } from "./d
 import { ContentManager } from "./ContentManager";
 import { SmartClass } from "./SmartClass";
 import { AttendanceManager } from "./AttendanceManager";
+import { FaceAttendanceKioskModal } from "./FaceAttendanceKioskModal";
 import { FeeManager } from "./FeeManager";
 import { ReportCard } from "./ReportCard";
 import { MarksManager } from "./MarksManager";
@@ -66,8 +67,10 @@ import {
   ClipboardList, Globe, UserPlus, QrCode, GraduationCap, CheckCircle2,
   Printer, Search, Sparkles, Mail, PenTool, Loader2, AlertCircle, LogOut,
   Home, Image as ImageIcon, Clock, Book, Package, MessageSquare, Bell, ArrowRight,
-  Youtube, Check, Menu, BarChart3, PieChart, Camera, Share2, Film, CheckCheck, RefreshCw, Upload, ExternalLink, Filter, Send, RotateCw, Bus, Sliders,
-  Cake, Gift
+  Youtube, Check, Menu, BarChart3, PieChart, Camera, Share2, Film, CheckCheck, RefreshCw, Upload, ExternalLink, Filter, Send, RotateCw, RotateCcw, Bus, Sliders,
+  Sun, Moon, Palette,
+  Cake, Gift,
+  Smartphone, Laptop, Monitor, Compass
 } from "lucide-react";
 import { SchoolStore } from "./SchoolStore";
 import { SchoolPlanView } from "./SchoolPlanView";
@@ -83,7 +86,19 @@ import { SchoolBirthdayCalendar } from "./SchoolBirthdayCalendar";
 import { UniversalAttendanceDesk } from "./UniversalAttendanceDesk";
 import { UniversalAttendanceScannerModal } from "./UniversalAttendanceScannerModal";
 import { SchoolLocationModal } from "./SchoolLocationModal";
-import { FaceAttendanceKioskModal } from "./FaceAttendanceKioskModal";
+import { getSchoolFaceDescriptors } from "../../utils/faceRecognitionEngine";
+import { getCombinedDiscountLedger, DISPLAY_DISCOUNT_LABEL } from "../../utils/schoolDiscountAndPayment";
+import { SchoolBackupManager } from "./SchoolBackupManager";
+import { SchoolExpenseManager } from "./SchoolExpenseManager";
+import { ReceiptCancellationModal } from "./ReceiptCancellationModal";
+import { ParentLeaveManager } from "./ParentLeaveManager";
+import { PtmSchedulerModal } from "./PtmSchedulerModal";
+import { StaffPayrollManager } from "./StaffPayrollManager";
+import { QuestionPaperBuilder } from "./QuestionPaperBuilder";
+import { SiblingProfileManager } from "./SiblingProfileManager";
+import { SessionRollOverModal } from "./SessionRollOverModal";
+import { UniversalFaceIdStudioModal } from "./UniversalFaceIdStudioModal";
+import { ShieldCheck, Receipt } from "lucide-react";
 
 interface Props {
   schoolId: string;
@@ -105,12 +120,22 @@ type AdminView =
   | "community"
   | "absentee"
   | "sessions" | "classes" | "subjects" | "teachers" | "students"
-  | "content" | "class_notes_manager" | "attendance" | "fees" | "fee_class" | "fee_all" | "fee_structure" | "bus_transport" | "qr_pay" | "fee_alerts" | "receipt_header" | "report_card" | "marks" | "results"
+  | "content" | "class_notes_manager" | "attendance" | "fees" | "fee_class" | "fee_all" | "fee_structure" | "bus_transport" | "qr_pay" | "fee_alerts" | "receipt_header" | "discount_list" | "report_card" | "marks" | "results"
+  | "sibling_profiles"
   | "store" | "subscription"
   | "id_cards" | "admit_cards" | "certificates" | "marksheet_hub" | "promotion" | "notices" | "holidays" | "staff_hrm" | "reports_hub"
   | "public_website" | "online_admissions" | "online_admission_fee"
   | "nsta_broadcast" | "video_lectures" | "classroom_videos" | "school_study_room"
-  | "account_hub";
+  | "account_hub"
+  | "backup_recovery"
+  | "expenses"
+  | "leaves_desk"
+  | "ptm_scheduler"
+  | "staff_payroll"
+  | "question_paper_builder"
+  | "face_id_studio"
+  | "class_qr"
+  | "receipt_cancellation";
 
 
 export const SchoolAdminPanel: React.FC<Props> = ({
@@ -157,6 +182,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const [smartClassLesson, setSmartClassLesson] = useState<any>(null);
   const [smartClassMode, setSmartClassMode] = useState<"reading" | "writing" | "pdf" | "mcq">("reading");
   const [saving, setSaving] = useState(false);
+  const [showSessionRollOverModal, setShowSessionRollOverModal] = useState(false);
+  const [showFaceStudioModal, setShowFaceStudioModal] = useState(false);
   const [showExpiryPopup, setShowExpiryPopup] = useState(false);
   const [expiryPopupExpired, setExpiryPopupExpired] = useState(false);
   const [studentSearchQuery, setStudentSearchQuery] = useState("");
@@ -219,7 +246,51 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     return false;
   });
 
+  const isEffectiveLandscape = isRotatedLandscape || isNativeLandscape;
+
   const [showRotatePrompt, setShowRotatePrompt] = useState(false);
+
+  // 3-Theme Switcher (White / Black / Midnight Current)
+  const [appTheme, setAppTheme] = useState<"current" | "white" | "black">(() => {
+    try {
+      const saved = (localStorage.getItem("nst_app_theme") || localStorage.getItem("nst_student_theme")) as any;
+      if (saved === "white" || saved === "black" || saved === "current") return saved;
+    } catch {}
+    return "current";
+  });
+
+  const applyAdminTheme = (nextTheme: "current" | "white" | "black") => {
+    setAppTheme(nextTheme);
+    try {
+      localStorage.setItem("nst_app_theme", nextTheme);
+      localStorage.setItem("nst_student_theme", nextTheme);
+      if (typeof document !== "undefined") {
+        document.documentElement.classList.remove(
+          "admin-theme-white",
+          "admin-theme-black",
+          "admin-theme-current",
+          "app-theme-white",
+          "app-theme-black",
+          "app-theme-current",
+          "dark-mode-black",
+          "dark-mode-blue"
+        );
+        document.documentElement.classList.add(`admin-theme-${nextTheme}`, `app-theme-${nextTheme}`);
+        if (nextTheme === "white") {
+          document.documentElement.classList.remove("dark", "dark-mode");
+        } else if (nextTheme === "black") {
+          document.documentElement.classList.add("dark", "dark-mode", "dark-mode-black");
+        } else {
+          document.documentElement.classList.add("dark", "dark-mode", "dark-mode-blue");
+        }
+      }
+      window.dispatchEvent(new Event("nst-dark-theme-change"));
+    } catch {}
+  };
+
+  useEffect(() => {
+    applyAdminTheme(appTheme);
+  }, []);
 
   useEffect(() => {
     const handleOrientationOrResize = () => {
@@ -309,7 +380,15 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   }, []);
 
   const handleToggleScreenRotate = async () => {
-    if (!isNativeLandscape) {
+    const isCurrentlyLaptop = isRotatedLandscape || isNativeLandscape;
+
+    if (!isCurrentlyLaptop) {
+      // Switch to Laptop / Landscape Mode
+      setIsRotatedLandscape(true);
+      try {
+        localStorage.setItem("school_erp_rotated_landscape", "true");
+      } catch {}
+
       // 1. Enter Fullscreen so mobile browser bars collapse and orientation lock is allowed by Android OS
       try {
         const root = document.documentElement;
@@ -333,16 +412,17 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         console.warn("Screen orientation lock:", err);
       }
 
-      setIsRotatedLandscape(true);
-      try {
-        localStorage.setItem("school_erp_rotated_landscape", "true");
-      } catch {}
-
       if (!locked) {
         setShowRotatePrompt(true);
-        setTimeout(() => setShowRotatePrompt(false), 5000);
+        setTimeout(() => setShowRotatePrompt(false), 4500);
       }
     } else {
+      // Switch back to Mobile / Portrait Mode
+      setIsRotatedLandscape(false);
+      try {
+        localStorage.setItem("school_erp_rotated_landscape", "false");
+      } catch {}
+
       // Exit fullscreen & unlock orientation
       try {
         if (screen.orientation && (screen.orientation as any).unlock) {
@@ -354,11 +434,6 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           await (document as any).webkitExitFullscreen().catch(() => {});
         }
       } catch (err) {}
-
-      setIsRotatedLandscape(false);
-      try {
-        localStorage.setItem("school_erp_rotated_landscape", "false");
-      } catch {}
     }
   };
 
@@ -482,6 +557,10 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const [showHowToUseModal, setShowHowToUseModal] = useState<boolean>(false);
   const [howToUseSearch, setHowToUseSearch] = useState<string>("");
   const [universalSearchQuery, setUniversalSearchQuery] = useState<string>("");
+  const [showCompactSearch, setShowCompactSearch] = useState<boolean>(false);
+  const [menuSearchQuery, setMenuSearchQuery] = useState<string>("");
+  const [discountLedgerFilter, setDiscountLedgerFilter] = useState<string>("all");
+  const [selectedSectionFilter, setSelectedSectionFilter] = useState<string>("ALL");
   const [copyClassesFromCurrent, setCopyClassesFromCurrent] = useState<boolean>(true);
   const [classForm, setClassForm] = useState({ name: "", section: "", stream: "Science", autoAddSubjects: true, defaultFee: 0 });
   const [subjectForm, setSubjectForm] = useState({ name: "" });
@@ -543,6 +622,27 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const [showUniversalScannerModal, setShowUniversalScannerModal] = useState(false);
   const [showSchoolLocationModal, setShowSchoolLocationModal] = useState(false);
   const [showFaceKioskModal, setShowFaceKioskModal] = useState(false);
+  const [enrolledFaceIds, setEnrolledFaceIds] = useState<Record<string, boolean>>({});
+  const [duesCardTab, setDuesCardTab] = useState<"admission" | "advance">("admission");
+  const [showPunchDeskExpanded, setShowPunchDeskExpanded] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!schoolId) return;
+    let cancelled = false;
+    getSchoolFaceDescriptors(schoolId)
+      .then((map) => {
+        if (cancelled) return;
+        const next: Record<string, boolean> = {};
+        Object.keys(map || {}).forEach((id) => {
+          next[id] = true;
+        });
+        setEnrolledFaceIds(next);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [schoolId, showFaceKioskModal, students.length]);
 
   // Fee summary state
   const [feeMonth, setFeeMonth] = useState(currentMonthStr());
@@ -1625,14 +1725,20 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       },
       items: [
         { id: "sessions" as AdminView, label: "Academic Sessions (सत्र)", icon: Calendar, desc: "सत्र बदलें, नया सत्र जोड़ें व एडिट करें" },
-        { id: "classes" as AdminView, label: "Classes & Sections", icon: BookOpen, desc: "कक्षाएं, वर्ग व अटेंडेंस" },
+        { id: "classes" as AdminView, label: "Classes & Sections", icon: BookOpen, desc: "कक्षाएं, वर्ग व प्रबंधन" },
+        { id: "students" as AdminView, label: "Students Directory (छात्र सूची)", icon: Users, desc: "कक्षा व सेक्शन अनुसार छात्र, नया छात्र, एडिट/डिलीट" },
+        { id: "teachers" as AdminView, label: "Teachers & Faculty (शिक्षक प्रबंधन)", icon: GraduationCap, desc: "नया शिक्षक जोड़ें, एडिट, डिलीट, फोटो व ID कार्ड" },
+        { id: "attendance" as AdminView, label: "Attendance & Haziri (दैनिक हाजिरी)", icon: Clock, desc: "दैनिक छात्र उपस्थिति, QR स्कैनर व हाजिरी रिपोर्ट" },
+        { id: "subjects" as AdminView, label: "Class Subjects (विषय व किताबें)", icon: BookOpen, desc: "कक्षा-वार पुस्तकें, विषय व पाठ्यक्रम जोड़ें" },
+        { id: "class_qr" as AdminView, label: "Class & Student QR Codes (क्यूआर)", icon: QrCode, desc: "प्रोजेक्टर पर लाइव क्यूआर व प्रिंट छात्र क्यूआर" },
         { id: "class_notes_manager" as AdminView, label: "Class 1-12 Notes Manager", icon: Sparkles, desc: "स्कूल पाठ्यक्रम नोट्स, MCQ, Video व PDF" },
-        { id: "students" as AdminView, label: "Students Directory", icon: Users, desc: "नामांकन व छात्र प्रोफाइल" },
-        { id: "teachers" as AdminView, label: "Teachers & Faculty", icon: Users, desc: "अध्यापक व स्टाफ खाते" },
+        { id: "face_id_studio" as AdminView, label: "Live Face ID Studio (लाइव चेहरा)", icon: Camera, desc: "कैमरे से छात्र व अध्यापकों का लाइव फेस आईडी ट्रेनिंग व मैच टेस्ट" },
         { id: "timetable" as AdminView, label: "Timetable & Routine", icon: Clock, desc: "साप्ताहिक घंटी व समय सारणी" },
         { id: "homework" as AdminView, label: "Daily Homework", icon: BookOpen, desc: "दैनिक गृहकार्य व डायरी" },
         { id: "library" as AdminView, label: "Library Management", icon: Book, desc: "पुस्तकालय व पुस्तक वितरण" },
         { id: "video_lectures" as AdminView, label: "Class Video Archive", icon: Youtube, desc: "यूट्यूब वीडियो लेक्चर्स" },
+        { id: "question_paper_builder" as AdminView, label: "Question Paper Builder", icon: FileText, desc: "अर्धवार्षिक व वार्षिक परीक्षा प्रश्न-पत्र जनरेटर" },
+        { id: "ptm_scheduler" as AdminView, label: "PTM Slot Scheduler", icon: Users, desc: "अभिभावक-शिक्षक बैठक स्लॉट बुकिंग" },
       ]
     },
     {
@@ -1646,7 +1752,11 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         hoverBg: "hover:bg-amber-950/40 hover:text-amber-200",
       },
       items: [
-        { id: "fees" as AdminView, label: "Fee Collection & Ledger", icon: IndianRupee, desc: "मासिक शुल्क व छात्र लेजर" },
+        { id: "fees" as AdminView, label: "Fee Collection & Ledger (फीस लेजर)", icon: IndianRupee, desc: "मासिक शुल्क व छात्र लेजर" },
+        { id: "sibling_profiles" as AdminView, label: "Sibling Profiles (भाई-बहन प्रोफाइल)", icon: Users, desc: "ऑटो भाई-बहन फैमिली ग्रुप, रियायत व 100% फ्री शिक्षा" },
+        { id: "expenses" as AdminView, label: "Expense & Daily Cashbook", icon: Receipt, desc: "दैनिक खर्च, पेटी कैश व नेट क्लोजिंग बैलेंस" },
+        { id: "receipt_cancellation" as AdminView, label: "Receipt Cancellation & Refund", icon: RotateCcw, desc: "रसीद निरस्तीकरण व रिफंड वाउचर ऑडिट" },
+        { id: "discount_list" as AdminView, label: "Fee Discount List (छूट सूची)", icon: Award, desc: "किसको कितना व कहाँ डिस्काउंट मिला" },
         { id: "online_admission_fee" as AdminView, label: "Online Admission & Fee", icon: Sliders, desc: "कक्षा-वार प्रवेश शुल्क व एक्टिव हेड सेट-अप" },
         { id: "fee_structure" as AdminView, label: "Class Fee Rates & Structure", icon: Sparkles, desc: "क्लास फीस दरें व शिक्षक वेतन हेड" },
         { id: "bus_transport" as AdminView, label: "Bus & Transport Service", icon: Bus, desc: "बस रूट व वाहन शुल्क प्रबंधन" },
@@ -1666,7 +1776,10 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         hoverBg: "hover:bg-purple-950/40 hover:text-purple-200",
       },
       items: [
-        { id: "marksheet_hub" as AdminView, label: "Marksheet & Results", icon: FileSpreadsheet, desc: "ऑफिशियल अंकपत्र व रिपोर्ट कार्ड" },
+        { id: "marks" as AdminView, label: "Marks Entry (परीक्षा अंक प्रविष्टि)", icon: Edit3, desc: "कक्षा व विषय अनुसार परीक्षा अंक प्रविष्टि" },
+        { id: "report_card" as AdminView, label: "Report Cards (अंकपत्र व रिपोर्ट कार्ड)", icon: FileText, desc: "कक्षा रिपोर्ट कार्ड, प्रगति पत्र व मार्कशीट PDF" },
+        { id: "results" as AdminView, label: "Exam Results (मेरिट लिस्ट व परिणाम)", icon: Award, desc: "कक्षा मेरिट लिस्ट, रैंक, टॉपर्स व उत्तीर्ण परिणाम" },
+        { id: "marksheet_hub" as AdminView, label: "Marksheet & Results Hub", icon: FileSpreadsheet, desc: "ऑफिशियल अंकपत्र व रिपोर्ट कार्ड" },
         { id: "id_cards" as AdminView, label: "QR ID Cards", icon: CreditCard, desc: "स्मार्ट क्यूआर छात्र पहचान पत्र" },
         { id: "admit_cards" as AdminView, label: "Exam Admit Cards", icon: FileText, desc: "परीक्षा प्रवेश पत्र (हॉल टिकट)" },
         { id: "certificates" as AdminView, label: "Certificates (TC & Merit)", icon: Award, desc: "स्थानांतरण व चरित्र प्रमाण पत्र" },
@@ -1687,6 +1800,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       items: [
         { id: "nsta_broadcast" as AdminView, label: "NSTA Messenger Suite", icon: MessageSquare, desc: "क्लास ग्रुप्स व 1-क्लिक अलर्ट्स" },
         { id: "absentee" as AdminView, label: "Absenty Action Center", icon: AlertCircle, desc: "1-दिन अलर्ट व 2-दिन+ कॉल ट्रैकर" },
+        { id: "leaves_desk" as AdminView, label: "Student Leaves Desk", icon: Calendar, desc: "अभिभावक छुट्टी आवेदन व 1-टैप अप्रूवल" },
         { id: "memories" as AdminView, label: "Memories & Events", icon: Camera, desc: "स्कूल की फोटो व वीडियो यादें" },
         { id: "community" as AdminView, label: "Community Feed", icon: Megaphone, desc: "लाइव कैंपस पोस्ट्स व अपडेट्स" },
         { id: "notices" as AdminView, label: "Notice Board Circulars", icon: Megaphone, desc: "आधिकारिक परिपत्र व सूचना" },
@@ -1704,7 +1818,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         hoverBg: "hover:bg-cyan-950/40 hover:text-cyan-200",
       },
       items: [
-        { id: "staff_hrm" as AdminView, label: "Staff HRM & Payroll", icon: Briefcase, desc: "कर्मचारी उपस्थिति व वेतन" },
+        { id: "staff_hrm" as AdminView, label: "Staff HRM Directory", icon: Briefcase, desc: "कर्मचारी प्रोफाइल व उपस्थिति" },
+        { id: "staff_payroll" as AdminView, label: "Staff Payroll & Pay Slips", icon: Briefcase, desc: "बायोमेट्रिक वेतन पर्ची व बैंक NEFT लिस्ट" },
+        { id: "backup_recovery" as AdminView, label: "Backup & Disaster Recovery", icon: ShieldCheck, desc: "1-क्लिक सम्पूर्ण स्कूल डेटा ZIP बैकअप व रीस्टोर" },
         { id: "inventory_store" as AdminView, label: "School Store & Uniform", icon: Package, desc: "ड्रेस, किताबें व पीओएस बिल" },
         { id: "public_website" as AdminView, label: "Public School Website", icon: Globe, desc: "लाइव पब्लिक स्कूल वेबसाइट" },
         { id: "online_admissions" as AdminView, label: "Online Admissions", icon: UserPlus, desc: "नवीन ऑनलाइन प्रवेश पोर्टल" },
@@ -1773,9 +1889,43 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           </button>
         </div>
 
+        {/* Sidebar Menu Search (Right after School Name & Session) */}
+        <div className="px-2.5 pt-2 pb-1 border-b border-slate-800/80 bg-slate-950/50 shrink-0">
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              value={menuSearchQuery}
+              onChange={(e) => setMenuSearchQuery(e.target.value)}
+              placeholder="मेनू / टूल खोजें..."
+              className="w-full pl-8 pr-6 py-1.5 rounded-lg bg-slate-800/90 border border-slate-700 text-[11px] text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+            />
+            {menuSearchQuery && (
+              <button
+                type="button"
+                onClick={() => setMenuSearchQuery("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-[10px] cursor-pointer"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+        </div>
+
         {/* Categories List with Independent Scroll */}
         <div className="flex-1 px-2.5 py-3 space-y-3.5 overflow-y-auto overscroll-contain">
-          {navCategories.map((cat, cIdx) => (
+          {navCategories
+            .map((cat) => ({
+              ...cat,
+              items: menuSearchQuery.trim()
+                ? cat.items.filter((it) => {
+                    const mq = menuSearchQuery.toLowerCase().trim();
+                    return it.label.toLowerCase().includes(mq) || it.desc.toLowerCase().includes(mq);
+                  })
+                : cat.items,
+            }))
+            .filter((cat) => cat.items.length > 0)
+            .map((cat, cIdx) => (
             <div key={`cat-${cIdx}`} className="space-y-1">
               {/* Styled Sub Group Pill with Unique Accent Color */}
               <div className={`px-2 py-1 rounded-lg ${cat.theme.pillBg} flex items-center justify-between gap-1 shadow-xs`}>
@@ -1911,9 +2061,43 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             </button>
           </div>
 
+          {/* Mobile Menu Search (Right after School Name & Session) */}
+          <div className="px-2.5 pt-2 pb-1.5 border-b border-slate-800/80 bg-slate-950/50 shrink-0">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={menuSearchQuery}
+                onChange={(e) => setMenuSearchQuery(e.target.value)}
+                placeholder="मेनू / टूल खोजें..."
+                className="w-full pl-8 pr-6 py-1.5 rounded-lg bg-slate-800/90 border border-slate-700 text-[11px] text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              />
+              {menuSearchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setMenuSearchQuery("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-[10px] cursor-pointer"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          </div>
+
           {/* Nav Categories */}
           <div className="flex-1 px-2.5 py-3 space-y-3.5 overflow-y-auto overscroll-contain">
-            {navCategories.map((cat, cIdx) => (
+            {navCategories
+              .map((cat) => ({
+                ...cat,
+                items: menuSearchQuery.trim()
+                  ? cat.items.filter((it) => {
+                      const mq = menuSearchQuery.toLowerCase().trim();
+                      return it.label.toLowerCase().includes(mq) || it.desc.toLowerCase().includes(mq);
+                    })
+                  : cat.items,
+              }))
+              .filter((cat) => cat.items.length > 0)
+              .map((cat, cIdx) => (
               <div key={`m-cat-${cIdx}`} className="space-y-1">
                 {/* Styled Sub Group Pill with Unique Accent Color */}
                 <div className={`px-2 py-1 rounded-lg ${cat.theme.pillBg} flex items-center justify-between gap-1 shadow-xs`}>
@@ -2009,91 +2193,136 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const renderTopHeader = () => {
     return (
       <>
-        <header className="sticky top-0 z-20 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 py-2.5 flex items-center justify-between gap-3 shadow-xs">
-          {/* Left: Mobile Toggle Menu Button & Title */}
-          <div className="flex items-center gap-2.5 min-w-0">
-            {!isNativeLandscape && (
+        <header className="sticky top-0 z-20 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 py-2.5 flex items-center justify-between gap-2.5 shadow-xs">
+          {/* Left: View Title, Home & Academic Session (Session moved to left side) */}
+          <div className="flex items-center gap-2 min-w-0">
+            {view !== "dashboard" && (
               <button
                 type="button"
-                onClick={() => setIsSidebarOpen(true)}
-                className="md:hidden flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black text-xs shadow-md shadow-blue-600/30 cursor-pointer active:scale-95 transition"
-                aria-label="Open Left Menu Drawer"
+                onClick={() => setView("dashboard")}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition cursor-pointer shrink-0"
               >
-                <Menu className="w-4 h-4 stroke-[2.5]" />
-                <span>Menu</span>
+                <ChevronLeft className="w-3.5 h-3.5" />
+                <span className="hidden xs:inline">Home</span>
               </button>
             )}
 
-            {isNativeLandscape && isSidebarHidden && (
-              <button
-                type="button"
-                onClick={() => {
-                  setIsSidebarHidden(false);
-                  try { localStorage.setItem("school_erp_sidebar_hidden", "false"); } catch {}
-                }}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs border border-slate-750 cursor-pointer transition shadow-xs"
-                title="मेनू दिखाएं (Swipe Right)"
-              >
-                <Menu className="w-3.5 h-3.5 text-indigo-400" />
-                <span className="hidden sm:inline">Menu</span>
-              </button>
-            )}
-
-            <div className="min-w-0 flex items-center gap-2">
-              {view !== "dashboard" && (
-                <button
-                  type="button"
-                  onClick={() => setView("dashboard")}
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition cursor-pointer"
-                >
-                  <ChevronLeft className="w-3.5 h-3.5" />
-                  <span>Home</span>
-                </button>
-              )}
-              <h1 className="text-xs sm:text-sm font-black text-slate-800 dark:text-white capitalize truncate">
-                {view === "dashboard"
-                  ? "Home Dashboard (कंट्रोल सेंटर)"
-                  : view === "account_hub"
-                  ? "अकाउंट, रोल स्विच व ऐप विकल्प (Account Hub)"
-                  : view === "school_profile"
-                  ? "School Profile & Settings (स्कूल सेटिंग्स)"
-                  : view === "memories"
-                  ? "School Memories & Events (यादें)"
-                  : view.replace(/_/g, " ")}
-              </h1>
-            </div>
-          </div>
-
-          {/* Center / Right: Screen Rotate & Actions */}
-          <div className="flex items-center gap-2 shrink-0">
-            {/* Screen Rotate Toggle */}
-            <button
-              type="button"
-              onClick={handleToggleScreenRotate}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl font-black text-xs transition cursor-pointer active:scale-95 shadow-md ${
-                isNativeLandscape
-                  ? "bg-gradient-to-r from-emerald-400 via-teal-400 to-emerald-500 text-slate-950 ring-2 ring-emerald-300 shadow-emerald-500/30"
-                  : "bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/30"
-              }`}
-              title={isNativeLandscape ? "Portrait Mode me wapas layein" : "Screen Rotate karein (Landscape Computer Mode)"}
-            >
-              <RotateCw className={`w-3.5 h-3.5 transition-transform duration-300 ${isNativeLandscape ? "rotate-90 text-slate-950 stroke-[2.5]" : "text-white"}`} />
-              <span className="hidden xs:inline">{isNativeLandscape ? "📱 Portrait" : "🔄 Screen Rotate"}</span>
-              <span className="xs:hidden">{isNativeLandscape ? "📱" : "🔄 Rotate"}</span>
-            </button>
-
+            {/* Academic Session Selector (Moved to Left Side) */}
             <button
               type="button"
               onClick={() => setShowSessionModal(true)}
-              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-800 dark:text-emerald-200 border border-emerald-500/35 text-xs font-black transition cursor-pointer active:scale-95 shadow-xs"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-800 dark:text-emerald-200 border border-emerald-500/35 text-xs font-black transition cursor-pointer active:scale-95 shadow-xs shrink-0"
               title="सत्र बदलें, नया सत्र जोड़ें या एडिट करें (Click to Switch/Edit Academic Session)"
             >
               <Calendar className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-              <span className="tabular-nums font-mono truncate max-w-[120px] sm:max-w-none">
+              <span className="tabular-nums font-mono text-[11px] sm:text-xs">
                 सत्र: {activeSession?.name ? activeSession.name.replace(/Academic Session |Session /i, "") : "2026-27"}
               </span>
-              <ChevronDown className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-300 opacity-80 shrink-0" />
+              <ChevronDown className="w-3 h-3 text-emerald-700 dark:text-emerald-300 opacity-80 shrink-0" />
+            </button>
+
+            <h1 className="text-xs sm:text-sm font-black text-slate-800 dark:text-white capitalize truncate hidden md:inline-block">
+              {view === "dashboard"
+                ? "Home Dashboard"
+                : view === "account_hub"
+                ? "Account Hub"
+                : view === "sibling_profiles"
+                ? "भाई-बहन प्रोफाइल (Sibling Profiles & Concessions)"
+                : view === "school_profile"
+                ? "School Profile & Settings"
+                : view === "memories"
+                ? "School Memories & Events"
+                : view.replace(/_/g, " ")}
+            </h1>
+          </div>
+
+          {/* Right: Search + 3-Theme Switcher + Mobile / Laptop Rotate Mode Toggle */}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {/* Compact Universal Search Button */}
+            <button
+              type="button"
+              onClick={() => setShowCompactSearch((prev) => !prev)}
+              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl font-black text-xs transition cursor-pointer active:scale-95 shadow-sm border ${
+                showCompactSearch || universalSearchQuery.trim()
+                  ? "bg-blue-600 text-white border-blue-500"
+                  : "bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700"
+              }`}
+              title="यूनिवर्सल सर्च खोलें (छात्र, शिक्षक, फीस, छूट, टूल)"
+            >
+              <Search className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Search</span>
+            </button>
+
+            {/* 3-Theme Switcher Segmented Pill */}
+            <div className="inline-flex items-center p-0.5 rounded-xl bg-slate-800/90 border border-slate-700/80 shadow-xs">
+              <button
+                type="button"
+                onClick={() => applyAdminTheme("white")}
+                className={`px-2 py-1 rounded-lg text-[10px] sm:text-xs font-black flex items-center gap-1 transition cursor-pointer ${
+                  appTheme === "white"
+                    ? "bg-amber-400 text-slate-950 shadow-sm"
+                    : "text-slate-400 hover:text-white"
+                }`}
+                title="White (Light) थीम - सफेद"
+              >
+                <Sun className="w-3.5 h-3.5" />
+                <span className="hidden xs:inline">White</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => applyAdminTheme("black")}
+                className={`px-2 py-1 rounded-lg text-[10px] sm:text-xs font-black flex items-center gap-1 transition cursor-pointer ${
+                  appTheme === "black"
+                    ? "bg-cyan-400 text-slate-950 shadow-sm"
+                    : "text-slate-400 hover:text-white"
+                }`}
+                title="Black (AMOLED) थीम - सुपर डार्क"
+              >
+                <Moon className="w-3.5 h-3.5" />
+                <span className="hidden xs:inline">Black</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => applyAdminTheme("current")}
+                className={`px-2 py-1 rounded-lg text-[10px] sm:text-xs font-black flex items-center gap-1 transition cursor-pointer ${
+                  appTheme === "current"
+                    ? "bg-indigo-600 text-white shadow-sm"
+                    : "text-slate-400 hover:text-white"
+                }`}
+                title="Midnight (Default) थीम - डिफ़ॉल्ट"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span className="hidden xs:inline">Midnight</span>
+              </button>
+            </div>
+
+            {/* Mobile / Laptop Rotate Toggle Button */}
+            <button
+              type="button"
+              onClick={handleToggleScreenRotate}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl font-black text-xs transition cursor-pointer active:scale-95 shadow-md border ${
+                isEffectiveLandscape
+                  ? "bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 text-white border-cyan-300/60 shadow-cyan-500/30 ring-2 ring-cyan-400/30"
+                  : "bg-slate-800 hover:bg-slate-700 text-emerald-300 border-emerald-500/40 shadow-emerald-500/10"
+              }`}
+              title={
+                isEffectiveLandscape
+                  ? "Mobile (Portrait) Mode me wapas layein"
+                  : "Laptop (Desktop) Mode me badlein"
+              }
+            >
+              {isEffectiveLandscape ? (
+                <>
+                  <Laptop className="w-3.5 h-3.5 text-cyan-200 animate-pulse" />
+                  <span className="inline">💻 Laptop</span>
+                </>
+              ) : (
+                <>
+                  <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="inline">📱 Mobile</span>
+                </>
+              )}
             </button>
 
             {canExitSchool && (
@@ -2104,7 +2333,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                 title="Leave School / स्कूल छोड़ें"
               >
                 <Building2 className="w-3.5 h-3.5 text-amber-500" />
-                <span className="hidden sm:inline">Leave School</span>
+                <span className="hidden sm:inline">Leave</span>
               </button>
             )}
 
@@ -2117,7 +2346,6 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               <Settings className="w-3.5 h-3.5 text-blue-500" />
               <span>Settings</span>
             </button>
-
           </div>
         </header>
 
@@ -2181,6 +2409,14 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               keywords: "face attendance kiosk hajiri camera चेहरा हाजिरी उपस्थिति",
               icon: Camera,
               action: () => setView("classes"),
+            },
+            {
+              id: "sub_face_studio",
+              label: "लाइव फेस आईडी स्टुडियो (Live Face ID Registration & Match Test)",
+              desc: "कैमरे से छात्र व अध्यापकों का लाइव चेहरा रजिस्टर करें व टेस्ट करें",
+              keywords: "live face id camera registration photo descriptor test चेहरा लाइव मैच",
+              icon: Camera,
+              action: () => setShowFaceStudioModal(true),
             },
             {
               id: "sub_advance_due",
@@ -2314,16 +2550,17 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             matchedSubjects.length +
             matchedSessions.length;
 
-          return (
-            <div className="bg-white/95 dark:bg-slate-900/95 border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 py-2 shrink-0 relative z-20">
+          return (showCompactSearch || Boolean(qRaw)) ? (
+            <div className="bg-white/95 dark:bg-slate-900/95 border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 py-2 shrink-0 relative z-20 animate-in fade-in duration-150">
               <div className="max-w-7xl mx-auto">
                 <div className="relative flex items-center">
                   <Search className="w-4 h-4 text-blue-500 absolute left-3.5 pointer-events-none" />
                   <input
                     type="text"
+                    autoFocus
                     value={universalSearchQuery}
                     onChange={(e) => setUniversalSearchQuery(e.target.value)}
-                    placeholder="🔍 एक ही सर्च बार से सब कुछ खोजें: छात्र, रोल नं., पिता/मोबाइल, शिक्षक, क्लास, विषय, फीस, छूट, भाई-बहन, बस, TC या कोई भी फीचर..."
+                    placeholder="🔍 छात्र, रोल नं., शिक्षक, क्लास, फीस, छूट, बस या कोई भी फीचर खोजें..."
                     className="w-full pl-10 pr-24 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
                   />
                   {qRaw && (
@@ -2591,7 +2828,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                 )}
               </div>
             </div>
-          );
+          ) : null;
         })()}
 
         {/* ── DUMMY SESSION ACTIVE NOTICE BAR ── */}
@@ -2617,1008 +2854,1051 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   };
 
   // ── 1. HOME DASHBOARD (7-DAY ATTENDANCE, FEES, ABSENTY & DUE LIST) ──────
+  // ── 1. HOME DASHBOARD (COMPACT 2-3 COLUMN PROFESSIONAL LAYOUT) ──────
   const renderHomeDashboard = () => {
+    const getClassLabel = (clsId: string) =>
+      displayedClasses.find((c) => c.id === clsId)?.name || "Class";
+
+    // Pending Face Enrollment List
+    const pendingFaceStudents = displayedStudents.filter(
+      (st) => !enrolledFaceIds[st.id]
+    );
+    const enrolledFaceCount = displayedStudents.length - pendingFaceStudents.length;
+
+    // Live Bus Fleet Summary from localStorage
+    const defaultBuses = [
+      { id: "bus-01", busNumber: "Bus #01 (DL-1PC-4590)", route: "Route 1" },
+      { id: "bus-02", busNumber: "Bus #02 (DL-1PC-8821)", route: "Route 2" },
+      { id: "bus-03", busNumber: "Bus #03 (DL-1PC-3312)", route: "Route 3" },
+    ];
+    const liveBuses = defaultBuses.map((b) => {
+      let status: "started" | "idle" = "idle";
+      let tripType = "";
+      let speed = 0;
+      try {
+        const raw = localStorage.getItem(`nst_live_bus_${schoolId || "default"}_${b.id}`);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed?.tripStatus === "started") {
+            status = "started";
+            tripType = parsed.tripType === "afternoon_drop" ? "Drop" : "Pickup";
+            speed = Number(parsed.speed || 28);
+          }
+        }
+      } catch {}
+      return { ...b, status, tripType, speed };
+    });
+    const activeBusCount = liveBuses.filter((b) => b.status === "started").length;
+    const busStudentsCount = displayedStudents.filter((s) => s.usesBus).length;
+
+    // Dues Summary
+    const studentsWithAdmissionDues = displayedStudents.filter(
+      (s) => Number(s.admissionDueBalance || 0) > 0
+    );
+    const totalAdmissionDue = studentsWithAdmissionDues.reduce(
+      (sum, s) => sum + Number(s.admissionDueBalance || 0),
+      0
+    );
+    const studentsWithAdvanceDues = displayedStudents.filter(
+      (s) =>
+        s.advanceMonthlyFeePaid === false &&
+        Number(s.advanceMonthlyFeeDue || s.monthlyFee || 0) > 0
+    );
+    const totalAdvanceDue = studentsWithAdvanceDues.reduce(
+      (sum, s) => sum + Number(s.advanceMonthlyFeeDue || s.monthlyFee || 0),
+      0
+    );
+
+    const openWhatsAppReminder = (
+      st: SchoolStudent,
+      headLabel: string,
+      dueAmt: number
+    ) => {
+      const phone = (st.parentPhone || st.phone || "").replace(/\D/g, "");
+      const targetPhone = phone.length === 10 ? `91${phone}` : phone;
+      const msg = encodeURIComponent(
+        `नमस्ते ${st.fatherName || "अभिभावक जी"},\n${school?.name || "School"} से सूचना:\nछात्र/छात्रा: *${st.name}* (${getClassLabel(st.classId)}, Roll #${st.rollNo || "—"})\nबकाया शीर्षक: *${headLabel}*\nबकाया राशि: *₹${dueAmt.toLocaleString("en-IN")}*\nकृपया शीघ्र शुल्क जमा कराने की कृपा करें। धन्यवाद!`
+      );
+      const url = targetPhone
+        ? `https://wa.me/${targetPhone}?text=${msg}`
+        : `https://wa.me/?text=${msg}`;
+      window.open(url, "_blank", "noopener,noreferrer");
+    };
+
+    const handleSettleDue = async () => {
+      if (!duesSettlementModal || !schoolId) return;
+      const { student: st, type, amount, mode } = duesSettlementModal;
+      const payAmt = Math.max(0, Number(amount) || 0);
+      if (payAmt <= 0) return;
+
+      setDuesSettlementModal((prev) => (prev ? { ...prev, saving: true } : null));
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const receiptNo = `ADM-${Date.now().toString().slice(-6)}`;
+
+      try {
+        let patch: Partial<SchoolStudent> = {};
+        if (type === "admission") {
+          const curDue = Number(st.admissionDueBalance || 0);
+          const applied = Math.min(curDue, payAmt);
+          const rem = Math.max(0, curDue - applied);
+          patch = {
+            admissionDueBalance: rem,
+            admissionPaidAmount: Number(st.admissionPaidAmount || 0) + applied,
+            admissionBalanceHistory: [
+              ...(st.admissionBalanceHistory || []),
+              {
+                date: todayIso,
+                paidAmount: applied,
+                remainingDue: rem,
+                receiptNo,
+                paymentMode: mode,
+              },
+            ],
+          };
+        } else {
+          patch = {
+            advanceMonthlyFeePaid: true,
+            advanceMonthlyFeeDue: 0,
+          };
+        }
+
+        await updateStudent(schoolId, st.id, patch);
+        setStudents((prev) =>
+          prev.map((item) => (item.id === st.id ? { ...item, ...patch } : item))
+        );
+        setDuesSettlementModal(null);
+      } catch (err) {
+        console.error("Failed to settle due:", err);
+        setDuesSettlementModal((prev) => (prev ? { ...prev, saving: false } : null));
+      }
+    };
+
     return (
-      <div className="space-y-5 animate-in fade-in duration-200">
-        {/* Push Alert Sent Toast */}
+      <div className="space-y-3.5 animate-in fade-in duration-200">
+        {/* Toasts */}
         {sentPushAlertsToast && (
-          <div className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-700 text-white text-xs sm:text-sm font-bold shadow-xl flex items-center justify-between gap-3 animate-in slide-in-from-top-2">
+          <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-xs font-bold flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-200" />
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
               <span>{sentPushAlertsToast}</span>
             </div>
-            <button type="button" onClick={() => setSentPushAlertsToast(null)} className="p-1 hover:bg-white/20 rounded">
-              <X className="w-4 h-4" />
+            <button type="button" onClick={() => setSentPushAlertsToast(null)} className="p-1 hover:bg-emerald-100 dark:hover:bg-emerald-900 rounded cursor-pointer">
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
         )}
 
-        {/* How to Use & Demo Session Quick Card */}
-        <button
-          type="button"
-          onClick={() => setShowHowToUseModal(true)}
-          className="w-full text-left bg-gradient-to-r from-indigo-600 via-blue-600 to-cyan-600 hover:from-indigo-500 hover:via-blue-500 hover:to-cyan-500 text-white p-3.5 sm:p-4 rounded-2xl shadow-md hover:shadow-lg transition-all cursor-pointer active:scale-[0.995] flex items-center justify-between gap-3 group border border-white/15"
-        >
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-xl bg-white/15 backdrop-blur-xs flex items-center justify-center shrink-0 group-hover:scale-105 transition">
-              <BookOpen className="w-5 h-5 text-white" />
+        {birthdayWishToast && (
+          <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs font-bold flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-rose-500" />
+              <span>{birthdayWishToast}</span>
             </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h3 className="text-sm sm:text-base font-black tracking-tight">
-                  📖 How to Use (स्कूल ERP गाइड)
-                </h3>
-                {schoolDemoActive && (
-                  <span className="px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black">
-                    🧪 डमी सत्र ON
-                  </span>
-                )}
-              </div>
-              <p className="text-[11px] sm:text-xs text-blue-100 font-medium truncate sm:whitespace-normal">
-                किस विकल्प से क्या काम होता है? पूरी लिस्ट देखें, सीधे खोलें और डमी सत्र (Demo Session) यहीं से चालू/बंद करें
-              </p>
-            </div>
+            <button type="button" onClick={() => setBirthdayWishToast(null)} className="p-1 hover:bg-rose-100 dark:hover:bg-rose-900 rounded cursor-pointer">
+              <X className="w-3.5 h-3.5" />
+            </button>
           </div>
-          <span className="px-3 py-1.5 rounded-xl bg-white/20 group-hover:bg-white/30 text-white text-xs font-black shrink-0 flex items-center gap-1 transition">
-            <span>खोलें</span>
-            <ChevronRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
-          </span>
-        </button>
+        )}
 
-        {/* Top Summary KPI Strip */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {/* Compact Top Bar: 4 KPI Cards + Slim How to Use */}
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
           <button
             type="button"
             onClick={() => setView("students")}
-            className="bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-200/80 dark:border-slate-700 shadow-xs hover:border-blue-400 transition text-left cursor-pointer group"
+            className="bg-white dark:bg-slate-800 p-3 rounded-2xl border border-slate-200/80 dark:border-slate-700 shadow-xs hover:border-blue-400 transition text-left cursor-pointer group"
           >
             <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold uppercase text-slate-400">Total Students</span>
-              <div className="w-8 h-8 rounded-xl bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400 group-hover:scale-110 transition">
-                <Users className="w-4 h-4" />
-              </div>
+              <span className="text-[10px] font-bold uppercase text-slate-400">Students</span>
+              <Users className="w-4 h-4 text-blue-600 dark:text-blue-400" />
             </div>
-            <p className="text-2xl font-black text-slate-800 dark:text-white mt-1 tabular-nums">
+            <p className="text-xl font-black text-slate-800 dark:text-white mt-0.5 tabular-nums">
               {displayedStudents.length}
             </p>
-            <p className="text-[10px] text-blue-500 font-medium mt-0.5">Click to view directory →</p>
+            <p className="text-[10px] text-blue-600 dark:text-blue-400 font-semibold">Directory →</p>
           </button>
 
           <button
             type="button"
             onClick={() => setView("teachers")}
-            className="bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-200/80 dark:border-slate-700 shadow-xs hover:border-emerald-400 transition text-left cursor-pointer group"
+            className="bg-white dark:bg-slate-800 p-3 rounded-2xl border border-slate-200/80 dark:border-slate-700 shadow-xs hover:border-emerald-400 transition text-left cursor-pointer group"
           >
             <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold uppercase text-slate-400">Teachers</span>
-              <div className="w-8 h-8 rounded-xl bg-emerald-50 dark:bg-emerald-900/30 flex items-center justify-center text-emerald-600 dark:text-emerald-400 group-hover:scale-110 transition">
-                <Users className="w-4 h-4" />
-              </div>
+              <span className="text-[10px] font-bold uppercase text-slate-400">Teachers</span>
+              <Users className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
             </div>
-            <p className="text-2xl font-black text-slate-800 dark:text-white mt-1 tabular-nums">
+            <p className="text-xl font-black text-slate-800 dark:text-white mt-0.5 tabular-nums">
               {displayedTeachers.length}
             </p>
-            <p className="text-[10px] text-emerald-500 font-medium mt-0.5">Active faculty staff →</p>
+            <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold">Faculty →</p>
           </button>
 
           <button
             type="button"
             onClick={() => setView("classes")}
-            className="bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-200/80 dark:border-slate-700 shadow-xs hover:border-purple-400 transition text-left cursor-pointer group"
+            className="bg-white dark:bg-slate-800 p-3 rounded-2xl border border-slate-200/80 dark:border-slate-700 shadow-xs hover:border-purple-400 transition text-left cursor-pointer group"
           >
             <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold uppercase text-slate-400">Classes</span>
-              <div className="w-8 h-8 rounded-xl bg-purple-50 dark:bg-purple-900/30 flex items-center justify-center text-purple-600 dark:text-purple-400 group-hover:scale-110 transition">
-                <BookOpen className="w-4 h-4" />
-              </div>
+              <span className="text-[10px] font-bold uppercase text-slate-400">Classes</span>
+              <BookOpen className="w-4 h-4 text-purple-600 dark:text-purple-400" />
             </div>
-            <p className="text-2xl font-black text-slate-800 dark:text-white mt-1 tabular-nums">
+            <p className="text-xl font-black text-slate-800 dark:text-white mt-0.5 tabular-nums">
               {displayedClasses.length}
             </p>
-            <p className="text-[10px] text-purple-500 font-medium mt-0.5">Total class sections →</p>
+            <p className="text-[10px] text-purple-600 dark:text-purple-400 font-semibold">Sections →</p>
           </button>
 
           <button
             type="button"
             onClick={() => setView("classes")}
-            className="bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-200/80 dark:border-slate-700 shadow-xs hover:border-teal-400 transition text-left cursor-pointer group"
+            className="bg-white dark:bg-slate-800 p-3 rounded-2xl border border-slate-200/80 dark:border-slate-700 shadow-xs hover:border-teal-400 transition text-left cursor-pointer group"
           >
             <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold uppercase text-slate-400">7-Day Attendance</span>
-              <div className="w-8 h-8 rounded-xl bg-teal-50 dark:bg-teal-900/30 flex items-center justify-center text-teal-600 dark:text-teal-400 group-hover:scale-110 transition">
-                <BarChart3 className="w-4 h-4" />
-              </div>
+              <span className="text-[10px] font-bold uppercase text-slate-400">Attendance</span>
+              <BarChart3 className="w-4 h-4 text-teal-600 dark:text-teal-400" />
             </div>
-            <p className="text-2xl font-black text-teal-600 dark:text-teal-400 mt-1 tabular-nums">
+            <p className="text-xl font-black text-teal-600 dark:text-teal-400 mt-0.5 tabular-nums">
               {avgAttendancePct}%
             </p>
-            <p className="text-[10px] text-teal-500 font-medium mt-0.5">Average weekly rate →</p>
+            <p className="text-[10px] text-teal-600 dark:text-teal-400 font-semibold">7-Day Avg →</p>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowHowToUseModal(true)}
+            className="col-span-2 sm:col-span-1 bg-indigo-50 hover:bg-indigo-100/80 dark:bg-indigo-950/50 dark:hover:bg-indigo-950/80 p-3 rounded-2xl border border-indigo-200 dark:border-indigo-800 shadow-xs transition text-left cursor-pointer flex sm:flex-col items-center sm:items-stretch justify-between gap-2"
+          >
+            <div className="flex items-center justify-between w-full">
+              <span className="text-[10px] font-black uppercase text-indigo-700 dark:text-indigo-300">
+                📖 How to Use
+              </span>
+              {schoolDemoActive && (
+                <span className="px-1.5 py-0.5 rounded bg-amber-400 text-slate-950 text-[9px] font-black">
+                  Demo ON
+                </span>
+              )}
+            </div>
+            <p className="text-xs font-black text-indigo-900 dark:text-white leading-tight">
+              ERP गाइड व डमी सत्र
+            </p>
+            <p className="text-[10px] text-indigo-600 dark:text-indigo-400 font-bold shrink-0">
+              खोलें →
+            </p>
           </button>
         </div>
 
-        {/* ── TWO MAJOR ATTENDANCE FEATURES ON HOME DASHBOARD ── */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* FEATURE 1 HERO CARD: UNIVERSAL 1-TAP IN/OUT ATTENDANCE DESK */}
-          <div className="bg-gradient-to-br from-indigo-950 via-slate-900 to-blue-950 rounded-3xl p-5 border-2 border-indigo-500/40 shadow-xl text-white relative overflow-hidden flex flex-col justify-between space-y-4">
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-indigo-500 text-white shadow-xs">
-                  FEATURE 1 • होम हाजिरी डेस्क
-                </span>
-                <span className="text-xs font-mono text-amber-300 font-bold flex items-center gap-1">
-                  <Clock className="w-3.5 h-3.5 text-amber-400" />
-                  <span>All In / Out</span>
-                </span>
-              </div>
-              <h3 className="font-black text-lg text-white">
-                ⚡ त्वरित हाजिरी पंच (Universal 1-Tap Attendance Desk)
-              </h3>
-              <p className="text-xs text-indigo-200/90 leading-relaxed">
-                सभी शिक्षक और किसी भी क्लास (Nursery से 12वीं) के छात्र का <strong>Punch IN (आगमन)</strong> व <strong>Punch OUT (प्रस्थान)</strong> सीधे यहीं से लगाएं।
-              </p>
-            </div>
-
-            <div className="flex items-center gap-2 pt-1 flex-wrap">
-              <button
-                type="button"
-                onClick={() => setShowSchoolLocationModal(true)}
-                className="px-3 py-2 rounded-xl bg-white/15 hover:bg-white/25 text-white font-bold text-xs transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
-              >
-                <MapPin className="w-3.5 h-3.5 text-blue-300" />
-                <span>📍 School GPS Location</span>
-              </button>
-            </div>
-          </div>
-
-          {/* FEATURE 2 HERO CARD: UNIVERSAL QR & FACE SCANNER DESK */}
-          <div className="bg-gradient-to-br from-purple-950 via-slate-900 to-indigo-950 rounded-3xl p-5 border-2 border-purple-500/40 shadow-xl text-white relative overflow-hidden flex flex-col justify-between space-y-4">
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-purple-500 text-white shadow-xs">
-                  FEATURE 2 • क्यूआर व फेस स्कैनर
-                </span>
-                <span className="text-xs font-mono text-emerald-300 font-bold flex items-center gap-1">
-                  <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Auto Detect</span>
-                </span>
-              </div>
-              <h3 className="font-black text-lg text-white">
-                📷 यूनिवर्सल स्कैनर (Universal QR &amp; Face Punch Desk)
-              </h3>
-              <p className="text-xs text-purple-200/90 leading-relaxed">
-                किसी भी क्लास के छात्र, शिक्षक या स्कूल एडमिन का ID Card QR कोड स्कैन करें। आगमन या प्रस्थान अपने-आप ऑडियो आवाज़ के साथ दर्ज होगा।
-              </p>
-            </div>
-
-            <div className="flex items-center gap-2 pt-1 flex-wrap">
-              <button
-                type="button"
-                onClick={() => setShowUniversalScannerModal(true)}
-                className="px-4 py-2 rounded-xl bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-400 hover:to-indigo-400 text-white font-black text-xs transition active:scale-95 shadow-md flex items-center gap-1.5 cursor-pointer"
-              >
-                <Camera className="w-4 h-4" />
-                <span>📷 Open QR Scanner</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setShowFaceKioskModal(true)}
-                className="px-3.5 py-2 rounded-xl bg-white/15 hover:bg-white/25 text-white font-bold text-xs transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
-              >
-                <span>🤖 AI Face Kiosk</span>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* ── EMBEDDED UNIVERSAL ATTENDANCE DESK ── */}
-        {school && (
-          <UniversalAttendanceDesk
-            school={school}
-            classes={displayedClasses}
-            students={displayedStudents}
-            teachers={displayedTeachers}
-            staff={staffList}
-            onOpenScanner={() => setShowUniversalScannerModal(true)}
-            onOpenLocationModal={() => setShowSchoolLocationModal(true)}
-            onViewClassAttendance={(clsId) => {
-              const found = displayedClasses.find(c => c.id === clsId);
-              if (found) {
-                setSelectedClass(found);
-                setView("attendance");
-              }
-            }}
-          />
-        )}
-
-        {/* ── HOME DASHBOARD DUES TRACKING: ADMISSION BALANCE & 1-MONTH ADVANCE FEE ── */}
-        {(() => {
-          const studentsWithAdmissionDues = displayedStudents.filter(
-            (s) => Number(s.admissionDueBalance || 0) > 0
-          );
-          const totalAdmissionDue = studentsWithAdmissionDues.reduce(
-            (sum, s) => sum + Number(s.admissionDueBalance || 0),
-            0
-          );
-
-          const studentsWithAdvanceDues = displayedStudents.filter(
-            (s) =>
-              s.advanceMonthlyFeePaid === false &&
-              Number(s.advanceMonthlyFeeDue || s.monthlyFee || 0) > 0
-          );
-          const totalAdvanceDue = studentsWithAdvanceDues.reduce(
-            (sum, s) => sum + Number(s.advanceMonthlyFeeDue || s.monthlyFee || 0),
-            0
-          );
-
-          const getClassLabel = (clsId: string) =>
-            displayedClasses.find((c) => c.id === clsId)?.name || "Class";
-
-          const openWhatsAppReminder = (
-            st: SchoolStudent,
-            headLabel: string,
-            dueAmt: number
-          ) => {
-            const phone = (st.parentPhone || st.phone || "").replace(/\D/g, "");
-            const targetPhone = phone.length === 10 ? `91${phone}` : phone;
-            const msg = encodeURIComponent(
-              `नमस्ते ${st.fatherName || "अभिभावक जी"},\n${school?.name || "School"} से सूचना:\nछात्र/छात्रा: *${st.name}* (${getClassLabel(st.classId)}, Roll #${st.rollNo || "—"})\nबकाया शीर्षक: *${headLabel}*\nबकाया राशि: *₹${dueAmt.toLocaleString("en-IN")}*\nकृपया शीघ्र शुल्क जमा कराने की कृपा करें। धन्यवाद!`
-            );
-            const url = targetPhone
-              ? `https://wa.me/${targetPhone}?text=${msg}`
-              : `https://wa.me/?text=${msg}`;
-            window.open(url, "_blank", "noopener,noreferrer");
-          };
-
-          const handleSettleDue = async () => {
-            if (!duesSettlementModal || !schoolId) return;
-            const { student: st, type, amount, mode } = duesSettlementModal;
-            const payAmt = Math.max(0, Number(amount) || 0);
-            if (payAmt <= 0) return;
-
-            setDuesSettlementModal((prev) => (prev ? { ...prev, saving: true } : null));
-            const todayIso = new Date().toISOString().slice(0, 10);
-            const receiptNo = `ADM-${Date.now().toString().slice(-6)}`;
-
-            try {
-              let patch: Partial<SchoolStudent> = {};
-              if (type === "admission") {
-                const curDue = Number(st.admissionDueBalance || 0);
-                const applied = Math.min(curDue, payAmt);
-                const rem = Math.max(0, curDue - applied);
-                patch = {
-                  admissionDueBalance: rem,
-                  admissionPaidAmount: Number(st.admissionPaidAmount || 0) + applied,
-                  admissionBalanceHistory: [
-                    ...(st.admissionBalanceHistory || []),
-                    {
-                      date: todayIso,
-                      paidAmount: applied,
-                      remainingDue: rem,
-                      receiptNo,
-                      paymentMode: mode,
-                    },
-                  ],
-                };
-              } else {
-                patch = {
-                  advanceMonthlyFeePaid: true,
-                  advanceMonthlyFeeDue: 0,
-                };
-              }
-
-              await updateStudent(schoolId, st.id, patch);
-              setStudents((prev) =>
-                prev.map((item) => (item.id === st.id ? { ...item, ...patch } : item))
-              );
-              setDuesSettlementModal(null);
-            } catch (err) {
-              console.error("Failed to settle due:", err);
-              setDuesSettlementModal((prev) => (prev ? { ...prev, saving: false } : null));
-            }
-          };
-
-          return (
-            <>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                {/* CARD 1: PENDING ADMISSION BALANCE (अधूरा एडमिशन शुल्क) */}
-                <div className="rounded-2xl border border-rose-200 dark:border-rose-900 bg-rose-50/40 dark:bg-rose-950/20 p-4 sm:p-5 flex flex-col justify-between gap-3">
-                  <div className="flex items-start justify-between gap-3 border-b border-rose-200/70 dark:border-rose-900/60 pb-3">
-                    <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-rose-700 dark:text-rose-400">
-                        Pending Admission Balance
-                      </span>
-                      <h3 className="text-base font-black text-slate-900 dark:text-white mt-0.5">
-                        अधूरा एडमिशन शुल्क (Admission Arrears)
-                      </h3>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <p className="text-lg font-black font-mono tabular-nums text-rose-700 dark:text-rose-300">
-                        ₹{totalAdmissionDue.toLocaleString("en-IN")}
-                      </p>
-                      <p className="text-[11px] font-bold font-mono tabular-nums text-rose-600 dark:text-rose-400">
-                        {studentsWithAdmissionDues.length} Students
-                      </p>
-                    </div>
-                  </div>
-
-                  {studentsWithAdmissionDues.length === 0 ? (
-                    <div className="py-5 text-center text-xs font-semibold text-slate-500 dark:text-slate-400">
-                      सभी छात्रों का एडमिशन शुल्क पूर्ण जमा है।
-                    </div>
-                  ) : (
-                    <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                      {studentsWithAdmissionDues.slice(0, 12).map((st) => {
-                        const due = Number(st.admissionDueBalance || 0);
-                        return (
-                          <div
-                            key={st.id}
-                            className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-white dark:bg-slate-900/80 border border-rose-200/70 dark:border-rose-900/50"
-                          >
-                            <div className="min-w-0">
-                              <p className="text-xs font-black text-slate-900 dark:text-white truncate">
-                                {st.name}
-                              </p>
-                              <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                                {getClassLabel(st.classId)} • Roll #{st.rollNo || "—"}
-                              </p>
-                            </div>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <span className="text-xs font-black font-mono tabular-nums text-rose-700 dark:text-rose-300 mr-1">
-                                ₹{due.toLocaleString("en-IN")}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setDuesSettlementModal({
-                                    student: st,
-                                    type: "admission",
-                                    amount: String(due),
-                                    mode: "Cash",
-                                    saving: false,
-                                  })
-                                }
-                                className="px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-bold transition cursor-pointer"
-                              >
-                                💰 जमा करें
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  openWhatsAppReminder(st, "बकाया एडमिशन शुल्क", due)
-                                }
-                                className="px-2 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold transition cursor-pointer"
-                                title="WhatsApp Reminder"
-                              >
-                                📲
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                {/* CARD 2: 1-MONTH ADVANCE FEE UNPAID (1-माह एडवांस फीस बकाया) */}
-                <div className="rounded-2xl border border-amber-200 dark:border-amber-900 bg-amber-50/40 dark:bg-amber-950/20 p-4 sm:p-5 flex flex-col justify-between gap-3">
-                  <div className="flex items-start justify-between gap-3 border-b border-amber-200/70 dark:border-amber-900/60 pb-3">
-                    <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">
-                        Unpaid 1-Month Advance Fee
-                      </span>
-                      <h3 className="text-base font-black text-slate-900 dark:text-white mt-0.5">
-                        1-माह एडवांस फीस बकाया (Advance Tuition)
-                      </h3>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <p className="text-lg font-black font-mono tabular-nums text-amber-700 dark:text-amber-300">
-                        ₹{totalAdvanceDue.toLocaleString("en-IN")}
-                      </p>
-                      <p className="text-[11px] font-bold font-mono tabular-nums text-amber-600 dark:text-amber-400">
-                        {studentsWithAdvanceDues.length} Students
-                      </p>
-                    </div>
-                  </div>
-
-                  {studentsWithAdvanceDues.length === 0 ? (
-                    <div className="py-5 text-center text-xs font-semibold text-slate-500 dark:text-slate-400">
-                      सभी नए छात्रों की 1-माह एडवांस फीस जमा है।
-                    </div>
-                  ) : (
-                    <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                      {studentsWithAdvanceDues.slice(0, 12).map((st) => {
-                        const advDue = Number(st.advanceMonthlyFeeDue || st.monthlyFee || 0);
-                        return (
-                          <div
-                            key={st.id}
-                            className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-white dark:bg-slate-900/80 border border-amber-200/70 dark:border-amber-900/50"
-                          >
-                            <div className="min-w-0">
-                              <p className="text-xs font-black text-slate-900 dark:text-white truncate">
-                                {st.name}
-                              </p>
-                              <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                                {getClassLabel(st.classId)} • Roll #{st.rollNo || "—"}
-                              </p>
-                            </div>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <span className="text-xs font-black font-mono tabular-nums text-amber-700 dark:text-amber-300 mr-1">
-                                ₹{advDue.toLocaleString("en-IN")}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setDuesSettlementModal({
-                                    student: st,
-                                    type: "advance",
-                                    amount: String(advDue),
-                                    mode: "Cash",
-                                    saving: false,
-                                  })
-                                }
-                                className="px-2.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold transition cursor-pointer"
-                              >
-                                ⚡ जमा करें
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  openWhatsAppReminder(st, "1-माह एडवांस ट्यूशन फीस", advDue)
-                                }
-                                className="px-2 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold transition cursor-pointer"
-                                title="WhatsApp Reminder"
-                              >
-                                📲
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* IN-PLACE 1-TAP DUES SETTLEMENT MODAL */}
-              {duesSettlementModal && (
-                <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-                  <div className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 shadow-2xl space-y-4">
-                    <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
-                      <div>
-                        <h4 className="text-base font-black text-slate-900 dark:text-white">
-                          {duesSettlementModal.type === "admission"
-                            ? "💰 अधूरा एडमिशन शुल्क जमा करें"
-                            : "⚡ 1-माह एडवांस फीस जमा करें"}
-                        </h4>
-                        <p className="text-xs text-slate-500 dark:text-slate-400">
-                          {duesSettlementModal.student.name} ({getClassLabel(duesSettlementModal.student.classId)})
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setDuesSettlementModal(null)}
-                        className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 cursor-pointer"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-
-                    <div className="space-y-3">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                          जमा राशि (Amount in ₹)
-                        </label>
-                        <input
-                          type="number"
-                          min={1}
-                          value={duesSettlementModal.amount}
-                          onChange={(e) =>
-                            setDuesSettlementModal((prev) =>
-                              prev ? { ...prev, amount: e.target.value } : null
-                            )
-                          }
-                          className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-white font-mono tabular-nums font-bold text-sm"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                          भुगतान माध्यम (Payment Mode)
-                        </label>
-                        <div className="grid grid-cols-3 gap-2">
-                          {(["Cash", "UPI", "Bank"] as const).map((m) => (
-                            <button
-                              key={m}
-                              type="button"
-                              onClick={() =>
-                                setDuesSettlementModal((prev) =>
-                                  prev ? { ...prev, mode: m } : null
-                                )
-                              }
-                              className={`py-2 rounded-xl text-xs font-bold border transition cursor-pointer ${
-                                duesSettlementModal.mode === m
-                                  ? "bg-indigo-600 text-white border-indigo-600"
-                                  : "bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700"
-                              }`}
-                            >
-                              {m}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
-                      <button
-                        type="button"
-                        onClick={() => setDuesSettlementModal(null)}
-                        className="px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 cursor-pointer"
-                      >
-                        रद्द करें
-                      </button>
-                      <button
-                        type="button"
-                        disabled={duesSettlementModal.saving}
-                        onClick={handleSettleDue}
-                        className="px-4 py-2 rounded-xl text-xs font-black bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer disabled:opacity-50"
-                      >
-                        {duesSettlementModal.saving ? "सहेजा जा रहा है..." : "✓ भुगतान दर्ज करें"}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </>
-          );
-        })()}
-
-        {/* ── BIRTHDAY WISH SENT TOAST ── */}
-        {birthdayWishToast && (
-          <div className="p-3.5 rounded-2xl bg-gradient-to-r from-rose-500 via-pink-600 to-purple-600 text-white text-xs sm:text-sm font-bold shadow-xl flex items-center justify-between gap-3 animate-in slide-in-from-top-2">
-            <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-amber-200" />
-              <span>{birthdayWishToast}</span>
-            </div>
-            <button type="button" onClick={() => setBirthdayWishToast(null)} className="p-1 hover:bg-white/20 rounded">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        )}
-
-        {/* ── TODAY'S BIRTHDAYS SPECIAL NSTA CELEBRATION SECTION (WHEN STUDENTS HAVE BIRTHDAY TODAY) ── */}
-        {todaysBirthdayStudents.length > 0 && (
-          <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-rose-500 via-pink-600 to-amber-500 text-white shadow-xl relative overflow-hidden border border-white/20">
-            <div className="absolute top-0 right-0 translate-x-4 -translate-y-4 opacity-15 pointer-events-none text-9xl">
-              🎂
-            </div>
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-10">
-              <div className="flex items-center gap-3.5">
-                <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center text-2xl shadow-inner shrink-0">
-                  🎂
+        {/* ── ROW 1 (3-COLUMN): QUICK PUNCH + QR/FACE SCANNER + LIVE BUS TRACKING ── */}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+          {/* Card 1: Quick Attendance & GPS */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3.5 border border-slate-200/80 dark:border-slate-700 shadow-xs flex flex-col justify-between gap-2.5">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-300 flex items-center justify-center shrink-0">
+                  <Clock className="w-4 h-4" />
                 </div>
                 <div>
-                  <div className="flex items-center gap-2">
-                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-white text-rose-700 shadow-xs">
-                      स्वतः NSTA मॉनिटरिंग सक्रिय
-                    </span>
-                    <span className="text-xs text-rose-100 font-bold">
-                      {new Date().toLocaleDateString("en-IN", { day: "numeric", month: "long" })}
-                    </span>
-                  </div>
-                  <h3 className="text-base sm:text-lg font-black text-white mt-0.5">
-                    🎉 आज के जन्मदिन ({todaysBirthdayStudents.length} Students Having Birthday Today)
+                  <h3 className="font-black text-xs sm:text-sm text-slate-800 dark:text-white">
+                    ⚡ त्वरित हाजिरी व GPS
                   </h3>
-                  <p className="text-xs text-rose-100/90 font-medium">
-                    School Principal व प्रशासन की तरफ से छात्र के NSTA Messenger School Desk पर आधिकारिक शुभकामना कार्ड व नोटिफिकेशन स्वतः भेज दिया गया है।
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    शिक्षक व छात्र Punch IN/OUT
                   </p>
                 </div>
               </div>
+              <span className="px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 text-[10px] font-bold shrink-0">
+                IN / OUT
+              </span>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setShowPunchDeskExpanded((p) => !p)}
+                className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] transition cursor-pointer"
+              >
+                {showPunchDeskExpanded ? "▲ हाजिरी डेस्क छुपाएं" : "▼ 1-टैप हाजिरी खोलें"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowSchoolLocationModal(true)}
+                className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold text-[11px] transition cursor-pointer flex items-center gap-1"
+              >
+                <MapPin className="w-3 h-3 text-blue-600 dark:text-blue-400" />
+                <span>GPS</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Card 2: QR & AI Face Kiosk */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3.5 border border-slate-200/80 dark:border-slate-700 shadow-xs flex flex-col justify-between gap-2.5">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-purple-50 dark:bg-purple-900/40 text-purple-600 dark:text-purple-300 flex items-center justify-center shrink-0">
+                  <Camera className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-black text-xs sm:text-sm text-slate-800 dark:text-white">
+                    📷 QR व AI Face स्कैनर
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    ID QR या चेहरा पहचान हाजिरी
+                  </p>
+                </div>
+              </div>
+              <span className="px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold shrink-0">
+                KYC AI
+              </span>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setShowFaceKioskModal(true)}
+                className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-[11px] transition cursor-pointer"
+              >
+                🤖 AI Face Kiosk
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowUniversalScannerModal(true)}
+                className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold text-[11px] transition cursor-pointer"
+              >
+                📷 QR Scanner
+              </button>
+            </div>
+          </div>
+
+          {/* Card 3: Live Bus Location Tracking */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3.5 border border-slate-200/80 dark:border-slate-700 shadow-xs flex flex-col justify-between gap-2.5 md:col-span-2 xl:col-span-1">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-50 dark:bg-amber-900/40 text-amber-600 dark:text-amber-300 flex items-center justify-center shrink-0">
+                  <Bus className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-black text-xs sm:text-sm text-slate-800 dark:text-white">
+                    🚌 Live Bus Location
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    {activeBusCount > 0
+                      ? `${activeBusCount} बस लाइव • ${busStudentsCount} छात्र`
+                      : `${liveBuses.length} बसें • ${busStudentsCount} छात्र पंजीकृत`}
+                  </p>
+                </div>
+              </div>
+              <span
+                className={`px-2 py-0.5 rounded-full text-[10px] font-black shrink-0 ${
+                  activeBusCount > 0
+                    ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                    : "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+                }`}
+              >
+                {activeBusCount > 0 ? "● LIVE" : "Standby"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 overflow-x-auto">
+                {liveBuses.map((b) => (
+                  <span
+                    key={b.id}
+                    className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border shrink-0 ${
+                      b.status === "started"
+                        ? "bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-950/50 dark:border-emerald-800 dark:text-emerald-300"
+                        : "bg-slate-50 border-slate-200 text-slate-600 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-400"
+                    }`}
+                  >
+                    {b.busNumber.split(" ")[0]} {b.busNumber.split(" ")[1]} {b.status === "started" ? `(${b.speed}km/h)` : ""}
+                  </span>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => setView("bus_transport")}
+                className="px-2.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[11px] shrink-0 transition cursor-pointer"
+              >
+                📍 Live Map →
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Collapsible Quick Punch Desk */}
+        {showPunchDeskExpanded && school && (
+          <div className="max-h-[420px] overflow-y-auto rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+            <UniversalAttendanceDesk
+              school={school}
+              classes={displayedClasses}
+              students={displayedStudents}
+              teachers={displayedTeachers}
+              staff={staffList}
+              onOpenScanner={() => setShowUniversalScannerModal(true)}
+              onOpenLocationModal={() => setShowSchoolLocationModal(true)}
+              onViewClassAttendance={(clsId) => {
+                const found = displayedClasses.find((c) => c.id === clsId);
+                if (found) {
+                  setSelectedClass(found);
+                  setView("attendance");
+                }
+              }}
+            />
+          </div>
+        )}
+
+        {/* ── ROW 2 (3-COLUMN): PENDING FACE ENROLLMENT + FEE DISCOUNTS LIST + ADMISSION/ADVANCE DUES ── */}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+          {/* Card 4: Fee Discounts Summary Card */}
+          {(() => {
+            const discEntries = getCombinedDiscountLedger(schoolId, displayedStudents, allFees);
+            const totalDiscAmt = discEntries.reduce((s, d) => s + (Number(d.discountAmount) || 0), 0);
+            return (
+              <div className="bg-white dark:bg-slate-800 rounded-2xl p-3.5 border border-emerald-200/80 dark:border-emerald-800/50 shadow-xs flex flex-col justify-between gap-2.5">
+                <div className="flex items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-700 pb-2">
+                  <div className="min-w-0">
+                    <h3 className="text-xs sm:text-sm font-black text-slate-800 dark:text-white truncate">
+                      🏷️ Fee Discounts ({DISPLAY_DISCOUNT_LABEL})
+                    </h3>
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                      {discEntries.length} छूट • कुल ₹{totalDiscAmt.toLocaleString("en-IN")} माफ (Next month due नहीं जुड़ेगा)
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setView("discount_list")}
+                    className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black shrink-0 cursor-pointer"
+                  >
+                    लिस्ट देखें →
+                  </button>
+                </div>
+
+                {discEntries.length === 0 ? (
+                  <div className="py-5 text-center text-xs font-semibold text-slate-400">
+                    अभी तक कोई Discount दर्ज नहीं है।
+                  </div>
+                ) : (
+                  <div className="space-y-1.5 max-h-40 overflow-y-auto pr-0.5">
+                    {discEntries.slice(0, 6).map((d) => (
+                      <div
+                        key={d.id}
+                        className="flex items-center justify-between gap-2 p-2 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-800/40"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-slate-800 dark:text-white truncate">
+                            {d.studentName}
+                          </p>
+                          <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                            {d.className || "Class"} • {d.whereLabel}
+                          </p>
+                        </div>
+                        <span className="px-2 py-0.5 rounded-lg bg-emerald-600 text-white text-[10px] font-black shrink-0">
+                          -₹{d.discountAmount.toLocaleString("en-IN")}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* Card 5: Pending Face Enrollment List */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3.5 border border-slate-200/80 dark:border-slate-700 shadow-xs flex flex-col justify-between gap-2.5">
+            <div className="flex items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-700 pb-2">
+              <div className="min-w-0">
+                <h3 className="text-xs sm:text-sm font-black text-slate-800 dark:text-white truncate">
+                  📸 फेस पहचान बाकी (Pending Face)
+                </h3>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                  {enrolledFaceCount}/{displayedStudents.length} सेव • {pendingFaceStudents.length} बाकी
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowFaceKioskModal(true)}
+                className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-black shrink-0 cursor-pointer"
+              >
+                + चेहरा जोड़ें
+              </button>
             </div>
 
-            {/* Students List */}
-            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 relative z-10">
-              {todaysBirthdayStudents.map(st => {
-                const cName = displayedClasses.find(c => c.id === st.classId)?.name || "Class Student";
-                return (
-                  <div key={st.id} className="bg-white/15 backdrop-blur-md rounded-2xl p-3 border border-white/20 flex items-center justify-between gap-2.5">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <div className="w-9 h-9 rounded-xl bg-white/30 flex items-center justify-center font-black text-xs text-white shrink-0 shadow-xs overflow-hidden">
-                        {st.photoUrl ? (
-                          <img src={st.photoUrl} alt={st.name} className="w-full h-full object-cover" />
-                        ) : (
-                          st.name.charAt(0)
-                        )}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="font-black text-xs text-white truncate">{st.name}</p>
-                        <p className="text-[10px] text-rose-100 truncate">{cName} • Roll {st.rollNo || "N/A"}</p>
-                      </div>
+            {pendingFaceStudents.length === 0 ? (
+              <div className="py-6 text-center text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                ✅ सभी छात्रों का चेहरा सेव है!
+              </div>
+            ) : (
+              <div className="space-y-1.5 max-h-40 overflow-y-auto pr-0.5">
+                {pendingFaceStudents.slice(0, 15).map((st) => (
+                  <div
+                    key={`pface-${st.id}`}
+                    className="flex items-center justify-between gap-2 p-2 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/70 dark:border-slate-700"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-slate-800 dark:text-white truncate">
+                        {st.name}
+                      </p>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                        {getClassLabel(st.classId)} • Roll #{st.rollNo || "—"}
+                      </p>
                     </div>
                     <button
                       type="button"
-                      onClick={() => handleSendManualBirthdayWish(st)}
-                      disabled={birthdayWishSending === st.id}
-                      className="px-2.5 py-1 rounded-xl bg-white text-rose-700 hover:bg-rose-50 text-[11px] font-black shrink-0 transition active:scale-95 shadow-xs cursor-pointer flex items-center gap-1"
-                      title="Send / Resend Official Birthday Blessing Card"
+                      onClick={() => setShowFaceKioskModal(true)}
+                      className="px-2 py-1 rounded-lg bg-amber-100 hover:bg-amber-200 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 text-[10px] font-black shrink-0 cursor-pointer"
                     >
-                      {birthdayWishSending === st.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Gift className="w-3 h-3" />}
-                      <span>{birthdayWishSending === st.id ? "भेज रहे हैं..." : "Wish Again"}</span>
+                      📸 सेव करें
                     </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Card 5: Combined Admission Arrears & 1-Month Advance Fee */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3.5 border border-slate-200/80 dark:border-slate-700 shadow-xs flex flex-col justify-between gap-2.5">
+            <div className="flex items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-700 pb-2">
+              <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-900 p-0.5 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setDuesCardTab("admission")}
+                  className={`px-2 py-1 rounded-lg text-[10px] font-black transition cursor-pointer ${
+                    duesCardTab === "admission"
+                      ? "bg-white dark:bg-slate-700 text-rose-700 dark:text-rose-300 shadow-xs"
+                      : "text-slate-500 dark:text-slate-400"
+                  }`}
+                >
+                  एडमिशन (₹{totalAdmissionDue.toLocaleString("en-IN")})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDuesCardTab("advance")}
+                  className={`px-2 py-1 rounded-lg text-[10px] font-black transition cursor-pointer ${
+                    duesCardTab === "advance"
+                      ? "bg-white dark:bg-slate-700 text-amber-700 dark:text-amber-300 shadow-xs"
+                      : "text-slate-500 dark:text-slate-400"
+                  }`}
+                >
+                  एडवांस (₹{totalAdvanceDue.toLocaleString("en-IN")})
+                </button>
+              </div>
+              <span className="text-[10px] font-bold text-slate-400 shrink-0">
+                {duesCardTab === "admission"
+                  ? `${studentsWithAdmissionDues.length} छात्र`
+                  : `${studentsWithAdvanceDues.length} छात्र`}
+              </span>
+            </div>
+
+            {duesCardTab === "admission" ? (
+              studentsWithAdmissionDues.length === 0 ? (
+                <div className="py-6 text-center text-xs font-semibold text-slate-500 dark:text-slate-400">
+                  ✅ सभी छात्रों का एडमिशन शुल्क पूर्ण जमा है।
+                </div>
+              ) : (
+                <div className="space-y-1.5 max-h-40 overflow-y-auto pr-0.5">
+                  {studentsWithAdmissionDues.slice(0, 12).map((st) => {
+                    const due = Number(st.admissionDueBalance || 0);
+                    return (
+                      <div
+                        key={st.id}
+                        className="flex items-center justify-between gap-2 p-2 rounded-xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-200/70 dark:border-rose-900/50"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-slate-800 dark:text-white truncate">
+                            {st.name}
+                          </p>
+                          <p className="text-[10px] text-slate-500 truncate">
+                            {getClassLabel(st.classId)} • ₹{due.toLocaleString("en-IN")}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setDuesSettlementModal({
+                                student: st,
+                                type: "admission",
+                                amount: String(due),
+                                mode: "Cash",
+                                saving: false,
+                              })
+                            }
+                            className="px-2 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-bold cursor-pointer"
+                          >
+                            जमा
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openWhatsAppReminder(st, "बकाया एडमिशन शुल्क", due)}
+                            className="px-1.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold cursor-pointer"
+                            title="WhatsApp"
+                          >
+                            📲
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )
+            ) : studentsWithAdvanceDues.length === 0 ? (
+              <div className="py-6 text-center text-xs font-semibold text-slate-500 dark:text-slate-400">
+                ✅ सभी नए छात्रों की 1-माह एडवांस फीस जमा है।
+              </div>
+            ) : (
+              <div className="space-y-1.5 max-h-40 overflow-y-auto pr-0.5">
+                {studentsWithAdvanceDues.slice(0, 12).map((st) => {
+                  const advDue = Number(st.advanceMonthlyFeeDue || st.monthlyFee || 0);
+                  return (
+                    <div
+                      key={st.id}
+                      className="flex items-center justify-between gap-2 p-2 rounded-xl bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200/70 dark:border-amber-900/50"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-slate-800 dark:text-white truncate">
+                          {st.name}
+                        </p>
+                        <p className="text-[10px] text-slate-500 truncate">
+                          {getClassLabel(st.classId)} • ₹{advDue.toLocaleString("en-IN")}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDuesSettlementModal({
+                              student: st,
+                              type: "advance",
+                              amount: String(advDue),
+                              mode: "Cash",
+                              saving: false,
+                            })
+                          }
+                          className="px-2 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-bold cursor-pointer"
+                        >
+                          जमा
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openWhatsAppReminder(st, "1-माह एडवांस ट्यूशन फीस", advDue)}
+                          className="px-1.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold cursor-pointer"
+                          title="WhatsApp"
+                        >
+                          📲
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Card 6: Absenty Action Center (Clean Light Professional Card) */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3.5 border border-rose-200/80 dark:border-rose-900/60 shadow-xs flex flex-col justify-between gap-2.5 md:col-span-2 xl:col-span-1">
+            <div className="flex items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-700 pb-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-7 h-7 rounded-lg bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
+                  <AlertCircle className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-xs sm:text-sm font-black text-slate-800 dark:text-white truncate">
+                    🚨 अनुपस्थित छात्र ({absenteeTrackerData.consecutiveAbsentees.length})
+                  </h3>
+                </div>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleSend1DayPushAlerts}
+                  className="px-2 py-1 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-900 text-[10px] font-black cursor-pointer"
+                  title="Send 1-Day Push Alerts"
+                >
+                  ⚡ Push
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setView("absentee")}
+                  className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-[10px] font-bold cursor-pointer"
+                >
+                  सभी →
+                </button>
+              </div>
+            </div>
+
+            {absenteeTrackerData.consecutiveAbsentees.length === 0 ? (
+              <div className="py-6 text-center text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                ✅ कोई लगातार अनुपस्थित छात्र नहीं है।
+              </div>
+            ) : (
+              <div className="space-y-1.5 max-h-40 overflow-y-auto pr-0.5">
+                {absenteeTrackerData.consecutiveAbsentees.map((st) => (
+                  <div
+                    key={`abs-${st.id}`}
+                    className="flex items-center justify-between gap-2 p-2 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/70 dark:border-slate-700"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <p className="font-bold text-xs text-slate-800 dark:text-white truncate">
+                          {st.name}
+                        </p>
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300 shrink-0">
+                          {st.daysAbsent}d
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-slate-500 truncate">
+                        {st.className} · #{st.rollNo}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <a
+                        href={`tel:${st.phone}`}
+                        className="p-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer"
+                        title="Call Parent"
+                      >
+                        <Phone className="w-3 h-3" />
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => handleSendWhatsAppAbsentAlert(st)}
+                        className="p-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white cursor-pointer"
+                        title="WhatsApp"
+                      >
+                        <MessageSquare className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* IN-PLACE 1-TAP DUES SETTLEMENT MODAL */}
+        {duesSettlementModal && (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 shadow-2xl space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+                <div>
+                  <h4 className="text-base font-black text-slate-900 dark:text-white">
+                    {duesSettlementModal.type === "admission"
+                      ? "💰 अधूरा एडमिशन शुल्क जमा करें"
+                      : "⚡ 1-माह एडवांस फीस जमा करें"}
+                  </h4>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {duesSettlementModal.student.name} ({getClassLabel(duesSettlementModal.student.classId)})
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDuesSettlementModal(null)}
+                  className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    जमा राशि (Amount in ₹)
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={duesSettlementModal.amount}
+                    onChange={(e) =>
+                      setDuesSettlementModal((prev) =>
+                        prev ? { ...prev, amount: e.target.value } : null
+                      )
+                    }
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-white font-mono tabular-nums font-bold text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    भुगतान माध्यम (Payment Mode)
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(["Cash", "UPI", "Bank"] as const).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() =>
+                          setDuesSettlementModal((prev) =>
+                            prev ? { ...prev, mode: m } : null
+                          )
+                        }
+                        className={`py-2 rounded-xl text-xs font-bold border transition cursor-pointer ${
+                          duesSettlementModal.mode === m
+                            ? "bg-indigo-600 text-white border-indigo-600"
+                            : "bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700"
+                        }`}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setDuesSettlementModal(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 cursor-pointer"
+                >
+                  रद्द करें
+                </button>
+                <button
+                  type="button"
+                  disabled={duesSettlementModal.saving}
+                  onClick={handleSettleDue}
+                  className="px-4 py-2 rounded-xl text-xs font-black bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer disabled:opacity-50"
+                >
+                  {duesSettlementModal.saving ? "सहेजा जा रहा है..." : "✓ भुगतान दर्ज करें"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── ROW 3 (2-COLUMN): COMPACT 7-DAY ATTENDANCE & FEE COLLECTION CHARTS ── */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {/* Compact Attendance Chart */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3.5 border border-slate-200/80 dark:border-slate-700 shadow-xs flex flex-col justify-between">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="p-1.5 rounded-lg bg-teal-50 dark:bg-teal-900/40 text-teal-600 dark:text-teal-300">
+                  <BarChart3 className="w-3.5 h-3.5" />
+                </span>
+                <h3 className="font-black text-xs sm:text-sm text-slate-800 dark:text-white">
+                  7-Day Attendance
+                </h3>
+              </div>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+                Avg: {avgAttendancePct}%
+              </span>
+            </div>
+
+            <div className="mt-3 grid grid-cols-7 gap-1.5 items-end h-28 border-b border-slate-100 dark:border-slate-700/60 pb-1.5">
+              {sevenDayAttendanceData.map((d, idx) => {
+                const barHeightPct = Math.max(15, Math.min(100, d.presentPct));
+                const isHigh = d.presentPct >= 90;
+                return (
+                  <div key={`att-${d.dateStr}-${idx}`} className="flex flex-col items-center h-full justify-end group relative">
+                    <span className="text-[9px] font-bold text-slate-600 dark:text-slate-300 mb-0.5 tabular-nums">
+                      {d.presentPct}%
+                    </span>
+                    <div className="w-full max-w-[20px] bg-slate-100 dark:bg-slate-700/50 rounded-t-lg overflow-hidden h-16 flex items-end">
+                      <div
+                        style={{ height: `${barHeightPct}%` }}
+                        className={`w-full rounded-t-lg ${
+                          isHigh ? "bg-teal-500" : "bg-blue-500"
+                        }`}
+                      />
+                    </div>
+                    <p className={`text-[10px] font-bold mt-1 ${d.isToday ? "text-blue-600 dark:text-blue-400" : "text-slate-500 dark:text-slate-400"}`}>
+                      {d.isToday ? "आज" : d.dayLabel}
+                    </p>
                   </div>
                 );
               })}
             </div>
-          </div>
-        )}
 
-        {/* ── SCHOOL BIRTHDAY & EVENTS INTERACTIVE CALENDAR ── */}
-        <SchoolBirthdayCalendar
-          schoolId={schoolId}
-          schoolName={school?.name}
-          students={displayedStudents}
-          classes={displayedClasses}
-          onOpenMessenger={() => setView("nsta_broadcast")}
-        />
-
-        {/* ── ROW 1: 7-DAY ATTENDANCE CHART & 7-DAY FEE COLLECTION CHART ────── */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          {/* Card A: 7-Day Attendance Chart */}
-          <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200/80 dark:border-slate-700 shadow-sm flex flex-col justify-between">
-            <div>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="p-1.5 rounded-lg bg-teal-50 dark:bg-teal-900/40 text-teal-600 dark:text-teal-300">
-                      <BarChart3 className="w-4 h-4" />
-                    </span>
-                    <h3 className="font-black text-sm sm:text-base text-slate-800 dark:text-white">
-                      ७ दिनों का छात्र उपस्थिति चार्ट (7-Day Attendance)
-                    </h3>
-                  </div>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                    दैनिक उपस्थिति दर (%) व कुल उपस्थित छात्र संख्या
-                  </p>
-                </div>
-                <span className="px-2.5 py-1 rounded-full text-[11px] font-black bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 shrink-0">
-                  Avg: {avgAttendancePct}%
-                </span>
-              </div>
-
-              {/* Attendance Visual Bars */}
-              <div className="mt-6 pt-2 grid grid-cols-7 gap-2 items-end h-44 border-b border-slate-100 dark:border-slate-700/60 pb-2">
-                {sevenDayAttendanceData.map((d, idx) => {
-                  const barHeightPct = Math.max(15, Math.min(100, d.presentPct));
-                  const isHigh = d.presentPct >= 90;
-                  return (
-                    <div key={`att-${d.dateStr}-${idx}`} className="flex flex-col items-center h-full justify-end group relative">
-                      {/* Hover Tooltip */}
-                      <div className="absolute -top-10 opacity-0 group-hover:opacity-100 pointer-events-none transition-all z-20 bg-slate-900 text-white text-[10px] rounded-lg py-1 px-2 whitespace-nowrap shadow-lg">
-                        {d.displayDate}: {d.presentCount} Present, {d.absentCount} Absent ({d.presentPct}%)
-                      </div>
-
-                      {/* Percentage Tag */}
-                      <span className="text-[10px] font-black text-slate-700 dark:text-slate-300 mb-1 tabular-nums">
-                        {d.presentPct}%
-                      </span>
-
-                      {/* Bar */}
-                      <div className="w-full max-w-[28px] bg-slate-100 dark:bg-slate-700/50 rounded-t-xl overflow-hidden h-32 flex items-end">
-                        <div
-                          style={{ height: `${barHeightPct}%` }}
-                          className={`w-full rounded-t-xl transition-all duration-500 ${
-                            isHigh
-                              ? "bg-gradient-to-t from-teal-600 to-emerald-400 shadow-sm"
-                              : "bg-gradient-to-t from-blue-600 to-indigo-400 shadow-sm"
-                          }`}
-                        />
-                      </div>
-
-                      {/* Labels */}
-                      <div className="text-center mt-2">
-                        <p className={`text-[11px] font-black leading-tight ${d.isToday ? "text-blue-600 dark:text-blue-400 font-extrabold" : "text-slate-600 dark:text-slate-300"}`}>
-                          {d.isToday ? "आज" : d.dayLabel}
-                        </p>
-                        <p className="text-[9px] text-slate-400 font-mono">{d.displayDate}</p>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="mt-4 pt-3 flex items-center justify-between text-xs">
-              <span className="text-slate-500 text-[11px]">
-                आज उपस्थित: <strong className="text-emerald-600 dark:text-emerald-400">{sevenDayAttendanceData[6]?.presentCount}</strong> | अनुपस्थित: <strong className="text-rose-600 dark:text-rose-400">{sevenDayAttendanceData[6]?.absentCount}</strong>
+            <div className="mt-2 flex items-center justify-between text-[11px]">
+              <span className="text-slate-500">
+                उपस्थित: <strong className="text-emerald-600">{sevenDayAttendanceData[6]?.presentCount}</strong> | अनुपस्थित: <strong className="text-rose-600">{sevenDayAttendanceData[6]?.absentCount}</strong>
               </span>
               <button
                 type="button"
                 onClick={() => setView("classes")}
-                className="text-blue-600 dark:text-blue-400 font-bold hover:underline flex items-center gap-1 cursor-pointer"
+                className="text-blue-600 dark:text-blue-400 font-bold hover:underline cursor-pointer"
               >
-                <span>हाजिरी लगाएं / देखें</span>
-                <ChevronRight className="w-3.5 h-3.5" />
+                हाजिरी देखें →
               </button>
             </div>
           </div>
 
-          {/* Card B: 7-Day Fee Collection Chart */}
-          <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200/80 dark:border-slate-700 shadow-sm flex flex-col justify-between">
-            <div>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="p-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-300">
-                      <IndianRupee className="w-4 h-4" />
-                    </span>
-                    <h3 className="font-black text-sm sm:text-base text-slate-800 dark:text-white">
-                      ७ दिनों का फीस कलेक्शन (Fee Collection Chart)
-                    </h3>
-                  </div>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                    दैनिक प्राप्त शुल्क (₹) एवं मासिक लक्ष्य संकलन
-                  </p>
-                </div>
-                <span className="px-2.5 py-1 rounded-full text-[11px] font-black bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300 shrink-0">
-                  Target: {monthlyProgressPct}%
-                </span>
-              </div>
-
-              {/* Fee Collection Bars */}
-              <div className="mt-6 pt-2 grid grid-cols-7 gap-2 items-end h-44 border-b border-slate-100 dark:border-slate-700/60 pb-2">
-                {sevenDayFeeData.map((f, idx) => {
-                  const maxAmt = Math.max(...sevenDayFeeData.map(x => x.amount), 35000);
-                  const barHeightPct = Math.max(15, Math.min(100, Math.round((f.amount / maxAmt) * 100)));
-                  return (
-                    <div key={`fee-${f.dateStr}-${idx}`} className="flex flex-col items-center h-full justify-end group relative">
-                      {/* Tooltip */}
-                      <div className="absolute -top-10 opacity-0 group-hover:opacity-100 pointer-events-none transition-all z-20 bg-slate-900 text-white text-[10px] rounded-lg py-1 px-2 whitespace-nowrap shadow-lg">
-                        {f.displayDate}: ₹{f.amount.toLocaleString("en-IN")}
-                      </div>
-
-                      <span className="text-[9px] font-bold text-slate-700 dark:text-slate-300 mb-1 tabular-nums">
-                        ₹{(f.amount / 1000).toFixed(1)}k
-                      </span>
-
-                      <div className="w-full max-w-[28px] bg-slate-100 dark:bg-slate-700/50 rounded-t-xl overflow-hidden h-32 flex items-end">
-                        <div
-                          style={{ height: `${barHeightPct}%` }}
-                          className="w-full rounded-t-xl bg-gradient-to-t from-indigo-600 via-blue-500 to-teal-400 shadow-sm transition-all duration-500"
-                        />
-                      </div>
-
-                      <div className="text-center mt-2">
-                        <p className={`text-[11px] font-black leading-tight ${f.isToday ? "text-emerald-600 dark:text-emerald-400 font-extrabold" : "text-slate-600 dark:text-slate-300"}`}>
-                          {f.isToday ? "आज" : f.dayLabel}
-                        </p>
-                        <p className="text-[9px] text-slate-400 font-mono">{f.displayDate}</p>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="mt-4 pt-3 flex flex-wrap items-center justify-between gap-2 text-xs">
-              <span className="text-slate-500 text-[11px]">
-                माह कुल: <strong className="text-emerald-600 dark:text-emerald-400 font-black">₹{currentMonthCollection.toLocaleString("en-IN")}</strong> / ₹{monthlyTarget.toLocaleString("en-IN")}
-              </span>
-              <button
-                type="button"
-                onClick={() => setView("fees")}
-                className="px-3 py-1 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1 transition cursor-pointer shadow-sm"
-              >
-                <span>फीस काउंटर खोलें</span>
-                <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* ── ROW 2: ABSENTY ACTION CENTER (1-DAY PUSH & 2-DAY CALL TRACKER) ── */}
-        <div className="bg-gradient-to-br from-rose-950 via-slate-900 to-amber-950 rounded-3xl p-5 sm:p-6 text-white border-2 border-rose-500/40 shadow-xl space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-2xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-lg shadow-rose-600/50 ring-2 ring-rose-400/50">
-                <AlertCircle className="w-6 h-6 animate-pulse" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h3 className="font-black text-base sm:text-lg text-white">
-                    Absenty Action Center (अनुपस्थित छात्र एक्शन सेंटर)
-                  </h3>
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-rose-500 text-white">
-                    1-DAY PUSH & 2-DAY CALL
-                  </span>
-                </div>
-                <p className="text-xs text-rose-200 mt-0.5">
-                  1-Day Absentees को ऑटो पुश नोटिस भेजें और 2-दिन+ लगातार गैरहाजिर छात्रों को 1-क्लिक कॉल करें
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleSend1DayPushAlerts}
-                className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs transition active:scale-95 shadow-md flex items-center gap-1.5 cursor-pointer"
-              >
-                <Bell className="w-3.5 h-3.5" />
-                <span>⚡ Send 1-Day Push Alerts</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setView("absentee")}
-                className="px-3.5 py-2 rounded-xl bg-white/15 hover:bg-white/25 text-white font-bold text-xs transition cursor-pointer"
-              >
-                <span>Full Center →</span>
-              </button>
-            </div>
-          </div>
-
-          {/* 2-Day+ Consecutive Absentees Urgent Table */}
-          <div className="bg-black/40 rounded-2xl p-3 sm:p-4 border border-rose-500/30 space-y-2.5">
-            <div className="flex items-center justify-between px-1">
-              <p className="text-xs font-black text-rose-300 flex items-center gap-1.5">
-                <span>🚨 High Dropout Risk: 2-Day+ Consecutive Absentees ({absenteeTrackerData.consecutiveAbsentees.length})</span>
-              </p>
-              <span className="text-[10px] text-slate-400 font-medium">1-Tap Direct Action</span>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-              {absenteeTrackerData.consecutiveAbsentees.map((st) => (
-                <div
-                  key={`abs-${st.id}`}
-                  className="bg-slate-900/90 rounded-xl p-3 border border-white/10 flex items-center justify-between gap-3"
-                >
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="font-bold text-sm text-white truncate">{st.name}</p>
-                      <span className="px-1.5 py-0.2 rounded text-[10px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/40 shrink-0">
-                        {st.daysAbsent} Din Absent
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-400 mt-0.5">
-                      {st.className} · Roll #{st.rollNo} · {st.fatherName}
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <a
-                      href={`tel:${st.phone}`}
-                      className="p-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition active:scale-95 shadow cursor-pointer"
-                      title="Parent ko Call Karein"
-                    >
-                      <Phone className="w-3.5 h-3.5" />
-                    </a>
-                    <button
-                      type="button"
-                      onClick={() => handleSendWhatsAppAbsentAlert(st)}
-                      className="p-2 rounded-lg bg-teal-600 hover:bg-teal-500 text-white transition active:scale-95 shadow cursor-pointer"
-                      title="WhatsApp Absence Alert Bhejein"
-                    >
-                      <MessageSquare className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* ── ROW 3: FEE DUE LIST & 1-CLICK WHATSAPP DEMAND NOTICE ──────────── */}
-        <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 sm:p-6 border border-slate-200/80 dark:border-slate-700 shadow-sm space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
+          {/* Compact Fee Collection Chart */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3.5 border border-slate-200/80 dark:border-slate-700 shadow-xs flex flex-col justify-between">
+            <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <span className="p-1.5 rounded-lg bg-amber-50 dark:bg-amber-900/40 text-amber-600 dark:text-amber-300">
-                  <FileText className="w-4 h-4" />
+                <span className="p-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-300">
+                  <IndianRupee className="w-3.5 h-3.5" />
                 </span>
-                <h3 className="font-black text-sm sm:text-base text-slate-800 dark:text-white">
-                  Fee Due List (बकाया फीस सूची व 1-क्लिक डिमांड स्लिप)
+                <h3 className="font-black text-xs sm:text-sm text-slate-800 dark:text-white">
+                  7-Day Fee Collection
                 </h3>
               </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                छात्रों का लंबित शुल्क देखें और अभिभावक के मोबाइल पर 1-क्लिक में आधिकारिक व्हाट्सएप मांग स्लिप भेजें
-              </p>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
+                Target: {monthlyProgressPct}%
+              </span>
             </div>
 
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="px-3 py-1 rounded-xl bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800 text-xs font-black">
-                कुल बकाया: ₹{totalDuesAmount.toLocaleString("en-IN")}
+            <div className="mt-3 grid grid-cols-7 gap-1.5 items-end h-28 border-b border-slate-100 dark:border-slate-700/60 pb-1.5">
+              {sevenDayFeeData.map((f, idx) => {
+                const maxAmt = Math.max(...sevenDayFeeData.map((x) => x.amount), 35000);
+                const barHeightPct = Math.max(15, Math.min(100, Math.round((f.amount / maxAmt) * 100)));
+                return (
+                  <div key={`fee-${f.dateStr}-${idx}`} className="flex flex-col items-center h-full justify-end group relative">
+                    <span className="text-[9px] font-bold text-slate-600 dark:text-slate-300 mb-0.5 tabular-nums">
+                      ₹{(f.amount / 1000).toFixed(0)}k
+                    </span>
+                    <div className="w-full max-w-[20px] bg-slate-100 dark:bg-slate-700/50 rounded-t-lg overflow-hidden h-16 flex items-end">
+                      <div
+                        style={{ height: `${barHeightPct}%` }}
+                        className="w-full rounded-t-lg bg-indigo-500"
+                      />
+                    </div>
+                    <p className={`text-[10px] font-bold mt-1 ${f.isToday ? "text-emerald-600 dark:text-emerald-400" : "text-slate-500 dark:text-slate-400"}`}>
+                      {f.isToday ? "आज" : f.dayLabel}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="mt-2 flex items-center justify-between text-[11px]">
+              <span className="text-slate-500">
+                माह कुल: <strong className="text-emerald-600">₹{currentMonthCollection.toLocaleString("en-IN")}</strong>
               </span>
               <button
                 type="button"
                 onClick={() => setView("fees")}
-                className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition cursor-pointer"
+                className="text-emerald-600 dark:text-emerald-400 font-bold hover:underline cursor-pointer"
               >
-                <span>Manage All Fees →</span>
+                फीस काउंटर →
               </button>
             </div>
           </div>
+        </div>
 
-          {/* Quick Filters */}
-          <div className="flex flex-wrap items-center gap-2 pt-1 pb-1 text-xs">
-            <span className="text-slate-400 font-bold text-[11px] flex items-center gap-1">
-              <Filter className="w-3.5 h-3.5" /> Filter:
-            </span>
-            <select
-              value={dueClassFilter}
-              onChange={(e) => setDueClassFilter(e.target.value)}
-              className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-700/60 border border-slate-200 dark:border-slate-600 text-slate-800 dark:text-slate-200 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="ALL">All Classes ({displayedStudents.length} Students)</option>
-              {displayedClasses.map(c => (
-                <option key={`opt-${c.id}`} value={c.id}>{c.name}</option>
-              ))}
-            </select>
+        {/* ── ROW 4 (2-COLUMN): FEE DUE LIST + BIRTHDAYS & CALENDAR ── */}
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 items-start">
+          {/* Left: Compact Fee Due List */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3.5 border border-slate-200/80 dark:border-slate-700 shadow-xs space-y-2.5">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-2">
+                <span className="p-1.5 rounded-lg bg-amber-50 dark:bg-amber-900/40 text-amber-600 dark:text-amber-300">
+                  <FileText className="w-3.5 h-3.5" />
+                </span>
+                <h3 className="font-black text-xs sm:text-sm text-slate-800 dark:text-white">
+                  बकाया फीस सूची (Due List)
+                </h3>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="px-2 py-0.5 rounded-lg bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 text-[10px] font-black">
+                  कुल: ₹{totalDuesAmount.toLocaleString("en-IN")}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setView("fees")}
+                  className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-[10px] cursor-pointer"
+                >
+                  Manage →
+                </button>
+              </div>
+            </div>
 
-            <button
-              type="button"
-              onClick={() => setDueMinAmount(dueMinAmount === 0 ? 2000 : 0)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
-                dueMinAmount > 0
-                  ? "bg-rose-600 text-white shadow-xs"
-                  : "bg-slate-100 dark:bg-slate-700/60 text-slate-600 dark:text-slate-300 hover:bg-slate-200"
-              }`}
-            >
-              {dueMinAmount > 0 ? "Showing > ₹2,000 Dues" : "High Dues (> ₹2,000)"}
-            </button>
-          </div>
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+              <select
+                value={dueClassFilter}
+                onChange={(e) => setDueClassFilter(e.target.value)}
+                className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-700/60 border border-slate-200 dark:border-slate-600 text-slate-800 dark:text-slate-200 text-[11px] font-semibold"
+              >
+                <option value="ALL">All Classes ({displayedStudents.length})</option>
+                {displayedClasses.map((c) => (
+                  <option key={`opt-${c.id}`} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => setDueMinAmount(dueMinAmount === 0 ? 2000 : 0)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
+                  dueMinAmount > 0
+                    ? "bg-rose-600 text-white"
+                    : "bg-slate-100 dark:bg-slate-700/60 text-slate-600 dark:text-slate-300"
+                }`}
+              >
+                {dueMinAmount > 0 ? "> ₹2,000 ON" : "> ₹2,000"}
+              </button>
+            </div>
 
-          {/* Scrollable Due Students Table */}
-          <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-700/80">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 dark:bg-slate-700/50 text-slate-500 dark:text-slate-300 font-black text-[11px] uppercase tracking-wider border-b border-slate-200 dark:border-slate-700">
-                <tr>
-                  <th className="px-4 py-3">Roll &amp; Student Name</th>
-                  <th className="px-3 py-3">Class</th>
-                  <th className="px-3 py-3">Pending Months</th>
-                  <th className="px-3 py-3">Due Balance (₹)</th>
-                  <th className="px-4 py-3 text-right">WhatsApp Demand</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-700/60">
-                {feeDueList.slice(0, 8).map((st) => (
-                  <tr key={`due-row-${st.id}`} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition">
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <span className="w-6 h-6 rounded-lg bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 font-bold flex items-center justify-center text-[10px]">
-                          #{st.rollNo}
-                        </span>
-                        <div>
-                          <p className="font-bold text-slate-800 dark:text-white">{st.name}</p>
-                          <p className="text-[10px] text-slate-400">{st.fatherName} · {st.phone}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-3 py-3 font-semibold text-slate-700 dark:text-slate-300">
-                      {st.className}
-                    </td>
-                    <td className="px-3 py-3 text-slate-500 text-[11px]">
-                      {st.dueMonths}
-                    </td>
-                    <td className="px-3 py-3 font-black text-rose-600 dark:text-rose-400 tabular-nums text-sm">
-                      ₹{st.dueAmount.toLocaleString("en-IN")}
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-1.5">
+            <div className="overflow-x-auto max-h-64 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-700/80">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 dark:bg-slate-700/50 text-slate-500 dark:text-slate-300 font-black text-[10px] uppercase border-b border-slate-200 dark:border-slate-700 sticky top-0">
+                  <tr>
+                    <th className="px-3 py-2">छात्र</th>
+                    <th className="px-2 py-2">बकाया</th>
+                    <th className="px-3 py-2 text-right">स्लिप</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-700/60">
+                  {feeDueList.slice(0, 10).map((st) => (
+                    <tr key={`due-row-${st.id}`} className="hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                      <td className="px-3 py-2">
+                        <p className="font-bold text-slate-800 dark:text-white text-xs">{st.name}</p>
+                        <p className="text-[10px] text-slate-400">
+                          {st.className} • #{st.rollNo} • {st.dueMonths}
+                        </p>
+                      </td>
+                      <td className="px-2 py-2 font-black text-rose-600 dark:text-rose-400 tabular-nums text-xs">
+                        ₹{st.dueAmount.toLocaleString("en-IN")}
+                      </td>
+                      <td className="px-3 py-2 text-right">
                         <button
                           type="button"
                           onClick={() => handleSendWhatsAppFeeDemand(st)}
-                          className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1.5 transition active:scale-95 shadow-sm cursor-pointer"
-                          title="WhatsApp Demand Slip Bhejein"
+                          className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[10px] inline-flex items-center gap-1 cursor-pointer"
                         >
-                          <Send className="w-3.5 h-3.5" />
-                          <span>WhatsApp Slip</span>
+                          <Send className="w-3 h-3" />
+                          <span>WhatsApp</span>
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Right: Compact Birthdays + Calendar */}
+          <div className="space-y-3">
+            {todaysBirthdayStudents.length > 0 && (
+              <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-800 border border-rose-200 dark:border-rose-900/60 shadow-xs space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-xs sm:text-sm font-black text-slate-800 dark:text-white flex items-center gap-1.5">
+                    <span>🎂 आज के जन्मदिन ({todaysBirthdayStudents.length})</span>
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-full bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-300 text-[10px] font-bold">
+                    Auto NSTA Desk
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {todaysBirthdayStudents.map((st) => {
+                    const cName = displayedClasses.find((c) => c.id === st.classId)?.name || "Class";
+                    return (
+                      <div key={st.id} className="bg-rose-50/50 dark:bg-rose-950/20 rounded-xl p-2 border border-rose-200/70 dark:border-rose-900/50 flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="font-bold text-xs text-slate-800 dark:text-white truncate">{st.name}</p>
+                          <p className="text-[10px] text-slate-500 truncate">{cName} • #{st.rollNo || "—"}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleSendManualBirthdayWish(st)}
+                          disabled={birthdayWishSending === st.id}
+                          className="px-2 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-bold shrink-0 cursor-pointer flex items-center gap-1"
+                        >
+                          {birthdayWishSending === st.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Gift className="w-3 h-3" />}
+                          <span>Wish</span>
                         </button>
                       </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <SchoolBirthdayCalendar
+              schoolId={schoolId}
+              schoolName={school?.name}
+              students={displayedStudents}
+              classes={displayedClasses}
+              onOpenMessenger={() => setView("nsta_broadcast")}
+            />
           </div>
         </div>
       </div>
@@ -4446,6 +4726,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             defaultClassId={selectedClass?.id || displayedClasses[0]?.id}
             existingStudents={displayedStudents}
             adminUid={adminUid}
+            userRole="SCHOOL_ADMIN"
+            actorName={school?.principalName || "School Admin"}
             onSuccess={(newStudent, admFee) => {
               setShowDirectAdmissionModal(false);
               setStudents(prev => [newStudent, ...prev.filter(s => s.id !== newStudent.id)]);
@@ -4584,6 +4866,29 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                     Current Active
                   </span>
                 </div>
+              </div>
+
+              {/* Session Roll-Over Quick Banner */}
+              <div className="p-3 rounded-2xl bg-gradient-to-r from-purple-950/50 to-indigo-950/50 border border-purple-500/30 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-xl bg-purple-500/20 text-purple-300 flex items-center justify-center shrink-0">
+                    <GraduationCap className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <h5 className="text-xs font-black text-white">वार्षिक सत्र प्रमोशन इंजन (Roll-Over)</h5>
+                    <p className="text-[10px] text-purple-200/80 truncate">छात्रों को अगली कक्षा व नए सत्र में प्रमोट करें</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSessionModal(false);
+                    setShowSessionRollOverModal(true);
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-black text-xs shadow-md transition active:scale-95 cursor-pointer shrink-0"
+                >
+                  प्रमोट करें →
+                </button>
               </div>
 
               {/* Add New Session Toggle / Form */}
@@ -5035,6 +5340,32 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             </div>
           </div>
         )}
+        {showSessionRollOverModal && (
+          <SessionRollOverModal
+            isOpen={showSessionRollOverModal}
+            onClose={() => setShowSessionRollOverModal(false)}
+            school={school}
+            sessions={displayedSessions}
+            classes={displayedClasses}
+            currentSession={activeSession}
+            onSuccess={() => {
+              try { loadAll(); } catch {}
+            }}
+          />
+        )}
+        {showFaceStudioModal && (
+          <UniversalFaceIdStudioModal
+            isOpen={showFaceStudioModal}
+            onClose={() => setShowFaceStudioModal(false)}
+            schoolId={schoolId}
+            students={displayedStudents}
+            teachers={displayedTeachers}
+            classes={displayedClasses}
+            onEnrollmentUpdated={() => {
+              try { loadAll(); } catch {}
+            }}
+          />
+        )}
         {renderAdminBottomNav()}
       </>
     );
@@ -5043,15 +5374,21 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   // ── MASTER ERP SHELL (LEFT SIDEBAR ON COMPUTER/LANDSCAPE, DRAWER ON MOBILE PORTRAIT) ────
   const renderErpShell = (content: React.ReactNode) => {
     return (
-      <div className="h-screen h-[100dvh] max-h-screen overflow-hidden flex bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 w-full relative">
+      <div className={`h-screen h-[100dvh] max-h-screen overflow-hidden flex transition-colors duration-200 admin-theme-${appTheme} app-theme-${appTheme} ${
+        appTheme === "white"
+          ? "bg-slate-100 text-slate-900"
+          : appTheme === "black"
+          ? "bg-black text-white"
+          : "bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+      } w-full relative`}>
         {/* Left Sidebar (fixed in place on desktop or landscape, never scrolls with page) */}
         {renderDesktopSidebar()}
 
-        {/* Mobile Slide-Out Drawer (only when in portrait and drawer toggled) */}
-        {!isNativeLandscape && isSidebarOpen && renderMobileSidebarDrawer()}
+        {/* Mobile Slide-Out Drawer (only when in mobile portrait and drawer toggled) */}
+        {!isEffectiveLandscape && isSidebarOpen && renderMobileSidebarDrawer()}
 
         {/* 1% Ultra-slim left edge indicator on mobile portrait when drawer is hidden */}
-        {!isNativeLandscape && !isSidebarOpen && (
+        {!isEffectiveLandscape && !isSidebarOpen && (
           <div
             onClick={() => setIsSidebarOpen(true)}
             className="fixed left-0 top-1/2 -translate-y-1/2 w-2.5 h-20 rounded-r-full bg-gradient-to-b from-indigo-500 via-amber-400 to-indigo-500 opacity-60 hover:opacity-100 hover:w-3.5 transition-all z-30 cursor-pointer shadow-[0_0_10px_rgba(99,102,241,0.5)] flex items-center justify-center group"
@@ -5062,19 +5399,23 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         )}
 
         {/* Main Content Area (Independent scroll container - page cards scroll smoothly while menu stays fixed) */}
-        <div className="flex-1 flex flex-col min-w-0 h-screen h-[100dvh] max-h-screen overflow-y-auto overflow-x-hidden">
+        <div className={`flex-1 flex flex-col min-w-0 h-screen h-[100dvh] max-h-screen overflow-y-auto ${
+          isEffectiveLandscape ? "overflow-x-auto" : "overflow-x-hidden"
+        }`}>
           {renderTopHeader()}
-          <main className="flex-1 p-2 sm:p-4 lg:p-5 w-full max-w-7xl mx-auto pb-16 md:pb-12">
+          <main className={`flex-1 p-2 sm:p-4 lg:p-5 w-full mx-auto pb-16 md:pb-12 ${
+            isEffectiveLandscape ? "min-w-[980px] sm:min-w-0 max-w-7xl" : "max-w-7xl"
+          }`}>
             {content}
           </main>
         </div>
 
         {/* Floating guidance banner when rotate is requested but phone needs to be turned */}
         {showRotatePrompt && (
-          <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 text-white border border-amber-400/40 px-4 py-2.5 rounded-2xl shadow-2xl flex items-center gap-3 backdrop-blur-md animate-in slide-in-from-bottom-4 duration-300 max-w-sm text-center">
-            <RotateCw className="w-5 h-5 text-amber-400 animate-spin shrink-0" />
-            <p className="text-xs font-bold text-amber-200">
-              कृपया फोन को Landscape (आड़ा) घुमाएं — स्टेटस बार समेत पूरा ऐप कंप्यूटर मोड में रोटेट हो जाएगा!
+          <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 text-white border border-cyan-400/40 px-4 py-2.5 rounded-2xl shadow-2xl flex items-center gap-3 backdrop-blur-md animate-in slide-in-from-bottom-4 duration-300 max-w-sm text-center">
+            <Laptop className="w-5 h-5 text-cyan-400 shrink-0" />
+            <p className="text-xs font-bold text-cyan-200">
+              💻 Laptop (Desktop) मोड सक्रिय है! आप फोन को आड़ा (Landscape) करके पूरे लैपटॉप व्यू का उपयोग कर सकते हैं।
             </p>
           </div>
         )}
@@ -5274,15 +5615,46 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     );
   }
 
-  if (view === "attendance" && selectedClass) {
+  if (view === "attendance") {
+    const activeClass = selectedClass || (displayedClasses.length > 0 ? displayedClasses[0] : null);
     return renderErpShell(
-      <AttendanceManager
-        schoolId={schoolId}
-        classId={selectedClass.id}
-        className={selectedClass.name}
-        teacherId={adminUid}
-        onBack={() => setView("classes")}
-      />
+      <div className="space-y-3">
+        {displayedClasses.length > 1 && (
+          <div className="bg-slate-900 border-b border-slate-800 p-2.5 px-4 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
+            <div className="flex items-center gap-1.5 shrink-0">
+              <Clock className="w-4 h-4 text-emerald-400" />
+              <span className="text-xs font-black text-white">कक्षा चुनें (Class):</span>
+            </div>
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+              {displayedClasses.map(c => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setSelectedClass(c)}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+                    (activeClass?.id === c.id)
+                      ? "bg-emerald-600 text-white shadow-xs ring-1 ring-emerald-400"
+                      : "bg-slate-800 hover:bg-slate-700 text-slate-300"
+                  }`}
+                >
+                  {c.name} {c.section ? `(${c.section})` : ""}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {activeClass ? (
+          <AttendanceManager
+            schoolId={schoolId}
+            classId={activeClass.id}
+            className={activeClass.name}
+            teacherId={adminUid}
+            onBack={() => setView("classes")}
+          />
+        ) : (
+          <div className="p-8 text-center text-slate-400">Pehle koi Class add karein.</div>
+        )}
+      </div>
     );
   }
 
@@ -5315,6 +5687,21 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         sessionId={activeSession?.id || ""}
         adminId={adminUid}
         onBack={() => setView("fees")}
+      />
+    );
+  }
+
+  if (view === "sibling_profiles") {
+    return renderErpShell(
+      <SiblingProfileManager
+        school={school!}
+        students={displayedStudents}
+        classes={displayedClasses}
+        activeSession={activeSession}
+        onUpdateStudent={(updated) => {
+          setStudents((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+        }}
+        onBack={() => setView("dashboard")}
       />
     );
   }
@@ -5390,46 +5777,192 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     );
   }
 
-  if (view === "results" && selectedClass) {
+  if (view === "results") {
+    const activeClass = selectedClass || (displayedClasses.length > 0 ? displayedClasses[0] : null);
     return renderErpShell(
-      <ExamResultsPanel
-        schoolId={schoolId}
-        classId={selectedClass.id}
-        className={selectedClass.name}
-        sessionId={activeSession?.id || ""}
-        subjects={subjects.filter(s => s.classId === selectedClass.id)}
-        adminId={adminUid}
-        schoolName={school?.name}
-        onBack={() => setView("classes")}
-      />
+      <div className="space-y-3">
+        {displayedClasses.length > 1 && (
+          <div className="bg-slate-900 border-b border-slate-800 p-2.5 px-4 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
+            <div className="flex items-center gap-1.5 shrink-0">
+              <Award className="w-4 h-4 text-amber-400" />
+              <span className="text-xs font-black text-white">कक्षा चुनें (Class):</span>
+            </div>
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+              {displayedClasses.map(c => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setSelectedClass(c)}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+                    (activeClass?.id === c.id)
+                      ? "bg-amber-500 text-slate-950 font-black shadow-xs ring-1 ring-amber-300"
+                      : "bg-slate-800 hover:bg-slate-700 text-slate-300"
+                  }`}
+                >
+                  {c.name} {c.section ? `(${c.section})` : ""}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {activeClass ? (
+          <ExamResultsPanel
+            schoolId={schoolId}
+            classId={activeClass.id}
+            className={activeClass.name}
+            sessionId={activeSession?.id || ""}
+            subjects={subjects.filter(s => s.classId === activeClass.id)}
+            adminId={adminUid}
+            schoolName={school?.name}
+            onBack={() => setView("classes")}
+          />
+        ) : (
+          <div className="p-8 text-center text-slate-400">Pehle koi Class add karein.</div>
+        )}
+      </div>
     );
   }
 
-  if (view === "report_card" && selectedClass) {
+  if (view === "report_card") {
+    const activeClass = selectedClass || (displayedClasses.length > 0 ? displayedClasses[0] : null);
     return renderErpShell(
-      <ReportCard
-        schoolId={schoolId}
-        classId={selectedClass.id}
-        className={selectedClass.name}
-        sessionId={activeSession?.id || ""}
-        onBack={() => setView("classes")}
-      />
+      <div className="space-y-3">
+        {displayedClasses.length > 1 && (
+          <div className="bg-slate-900 border-b border-slate-800 p-2.5 px-4 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
+            <div className="flex items-center gap-1.5 shrink-0">
+              <FileText className="w-4 h-4 text-blue-400" />
+              <span className="text-xs font-black text-white">कक्षा चुनें (Class):</span>
+            </div>
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+              {displayedClasses.map(c => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setSelectedClass(c)}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+                    (activeClass?.id === c.id)
+                      ? "bg-blue-600 text-white font-bold shadow-xs ring-1 ring-blue-400"
+                      : "bg-slate-800 hover:bg-slate-700 text-slate-300"
+                  }`}
+                >
+                  {c.name} {c.section ? `(${c.section})` : ""}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {activeClass ? (
+          <ReportCard
+            schoolId={schoolId}
+            classId={activeClass.id}
+            className={activeClass.name}
+            sessionId={activeSession?.id || ""}
+            onBack={() => setView("classes")}
+          />
+        ) : (
+          <div className="p-8 text-center text-slate-400">Pehle koi Class add karein.</div>
+        )}
+      </div>
     );
   }
 
-  if (view === "marks" && selectedClass) {
+  if (view === "marks") {
+    const activeClass = selectedClass || (displayedClasses.length > 0 ? displayedClasses[0] : null);
     return renderErpShell(
-      <MarksManager
-        schoolId={schoolId}
-        classId={selectedClass.id}
-        className={selectedClass.name}
-        sessionId={activeSession?.id || ""}
-        teacherId={adminUid}
-        subjectId={selectedSubject?.id}
-        subjectName={selectedSubject?.name}
-        initialSubjects={subjects.filter(s => s.classId === selectedClass.id)}
-        onBack={() => setView("classes")}
-      />
+      <div className="space-y-3">
+        {displayedClasses.length > 1 && (
+          <div className="bg-slate-900 border-b border-slate-800 p-2.5 px-4 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
+            <div className="flex items-center gap-1.5 shrink-0">
+              <Edit3 className="w-4 h-4 text-orange-400" />
+              <span className="text-xs font-black text-white">कक्षा चुनें (Class):</span>
+            </div>
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+              {displayedClasses.map(c => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setSelectedClass(c)}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+                    (activeClass?.id === c.id)
+                      ? "bg-orange-500 text-slate-950 font-black shadow-xs ring-1 ring-orange-300"
+                      : "bg-slate-800 hover:bg-slate-700 text-slate-300"
+                  }`}
+                >
+                  {c.name} {c.section ? `(${c.section})` : ""}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {activeClass ? (
+          <MarksManager
+            schoolId={schoolId}
+            classId={activeClass.id}
+            className={activeClass.name}
+            sessionId={activeSession?.id || ""}
+            teacherId={adminUid}
+            subjectId={selectedSubject?.id}
+            subjectName={selectedSubject?.name}
+            initialSubjects={subjects.filter(s => s.classId === activeClass.id)}
+            onBack={() => setView("classes")}
+          />
+        ) : (
+          <div className="p-8 text-center text-slate-400">Pehle koi Class add karein.</div>
+        )}
+      </div>
+    );
+  }
+
+  if (view === "class_qr") {
+    return renderErpShell(
+      <div className="p-4 sm:p-6 space-y-4 max-w-4xl mx-auto">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-purple-50 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400 flex items-center justify-center font-bold text-xl shrink-0">
+              <QrCode className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-black text-slate-800 dark:text-white">Class &amp; Student Attendance QR Codes</h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">प्रोजेक्टर पर लाइव क्यूआर कोड दिखाएं या प्रिंट करके क्लासरूम में लगाएं</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowUniversalScannerModal(true)}
+            className="px-3.5 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-black flex items-center gap-1.5 transition cursor-pointer shadow-sm active:scale-95 shrink-0"
+          >
+            <Camera className="w-4 h-4" />
+            <span>📷 Live Universal Scanner</span>
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {displayedClasses.map((c) => {
+            const classStudents = students.filter(s => isStudentInClass(s, c.id, c.name));
+            return (
+              <div key={c.id} className="p-4 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xs space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-black text-base text-slate-800 dark:text-white">{c.name}</h4>
+                    <p className="text-xs text-slate-400">{classStudents.length} Students Enrolled</p>
+                  </div>
+                  <span className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-300">
+                    <QrCode className="w-4 h-4" />
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setQrModalClass(c)}
+                  className="w-full py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition cursor-pointer active:scale-95 shadow-xs"
+                >
+                  <QrCode className="w-3.5 h-3.5" />
+                  <span>Open Class QR &amp; Print</span>
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
     );
   }
 
@@ -5733,8 +6266,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   }
 
   if (view === "nsta_broadcast") {
-    return renderErpShell(
-      <div className="w-full h-[calc(100vh-120px)] bg-slate-950 rounded-2xl overflow-hidden shadow-xl border border-slate-800">
+    return (
+      <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col h-screen w-screen overflow-hidden">
         <NstaMessengerSuite
           school={school!}
           classes={displayedClasses}
@@ -5748,6 +6281,82 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       </div>
     );
   }
+
+  if (view === "backup_recovery") {
+    return renderErpShell(
+      <SchoolBackupManager
+        school={school}
+        activeSession={activeSession}
+        onRefreshData={() => {
+          try { window.location.reload(); } catch {}
+        }}
+      />
+    );
+  }
+
+  if (view === "expenses") {
+    return renderErpShell(
+      <SchoolExpenseManager
+        school={school}
+        activeSession={activeSession}
+      />
+    );
+  }
+
+  if (view === "leaves_desk") {
+    return renderErpShell(
+      <div className="max-w-4xl mx-auto">
+        <ParentLeaveManager
+          school={school}
+          mode="TEACHER_ADMIN"
+          onLeaveUpdated={() => {}}
+        />
+      </div>
+    );
+  }
+
+  if (view === "ptm_scheduler") {
+    return renderErpShell(
+      <PtmSchedulerModal
+        school={school}
+        activeSession={activeSession}
+        mode="ADMIN_TEACHER"
+        isOpen={true}
+        onClose={() => setView("dashboard")}
+      />
+    );
+  }
+
+  if (view === "staff_payroll") {
+    return renderErpShell(
+      <StaffPayrollManager
+        school={school}
+        activeSession={activeSession}
+      />
+    );
+  }
+
+  if (view === "question_paper_builder") {
+    return renderErpShell(
+      <QuestionPaperBuilder
+        school={school}
+        activeSession={activeSession}
+      />
+    );
+  }
+
+  if (view === "receipt_cancellation") {
+    return renderErpShell(
+      <ReceiptCancellationModal
+        isOpen={true}
+        onClose={() => setView("fees")}
+        school={school}
+        activeSession={activeSession}
+        onReceiptCancelled={() => {}}
+      />
+    );
+  }
+
   const menuItems = [
     { label: "Absenty Action Center", subtitle: "1-Day Push Notice & 2-Day+ Direct Call Tracker", icon: <AlertCircle className="w-5 h-5 text-rose-500" />, view: "absentee", count: "Action 🚨", locked: false, featured: true },
     { label: "NSTA Messenger", subtitle: "Class Groups, School Desk & Teacher Chat", icon: <MessageSquare className="w-5 h-5 text-indigo-500" />, view: "nsta_broadcast", count: "3 Screens ⚡", locked: false, featured: true },
@@ -6102,22 +6711,33 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={() => {
-                setShowForm(showForm === "session" ? null : "session");
-                setEditingSessionId(null);
-                setSessionForm({
-                  name: "Session 2027-28",
-                  startDate: "2027-04-01",
-                  endDate: "2028-03-31"
-                });
-              }}
-              className="w-full sm:w-auto px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-blue-600/20 transition cursor-pointer active:scale-95 shrink-0"
-            >
-              <Plus className="w-4 h-4" />
-              <span>+ नया सत्र जोड़ें (+ Add Session)</span>
-            </button>
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowSessionRollOverModal(true)}
+                className="px-4 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-purple-600/20 transition cursor-pointer active:scale-95"
+              >
+                <GraduationCap className="w-4 h-4" />
+                <span>🎓 छात्र सत्र प्रमोशन (Roll-Over)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowForm(showForm === "session" ? null : "session");
+                  setEditingSessionId(null);
+                  setSessionForm({
+                    name: "Session 2027-28",
+                    startDate: "2027-04-01",
+                    endDate: "2028-03-31"
+                  });
+                }}
+                className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-blue-600/20 transition cursor-pointer active:scale-95"
+              >
+                <Plus className="w-4 h-4" />
+                <span>+ नया सत्र जोड़ें</span>
+              </button>
+            </div>
           </div>
 
           {/* Active Session Highlight Banner */}
@@ -6357,6 +6977,43 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                 </div>
               );
             })}
+          </div>
+        </div>
+      );
+    }
+
+    if (view === "face_id_studio") {
+      return (
+        <div className="p-4 sm:p-6 space-y-4 max-w-4xl mx-auto">
+          <div className="bg-gradient-to-r from-emerald-600 to-teal-700 text-white rounded-3xl p-6 sm:p-8 shadow-xl relative overflow-hidden">
+            <div className="relative z-10 space-y-3">
+              <span className="px-3 py-1 bg-white/20 backdrop-blur-md rounded-full text-xs font-black uppercase tracking-wider">
+                Universal Live Biometric System
+              </span>
+              <h2 className="text-2xl sm:text-3xl font-black">
+                📷 लाइव फेस आईडी स्टुडियो (Live Face ID Studio)
+              </h2>
+              <p className="text-sm text-emerald-100 max-w-xl">
+                2D फोटो अपलोड के बजाय लाइव कैमरे से हर छात्र व शिक्षक का चेहरा रजिस्टर करें। 128-पॉइंट बायोमेट्रिक लैंडमार्क्स क्लाउड व डिवाइस दोनों में सिंक रहते हैं और 0.58 कैलिब्रेटेड थ्रेशोल्ड पर तुरंत मैच होते हैं।
+              </p>
+              <div className="pt-2 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowFaceStudioModal(true)}
+                  className="px-6 py-3 bg-white text-emerald-900 rounded-2xl font-black text-sm shadow-lg hover:bg-emerald-50 active:scale-95 transition cursor-pointer flex items-center gap-2"
+                >
+                  <Camera className="w-5 h-5 text-emerald-700" />
+                  <span>Open Face ID Studio (स्टुडियो खोलें)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setView("classes")}
+                  className="px-5 py-3 bg-emerald-800/80 hover:bg-emerald-800 text-white rounded-2xl font-bold text-sm transition cursor-pointer"
+                >
+                  Daily Attendance
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       );
@@ -7075,14 +7732,37 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     }
 
     if (view === "subjects") {
+      const currentClass = selectedClass || (displayedClasses.length > 0 ? displayedClasses[0] : null);
+      const classSubjects = currentClass ? subjects.filter(s => s.classId === currentClass.id) : [];
       return (
         <div className="p-4 space-y-3 max-w-2xl mx-auto">
-          {!selectedClass && <div className="text-slate-400 text-center py-8">Select a class first</div>}
-          {selectedClass && (
+          {displayedClasses.length > 1 && (
+            <div className="bg-white dark:bg-slate-800 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
+              <span className="text-xs font-bold text-slate-700 dark:text-slate-200 shrink-0">Class चुनें:</span>
+              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+                {displayedClasses.map(c => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => setSelectedClass(c)}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+                      (currentClass?.id === c.id)
+                        ? "bg-blue-600 text-white shadow-xs"
+                        : "bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 text-slate-700 dark:text-slate-200"
+                    }`}
+                  >
+                    {c.name} {c.section ? `(${c.section})` : ""}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {!currentClass && <div className="text-slate-400 text-center py-8">Select a class first</div>}
+          {currentClass && (
             <>
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
                 <p className="text-sm text-slate-500">
-                  Subjects for <strong className="text-slate-800 dark:text-slate-100 font-bold">{selectedClass.name}</strong> ({subjects.length} books)
+                  Subjects for <strong className="text-slate-800 dark:text-slate-100 font-bold">{currentClass.name}</strong> ({classSubjects.length} books)
                 </p>
                 <div className="flex items-center gap-2 w-full sm:w-auto">
                   <button
@@ -7363,6 +8043,15 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setShowFaceStudioModal(true)}
+                className="px-3.5 py-2.5 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 transition active:scale-95 cursor-pointer shadow-xs"
+                title="Register Live Face ID for Teachers"
+              >
+                <Camera className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <span>📷 लाइव फेस आईडी</span>
+              </button>
               <button
                 type="button"
                 onClick={() => setView("id_cards")}
@@ -7913,9 +8602,121 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       );
     }
 
+    if (view === "discount_list") {
+      const allDiscs = getCombinedDiscountLedger(schoolId, displayedStudents, allFees);
+      const filteredDiscs = allDiscs.filter((d) => {
+        if (discountLedgerFilter !== "all" && d.category !== discountLedgerFilter) return false;
+        if (studentSearchQuery.trim()) {
+          const q = studentSearchQuery.toLowerCase().trim();
+          return (
+            d.studentName.toLowerCase().includes(q) ||
+            d.className.toLowerCase().includes(q) ||
+            d.whereLabel.toLowerCase().includes(q) ||
+            d.givenByName.toLowerCase().includes(q)
+          );
+        }
+        return true;
+      });
+      const totalSavedDisc = filteredDiscs.reduce((s, d) => s + (Number(d.discountAmount) || 0), 0);
+
+      return (
+        <div className="p-4 space-y-3 max-w-4xl mx-auto">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-4 border border-emerald-200 dark:border-emerald-800 shadow-xs flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-base font-black text-slate-800 dark:text-white flex items-center gap-2">
+                🏷️ Fee Discount Register ({DISPLAY_DISCOUNT_LABEL})
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                किस छात्र को, कितना डिस्काउंट और कहाँ मिला — सभी प्रविष्टियाँ स्थायी रूप से माफ हैं (Next Month Due में नहीं जुड़ेंगी)।
+              </p>
+            </div>
+            <div className="text-right">
+              <p className="text-[10px] font-bold uppercase text-slate-400">Total Waived</p>
+              <p className="text-lg font-black text-emerald-600 dark:text-emerald-400">
+                ₹{totalSavedDisc.toLocaleString("en-IN")} ({filteredDiscs.length})
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {[
+              { id: "all", label: "सभी (All)" },
+              { id: "admission", label: "Admission" },
+              { id: "multi_admission", label: "Multi-Admission" },
+              { id: "monthly_fee", label: "Monthly Fee" },
+              { id: "sibling", label: "Sibling" },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setDiscountLedgerFilter(tab.id)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-black cursor-pointer border transition ${
+                  discountLedgerFilter === tab.id
+                    ? "bg-emerald-600 text-white border-emerald-600"
+                    : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {filteredDiscs.length === 0 ? (
+            <div className="bg-white dark:bg-slate-800 rounded-2xl p-8 text-center text-sm text-slate-500 border border-slate-200 dark:border-slate-700">
+              इस श्रेणी में कोई Discount रिकॉर्ड नहीं मिला।
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {filteredDiscs.map((d) => (
+                <div
+                  key={d.id}
+                  className="bg-white dark:bg-slate-800 rounded-xl p-3 border border-slate-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-3"
+                >
+                  <div className="min-w-0 space-y-0.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-black text-slate-800 dark:text-white">{d.studentName}</span>
+                      <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-700 text-[10px] font-bold text-slate-700 dark:text-slate-200">
+                        {d.className || "Class"} {d.section ? `(${d.section})` : ""} • Roll #{d.rollNo || "—"}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 text-[10px] font-black">
+                        {d.whereLabel}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      दिया गया: <strong>{d.givenByName}</strong> ({d.givenByRole}) • दिनांक: {new Date(d.createdAt).toLocaleDateString("en-IN")}
+                      {d.note ? ` • ${d.note}` : ""}
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <span className="px-2.5 py-1 rounded-xl bg-emerald-600 text-white text-xs font-black">
+                      -₹{d.discountAmount.toLocaleString("en-IN")} ({d.discountPct}%)
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
     if (view === "students") {
-      const rawClassStudents = selectedClass ? displayedStudents.filter(s => isStudentInClass(s, selectedClass.id, selectedClass.name)) : displayedStudents;
-      const filteredStudents = rawClassStudents.filter(s => {
+      const availableSections = Array.from(
+        new Set(
+          displayedClasses
+            .filter((c) => !selectedClass || c.id === selectedClass.id || c.name === selectedClass.name)
+            .map((c) => (c.section || "").trim())
+            .filter(Boolean)
+        )
+      );
+      const rawClassStudents = selectedClass
+        ? displayedStudents.filter((s) => isStudentInClass(s, selectedClass.id, selectedClass.name))
+        : displayedStudents;
+      const sectionFilteredStudents =
+        selectedSectionFilter === "ALL"
+          ? rawClassStudents
+          : rawClassStudents.filter((s) => (s.section || "").trim().toUpperCase() === selectedSectionFilter.toUpperCase());
+      const filteredStudents = sectionFilteredStudents.filter(s => {
         if (!studentSearchQuery.trim()) return true;
         const q = studentSearchQuery.toLowerCase().trim();
         return (
@@ -7933,7 +8734,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       const paginatedStudents = filteredStudents.slice((currentStudentPage - 1) * pageSize, currentStudentPage * pageSize);
 
       return (
-        <div className="p-4 space-y-3 max-w-2xl mx-auto">
+        <div className="p-4 space-y-3 max-w-3xl mx-auto">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-sm text-slate-500">
               {selectedClass ? (
@@ -7945,12 +8746,54 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             {selectedClass && (
               <button
                 type="button"
-                onClick={() => { setSelectedClass(null); setStudentPage(1); }}
+                onClick={() => { setSelectedClass(null); setSelectedSectionFilter("ALL"); setStudentPage(1); }}
                 className="text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
               >
                 Show All Classes
               </button>
             )}
+          </div>
+
+          {/* Class & Section Filter Bar */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-white dark:bg-slate-800 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700">
+            <div>
+              <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Class चुनें (कक्षा)</label>
+              <select
+                value={selectedClass?.id || ""}
+                onChange={(e) => {
+                  const cls = displayedClasses.find((c) => c.id === e.target.value) || null;
+                  setSelectedClass(cls);
+                  setSelectedSectionFilter("ALL");
+                  setStudentPage(1);
+                }}
+                className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-bold text-slate-800 dark:text-white"
+              >
+                <option value="">सभी कक्षाएं (All Classes)</option>
+                {displayedClasses.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} {c.section ? `(${c.section})` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Section चुनें (वर्ग)</label>
+              <select
+                value={selectedSectionFilter}
+                onChange={(e) => {
+                  setSelectedSectionFilter(e.target.value);
+                  setStudentPage(1);
+                }}
+                className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-bold text-slate-800 dark:text-white"
+              >
+                <option value="ALL">सभी सेक्शन (All Sections)</option>
+                {(availableSections.length > 0 ? availableSections : ["A", "B", "C"]).map((sec) => (
+                  <option key={sec} value={sec}>
+                    Section {sec}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           {/* Quick Search Bar */}
@@ -7977,17 +8820,28 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             )}
           </div>
 
-          <button
-            type="button"
-            onClick={() => {
-              setEditingStudentId(null);
-              setShowDirectAdmissionModal(true);
-            }}
-            className="w-full py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-sm transition cursor-pointer"
-          >
-            <UserPlus className="w-4 h-4" />
-            <span>+ New Student Admission (Quick / Full Form + Receipt)</span>
-          </button>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setEditingStudentId(null);
+                setShowDirectAdmissionModal(true);
+              }}
+              className="sm:col-span-2 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-sm transition cursor-pointer text-sm"
+            >
+              <UserPlus className="w-4 h-4" />
+              <span>+ New Student Admission (Quick / Full Form + Receipt)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowFaceStudioModal(true)}
+              className="py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-sm transition cursor-pointer text-sm shadow-emerald-500/20"
+              title="कैमरे से छात्र का लाइव फेस आईडी रजिस्टर करें व टेस्ट करें"
+            >
+              <Camera className="w-4 h-4" />
+              <span>📷 लाइव फेस आईडी</span>
+            </button>
+          </div>
 
           {paginatedStudents.map((s, idx) => (
             <div key={s.id || `student-${s.rollNo || idx}-${idx}`} className="bg-white dark:bg-slate-800 rounded-xl p-3 shadow-sm border border-slate-100 dark:border-slate-700">

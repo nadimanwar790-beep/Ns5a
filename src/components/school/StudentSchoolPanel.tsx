@@ -37,6 +37,8 @@ import {
   Youtube,
   Palmtree,
   Sun,
+  Moon,
+  Palette,
   Play,
   Share2,
   Heart,
@@ -52,8 +54,13 @@ import {
   ShoppingBag,
 } from "lucide-react";
 import QRCode from "react-qr-code";
+import { StudentFaceIdModal } from "./StudentFaceIdModal";
 import { ClassroomVideoArchive } from "./ClassroomVideoArchive";
 import { CustomPlayer } from "../CustomPlayer";
+import { GroupStudyModal } from "../GroupStudyModal";
+import { FULL_SYLLABUS } from "../../syllabus_data";
+import { getSubjectsList } from "../../constants";
+import { createPortal } from "react-dom";
 import {
   getSchool,
   getLocalStudents,
@@ -80,6 +87,7 @@ import {
   subscribeToSchoolCommunityPosts,
   subscribeToTeachers,
   getClasses,
+  getLocalSchoolCurriculumNotes,
   isDemoRecord,
   shouldUseDemoForSchool,
   type SchoolCommunityPost,
@@ -107,7 +115,10 @@ import {
   syncStudentFeeDueForPush,
   sendSchoolPushNotification,
 } from "../../utils/schoolPushClient";
-import type { School, SchoolStudent, SchoolTeacher, NstaWelcomeData, NstaBirthdayData } from "../../school-types";
+import { isSchoolEliteCurriculum, type School, type SchoolStudent, type SchoolTeacher, type NstaWelcomeData, type NstaBirthdayData } from "../../school-types";
+import { ParentLeaveManager } from "./ParentLeaveManager";
+import { PtmSchedulerModal } from "./PtmSchedulerModal";
+import { playBusArrivalAlarmChime, checkAndTriggerBusProximity } from "../../utils/busProximityAlarm";
 
 interface Props {
   uid?: string;
@@ -121,6 +132,8 @@ interface Props {
   initialTab?: TabType;
   onTabChange?: (tab: TabType) => void;
   onAddAnotherStudentQr?: () => void;
+  onRemoveLinkedStudent?: (studentKey: string) => void;
+  onSwitchStudent?: (studentKey: string) => void;
   onOpenPlatformContent?: () => void;
   onBack?: () => void;
   onLogout?: () => void;
@@ -148,6 +161,35 @@ type TabType =
   | "store"
   | "profile";
 
+export type StudentAppTheme = "current" | "white" | "black";
+
+export const STUDENT_THEMES_META = [
+  {
+    id: "current" as StudentAppTheme,
+    label: "Midnight",
+    labelHi: "मिडनाइट स्लेट",
+    badge: "Default",
+    desc: "डिफ़ॉल्ट स्कूल ब्लू-स्लेट थीम",
+    dotColor: "bg-indigo-500",
+  },
+  {
+    id: "white" as StudentAppTheme,
+    label: "White",
+    labelHi: "सफेद / लाइट",
+    badge: "Daylight",
+    desc: "दिन में पढ़ने के लिए उत्तम स्वच्छ लाइट मोड",
+    dotColor: "bg-amber-400",
+  },
+  {
+    id: "black" as StudentAppTheme,
+    label: "Black",
+    labelHi: "AMOLED ब्लैक",
+    badge: "OLED Dark",
+    desc: "सुपर डार्क मोड - बैटरी बचत व आंखों का आराम",
+    dotColor: "bg-cyan-400",
+  },
+];
+
 export const StudentSchoolPanel: React.FC<Props> = ({
   uid,
   schoolId = "dps_gurgaon_sector45",
@@ -160,6 +202,8 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   initialTab,
   onTabChange,
   onAddAnotherStudentQr,
+  onRemoveLinkedStudent,
+  onSwitchStudent,
   onOpenPlatformContent,
   onBack,
   onLogout,
@@ -169,12 +213,12 @@ export const StudentSchoolPanel: React.FC<Props> = ({
     if (t === "updates" || t === "messenger" || t === "chat" || t === "nsta_messenger") return "channel";
     if (t === "feed" || t === "community" || t === "notices") return "holidays";
     if (t === "memories" || t === "events") return "events_memories";
-    if (t === "explore") return "explore_plus";
+    if (t === "explore" || t === "explore_plus") return "overview";
     if (t === "store" || t === "shop" || t === "school_store") return "store";
     if ([
       "overview", "channel", "attendance", "fees", "exams", "homework",
       "idcard", "teachers", "videos", "holidays", "events_memories",
-      "explore_plus", "store"
+      "store"
     ].includes(t)) {
       return t as TabType;
     }
@@ -209,6 +253,47 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   const [pushEnabled, setPushEnabled] = useState<boolean>(() => getSchoolPushEnabledState(effectiveUid));
   const [pushBusy, setPushBusy] = useState<boolean>(false);
   const [pushFeedback, setPushFeedback] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [showPtmModal, setShowPtmModal] = useState<boolean>(false);
+  const [busAlarmTriggered, setBusAlarmTriggered] = useState<boolean>(false);
+
+  // Student 3-Theme Switcher (White / Black / Midnight Current)
+  const [studentTheme, setStudentTheme] = useState<StudentAppTheme>(() => {
+    try {
+      const saved = localStorage.getItem("nst_student_theme") as StudentAppTheme;
+      if (saved === "white" || saved === "black" || saved === "current") return saved;
+    } catch {}
+    return "current";
+  });
+  const [showThemeModal, setShowThemeModal] = useState<boolean>(false);
+
+  const applyStudentTheme = (nextTheme: StudentAppTheme) => {
+    setStudentTheme(nextTheme);
+    try {
+      localStorage.setItem("nst_student_theme", nextTheme);
+      if (typeof document !== "undefined") {
+        document.documentElement.classList.remove(
+          "student-theme-white",
+          "student-theme-black",
+          "student-theme-current",
+          "dark-mode-black",
+          "dark-mode-blue"
+        );
+        document.documentElement.classList.add(`student-theme-${nextTheme}`);
+        if (nextTheme === "white") {
+          document.documentElement.classList.remove("dark", "dark-mode");
+        } else if (nextTheme === "black") {
+          document.documentElement.classList.add("dark", "dark-mode", "dark-mode-black");
+        } else {
+          document.documentElement.classList.add("dark", "dark-mode", "dark-mode-blue");
+        }
+      }
+      window.dispatchEvent(new Event("nst-dark-theme-change"));
+    } catch {}
+  };
+
+  useEffect(() => {
+    applyStudentTheme(studentTheme);
+  }, []);
 
   const handleStudentLogout = () => {
     try {
@@ -263,6 +348,33 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   const [showNotificationModal, setShowNotificationModal] = useState<boolean>(false);
   const [showStudentSwitcherModal, setShowStudentSwitcherModal] = useState<boolean>(false);
   const [welcomeModalData, setWelcomeModalData] = useState<NstaWelcomeData | null>(null);
+
+  // ── Face ID 30-Day Biometric State
+  const [showFaceIdModal, setShowFaceIdModal] = useState<boolean>(false);
+  // ── Live Study Room & Academic Syllabus states
+  const [showStudyRoomModal, setShowStudyRoomModal] = useState<boolean>(false);
+  const [showClassSyllabusModal, setShowClassSyllabusModal] = useState<boolean>(false);
+  const [selectedSyllabusSubject, setSelectedSyllabusSubject] = useState<string | null>(null);
+  const [selectedChapterNotes, setSelectedChapterNotes] = useState<{ title: string; subject: string; classLevel: string; content?: string } | null>(null);
+  const [lastFaceUpdate, setLastFaceUpdate] = useState<string | null>(() => {
+    try {
+      const stId = studentId || "student";
+      return localStorage.getItem(`nst_face_last_update_${stId}`) || null;
+    } catch {
+      return null;
+    }
+  });
+
+  const faceIdDaysRemaining = (() => {
+    if (!lastFaceUpdate) return 0;
+    try {
+      const last = new Date(lastFaceUpdate).getTime();
+      const elapsedDays = (Date.now() - last) / (1000 * 60 * 60 * 24);
+      return Math.max(0, Math.ceil(30 - elapsedDays));
+    } catch {
+      return 0;
+    }
+  })();
 
   // Check for newly created ID or scan-login welcome celebration trigger
   useEffect(() => {
@@ -723,6 +835,182 @@ export const StudentSchoolPanel: React.FC<Props> = ({
       })
       .catch(() => {});
   }, [schoolId]);
+
+  // ── Clean Class Label & Academic Syllabus for Student Portal ──
+  const cleanClassNum = useMemo(() => {
+    const raw = formatClassLabel(studentClassLabel) || "";
+    const match = raw.match(/\d+/);
+    if (match) return match[0];
+    if (/nursery/i.test(raw)) return "Nursery";
+    if (/lkg/i.test(raw)) return "LKG";
+    if (/ukg/i.test(raw)) return "UKG";
+    return "10";
+  }, [studentClassLabel]);
+
+  const [selectedClassLevel, setSelectedClassLevel] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('nst_active_session_class') || localStorage.getItem('nst_session_class');
+      if (saved && (['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'].includes(saved) || saved === 'COMPETITION')) {
+        return saved;
+      }
+    } catch {}
+    return cleanClassNum || '10';
+  });
+  const [showClassPickerDrawer, setShowClassPickerDrawer] = useState<boolean>(false);
+
+  const isCompetitionSelected = selectedClassLevel === 'COMPETITION';
+  const isSelectedBoardClass = !isCompetitionSelected && (selectedClassLevel === '10' || selectedClassLevel === '12');
+
+  const classEmojis: Record<string, string> = {
+    '1': '🌱',
+    '2': '✏️',
+    '3': '🎨',
+    '4': '🧩',
+    '5': '🔬',
+    '6': '📖',
+    '7': '🧪',
+    '8': '🌍',
+    '9': '📚',
+    '10': '🏆',
+    '11': '🚀',
+    '12': '🎓',
+  };
+  const boardClasses = ['10', '12'];
+
+  const isEliteSchool = useMemo(() => {
+    return isSchoolEliteCurriculum(school);
+  }, [school]);
+
+  const [showSchoolSyllabusModal, setShowSchoolSyllabusModal] = useState<boolean>(false);
+  const [selectedSchoolSubject, setSelectedSchoolSubject] = useState<string | null>(null);
+  const [selectedSchoolNote, setSelectedSchoolNote] = useState<any | null>(null);
+
+  // School-specific curriculum notes (strictly for this schoolId)
+  const schoolCurriculumNotes = useMemo(() => {
+    if (!schoolId) return [];
+    return getLocalSchoolCurriculumNotes(schoolId);
+  }, [schoolId]);
+
+  // Notes filtered strictly to this school and the selected class
+  const schoolClassNotes = useMemo(() => {
+    return schoolCurriculumNotes.filter((n: any) => {
+      if (!n) return false;
+      const noteClass = String(n.classLevel || n.classId || '').replace(/^cls_/i, '').trim();
+      return noteClass === String(selectedClassLevel);
+    });
+  }, [schoolCurriculumNotes, selectedClassLevel]);
+
+  // Group notes by subject for this school
+  const schoolClassSubjectsMap = useMemo(() => {
+    const map = new Map<string, any[]>();
+    schoolClassNotes.forEach((n: any) => {
+      const subjName = (n.subjectName || n.subject || 'School Notes').trim();
+      if (!map.has(subjName)) {
+        map.set(subjName, []);
+      }
+      map.get(subjName)!.push(n);
+    });
+    return map;
+  }, [schoolClassNotes]);
+
+  const schoolSubjectsCount = isCompetitionSelected ? 7 : schoolClassSubjectsMap.size;
+  const schoolLessonsCount = isCompetitionSelected ? 25 : schoolClassNotes.length;
+  const schoolMcqCount = useMemo(() => {
+    if (isCompetitionSelected) return 1000;
+    let count = 0;
+    schoolClassNotes.forEach((n: any) => {
+      if (Array.isArray(n.mcqs)) count += n.mcqs.length;
+      else if (Array.isArray(n.questions)) count += n.questions.length;
+      else if (n.content && n.content.length > 50) count += 10;
+    });
+    return count;
+  }, [schoolClassNotes, isCompetitionSelected]);
+
+  const handleOpenClassSyllabus = (targetClass: string) => {
+    if (targetClass === 'COMPETITION') {
+      try {
+        localStorage.setItem('nst_session_class', 'COMPETITION');
+        localStorage.setItem('nst_active_session_class', 'COMPETITION');
+        localStorage.setItem('nst_syllabus_mode', 'COMPETITION');
+        localStorage.setItem('nst_student_active_tab', 'COURSES');
+        window.dispatchEvent(new CustomEvent('nst_open_student_dashboard', {
+          detail: { tab: 'COURSES', targetClass: 'COMPETITION' }
+        }));
+      } catch {}
+      if (onOpenPlatformContent) {
+        (onOpenPlatformContent as any)('COMPETITION');
+      }
+      return;
+    }
+    // For school academic class: open the school's own syllabus viewer
+    const firstSubj = Array.from(schoolClassSubjectsMap.keys())[0] || null;
+    setSelectedSchoolSubject(firstSubj);
+    setSelectedSchoolNote(null);
+    setShowSchoolSyllabusModal(true);
+  };
+
+  const isBoardClass = cleanClassNum === "10" || cleanClassNum === "12";
+  const classDisplayTitle = formatClassLabel(studentClassLabel) || `Class ${cleanClassNum}`;
+
+  const classSyllabusSubjects = useMemo(() => {
+    const subjectsMap: Record<string, string[]> = {};
+    if (typeof FULL_SYLLABUS === "object" && FULL_SYLLABUS !== null) {
+      Object.keys(FULL_SYLLABUS).forEach((k) => {
+        const parts = k.split("-");
+        if (parts.length >= 3) {
+          const cls = parts[1];
+          const subj = parts.slice(2).join(" ");
+          if (cls === cleanClassNum) {
+            if (!subjectsMap[subj] || subjectsMap[subj].length < (FULL_SYLLABUS[k]?.length || 0)) {
+              subjectsMap[subj] = FULL_SYLLABUS[k];
+            }
+          }
+        }
+      });
+    }
+
+    if (Object.keys(subjectsMap).length === 0) {
+      if (cleanClassNum === "Nursery" || cleanClassNum === "LKG" || cleanClassNum === "UKG") {
+        subjectsMap["English Alphabet & Phonics"] = ["Alphabet A to Z", "Phonics Sounds", "Letter Tracing", "Simple Words"];
+        subjectsMap["Hindi Varnamala"] = ["स्वर (अ से अः)", "व्यंजन (क से ज्ञ)", "चित्र पहचान", "सरल शब्द"];
+        subjectsMap["Mathematics & Numbers"] = ["Numbers 1 to 50", "Counting Objects", "Shapes & Patterns", "Big & Small"];
+        subjectsMap["General Awareness & Rhymes"] = ["My Body & Senses", "Animals & Birds", "Nursery Rhymes", "Colors & Fruits"];
+        subjectsMap["Art & Drawing"] = ["Color Filling", "Basic Shapes Drawing", "Finger Painting"];
+      } else {
+        subjectsMap["Mathematics"] = ["Number Systems", "Polynomials", "Linear Equations", "Quadratic Equations", "Arithmetic Progressions", "Triangles", "Coordinate Geometry", "Trigonometry", "Circles", "Statistics", "Probability"];
+        subjectsMap["Science"] = ["Chemical Reactions & Equations", "Acids, Bases & Salts", "Metals & Non-metals", "Life Processes", "Control & Coordination", "Electricity", "Magnetic Effects of Electric Current", "Light Reflection & Refraction"];
+        subjectsMap["Social Science"] = ["The Rise of Nationalism in Europe", "Nationalism in India", "Resources & Development", "Power Sharing", "Federalism", "Development", "Sectors of the Indian Economy"];
+        subjectsMap["English Language & Literature"] = ["A Letter to God", "Nelson Mandela: Long Walk to Freedom", "Two Stories about Flying", "From the Diary of Anne Frank", "The Hundred Dresses", "Grammar & Composition"];
+        subjectsMap["Hindi"] = ["सूरदास के पद", "राम-लक्ष्मण-परशुराम संवाद", "नेताजी का चश्मा", "बालगोबिन भगत", "व्याकरण एवं रचना"];
+      }
+    }
+
+    try {
+      const rawCurriculum = localStorage.getItem(`nst_school_curriculum_notes_${schoolId}`);
+      if (rawCurriculum) {
+        const parsedNotes = JSON.parse(rawCurriculum);
+        if (Array.isArray(parsedNotes)) {
+          parsedNotes.forEach((note: any) => {
+            if (note.classLevel === cleanClassNum || note.classId === activeStudent.classId) {
+              const subjName = note.subjectName || note.subject || "Teacher Notes";
+              if (!subjectsMap[subjName]) {
+                subjectsMap[subjName] = [];
+              }
+              if (note.lessonTitle && !subjectsMap[subjName].includes(note.lessonTitle)) {
+                subjectsMap[subjName].push(note.lessonTitle);
+              }
+            }
+          });
+        }
+      }
+    } catch {}
+
+    return subjectsMap;
+  }, [cleanClassNum, activeStudent.classId, schoolId]);
+
+  const syllabusSubjectsCount = Object.keys(classSyllabusSubjects).length;
+  const syllabusLessonsCount = Object.values(classSyllabusSubjects).reduce((sum, chapters) => sum + chapters.length, 0);
+  const syllabusMcqCount = syllabusLessonsCount * 10;
 
   // Load real attendance logs
   useEffect(() => {
@@ -1807,7 +2095,13 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+    <div className={`min-h-screen flex flex-col font-sans transition-colors duration-200 student-theme-${studentTheme} ${
+      studentTheme === "white"
+        ? "bg-slate-100 text-slate-900"
+        : studentTheme === "black"
+        ? "bg-black text-white"
+        : "bg-slate-950 text-slate-100"
+    }`}>
       {/* ── TOP NAV HEADER (SHOWN STRICTLY ONLY ON HOME OVERVIEW PAGE) ─────── */}
       {activeTab === "overview" && (
         <header className="sticky top-0 z-30 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 px-3 sm:px-6 py-2 flex items-center justify-between gap-2 overflow-x-auto no-scrollbar shadow-lg">
@@ -1841,7 +2135,11 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                           if (!isSelected) {
                             try {
                               localStorage.setItem("nst_current_user", JSON.stringify(st));
-                              window.location.reload();
+                              if (onSwitchStudent) {
+                                onSwitchStudent(st.id || st.admissionNo);
+                              } else {
+                                window.location.reload();
+                              }
                             } catch {}
                           }
                         }}
@@ -1860,13 +2158,33 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
+                            const confirmed = window.confirm(
+                              `Kya aap "${st.name}" ka student profile is account se hatana chahte hain?`
+                            );
+                            if (!confirmed) return;
+
+                            const stKey = st.id || st.admissionNo;
+                            if (onRemoveLinkedStudent) {
+                              onRemoveLinkedStudent(stKey);
+                            }
+
                             try {
                               const remaining = list.filter((x: any) => (x.id || x.admissionNo) !== (st.id || st.admissionNo));
                               localStorage.setItem("nst_linked_students", JSON.stringify(remaining));
+                              if (uid) {
+                                localStorage.setItem(
+                                  `nst_user_linked_students_${uid}`,
+                                  JSON.stringify({ students: remaining, activeStudentKey: remaining[0]?.id || "" })
+                                );
+                              }
                               if (isSelected && remaining.length > 0) {
                                 localStorage.setItem("nst_current_user", JSON.stringify(remaining[0]));
+                                if (onSwitchStudent) {
+                                  onSwitchStudent(remaining[0].id || remaining[0].admissionNo);
+                                } else {
+                                  window.location.reload();
+                                }
                               }
-                              window.location.reload();
                             } catch {}
                           }}
                           title={`${st.name} ka ID card is account se hatayein`}
@@ -1882,22 +2200,67 @@ export const StudentSchoolPanel: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* Right: + Add Student QR button */}
-          <button
-            type="button"
-            onClick={() => {
-              if (onAddAnotherStudentQr) {
-                onAddAnotherStudentQr();
-              } else {
-                setShowStudentSwitcherModal(true);
-              }
-            }}
-            className="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/35 border border-indigo-500/40 text-indigo-300 hover:text-white text-[11px] sm:text-xs font-bold flex items-center gap-1.5 shrink-0 transition cursor-pointer"
-            title="Add another student ID / QR"
-          >
-            <UserPlus className="w-3.5 h-3.5 text-indigo-400" />
-            <span>+ Add Student QR</span>
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {/* 3-Theme Switcher Segmented Pill */}
+            <div className="inline-flex items-center p-0.5 rounded-xl bg-slate-800/90 border border-slate-700/80 shadow-xs">
+              <button
+                type="button"
+                onClick={() => applyStudentTheme("white")}
+                className={`px-2 py-1 rounded-lg text-[10px] sm:text-xs font-black flex items-center gap-1 transition cursor-pointer ${
+                  studentTheme === "white"
+                    ? "bg-amber-400 text-slate-950 shadow-sm"
+                    : "text-slate-400 hover:text-white"
+                }`}
+                title="White (Light) थीम - सफेद"
+              >
+                <Sun className="w-3.5 h-3.5" />
+                <span className="hidden xs:inline">White</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => applyStudentTheme("black")}
+                className={`px-2 py-1 rounded-lg text-[10px] sm:text-xs font-black flex items-center gap-1 transition cursor-pointer ${
+                  studentTheme === "black"
+                    ? "bg-cyan-400 text-slate-950 shadow-sm"
+                    : "text-slate-400 hover:text-white"
+                }`}
+                title="Black (AMOLED) थीम - सुपर डार्क"
+              >
+                <Moon className="w-3.5 h-3.5" />
+                <span className="hidden xs:inline">Black</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => applyStudentTheme("current")}
+                className={`px-2 py-1 rounded-lg text-[10px] sm:text-xs font-black flex items-center gap-1 transition cursor-pointer ${
+                  studentTheme === "current"
+                    ? "bg-indigo-600 text-white shadow-sm"
+                    : "text-slate-400 hover:text-white"
+                }`}
+                title="Midnight (Default) थीम - डिफ़ॉल्ट"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span className="hidden xs:inline">Midnight</span>
+              </button>
+            </div>
+
+            {/* Right: + Add Student QR button */}
+            <button
+              type="button"
+              onClick={() => {
+                if (onAddAnotherStudentQr) {
+                  onAddAnotherStudentQr();
+                } else {
+                  setShowStudentSwitcherModal(true);
+                }
+              }}
+              className="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/35 border border-indigo-500/40 text-indigo-300 hover:text-white text-[11px] sm:text-xs font-bold flex items-center gap-1.5 shrink-0 transition cursor-pointer"
+              title="Add another student ID / QR"
+            >
+              <UserPlus className="w-3.5 h-3.5 text-indigo-400" />
+              <span>+ Add Student QR</span>
+            </button>
+          </div>
         </header>
       )}
 
@@ -2017,7 +2380,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 pt-2.5">
+                <div className="flex items-center gap-2 pt-2.5 flex-wrap">
                   <button
                     onClick={() => setActiveTab("idcard")}
                     className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-bold flex items-center gap-1 border border-slate-700 transition cursor-pointer active:scale-95"
@@ -2031,6 +2394,52 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                   >
                     <FileText className="w-3 h-3 text-emerald-400" />
                     <span>A4 Admission Form</span>
+                  </button>
+                  <button
+                    onClick={() => setShowFaceIdModal(true)}
+                    className="px-2.5 py-1 rounded-lg bg-teal-950/70 hover:bg-teal-900/80 text-teal-300 text-[11px] font-bold flex items-center gap-1.5 border border-teal-500/40 transition cursor-pointer active:scale-95 shadow-sm"
+                    title="Update Face ID Biometric (Free every 30 days)"
+                  >
+                    <Camera className="w-3 h-3 text-teal-400" />
+                    <span>
+                      अपडेट फेस आईडी {faceIdDaysRemaining > 0 ? `(${faceIdDaysRemaining}d)` : "(Free)"}
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={() => setShowPtmModal(true)}
+                    className="px-2.5 py-1 rounded-lg bg-indigo-950/70 hover:bg-indigo-900/80 text-indigo-300 text-[11px] font-bold flex items-center gap-1.5 border border-indigo-500/40 transition cursor-pointer active:scale-95 shadow-sm"
+                    title="शिक्षक-अभिभावक बैठक स्लॉट बुक करें"
+                  >
+                    <Users className="w-3 h-3 text-indigo-400" />
+                    <span>PTM स्लॉट</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      playBusArrivalAlarmChime();
+                      setBusAlarmTriggered(true);
+                      setTimeout(() => setBusAlarmTriggered(false), 3000);
+                    }}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1.5 border transition cursor-pointer active:scale-95 shadow-sm ${
+                      busAlarmTriggered
+                        ? "bg-amber-500 text-slate-950 border-amber-400 animate-bounce"
+                        : "bg-amber-950/70 hover:bg-amber-900/80 text-amber-300 border-amber-500/40"
+                    }`}
+                    title="1 KM बस अराइवल सायरन टेस्ट करें"
+                  >
+                    <Bell className="w-3 h-3 text-amber-400" />
+                    <span>{busAlarmTriggered ? "सायरन बज रहा है! 🔔" : "बस 1KM सायरन"}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowThemeModal(true)}
+                    className="px-2.5 py-1 rounded-lg bg-purple-950/70 hover:bg-purple-900/80 text-purple-300 text-[11px] font-bold flex items-center gap-1.5 border border-purple-500/40 transition cursor-pointer active:scale-95 shadow-sm"
+                    title="ऐप का थीम चुनें (White / Black / Midnight)"
+                  >
+                    <Palette className="w-3 h-3 text-purple-400" />
+                    <span>थीम: {studentTheme === "white" ? "☀️ White" : studentTheme === "black" ? "🌑 Black" : "🌌 Midnight"}</span>
                   </button>
                 </div>
               </div>
@@ -2122,6 +2531,315 @@ export const StudentSchoolPanel: React.FC<Props> = ({
         {/* TAB 1: UNIFIED APP LAUNCHPAD HOME & PROFILE ──────────────────────────── */}
         {activeTab === "overview" && (
           <div className="space-y-6">
+            {/* ── 1. SELECTED TARGET / CLASS CARD (DYNAMIC SCHOOL OR GOVT. EXAM) ── GATED TO ELITE SCHOOLS */}
+            {isEliteSchool && (
+              <div id="home-class-6-12-card" className="space-y-2">
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                      {isCompetitionSelected ? 'Competitive Mode' : 'Academic Class'}
+                    </span>
+                    <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                      {schoolDisplayName}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowClassPickerDrawer(true)}
+                    className="px-2.5 py-1 rounded-xl text-xs font-black flex items-center gap-1.5 transition active:scale-95 cursor-pointer shadow-xs border bg-slate-900 border-indigo-500/30 text-indigo-400 hover:bg-slate-800"
+                  >
+                    <span>{isCompetitionSelected ? '🏛️ Govt. Exams' : `Class ${selectedClassLevel}`}</span>
+                    <ChevronDown size={13} className="text-slate-400" />
+                    <span className="text-[10px] opacity-75 font-bold">Change</span>
+                  </button>
+                </div>
+
+                <div
+                  id="home-selected-class-card"
+                  className="nst-card-animated w-full relative overflow-hidden rounded-2xl text-left transition-all group bg-gradient-to-br from-slate-900 via-slate-900 to-indigo-950/40 border border-slate-800 hover:border-slate-700 shadow-xl"
+                >
+                  <div className="p-4 sm:p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0 pr-1">
+                        <div className="flex items-center gap-1.5 mb-1.5">
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider shrink-0 bg-indigo-500/15 text-indigo-400 border border-indigo-500/35">
+                            {isCompetitionSelected ? 'Competitive Mode · Govt. Exams' : `Class ${selectedClassLevel} · School Academic Mode`}
+                          </span>
+                          {isSelectedBoardClass && (
+                            <span className="px-1.5 py-0.5 rounded-full text-[9px] font-black bg-amber-400 text-amber-950 shadow-xs">
+                              👑 Board Class
+                            </span>
+                          )}
+                        </div>
+                        <h3 className="text-[22px] sm:text-[24px] font-black leading-tight mb-1.5 text-white">
+                          {isCompetitionSelected ? 'Govt. Exams' : `Class ${selectedClassLevel}`}
+                        </h3>
+                        <div className="flex items-center flex-wrap gap-1.5">
+                          {isCompetitionSelected ? (
+                            <>
+                              <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-slate-800/80 border border-slate-700/60 text-slate-300">
+                                📚 7 Books
+                              </span>
+                              <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-slate-800/80 border border-slate-700/60 text-slate-300">
+                                🎯 SSC • UPSC • Railway • Police
+                              </span>
+                              <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-slate-800/80 border border-slate-700/60 text-slate-300">
+                                ⚡ 1000+ MCQs
+                              </span>
+                              <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-slate-800/80 border border-slate-700/60 text-slate-300">
+                                🧭 General Studies
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-slate-800/80 border border-slate-700/60 text-slate-300">
+                                📚 {schoolSubjectsCount} Subjects
+                              </span>
+                              <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-slate-800/80 border border-slate-700/60 text-slate-300">
+                                📖 {schoolLessonsCount} Lessons
+                              </span>
+                              <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-slate-800/80 border border-slate-700/60 text-slate-300">
+                                ⚡ {schoolMcqCount} MCQs
+                              </span>
+                              <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-indigo-950/60 border border-indigo-500/40 text-indigo-300">
+                                🏫 {schoolDisplayName}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                        {!isCompetitionSelected && schoolLessonsCount === 0 && (
+                          <p className="text-[11px] text-amber-300/90 mt-2 flex items-center gap-1 font-medium">
+                            <span>ℹ️</span>
+                            <span>इस कक्षा के नोट्स आपके स्कूल शिक्षकों द्वारा अपलोड होने पर यहाँ दिखेंगे।</span>
+                          </p>
+                        )}
+                      </div>
+                      <div className="text-[44px] sm:text-[50px] leading-none shrink-0 select-none group-hover:scale-105 transition-transform pt-0.5">
+                        {isCompetitionSelected ? '🏛️' : (classEmojis[selectedClassLevel] || '🎓')}
+                      </div>
+                    </div>
+
+                    {/* Standard unified bottom button */}
+                    <div className="mt-3.5 pt-2.5 border-t border-slate-800/80 w-full">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenClassSyllabus(isCompetitionSelected ? 'COMPETITION' : selectedClassLevel)}
+                        className="w-full py-2.5 px-4 rounded-xl text-xs font-black shadow-md flex items-center justify-center gap-1.5 transition-all bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 hover:from-indigo-500 hover:to-blue-500 text-white cursor-pointer active:scale-[0.99]"
+                      >
+                        <BookOpen size={14} />
+                        <span>{isCompetitionSelected ? 'Open Govt. Exams Syllabus' : `Open Class ${selectedClassLevel} Syllabus`}</span>
+                        <span className="group-hover:translate-x-0.5 transition-transform">→</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── SELECT CLASS OR TARGET EXAM POPUP (MATCHES EXACT STUDENT DASHBOARD POPUP) ── */}
+            {showClassPickerDrawer && createPortal(
+              <div className="fixed inset-0 z-[999999] pointer-events-auto flex items-center justify-center p-3 sm:p-4">
+                <div
+                  className="fixed inset-0 bg-black/60 backdrop-blur-[2px] animate-in fade-in duration-150"
+                  onClick={() => setShowClassPickerDrawer(false)}
+                  onTouchStart={() => setShowClassPickerDrawer(false)}
+                />
+                <div
+                  data-no-topbar-swipe
+                  className="relative w-72 sm:w-80 max-w-[calc(100vw-24px)] rounded-2xl shadow-2xl border z-[1000000] animate-in fade-in zoom-in-95 duration-150 overflow-y-auto max-h-[calc(100dvh-80px)] bg-[#111827] border-slate-800 text-white"
+                >
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-sm">🎯</span>
+                      <span className="text-xs font-black uppercase tracking-wider text-slate-400">Select Class / Target</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowClassPickerDrawer(false)}
+                      className="p-1.5 rounded-full hover:bg-white/10 text-slate-400 transition-colors cursor-pointer"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 1l12 12M13 1L1 13" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
+                    </button>
+                  </div>
+
+                  <div className="px-3.5 py-3 border-b border-slate-800">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">School &amp; Board Classes</p>
+                      <span className="text-[9px] font-bold text-indigo-400 bg-indigo-950/60 px-2 py-0.5 rounded-full border border-indigo-700/50">
+                        Class 1 – 12
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5 max-h-60 sm:max-h-72 overflow-y-auto pr-0.5">
+                      {['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'].map((c) => {
+                        const isSelected = !isCompetitionSelected && String(c) === selectedClassLevel;
+                        const isBoard = boardClasses.includes(c);
+                        let subjCount = 8;
+                        try {
+                          subjCount = getSubjectsList(c, null, undefined).length || 8;
+                        } catch {}
+                        return (
+                          <button
+                            key={c}
+                            type="button"
+                            onClick={() => {
+                              setSelectedClassLevel(c);
+                              try {
+                                localStorage.setItem('nst_session_class', c);
+                                localStorage.setItem('nst_active_session_class', c);
+                              } catch {}
+                            }}
+                            className={`flex items-center justify-between p-2 rounded-xl text-left border transition-all cursor-pointer active:scale-95 ${
+                              isSelected
+                                ? 'border-indigo-500 bg-indigo-950/80 shadow-xs'
+                                : 'border-slate-800 bg-slate-800/60 hover:bg-slate-800 text-slate-200'
+                            }`}
+                          >
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="text-base shrink-0">{classEmojis[c]}</span>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-1">
+                                  <span className="text-xs font-black truncate">Class {c}</span>
+                                  {isBoard && <span className="text-[10px]">👑</span>}
+                                </div>
+                                <span className="text-[9px] font-semibold text-slate-400 block -mt-0.5">
+                                  {subjCount} Subj
+                                </span>
+                              </div>
+                            </div>
+                            {isSelected && (
+                              <span className="w-4 h-4 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[10px] shrink-0 font-bold">
+                                ✓
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="px-3.5 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Competitive Exams</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedClassLevel('COMPETITION');
+                        try {
+                          localStorage.setItem('nst_session_class', 'COMPETITION');
+                          localStorage.setItem('nst_active_session_class', 'COMPETITION');
+                        } catch {}
+                      }}
+                      className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left border transition-all cursor-pointer active:scale-95 ${
+                        isCompetitionSelected
+                          ? 'border-amber-500 bg-amber-950/60 shadow-xs'
+                          : 'border-slate-800 bg-slate-800/60 hover:bg-slate-800 text-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className="text-2xl shrink-0">🏛️</span>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-black truncate">Govt. Exams &amp; Competition</span>
+                            <span className="px-1 py-0.2 rounded-full text-[8px] font-black bg-amber-400 text-amber-900">
+                              Special
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-400 font-medium truncate mt-0.5">
+                            SSC · Railway · UPSC · BPSC · Police
+                          </p>
+                        </div>
+                      </div>
+                      {isCompetitionSelected ? (
+                        <span className="w-5 h-5 rounded-full bg-amber-500 text-white flex items-center justify-center text-xs font-bold shrink-0">
+                          ✓
+                        </span>
+                      ) : (
+                        <span className="text-[11px] font-bold text-slate-400 shrink-0">
+                          Select →
+                        </span>
+                      )}
+                    </button>
+
+                    <div className="pt-2.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowClassPickerDrawer(false);
+                          handleOpenClassSyllabus(isCompetitionSelected ? 'COMPETITION' : selectedClassLevel);
+                        }}
+                        className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black transition cursor-pointer shadow-md flex items-center justify-center gap-1.5"
+                      >
+                        <span>{isCompetitionSelected ? 'Open Govt. Exams Syllabus' : `Open Class ${selectedClassLevel} Syllabus`}</span>
+                        <span>→</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>,
+              document.body
+            )}
+
+            {/* ── 2. DAILY CHALLENGE, STUDY ROOM, REVISION & MISTAKES ── */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="flex-1 h-px bg-slate-800" />
+                <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                  Daily Challenge, Study Room, Revision &amp; Mistakes
+                </span>
+                <span className="flex-1 h-px bg-slate-800" />
+              </div>
+
+              {/* ── LIVE STUDY ROOM CARD (MATCHES EXACT STUDENT DASHBOARD CARD) ── */}
+              <div
+                id="home-study-room-card"
+                className="nst-card-animated w-full relative overflow-hidden rounded-2xl p-4 sm:p-5 text-left transition-all flex flex-col justify-between group flex-1 bg-slate-900 border border-slate-800 hover:border-slate-700 shadow-xl"
+              >
+                <div className="space-y-3 w-full">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-xs text-2xl bg-indigo-500/15 text-indigo-400 border border-indigo-500/20">
+                        👥
+                      </div>
+                      <div>
+                        <h4 className="text-base font-black leading-tight text-white">
+                          Live Study Room
+                        </h4>
+                        <p className="text-[11px] mt-0.5 font-medium leading-tight text-slate-400">
+                          Virtual study room with peers &amp; timer
+                        </p>
+                      </div>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider shrink-0 flex items-center gap-1 bg-indigo-500/15 text-indigo-400 border border-indigo-500/35">
+                      1-Tap Invite
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5 text-[9px] font-bold">
+                    <span className="px-2 py-0.5 rounded-lg font-bold bg-slate-800/80 border border-slate-700/60 text-slate-300">
+                      ⏱️ Pomodoro Timer
+                    </span>
+                    <span className="px-2 py-0.5 rounded-lg font-bold bg-slate-800/80 border border-slate-700/60 text-slate-300">
+                      👥 Live Classmates
+                    </span>
+                    <span className="px-2 py-0.5 rounded-lg font-bold bg-slate-800/80 border border-slate-700/60 text-slate-300">
+                      📢 Instant Push
+                    </span>
+                  </div>
+                </div>
+
+                <div className="mt-3.5 pt-2.5 border-t border-slate-800/80 w-full">
+                  <button
+                    type="button"
+                    onClick={() => setShowStudyRoomModal(true)}
+                    className="w-full py-2.5 px-4 rounded-xl text-xs font-black shadow-md flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-98 bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 hover:from-indigo-500 hover:to-blue-500 text-white"
+                  >
+                    <Users size={14} />
+                    <span>Join / Create Study Room</span>
+                    <span className="group-hover:translate-x-0.5 transition-transform">→</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
             {/* Clean Multi-Section Official Feature Button Grid */}
             <div>
               <div className="flex items-center justify-between mb-3">
@@ -2283,6 +3001,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                     </p>
                   </div>
                 </button>
+
               </div>
             </div>
 
@@ -2347,43 +3066,12 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                 </button>
               </div>
             </div>
-
-            {/* ── COMPACT PREMIUM NSTA LEARNING APP BUTTON (PAGE LAST) ── */}
-            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 hover:border-indigo-500/40 transition flex flex-col sm:flex-row items-center justify-between gap-3 shadow-md">
-              <div className="flex items-center gap-3 w-full sm:w-auto">
-                <div className="w-10 h-10 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0">
-                  <Sparkles className="w-5 h-5 text-amber-300" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h4 className="text-xs sm:text-sm font-bold text-white truncate">
-                      Explore Full NSTA App
-                    </h4>
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 shrink-0">
-                      Study &amp; MCQs
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-400 mt-0.5 truncate">
-                    Govt. Exams, 100 MCQs Daily Challenge, Live Study Room &amp; Revision Engine
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleExploreFullApp}
-                className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-md shadow-indigo-600/30 transition cursor-pointer shrink-0"
-              >
-                <span>Open Full App</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
           </div>
         )}
 
         {/* ── TAB: NSTA MESSENGER SUITE (CLASS | SCHOOL | TEACHER) ─────────── */}
         {activeTab === "channel" && (
-          <div className="fixed inset-0 pb-16 z-30 bg-slate-950 flex flex-col">
+          <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col">
             <NstaMessengerSuite
               school={{
                 ...(school || {}),
@@ -2576,6 +3264,15 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                 <span>Watch Class Videos (वीडियो देखें)</span>
                 <ChevronRight className="w-4 h-4" />
               </button>
+            </div>
+
+            {/* Parent Digital Leave Application Section */}
+            <div className="pt-2">
+              <ParentLeaveManager
+                school={school}
+                mode="PARENT_STUDENT"
+                currentStudent={activeStudent}
+              />
             </div>
           </div>
         )}
@@ -3891,159 +4588,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
           );
         })()}
 
-        {/* ── TAB: EXPLORE+ COMPLETE LEARNING UNIVERSE ────────────────────────── */}
-        {activeTab === "explore_plus" && (
-          <div className="space-y-6">
-            {/* Hero Card with Blurred Student Dashboard Preview */}
-            <div
-              onClick={handleExploreFullApp}
-              className="relative rounded-3xl overflow-hidden border-2 border-indigo-500/40 hover:border-indigo-400 transition-all cursor-pointer group shadow-2xl shadow-indigo-950/60"
-            >
-              <div
-                className="absolute inset-0 bg-cover bg-top filter blur-[3px] scale-105 opacity-40 group-hover:opacity-55 transition-opacity"
-                style={{ backgroundImage: `url('/assets/aistudio/Screenshot_20261106_025216_Chrome_cb98684f.jpg')` }}
-              />
-              <div className="absolute inset-0 bg-gradient-to-r from-slate-950/95 via-slate-900/90 to-indigo-950/85" />
 
-              <div className="relative z-10 p-5 sm:p-7 flex flex-col md:flex-row items-start md:items-center justify-between gap-5">
-                <div className="space-y-3 max-w-2xl">
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 text-xs font-black tracking-wider uppercase backdrop-blur-md">
-                    <Sparkles className="w-3.5 h-3.5 text-amber-300 animate-spin" />
-                    <span>NSTA Complete Learning Ecosystem</span>
-                  </div>
-
-                  <h3 className="text-xl sm:text-3xl font-black text-white tracking-tight flex items-center gap-2 group-hover:text-indigo-200 transition-colors">
-                    <span>Explore the Full App</span>
-                    <ArrowRight className="w-6 h-6 text-indigo-400 group-hover:translate-x-2 transition-transform" />
-                  </h3>
-
-                  <p className="text-xs sm:text-sm text-slate-300 leading-relaxed font-medium">
-                    25,000+ लाइन्स का मुख्य लर्निंग डैशबोर्ड: 53+ प्रतियोगी किताबें, 100 MCQs डेली चैलेंज, लाइव स्टडी रूम और मेमोरी इंजन।
-                  </p>
-
-                  <div className="flex items-center gap-2 flex-wrap pt-1">
-                    <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-700/60 text-xs font-bold text-slate-200">
-                      🏆 Daily Challenge
-                    </span>
-                    <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-700/60 text-xs font-bold text-slate-200">
-                      👥 Live Study Room
-                    </span>
-                    <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-700/60 text-xs font-bold text-slate-200">
-                      🧠 Revision Hub
-                    </span>
-                    <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-700/60 text-xs font-bold text-slate-200">
-                      📚 Govt. Exams &amp; 53+ Books
-                    </span>
-                  </div>
-                </div>
-
-                <div className="w-full md:w-auto shrink-0">
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleExploreFullApp();
-                    }}
-                    className="w-full md:w-auto px-6 py-4 rounded-2xl bg-gradient-to-r from-indigo-600 via-blue-600 to-emerald-500 hover:from-indigo-500 hover:to-emerald-400 text-white font-black text-sm sm:text-base flex items-center justify-center gap-2 shadow-xl shadow-indigo-600/35 transition active:scale-95 cursor-pointer"
-                  >
-                    <span>Launch Full Platform</span>
-                    <ArrowRight className="w-5 h-5" />
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Explore Modules Grid */}
-            <div>
-              <div className="flex items-center justify-between mb-3 px-1">
-                <h3 className="text-sm font-bold text-white">Academic &amp; Competitive Learning Modules</h3>
-                <span className="text-xs text-slate-400">1-टैप में सीधे शुरू करें</span>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
-                {[
-                  {
-                    title: "100 MCQs Daily Challenge",
-                    desc: "रोज़ाना 100 बहुविकल्पीय प्रश्नों की टाइमर परीक्षा, लाइव लीडरबोर्ड व कॉइन्स रिवॉर्ड।",
-                    icon: "🎯",
-                    badge: "Live Arena",
-                    color: "from-rose-950/60 to-slate-900 border-rose-500/30",
-                    action: handleExploreFullApp,
-                  },
-                  {
-                    title: "Live Virtual Study Room",
-                    desc: "सहपाठियों के साथ वर्चुअल स्टडी रूम, पोमोडोरो टाइमर व फोकस मोड में पढ़ाई।",
-                    icon: "👥",
-                    badge: "Peers Online",
-                    color: "from-blue-950/60 to-slate-900 border-blue-500/30",
-                    action: handleExploreFullApp,
-                  },
-                  {
-                    title: "Revision Hub & Memory Engine",
-                    desc: "स्पैस्ड रिपीटिशन तकनीक से कभी न भूलने वाले फॉर्मूले व कमजोर विषयों की ड्रिल।",
-                    icon: "🧠",
-                    badge: "Memory Engine",
-                    color: "from-purple-950/60 to-slate-900 border-purple-500/30",
-                    action: handleExploreFullApp,
-                  },
-                  {
-                    title: "Govt. Exams & 53+ Books",
-                    desc: "Lucent GK, Speedy Science, सार संग्रह, NCERT और प्रतियोगी परीक्षाओं की किताबें।",
-                    icon: "📚",
-                    badge: "7+ Books",
-                    color: "from-emerald-950/60 to-slate-900 border-emerald-500/30",
-                    action: handleExploreFullApp,
-                  },
-                  {
-                    title: "Class 1 to 12 Academic Notes",
-                    desc: "कक्षावार विस्तृत अध्ययन नोट्स, महत्वपूर्ण प्रश्नोत्तर और अभ्यास सेट्स।",
-                    icon: "📖",
-                    badge: "Syllabus",
-                    color: "from-indigo-950/60 to-slate-900 border-indigo-500/30",
-                    action: handleExploreFullApp,
-                  },
-                  {
-                    title: "Spin Wheel & Brain Games",
-                    desc: "डेली लॉगिन बोनस, लकी व्हील, मेमोरी गेम्स व कॉइन्स रिवॉर्ड्स।",
-                    icon: "🎮",
-                    badge: "Win Coins",
-                    color: "from-amber-950/60 to-slate-900 border-amber-500/30",
-                    action: handleExploreFullApp,
-                  },
-                ].map((item, idx) => (
-                  <div
-                    key={idx}
-                    onClick={item.action}
-                    className={`p-4 rounded-2xl bg-gradient-to-br ${item.color} border hover:border-indigo-400 transition cursor-pointer flex flex-col justify-between gap-3 group shadow-md hover:shadow-indigo-950/40`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="w-10 h-10 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center text-xl group-hover:scale-110 transition-transform">
-                        {item.icon}
-                      </div>
-                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-950/80 text-indigo-300 border border-slate-700 font-bold uppercase">
-                        {item.badge}
-                      </span>
-                    </div>
-
-                    <div>
-                      <h4 className="text-sm font-black text-white group-hover:text-indigo-300 transition-colors">
-                        {item.title}
-                      </h4>
-                      <p className="text-xs text-slate-400 mt-1 line-clamp-2">
-                        {item.desc}
-                      </p>
-                    </div>
-
-                    <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs font-bold text-indigo-400 group-hover:text-indigo-300">
-                      <span>Open in Main Platform</span>
-                      <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
 
 
 
@@ -4815,6 +5360,456 @@ export const StudentSchoolPanel: React.FC<Props> = ({
         birthdayData={birthdayModalData}
         onOpenSchoolDesk={() => setActiveTab("channel")}
       />
+
+      {/* ── 30-DAY SELF-SERVICE FACE ID BIOMETRIC MODAL ── */}
+      <StudentFaceIdModal
+        isOpen={showFaceIdModal}
+        onClose={() => setShowFaceIdModal(false)}
+        student={activeStudent}
+        schoolId={schoolId}
+        lastFaceUpdate={lastFaceUpdate}
+        onFaceUpdated={(newPhoto) => {
+          setLastFaceUpdate(new Date().toISOString());
+          setActiveStudent((prev: any) => ({ ...prev, photoUrl: newPhoto }));
+        }}
+      />
+
+      {/* ── PTM SLOT BOOKING MODAL FOR PARENTS ── */}
+      {showPtmModal && (
+        <PtmSchedulerModal
+          school={school}
+          activeSession={null}
+          mode="PARENT_STUDENT"
+          currentStudent={activeStudent}
+          isOpen={showPtmModal}
+          onClose={() => setShowPtmModal(false)}
+        />
+      )}
+
+      {/* ── 3-THEME CUSTOMIZER MODAL FOR STUDENTS ── */}
+      {showThemeModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-700/80 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-5 text-white">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-purple-500/20 text-purple-400 border border-purple-500/30 flex items-center justify-center">
+                  <Palette className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-sm text-white">
+                    App Theme Switcher (ऐप थीम)
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    अपनी पसंद के अनुसार 3 में से कोई भी थीम चुनें
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowThemeModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {STUDENT_THEMES_META.map((t) => {
+                const isActive = studentTheme === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => {
+                      applyStudentTheme(t.id);
+                    }}
+                    className={`w-full p-3.5 rounded-2xl border text-left flex items-center justify-between gap-3 transition cursor-pointer active:scale-98 ${
+                      isActive
+                        ? "bg-purple-950/40 border-purple-500 ring-2 ring-purple-500/30 shadow-md"
+                        : "bg-slate-950/60 border-slate-800 hover:border-slate-700"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0 border ${
+                        t.id === "white"
+                          ? "bg-white text-slate-900 border-slate-300 shadow-sm"
+                          : t.id === "black"
+                          ? "bg-black text-white border-neutral-700"
+                          : "bg-slate-900 text-indigo-400 border-indigo-500/40"
+                      }`}>
+                        {t.id === "white" ? "☀️" : t.id === "black" ? "🌑" : "🌌"}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-black text-xs text-white">
+                            {t.labelHi} ({t.label})
+                          </span>
+                          <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-slate-800 text-slate-300">
+                            {t.badge}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-0.5">
+                          {t.desc}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="shrink-0">
+                      {isActive ? (
+                        <div className="w-5 h-5 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center text-xs font-black">
+                          ✓
+                        </div>
+                      ) : (
+                        <div className="w-5 h-5 rounded-full border border-slate-700" />
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between">
+              <span className="text-[11px] text-slate-400">
+                चयनित थीम डिवाइस में हमेशा सुरक्षित रहेगी
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowThemeModal(false)}
+                className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs transition cursor-pointer shadow-sm"
+              >
+                हो गया (Done)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── LIVE STUDY ROOM MODAL (FOR STUDENTS) ── */}
+      {showStudyRoomModal && (
+        <GroupStudyModal
+          isOpen={true}
+          onClose={() => setShowStudyRoomModal(false)}
+          user={{
+            id: activeStudent.id,
+            uid: activeStudent.id,
+            name: activeStudent.name,
+            role: "STUDENT",
+            isSchoolHost: false,
+            schoolId: schoolId,
+            schoolName: schoolDisplayName,
+            subscriptionLevel: "ULTRA",
+          }}
+          tierTheme={{ primary: "#0d9488" }}
+          isSchoolHost={false}
+          schoolId={schoolId}
+          schoolName={schoolDisplayName}
+        />
+      )}
+
+      {/* ── SCHOOL ACADEMIC SYLLABUS & NOTES MODAL (STRICTLY ISOLATED TO THIS SCHOOL) ── */}
+      {showSchoolSyllabusModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 animate-in fade-in">
+          <div className="relative w-full max-w-4xl max-h-[92vh] bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl flex flex-col overflow-hidden">
+            {/* Header */}
+            <div className="p-4 sm:p-5 bg-slate-950/90 border-b border-slate-800 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400 text-xl shrink-0">
+                  📚
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base sm:text-lg font-black text-white truncate">
+                      Class {selectedClassLevel} School Syllabus &amp; Notes
+                    </h3>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 shrink-0">
+                      🏫 {schoolDisplayName}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5 truncate">
+                    {schoolSubjectsCount} Subjects • {schoolLessonsCount} School Lessons • {schoolMcqCount} MCQs
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSchoolSyllabusModal(false);
+                  setSelectedSchoolNote(null);
+                }}
+                className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Content Body */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+              {selectedSchoolNote ? (
+                /* Note Details & Reader View */
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSchoolNote(null)}
+                      className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                    >
+                      <ArrowLeft className="w-4 h-4" />
+                      <span>Back to Notes</span>
+                    </button>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-indigo-300 bg-indigo-950/60 px-2 py-0.5 rounded-md border border-indigo-500/30">
+                        {selectedSchoolNote.subjectName || selectedSchoolNote.subject || 'School Note'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowSchoolSyllabusModal(false);
+                          setShowStudyRoomModal(true);
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-teal-600/20 hover:bg-teal-600/40 text-teal-300 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer border border-teal-500/30"
+                      >
+                        <Users className="w-3.5 h-3.5" />
+                        <span>Study Room</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="p-5 rounded-2xl bg-slate-950 border border-slate-800 text-slate-100 space-y-4">
+                    <div>
+                      <h4 className="text-xl font-black text-white">
+                        {selectedSchoolNote.title || selectedSchoolNote.chapterName || 'Class Note'}
+                      </h4>
+                      <p className="text-xs text-slate-400 mt-1">
+                        Author / Teacher: {selectedSchoolNote.teacherName || schoolDisplayName} • Class {selectedClassLevel}
+                      </p>
+                    </div>
+
+                    {/* PDF Attachment preview/download */}
+                    {(selectedSchoolNote.pdfUrl || selectedSchoolNote.attachmentUrl) && (
+                      <div className="p-3.5 rounded-xl bg-indigo-950/30 border border-indigo-500/30 flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2.5">
+                          <FileText className="w-5 h-5 text-indigo-400" />
+                          <div>
+                            <p className="text-xs font-bold text-white">Attached Study Document / PDF</p>
+                            <p className="text-[10px] text-slate-400">Official material provided by your school</p>
+                          </div>
+                        </div>
+                        <a
+                          href={selectedSchoolNote.pdfUrl || selectedSchoolNote.attachmentUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                        >
+                          <span>Open PDF</span>
+                          <span>↗</span>
+                        </a>
+                      </div>
+                    )}
+
+                    {/* Content text */}
+                    <div className="prose prose-invert max-w-none text-sm text-slate-300 space-y-3 leading-relaxed whitespace-pre-line bg-slate-900/60 p-4 rounded-xl border border-slate-800">
+                      {selectedSchoolNote.content || selectedSchoolNote.description || 'No additional note description provided.'}
+                    </div>
+
+                    {/* MCQs / Questions if available */}
+                    {Array.isArray(selectedSchoolNote.mcqs || selectedSchoolNote.questions) && (selectedSchoolNote.mcqs || selectedSchoolNote.questions).length > 0 && (
+                      <div className="space-y-3 pt-3 border-t border-slate-800">
+                        <h5 className="text-sm font-bold text-amber-300 flex items-center gap-1.5">
+                          <span>⚡</span>
+                          <span>Practice Questions ({((selectedSchoolNote.mcqs || selectedSchoolNote.questions) as any[]).length})</span>
+                        </h5>
+                        <div className="space-y-3">
+                          {((selectedSchoolNote.mcqs || selectedSchoolNote.questions) as any[]).map((q: any, qIdx: number) => (
+                            <div key={qIdx} className="p-3.5 rounded-xl bg-slate-900 border border-slate-800/80 space-y-2">
+                              <p className="text-xs font-bold text-white">
+                                Q{qIdx + 1}. {q.question || q.text || q.q}
+                              </p>
+                              {Array.isArray(q.options) && (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1">
+                                  {q.options.map((opt: string, optIdx: number) => {
+                                    const isCorrect = q.correctAnswer === optIdx || q.correct === optIdx || q.answer === opt;
+                                    return (
+                                      <div
+                                        key={optIdx}
+                                        className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${
+                                          isCorrect
+                                            ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300'
+                                            : 'bg-slate-950/60 border-slate-800 text-slate-300'
+                                        }`}
+                                      >
+                                        <span className="font-bold mr-1.5 text-slate-400">{String.fromCharCode(65 + optIdx)}.</span>
+                                        <span>{opt}</span>
+                                        {isCorrect && <span className="ml-1 text-[10px] text-emerald-400 font-bold">✓ (Correct)</span>}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                              {q.explanation && (
+                                <p className="text-[11px] text-slate-400 bg-slate-950/50 p-2 rounded-lg border border-slate-800 mt-1">
+                                  💡 <strong>Explanation:</strong> {q.explanation}
+                                </p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                /* Syllabus Subjects & Notes List View */
+                <div className="space-y-4">
+                  {/* Subject filter pills */}
+                  {schoolClassSubjectsMap.size > 0 && (
+                    <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-2">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSchoolSubject(null)}
+                        className={`px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition cursor-pointer flex items-center gap-1.5 ${
+                          selectedSchoolSubject === null
+                            ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30 ring-1 ring-indigo-400"
+                            : "bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700/60"
+                        }`}
+                      >
+                        <BookOpen className="w-3.5 h-3.5" />
+                        <span>All Subjects</span>
+                        <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-black/30 font-mono">
+                          {schoolClassNotes.length}
+                        </span>
+                      </button>
+                      {Array.from(schoolClassSubjectsMap.keys()).map((subj) => (
+                        <button
+                          key={subj}
+                          type="button"
+                          onClick={() => setSelectedSchoolSubject(subj)}
+                          className={`px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition cursor-pointer flex items-center gap-1.5 ${
+                            selectedSchoolSubject === subj
+                              ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30 ring-1 ring-indigo-400"
+                              : "bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700/60"
+                          }`}
+                        >
+                          <BookOpen className="w-3.5 h-3.5" />
+                          <span>{subj}</span>
+                          <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-black/30 font-mono">
+                            {schoolClassSubjectsMap.get(subj)?.length || 0}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Empty state when no school notes uploaded yet */}
+                  {schoolClassNotes.length === 0 ? (
+                    <div className="p-8 text-center bg-slate-950/60 rounded-2xl border border-slate-800 space-y-3">
+                      <div className="w-14 h-14 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center text-3xl mx-auto">
+                        🏫
+                      </div>
+                      <h4 className="text-base font-black text-white">
+                        Class {selectedClassLevel} के नोट्स अभी अपलोड नहीं हुए हैं
+                      </h4>
+                      <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
+                        {schoolDisplayName} के शिक्षकों द्वारा इस कक्षा के नोट्स, असाइनमेंट्स या प्रश्न अपलोड करने पर वे यहाँ सीधे उपलब्ध होंगे।
+                      </p>
+                      <div className="pt-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowSchoolSyllabusModal(false);
+                            setShowStudyRoomModal(true);
+                          }}
+                          className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold transition flex items-center gap-2 mx-auto cursor-pointer"
+                        >
+                          <Users className="w-4 h-4" />
+                          <span>सहपाठियों के साथ Live Study Room शुरू करें</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Grid of school lessons */
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {schoolClassNotes
+                        .filter((note: any) => !selectedSchoolSubject || (note.subjectName || note.subject) === selectedSchoolSubject)
+                        .map((note: any, idx: number) => {
+                          const mcqsCount = Array.isArray(note.mcqs || note.questions) ? (note.mcqs || note.questions).length : 0;
+                          return (
+                            <div
+                              key={note.id || idx}
+                              className="p-4 rounded-2xl bg-slate-950/70 border border-slate-800 hover:border-indigo-500/50 transition flex flex-col justify-between gap-3 group"
+                            >
+                              <div className="space-y-2">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-500/15 text-indigo-400 border border-indigo-500/30">
+                                    {note.subjectName || note.subject || 'School'}
+                                  </span>
+                                  {note.pdfUrl && (
+                                    <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                      PDF
+                                    </span>
+                                  )}
+                                </div>
+                                <h4 className="text-sm font-bold text-white group-hover:text-indigo-300 transition-colors line-clamp-2">
+                                  {note.title || note.chapterName || `Lesson ${idx + 1}`}
+                                </h4>
+                                <p className="text-xs text-slate-400 line-clamp-2">
+                                  {note.content || note.description || 'School curated study material.'}
+                                </p>
+                                <div className="flex items-center gap-2 text-[10px] text-slate-500">
+                                  {mcqsCount > 0 && <span>⚡ {mcqsCount} MCQs</span>}
+                                  <span>📅 {note.updatedAt ? new Date(note.updatedAt).toLocaleDateString() : 'Active'}</span>
+                                </div>
+                              </div>
+
+                              <div className="pt-2.5 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedSchoolNote(note)}
+                                  className="px-3 py-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 text-xs font-bold flex items-center gap-1 transition cursor-pointer active:scale-95"
+                                >
+                                  <BookOpen className="w-3 h-3" />
+                                  <span>Read Notes</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setShowSchoolSyllabusModal(false);
+                                    setShowStudyRoomModal(true);
+                                  }}
+                                  className="px-2.5 py-1.5 rounded-lg bg-teal-600/20 hover:bg-teal-600/40 text-teal-300 text-xs font-bold flex items-center gap-1 transition cursor-pointer active:scale-95 border border-teal-500/30"
+                                >
+                                  <Users className="w-3 h-3" />
+                                  <span>Study Room</span>
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 bg-slate-950/90 border-t border-slate-800 flex items-center justify-between">
+              <span className="text-xs text-slate-400">
+                School Curriculum Portal • {schoolDisplayName}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSchoolSyllabusModal(false);
+                  setSelectedSchoolNote(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition cursor-pointer shadow-md"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

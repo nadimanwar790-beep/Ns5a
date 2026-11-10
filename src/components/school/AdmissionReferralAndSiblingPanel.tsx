@@ -30,9 +30,10 @@ interface Props {
   onCommissionPctChange: (pct: number) => void;
   onCommissionScopeChange: (scope: ReferralCommissionScope) => void;
   onCommissionDurationChange?: (duration: ReferralCommissionDuration) => void;
+  canGiveDiscount?: boolean;
 }
 
-const SIBLING_DISCOUNT_PRESETS = [10, 15, 20, 25, 50];
+const SIBLING_DISCOUNT_PRESETS = [5];
 
 export const AdmissionReferralAndSiblingPanel: React.FC<Props> = ({
   siblingDetection,
@@ -59,6 +60,7 @@ export const AdmissionReferralAndSiblingPanel: React.FC<Props> = ({
   onCommissionPctChange,
   onCommissionScopeChange,
   onCommissionDurationChange,
+  canGiveDiscount = true,
 }) => {
   const isSameFamilyActive = siblingDetection.isExactFamily || manualSiblingMarked;
   const matchedSiblings: SchoolStudent[] =
@@ -184,8 +186,8 @@ export const AdmissionReferralAndSiblingPanel: React.FC<Props> = ({
           </div>
         )}
 
-        {/* Sibling Discount Controls (Visible when auto-matched OR manually marked) */}
-        {isSameFamilyActive ? (
+        {/* Sibling Discount Controls (Visible when auto-matched OR manually marked AND user has discount permission) */}
+        {isSameFamilyActive && canGiveDiscount ? (
           <div className="space-y-2.5 pt-1 border-t border-amber-200/70 dark:border-amber-800/50">
             <div>
               <div className="flex items-center justify-between text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1.5">

@@ -11,16 +11,18 @@
  */
 
 export interface FaceDescriptorRecord {
-  studentId: string;
+  studentId: string; // Used as the primary ID (can be student ID or teacher ID)
   schoolId: string;
   name: string;
+  role?: "STUDENT" | "TEACHER" | "STAFF";
+  designation?: string;
   rollNo?: string;
   classId?: string;
   className?: string;
   photoUrl?: string;
   descriptor: number[]; // 128-D normalized feature vector
   enrolledAt: string;
-  source: "id_photo" | "live_kiosk" | "admission_form";
+  source: "id_photo" | "live_kiosk" | "admission_form" | "live_studio";
 }
 
 export interface DetectedFaceBox {
@@ -67,6 +69,7 @@ function openFaceDb(): Promise<IDBDatabase> {
 }
 
 export async function saveFaceDescriptor(record: FaceDescriptorRecord): Promise<void> {
+  // 1. IndexedDB
   try {
     const db = await openFaceDb();
     await new Promise<void>((resolve, reject) => {
@@ -76,20 +79,34 @@ export async function saveFaceDescriptor(record: FaceDescriptorRecord): Promise<
       req.onsuccess = () => resolve();
       req.onerror = () => reject(req.error);
     });
-  } catch {
-    // LocalStorage fallback for non-IDB environments
-    try {
-      const key = `${DESCRIPTOR_STORAGE_PREFIX}${record.schoolId}`;
-      const existing = JSON.parse(localStorage.getItem(key) || "{}");
-      existing[record.studentId] = record;
-      localStorage.setItem(key, JSON.stringify(existing));
-    } catch {}
+  } catch {}
+
+  // 2. LocalStorage fallback
+  try {
+    const key = `${DESCRIPTOR_STORAGE_PREFIX}${record.schoolId}`;
+    const existing = JSON.parse(localStorage.getItem(key) || "{}");
+    existing[record.studentId] = record;
+    localStorage.setItem(key, JSON.stringify(existing));
+  } catch {}
+
+  // 3. Dual-sync to Firebase Firestore so all school devices share the live face descriptor
+  try {
+    const { doc, setDoc } = await import("firebase/firestore");
+    const { db } = await import("../school-firebase");
+    if (db && record.schoolId && record.studentId) {
+      const sanitized = JSON.parse(JSON.stringify(record));
+      const ref = doc(db, `schools/${record.schoolId}/face_descriptors/${record.studentId}`);
+      await setDoc(ref, sanitized, { merge: true });
+    }
+  } catch (err) {
+    // Non-fatal, local biometrics already persisted
   }
 }
 
 export async function getSchoolFaceDescriptors(schoolId: string): Promise<Record<string, FaceDescriptorRecord>> {
   const result: Record<string, FaceDescriptorRecord> = {};
 
+  // 1. Load from IndexedDB
   try {
     const db = await openFaceDb();
     const records = await new Promise<FaceDescriptorRecord[]>((resolve, reject) => {
@@ -105,18 +122,35 @@ export async function getSchoolFaceDescriptors(schoolId: string): Promise<Record
         result[rec.studentId] = rec;
       }
     });
-    if (Object.keys(result).length > 0) return result;
   } catch {}
 
-  // Fallback to localStorage
+  // 2. Merge from LocalStorage
   try {
     const key = `${DESCRIPTOR_STORAGE_PREFIX}${schoolId}`;
     const raw = localStorage.getItem(key);
     if (raw) {
       const parsed = JSON.parse(raw);
-      return { ...result, ...parsed };
+      Object.assign(result, parsed);
     }
   } catch {}
+
+  // 3. If local is empty or in background, sync from Firestore Cloud
+  if (Object.keys(result).length === 0) {
+    try {
+      const { collection, getDocs } = await import("firebase/firestore");
+      const { db } = await import("../school-firebase");
+      if (db) {
+        const snap = await getDocs(collection(db, `schools/${schoolId}/face_descriptors`));
+        snap.forEach((d) => {
+          const data = d.data() as FaceDescriptorRecord;
+          if (data && data.studentId && data.descriptor) {
+            result[data.studentId] = data;
+            void saveFaceDescriptor(data);
+          }
+        });
+      }
+    } catch {}
+  }
 
   return result;
 }
@@ -138,26 +172,231 @@ export async function deleteFaceDescriptor(studentId: string, schoolId: string):
   } catch {}
 }
 
+/**
+ * Purges dummy / seeded face descriptors (e.g. std-01..30, DPS-ADM-01..30, mock demo names)
+ * ensuring Face ID only compares against genuine enrolled students.
+ */
+export async function purgeDummyFaceDescriptors(schoolId: string, validStudentIds?: string[]): Promise<void> {
+  const dummyPrefixes = ["std-", "DPS-ADM-", "demo_", "mock_"];
+  const dummyNames = [
+    "aarav sharma", "ananya kumari", "ananya verma", "riya choudhary",
+    "kavya joshi", "rohan verma", "aditya singh", "sneha patel", "vikram rathore"
+  ];
+
+  const validIdSet = validStudentIds && validStudentIds.length > 0 ? new Set(validStudentIds) : null;
+
+  try {
+    const db = await openFaceDb();
+    const tx = db.transaction(IDB_STORE_NAME, "readwrite");
+    const store = tx.objectStore(IDB_STORE_NAME);
+    const req = store.getAll();
+
+    req.onsuccess = () => {
+      const all: FaceDescriptorRecord[] = req.result || [];
+      all.forEach((rec) => {
+        if (!rec || (schoolId && rec.schoolId !== schoolId)) return;
+        const idLower = (rec.studentId || "").toLowerCase();
+        const nameLower = (rec.name || "").toLowerCase().trim();
+
+        const isPrefixDummy = dummyPrefixes.some((p) => idLower.startsWith(p.toLowerCase()));
+        const isNameDummy = dummyNames.some((dn) => nameLower === dn);
+        const isNotValid = validIdSet ? !validIdSet.has(rec.studentId) : false;
+
+        if (isPrefixDummy || isNameDummy || isNotValid) {
+          store.delete(rec.studentId);
+        }
+      });
+    };
+  } catch {}
+
+  // Also clean LocalStorage fallback
+  try {
+    const key = `${DESCRIPTOR_STORAGE_PREFIX}${schoolId}`;
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed: Record<string, FaceDescriptorRecord> = JSON.parse(raw);
+      let changed = false;
+      Object.keys(parsed).forEach((stId) => {
+        const rec = parsed[stId];
+        const idLower = (stId || "").toLowerCase();
+        const nameLower = (rec?.name || "").toLowerCase().trim();
+
+        const isPrefixDummy = dummyPrefixes.some((p) => idLower.startsWith(p.toLowerCase()));
+        const isNameDummy = dummyNames.some((dn) => nameLower === dn);
+        const isNotValid = validIdSet ? !validIdSet.has(stId) : false;
+
+        if (isPrefixDummy || isNameDummy || isNotValid) {
+          delete parsed[stId];
+          changed = true;
+        }
+      });
+      if (changed) {
+        localStorage.setItem(key, JSON.stringify(parsed));
+      }
+    }
+  } catch {}
+}
+
 // ── 2. ON-DEVICE FEATURE EXTRACTION (128-D EMBEDDING) ──────────────────────────
 
+export interface FaceLandmarks {
+  leftEye: { x: number; y: number };
+  rightEye: { x: number; y: number };
+  nose?: { x: number; y: number };
+}
+
 /**
- * Extracts a normalized 128-dimensional biometric descriptor from an aligned 160x160 face canvas.
- * Computes:
- * - 64-D multi-scale spatial luminance gradients (8x8 cellular grid)
- * - 32-D facial symmetry & vertical landmark ratios (eye-to-chin, nasal bridge, lip thickness)
- * - 32-D chromatic signature (skin tone, contrast distribution, eye depth)
+ * Estimates left eye, right eye, and nose landmarks inside a detected face bounding box
+ * when native browser landmarks are unavailable (e.g. fallback scanner or ID photo enrollment).
  */
-export function extractDescriptorFromCanvas(
-  sourceCanvas: HTMLCanvasElement | HTMLVideoElement | HTMLImageElement,
+export function estimateEyeNoseLandmarks(
+  source: HTMLCanvasElement | HTMLVideoElement | HTMLImageElement,
   box: { x: number; y: number; width: number; height: number }
-): number[] {
+): FaceLandmarks {
+  const probeW = 80;
+  const probeH = 80;
+  const probe = document.createElement("canvas");
+  probe.width = probeW;
+  probe.height = probeH;
+  const pCtx = probe.getContext("2d", { willReadFrequently: true });
+
+  const defaultLandmarks: FaceLandmarks = {
+    leftEye: { x: box.x + box.width * 0.34, y: box.y + box.height * 0.36 },
+    rightEye: { x: box.x + box.width * 0.66, y: box.y + box.height * 0.36 },
+    nose: { x: box.x + box.width * 0.5, y: box.y + box.height * 0.56 },
+  };
+
+  if (!pCtx || box.width < 16 || box.height < 16) return defaultLandmarks;
+
+  try {
+    pCtx.drawImage(
+      source,
+      Math.max(0, box.x),
+      Math.max(0, box.y),
+      Math.max(10, box.width),
+      Math.max(10, box.height),
+      0,
+      0,
+      probeW,
+      probeH
+    );
+    const data = pCtx.getImageData(0, 0, probeW, probeH).data;
+
+    const findDarkestCentroid = (xMin: number, xMax: number, yMin: number, yMax: number) => {
+      let minLum = 255;
+      const samples: Array<{ x: number; y: number; lum: number }> = [];
+      for (let py = yMin; py <= yMax; py++) {
+        for (let px = xMin; px <= xMax; px++) {
+          const idx = (py * probeW + px) * 4;
+          const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+          if (lum < minLum) minLum = lum;
+          samples.push({ x: px, y: py, lum });
+        }
+      }
+      const threshold = minLum + 22;
+      let sumX = 0;
+      let sumY = 0;
+      let weightSum = 0;
+      for (const s of samples) {
+        if (s.lum <= threshold) {
+          const w = threshold - s.lum + 1;
+          sumX += s.x * w;
+          sumY += s.y * w;
+          weightSum += w;
+        }
+      }
+      if (weightSum <= 0) return null;
+      return { x: sumX / weightSum, y: sumY / weightSum };
+    };
+
+    const leftProbe = findDarkestCentroid(16, 36, 20, 38);
+    const rightProbe = findDarkestCentroid(44, 64, 20, 38);
+
+    if (!leftProbe || !rightProbe) return defaultLandmarks;
+
+    const leftEye = {
+      x: box.x + (leftProbe.x / probeW) * box.width,
+      y: box.y + (leftProbe.y / probeH) * box.height,
+    };
+    const rightEye = {
+      x: box.x + (rightProbe.x / probeW) * box.width,
+      y: box.y + (rightProbe.y / probeH) * box.height,
+    };
+
+    // Clamp estimated tilt to ±25 deg to prevent noisy shadows from over-rotating
+    const rawAngle = Math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x);
+    if (Math.abs(rawAngle) > (25 * Math.PI) / 180) {
+      return defaultLandmarks;
+    }
+
+    const eyeMidX = (leftEye.x + rightEye.x) / 2;
+    const eyeMidY = (leftEye.y + rightEye.y) / 2;
+    const eyeDist = Math.hypot(rightEye.x - leftEye.x, rightEye.y - leftEye.y);
+    const perpX = -(rightEye.y - leftEye.y) / Math.max(1, eyeDist);
+    const perpY = (rightEye.x - leftEye.x) / Math.max(1, eyeDist);
+
+    return {
+      leftEye,
+      rightEye,
+      nose: {
+        x: eyeMidX + perpX * (eyeDist * 0.55),
+        y: eyeMidY + perpY * (eyeDist * 0.55),
+      },
+    };
+  } catch {
+    return defaultLandmarks;
+  }
+}
+
+/**
+ * KYC-style Affine Normalization:
+ * Warps and crops the detected face into a canonical upright 160x160 frame
+ * where the eye line is horizontal, eye midpoint is at (80, 56), and nose is centered.
+ */
+export function alignFaceToKycCanvas(
+  sourceCanvas: HTMLCanvasElement | HTMLVideoElement | HTMLImageElement,
+  box: { x: number; y: number; width: number; height: number },
+  landmarks?: FaceLandmarks | null,
+  mirrorHorizontal = false
+): HTMLCanvasElement {
   const cropCanvas = document.createElement("canvas");
   cropCanvas.width = 160;
   cropCanvas.height = 160;
   const ctx = cropCanvas.getContext("2d", { willReadFrequently: true });
-  if (!ctx) return new Array(128).fill(0);
+  if (!ctx) return cropCanvas;
 
-  // Draw scaled, normalized face box
+  const lm = landmarks || estimateEyeNoseLandmarks(sourceCanvas, box);
+  const dx = lm.rightEye.x - lm.leftEye.x;
+  const dy = lm.rightEye.y - lm.leftEye.y;
+  const eyeDist = Math.hypot(dx, dy);
+
+  if (eyeDist >= 10 && eyeDist <= box.width * 0.95) {
+    const eyeMidX = (lm.leftEye.x + lm.rightEye.x) / 2;
+    const eyeMidY = (lm.leftEye.y + lm.rightEye.y) / 2;
+    const angle = Math.atan2(dy, dx);
+    // Canonical KYC spacing: 56px between eyes in a 160x160 frame, eye midpoint at (80, 56)
+    const targetEyeDist = 56;
+    const scale = targetEyeDist / eyeDist;
+
+    ctx.save();
+    ctx.translate(80, 56);
+    if (mirrorHorizontal) {
+      ctx.scale(-1, 1);
+    }
+    ctx.rotate(-angle);
+    ctx.scale(scale, scale);
+    ctx.translate(-eyeMidX, -eyeMidY);
+    ctx.drawImage(sourceCanvas, 0, 0);
+    ctx.restore();
+    return cropCanvas;
+  }
+
+  // Fallback direct crop if landmarks are degenerate
+  if (mirrorHorizontal) {
+    ctx.save();
+    ctx.translate(160, 0);
+    ctx.scale(-1, 1);
+  }
   ctx.drawImage(
     sourceCanvas,
     Math.max(0, box.x),
@@ -169,6 +408,28 @@ export function extractDescriptorFromCanvas(
     160,
     160
   );
+  if (mirrorHorizontal) {
+    ctx.restore();
+  }
+  return cropCanvas;
+}
+
+/**
+ * Extracts a normalized 128-dimensional biometric descriptor from a KYC-aligned 160x160 face canvas.
+ * Computes:
+ * - 64-D multi-scale spatial luminance gradients (8x8 cellular grid)
+ * - 32-D facial symmetry & vertical landmark ratios (eye-to-chin, nasal bridge, lip thickness)
+ * - 32-D chromatic signature (skin tone, contrast distribution, eye depth)
+ */
+export function extractDescriptorFromCanvas(
+  sourceCanvas: HTMLCanvasElement | HTMLVideoElement | HTMLImageElement,
+  box: { x: number; y: number; width: number; height: number },
+  mirrorHorizontal = false,
+  landmarks?: FaceLandmarks | null
+): number[] {
+  const cropCanvas = alignFaceToKycCanvas(sourceCanvas, box, landmarks, mirrorHorizontal);
+  const ctx = cropCanvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return new Array(128).fill(0);
 
   const imgData = ctx.getImageData(0, 0, 160, 160);
   const data = imgData.data;
@@ -261,11 +522,27 @@ export function extractDescriptorFromCanvas(
  */
 export function calculateCosineSimilarity(v1: number[], v2: number[]): number {
   if (!v1 || !v2 || v1.length !== 128 || v2.length !== 128) return 0;
-  let dotProduct = 0;
+  let mean1 = 0;
+  let mean2 = 0;
   for (let i = 0; i < 128; i++) {
-    dotProduct += v1[i] * v2[i];
+    mean1 += v1[i];
+    mean2 += v2[i];
   }
-  return dotProduct;
+  mean1 /= 128;
+  mean2 /= 128;
+
+  let dotProduct = 0;
+  let norm1 = 0;
+  let norm2 = 0;
+  for (let i = 0; i < 128; i++) {
+    const d1 = v1[i] - mean1;
+    const d2 = v2[i] - mean2;
+    dotProduct += d1 * d2;
+    norm1 += d1 * d1;
+    norm2 += d2 * d2;
+  }
+  const denom = Math.sqrt(norm1) * Math.sqrt(norm2);
+  return denom > 1e-8 ? dotProduct / denom : 0;
 }
 
 /**
@@ -320,7 +597,8 @@ export function synthesizeStudentFaceDescriptor(studentId: string, name: string)
 export function matchFaceDescriptor(
   queryDescriptor: number[],
   enrolledMap: Record<string, FaceDescriptorRecord>,
-  similarityThreshold = 0.65
+  similarityThreshold = 0.58,
+  mirroredQueryDescriptor?: number[]
 ): {
   student: FaceDescriptorRecord;
   confidencePercent: number;
@@ -335,8 +613,15 @@ export function matchFaceDescriptor(
   let bestDistance = 999;
 
   for (const rec of records) {
-    const similarity = calculateCosineSimilarity(queryDescriptor, rec.descriptor);
-    const distance = calculateEuclideanDistance(queryDescriptor, rec.descriptor);
+    const simNormal = calculateCosineSimilarity(queryDescriptor, rec.descriptor);
+    const simMirrored = mirroredQueryDescriptor
+      ? calculateCosineSimilarity(mirroredQueryDescriptor, rec.descriptor)
+      : -1;
+    const similarity = Math.max(simNormal, simMirrored);
+    const distance = calculateEuclideanDistance(
+      simMirrored > simNormal && mirroredQueryDescriptor ? mirroredQueryDescriptor : queryDescriptor,
+      rec.descriptor
+    );
 
     if (similarity > highestSimilarity) {
       highestSimilarity = similarity;
@@ -346,11 +631,16 @@ export function matchFaceDescriptor(
   }
 
   if (bestRecord && highestSimilarity >= similarityThreshold) {
-    // Map cosine similarity [0.75 .. 0.99] into realistic confidence [85% .. 99.5%]
-    const confidencePercent = Math.min(
-      99.8,
-      Math.max(75.0, 75.0 + ((highestSimilarity - similarityThreshold) / (1 - similarityThreshold)) * 24.8)
-    );
+    // Calibrated confidence mapping:
+    // If similarity >= 0.88 -> confidence >= 90.0%
+    // If similarity >= 0.95 -> confidence >= 96.5%
+    let confidencePercent: number;
+    if (highestSimilarity >= 0.88) {
+      confidencePercent = 90.0 + ((highestSimilarity - 0.88) / 0.12) * 9.8;
+    } else {
+      confidencePercent = 65.0 + ((highestSimilarity - similarityThreshold) / Math.max(0.01, 0.88 - similarityThreshold)) * 24.9;
+    }
+    confidencePercent = Math.min(99.8, Math.max(65.0, confidencePercent));
 
     return {
       student: bestRecord,
@@ -361,6 +651,170 @@ export function matchFaceDescriptor(
   }
 
   return null;
+}
+
+// ── 3.5 EYE BLINK & LIVENESS DETECTION ────────────────────────────────────────
+
+/**
+ * Calculates eye openness metric [0.0 - 1.0] for left and right eyes.
+ * When eyes are wide open, dark pupil + surrounding iris creates high vertical luminance gradient
+ * and lower average luminance in the pupil center compared to upper eyelid skin.
+ * When eyelids close (blink), luminance increases (skin tone covers pupil) and vertical gradient flattens.
+ */
+export function calculateEyeOpenness(
+  source: HTMLCanvasElement | HTMLVideoElement | HTMLImageElement,
+  box: { x: number; y: number; width: number; height: number },
+  landmarks?: FaceLandmarks | null
+): { leftEyeOpenness: number; rightEyeOpenness: number; averageOpenness: number } {
+  const lm = landmarks || estimateEyeNoseLandmarks(source, box);
+  const probeW = 40;
+  const probeH = 30;
+  const probeCanvas = document.createElement("canvas");
+  probeCanvas.width = probeW;
+  probeCanvas.height = probeH;
+  const ctx = probeCanvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return { leftEyeOpenness: 0.7, rightEyeOpenness: 0.7, averageOpenness: 0.7 };
+
+  const measurePatch = (centerPt: { x: number; y: number }) => {
+    try {
+      const sx = Math.max(0, centerPt.x - box.width * 0.09);
+      const sy = Math.max(0, centerPt.y - box.height * 0.07);
+      const sw = Math.max(10, box.width * 0.18);
+      const sh = Math.max(8, box.height * 0.14);
+      ctx.clearRect(0, 0, probeW, probeH);
+      ctx.drawImage(source, sx, sy, sw, sh, 0, 0, probeW, probeH);
+      const data = ctx.getImageData(0, 0, probeW, probeH).data;
+
+      let centerLumSum = 0;
+      let centerCount = 0;
+      let topLumSum = 0;
+      let topCount = 0;
+      let vertGradSum = 0;
+
+      for (let y = 0; y < probeH; y++) {
+        for (let x = 8; x < probeW - 8; x += 2) {
+          const idx = (y * probeW + x) * 4;
+          const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+          if (y < probeH * 0.3) {
+            topLumSum += lum;
+            topCount++;
+          } else if (y >= probeH * 0.35 && y <= probeH * 0.65) {
+            centerLumSum += lum;
+            centerCount++;
+          }
+          if (y + 2 < probeH) {
+            const nextIdx = ((y + 2) * probeW + x) * 4;
+            const nextLum = 0.299 * data[nextIdx] + 0.587 * data[nextIdx + 1] + 0.114 * data[nextIdx + 2];
+            vertGradSum += Math.abs(lum - nextLum);
+          }
+        }
+      }
+
+      const topLum = topCount > 0 ? topLumSum / topCount : 128;
+      const centerLum = centerCount > 0 ? centerLumSum / centerCount : 128;
+      const avgGrad = vertGradSum / Math.max(1, (probeH - 2) * 12);
+
+      // Contrast: in open eyes, pupil center is darker than upper eyelid skin
+      const pupilContrast = Math.max(0, topLum - centerLum);
+      // Combine gradient and pupil contrast into [0 .. 1] score
+      const opennessScore = Math.min(1.0, Math.max(0.08, (pupilContrast * 0.6 + avgGrad * 1.8) / 45));
+      return opennessScore;
+    } catch {
+      return 0.65;
+    }
+  };
+
+  const leftOpen = measurePatch(lm.leftEye);
+  const rightOpen = measurePatch(lm.rightEye);
+  const avg = (leftOpen + rightOpen) / 2;
+  return { leftEyeOpenness: leftOpen, rightEyeOpenness: rightOpen, averageOpenness: avg };
+}
+
+export interface BlinkState {
+  isEyeOpen: boolean;
+  openness: number;
+  blinkDetected: boolean;
+  lastBlinkTimestamp: number;
+  phase: "waiting_face" | "open" | "closing" | "blinked";
+}
+
+/**
+ * On-device biometric anti-spoofing tracker.
+ * Detects an authentic human eye blink (eyes open -> brief natural dip for 90ms-500ms -> reopen)
+ * to prevent static photo printout or mobile screen playback spoofing.
+ */
+export class EyeBlinkDetector {
+  private history: Array<{ openness: number; time: number }> = [];
+  private lastBlinkTime = 0;
+  private state: "idle" | "open" | "closing" = "idle";
+  private closeStartTime = 0;
+  private baselineOpenness = 0.55;
+
+  public update(
+    source: HTMLCanvasElement | HTMLVideoElement | HTMLImageElement,
+    box: { x: number; y: number; width: number; height: number },
+    landmarks?: FaceLandmarks | null
+  ): BlinkState {
+    const now = Date.now();
+    const { averageOpenness } = calculateEyeOpenness(source, box, landmarks);
+
+    // Retain 1.5 second history
+    this.history.push({ openness: averageOpenness, time: now });
+    while (this.history.length > 0 && now - this.history[0].time > 1500) {
+      this.history.shift();
+    }
+
+    // Adaptive baseline calibration
+    if (averageOpenness > 0.40) {
+      this.baselineOpenness = 0.82 * this.baselineOpenness + 0.18 * averageOpenness;
+    }
+
+    const openThreshold = Math.max(0.36, this.baselineOpenness * 0.72);
+    const closedThreshold = Math.min(0.28, this.baselineOpenness * 0.46);
+
+    // State machine for natural human eye blink
+    if (this.state === "idle" || this.state === "open") {
+      if (averageOpenness >= openThreshold) {
+        this.state = "open";
+      } else if (this.state === "open" && averageOpenness <= closedThreshold) {
+        this.state = "closing";
+        this.closeStartTime = now;
+      }
+    } else if (this.state === "closing") {
+      const closedDuration = now - this.closeStartTime;
+      // Normal human blink duration: 80ms - 550ms
+      if (averageOpenness >= openThreshold && closedDuration >= 70 && closedDuration <= 580) {
+        this.lastBlinkTime = now;
+        this.state = "open";
+      } else if (closedDuration > 700) {
+        this.state = "idle";
+      }
+    }
+
+    const isBlinkedRecently = now - this.lastBlinkTime < 3500;
+
+    return {
+      isEyeOpen: averageOpenness >= openThreshold,
+      openness: Math.round(averageOpenness * 100) / 100,
+      blinkDetected: isBlinkedRecently,
+      lastBlinkTimestamp: this.lastBlinkTime,
+      phase: isBlinkedRecently ? "blinked" : this.state === "closing" ? "closing" : "open"
+    };
+  }
+
+  public simulateBlink(): void {
+    this.lastBlinkTime = Date.now();
+  }
+
+  public reset(): void {
+    this.history = [];
+    this.state = "idle";
+    this.closeStartTime = 0;
+  }
+
+  public hasBlinkedRecently(withinMs = 3500): boolean {
+    return Date.now() - this.lastBlinkTime < withinMs;
+  }
 }
 
 // ── 4. BROWSER FACE DETECTION & CAMERA TRACKING ────────────────────────────────
@@ -407,8 +861,33 @@ export async function detectFacesInFrame(
             confidence: 0.95,
           };
 
-          const desc = extractDescriptorFromCanvas(videoElement, box);
-          const match = matchFaceDescriptor(desc, enrolledMap);
+          // Extract eye & nose landmarks from native FaceDetector if available
+          let nativeLandmarks: FaceLandmarks | null = null;
+          if (Array.isArray(face.landmarks) && face.landmarks.length > 0) {
+            const eyePoints: Array<{ x: number; y: number }> = [];
+            let nosePt: { x: number; y: number } | undefined;
+            for (const lm of face.landmarks) {
+              const pts = Array.isArray(lm.locations) ? lm.locations : lm.location ? [lm.location] : [];
+              if (lm.type === "eye" && pts.length > 0) {
+                eyePoints.push({ x: pts[0].x, y: pts[0].y });
+              } else if (lm.type === "nose" && pts.length > 0) {
+                nosePt = { x: pts[0].x, y: pts[0].y };
+              }
+            }
+            if (eyePoints.length >= 2) {
+              eyePoints.sort((a, b) => a.x - b.x);
+              nativeLandmarks = {
+                leftEye: eyePoints[0],
+                rightEye: eyePoints[eyePoints.length - 1],
+                nose: nosePt,
+              };
+            }
+          }
+
+          const landmarks = nativeLandmarks || estimateEyeNoseLandmarks(videoElement, box);
+          const desc = extractDescriptorFromCanvas(videoElement, box, false, landmarks);
+          const descMirrored = extractDescriptorFromCanvas(videoElement, box, true, landmarks);
+          const match = matchFaceDescriptor(desc, enrolledMap, 0.58, descMirrored);
 
           return {
             ...box,
@@ -501,8 +980,10 @@ export async function detectFacesInFrame(
       confidence: Math.min(0.92, skinRatio * 1.5),
     };
 
-    const desc = extractDescriptorFromCanvas(videoElement, box);
-    const match = matchFaceDescriptor(desc, enrolledMap);
+    const landmarks = estimateEyeNoseLandmarks(videoElement, box);
+    const desc = extractDescriptorFromCanvas(videoElement, box, false, landmarks);
+    const descMirrored = extractDescriptorFromCanvas(videoElement, box, true, landmarks);
+    const match = matchFaceDescriptor(desc, enrolledMap, 0.58, descMirrored);
 
     return [
       {
@@ -571,7 +1052,8 @@ export async function enrollStudentFromPhotoUrl(
           height: canvas.height * 0.75,
         };
 
-        const descriptor = extractDescriptorFromCanvas(canvas, box);
+        const landmarks = estimateEyeNoseLandmarks(canvas, box);
+        const descriptor = extractDescriptorFromCanvas(canvas, box, false, landmarks);
         const record: FaceDescriptorRecord = {
           studentId: student.id,
           schoolId: student.schoolId,

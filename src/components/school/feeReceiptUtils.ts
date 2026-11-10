@@ -914,8 +914,8 @@ export function generateDpsReceiptHtml(
     </div>
     ` : (data.earlyDiscount && data.earlyDiscount > 0) || totalConcession > 0 ? `
     <div class="dps-early-bird-strip" style="background:#ecfdf5;border:1px solid #10b981;border-radius:4px;padding:3px 8px;margin:2px 0 3px 0;display:flex;align-items:center;justify-content:space-between;font-size:9.5px;color:#065f46;font-weight:700;">
-      <span>✓ <strong>5% अर्ली बर्ड छूट स्वीकृत (बचत: ₹${(data.earlyDiscount || totalConcession).toLocaleString("en-IN")})</strong> • 10 तारीख के पहले पूर्ण भुगतान</span>
-      <span style="background:#059669;color:#ffffff;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:800;white-space:nowrap;">5% OFF APPLIED</span>
+      <span>✓ <strong>${data.items.some(it => /sibling|भाई-बहन|नि:शुल्क|free/i.test(it.description)) ? "भाई-बहन रियायत / नि:शुल्क शिक्षा स्वीकृत" : "5% अर्ली बर्ड छूट स्वीकृत"} (बचत: ₹${(data.earlyDiscount || totalConcession).toLocaleString("en-IN")})</strong> • विशेष छूट</span>
+      <span style="background:#059669;color:#ffffff;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:800;white-space:nowrap;">${data.items.some(it => /sibling|भाई-बहन|नि:शुल्क|free/i.test(it.description)) ? "SIBLING CONCESSION" : "5% OFF APPLIED"}</span>
     </div>
     ` : ""}
 
@@ -3118,7 +3118,7 @@ export function generatePosSlipHtml(
       </div>
       ` : (data.earlyDiscount && data.earlyDiscount > 0) || totalConcession > 0 ? `
       <div style="text-align:center;font-size:8.5px;font-weight:900;border:1px solid #10b981;padding:1mm;margin:1mm 0;background:#ecfdf5;color:#065f46;">
-        ✓ 5% अर्ली बर्ड छूट स्वीकृत (-₹${(data.earlyDiscount || totalConcession).toLocaleString("en-IN")})
+        ✓ ${data.items.some(it => /sibling|भाई-बहन|नि:शुल्क|free/i.test(it.description)) ? "भाई-बहन रियायत / नि:शुल्क शिक्षा" : "5% अर्ली बर्ड छूट"} स्वीकृत (-₹${(data.earlyDiscount || totalConcession).toLocaleString("en-IN")})
       </div>
       ` : ""}
 

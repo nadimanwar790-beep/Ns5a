@@ -2089,6 +2089,7 @@ export const markStudentQrAttendance = async (params: {
   markedBy?: string;
   scanMode?: "auto" | "in" | "out";
   cutoffTime?: string; // e.g. "08:30"
+  prayerTime?: string; // e.g. "09:00"
 }): Promise<{
   success: boolean;
   message: string;
@@ -2109,6 +2110,12 @@ export const markStudentQrAttendance = async (params: {
     const studentsMap = existing?.students ? { ...existing.students } : {};
     const existingEntry = studentsMap[params.studentId];
 
+    // Determine school routine cutoff (Prayer + 60 minutes)
+    // Example: Prayer at 09:00 AM -> Morning IN window stays active until 10:00 AM
+    const [pHour, pMin] = (params.prayerTime || "09:00").split(":").map(Number);
+    const inCutoffMinutes = (isNaN(pHour) ? 9 : pHour) * 60 + (isNaN(pMin) ? 0 : pMin) + 60; // 600 mins = 10:00 AM
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+
     // Determine if this is an ENTRY (in) or an EXIT (out) punch
     let action: "in" | "out" = "in";
     if (params.scanMode === "out") {
@@ -2116,8 +2123,50 @@ export const markStudentQrAttendance = async (params: {
     } else if (params.scanMode === "in") {
       action = "in";
     } else {
-      // Auto Mode: If student has no inTime today, punch IN. If already has inTime, punch OUT!
-      action = existingEntry?.inTime ? "out" : "in";
+      // Auto Routine:
+      // Morning up to prayer cutoff -> strictly IN punch (never toggle to OUT in morning)
+      // After prayer cutoff (10:00 AM onwards) -> OUT punch
+      if (nowMinutes <= inCutoffMinutes) {
+        action = "in";
+      } else {
+        action = "out";
+      }
+    }
+
+    // ── SAFE ATTENDANCE CHECK: "FIRST IN, LOCK FOREVER" RULE ──
+    if (action === "in") {
+      // If student already has an arrival inTime today, NEVER rewrite or overwrite it!
+      if (existingEntry?.inTime) {
+        console.log(`[SafeAttendance] ${params.studentName || params.studentId} ka IN pehle se darj hai (${existingEntry.inTime}). Rewrite ignored!`);
+        return {
+          success: true,
+          action: "in",
+          inTime: existingEntry.inTime,
+          outTime: existingEntry.outTime,
+          stayDuration: existingEntry.stayDuration,
+          isLate: existingEntry.status === "late",
+          alreadyMarked: true,
+          message: `${params.studentName || 'छात्र'} का आगमन समय पहले से दर्ज है (${existingEntry.inTime})।`,
+          record: existing
+        };
+      }
+    } else {
+      // action === "out"
+      // If student already has an outTime today, NEVER rewrite it on repeated passes
+      if (existingEntry?.outTime) {
+        console.log(`[SafeAttendance] ${params.studentName || params.studentId} ka OUT pehle se lag chuka hai (${existingEntry.outTime}).`);
+        return {
+          success: true,
+          action: "out",
+          inTime: existingEntry.inTime,
+          outTime: existingEntry.outTime,
+          stayDuration: existingEntry.stayDuration,
+          isLate: existingEntry.status === "late",
+          alreadyMarked: true,
+          message: `${params.studentName || 'छात्र'} का प्रस्थान समय पहले से दर्ज है (${existingEntry.outTime})।`,
+          record: existing
+        };
+      }
     }
 
     let inTime = existingEntry?.inTime;
@@ -2193,7 +2242,7 @@ export const markStudentQrAttendance = async (params: {
       outTime,
       stayDuration,
       isLate,
-      alreadyMarked: !!existingEntry?.inTime,
+      alreadyMarked: false,
       message,
       record
     };

@@ -9,13 +9,15 @@ import {
   CheckCircle, XCircle, Download, Calendar, Users, ChevronLeft, ChevronRight,
   Camera, QrCode, Phone, PhoneCall, Bell, Send, AlertTriangle, AlertCircle,
   CheckCircle2, MessageCircle, ShieldAlert, Sparkles, PhoneOutgoing, Loader2,
-  Cake, Gift, Heart
+  Cake, Gift, Heart, Wifi, WifiOff, Cloud, CloudOff, RefreshCw
 } from "lucide-react";
+import { speakNotification } from "../../utils/voiceNotifyEngine";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 import { QrAttendanceScannerModal } from "./QrAttendanceScannerModal";
 import { ClassQrCodeModal } from "./ClassQrCodeModal";
 import { StudentQuickActionModal } from "./StudentQuickActionModal";
 import { FaceAttendanceKioskModal } from "./FaceAttendanceKioskModal";
+import { UniversalFaceIdStudioModal } from "./UniversalFaceIdStudioModal";
 
 interface Props {
   schoolId: string;
@@ -37,6 +39,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
   const [selectedMonth, setSelectedMonth] = useState(currentMonthStr());
   const [loading, setLoading] = useState(true);
   const [showFaceKiosk, setShowFaceKiosk] = useState(false);
+  const [showFaceStudio, setShowFaceStudio] = useState(false);
   const [showQrScanner, setShowQrScanner] = useState(false);
   const [selectedStudentForModal, setSelectedStudentForModal] = useState<SchoolStudent | null>(null);
   const [modalInitialTab, setModalInitialTab] = useState<"id_card" | "fees" | "attendance">("attendance");
@@ -55,6 +58,97 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
       return {};
     }
   });
+
+  // ── Offline Attendance Queue & Network State ─────────────────────────────
+  const [isOnline, setIsOnline] = useState<boolean>(() => typeof navigator !== "undefined" ? navigator.onLine : true);
+  const QUEUE_KEY = `nst_offline_attendance_queue_${schoolId}`;
+  const [offlineQueue, setOfflineQueue] = useState<any[]>(() => {
+    try {
+      const raw = localStorage.getItem(`nst_offline_attendance_queue_${schoolId}`);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [offlineAlertMsg, setOfflineAlertMsg] = useState<string | null>(null);
+  const [isSyncingQueue, setIsSyncingQueue] = useState<boolean>(false);
+
+  const getStoredQueue = useCallback((): any[] => {
+    try {
+      const raw = localStorage.getItem(QUEUE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  }, [QUEUE_KEY]);
+
+  const enqueueOfflineRecord = useCallback((record: AttendanceRecord) => {
+    const queue = getStoredQueue();
+    const id = `${record.classId}_${record.date}`;
+    const next = [
+      { id, date: record.date, classId: record.classId, className, record, timestamp: new Date().toISOString() },
+      ...queue.filter((q: any) => q.id !== id)
+    ];
+    try {
+      localStorage.setItem(QUEUE_KEY, JSON.stringify(next));
+    } catch {}
+    setOfflineQueue(next);
+  }, [QUEUE_KEY, className, getStoredQueue]);
+
+  const syncOfflineQueue = useCallback(async () => {
+    const queue = getStoredQueue();
+    if (queue.length === 0) return;
+    setIsSyncingQueue(true);
+    let synced = 0;
+    const remaining: any[] = [];
+
+    for (const item of queue) {
+      try {
+        await saveAttendance(item.record);
+        synced++;
+      } catch (e) {
+        remaining.push(item);
+      }
+    }
+
+    try {
+      localStorage.setItem(QUEUE_KEY, JSON.stringify(remaining));
+    } catch {}
+    setOfflineQueue(remaining);
+    setIsSyncingQueue(false);
+
+    if (synced > 0) {
+      setOfflineAlertMsg(`☁️ बैकग्राउंड सिंक पूर्ण: ${synced} ऑफलाइन हाजिरी रिकॉर्ड्स क्लाउड पर सफलतापूर्वक सिंक हो गए!`);
+      speakNotification("अटेंडेंस सिंक पूर्ण", `${synced} हाजिरी रिकॉर्ड क्लाउड पर सिंक हो गए।`);
+      setTimeout(() => setOfflineAlertMsg(null), 4500);
+    }
+  }, [QUEUE_KEY, getStoredQueue]);
+
+  // Network listener & auto-sync every 20s
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      syncOfflineQueue();
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+    };
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    const interval = setInterval(() => {
+      if (typeof navigator !== "undefined" && navigator.onLine && getStoredQueue().length > 0) {
+        syncOfflineQueue();
+      }
+    }, 20000);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+      clearInterval(interval);
+    };
+  }, [syncOfflineQueue, getStoredQueue]);
 
   // Birthday Detection for No-Punishment Policy & Greetings
   const birthdayStudentsInClass = React.useMemo(() => {
@@ -199,10 +293,39 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
       students: studentsMap,
       createdAt: new Date().toISOString()
     };
-    await saveAttendance(record);
+
+    let cloudSynced = false;
+    const isCurrentlyOnline = typeof navigator !== "undefined" ? navigator.onLine : true;
+
+    if (isCurrentlyOnline) {
+      try {
+        await Promise.race([
+          saveAttendance(record),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("Network timeout")), 2500))
+        ]);
+        cloudSynced = true;
+      } catch (err) {
+        console.warn("[Attendance] Cloud sync slow or failed, fallback to offline queue:", err);
+      }
+    }
+
+    if (!cloudSynced) {
+      // Enqueue for offline sync
+      enqueueOfflineRecord(record);
+      const prs = Object.values(studentsMap).filter(st => st.present).length;
+      setOfflineAlertMsg(
+        `📶 हाजिरी फोन में सुरक्षित सेव हो गई है (${prs} उपस्थित)। इंटरनेट कमजोर या बंद होने के कारण यह ऑफलाइन सुरक्षित है, नेटवर्क आते ही अपने आप क्लाउड पर सिंक हो जाएगी।`
+      );
+      speakNotification(
+        "हाजिरी ऑफलाइन सेव",
+        "कमजोर नेटवर्क के कारण हाजिरी डिवाइस में सुरक्षित सेव हो गई है। इंटरनेट आने पर स्वतः सिंक होगी।"
+      );
+    } else {
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    }
+
     setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
   };
 
   const presentCount = Object.values(attendance).filter(Boolean).length;
@@ -364,22 +487,69 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
       {/* Header */}
-      <div className="bg-white dark:bg-slate-800 border-b dark:border-slate-700 px-4 py-3 flex items-center gap-3">
-        {onBack && <button onClick={onBack} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700"><ChevronLeft className="w-5 h-5" /></button>}
-        <div className="flex-1">
-          <h2 className="font-bold text-slate-800 dark:text-white">{className} — Attendance</h2>
-          <p className="text-xs text-slate-500">{students.length} students</p>
+      <div className="bg-white dark:bg-slate-800 border-b dark:border-slate-700 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          {onBack && <button onClick={onBack} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer"><ChevronLeft className="w-5 h-5" /></button>}
+          <div>
+            <h2 className="font-bold text-slate-800 dark:text-white">{className} — Attendance</h2>
+            <div className="flex items-center gap-2 mt-0.5">
+              <span className="text-xs text-slate-500">{students.length} छात्र</span>
+              <span className="text-slate-300 dark:text-slate-600">•</span>
+              {isOnline ? (
+                <span className="flex items-center gap-1 text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  ऑनलाइन (क्लाउड सिंक)
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-[11px] font-bold text-amber-600 dark:text-amber-400">
+                  <WifiOff className="w-3 h-3 text-amber-500" />
+                  ऑफलाइन मोड (लोकल सुरक्षित)
+                </span>
+              )}
+            </div>
+          </div>
         </div>
-        <div className="flex gap-1.5 overflow-x-auto">
-          <button onClick={() => setViewMode("mark")} className={`px-2.5 py-1.5 rounded-lg text-xs sm:text-sm font-bold whitespace-nowrap transition-colors ${viewMode === "mark" ? "bg-blue-600 text-white" : "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"}`}>Mark (दैनिक)</button>
-          <button onClick={() => setViewMode("absentee")} className={`px-2.5 py-1.5 rounded-lg text-xs sm:text-sm font-bold whitespace-nowrap transition-colors flex items-center gap-1.5 ${viewMode === "absentee" ? "bg-rose-600 text-white shadow-md shadow-rose-600/30" : "bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800"}`}>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          {offlineQueue.length > 0 && (
+            <button
+              type="button"
+              onClick={syncOfflineQueue}
+              disabled={isSyncingQueue}
+              className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-sm transition active:scale-95 cursor-pointer animate-pulse"
+              title="पेंडिंग हाजिरी क्लाउड पर सिंक करें"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncingQueue ? "animate-spin" : ""}`} />
+              <span>{isSyncingQueue ? "सिंक हो रहा है..." : `☁️ ${offlineQueue.length} पेंडिंग सिंक करें`}</span>
+            </button>
+          )}
+
+          <button onClick={() => setViewMode("mark")} className={`px-2.5 py-1.5 rounded-lg text-xs sm:text-sm font-bold whitespace-nowrap transition-colors cursor-pointer ${viewMode === "mark" ? "bg-blue-600 text-white" : "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"}`}>Mark (दैनिक)</button>
+          <button onClick={() => setViewMode("absentee")} className={`px-2.5 py-1.5 rounded-lg text-xs sm:text-sm font-bold whitespace-nowrap transition-colors cursor-pointer flex items-center gap-1.5 ${viewMode === "absentee" ? "bg-rose-600 text-white shadow-md shadow-rose-600/30" : "bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800"}`}>
             <AlertCircle className="w-3.5 h-3.5" />
             <span>🚨 Absenty Action Center ({absentStudents.length})</span>
           </button>
-          <button onClick={() => setViewMode("report")} className={`px-2.5 py-1.5 rounded-lg text-xs sm:text-sm font-bold whitespace-nowrap transition-colors ${viewMode === "report" ? "bg-blue-600 text-white" : "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"}`}>Report</button>
-          <button onClick={() => setViewMode("matrix")} className={`px-2.5 py-1.5 rounded-lg text-xs sm:text-sm font-bold whitespace-nowrap transition-colors ${viewMode === "matrix" ? "bg-indigo-600 text-white" : "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"}`}>📅 31-Day Matrix</button>
+          <button onClick={() => setViewMode("report")} className={`px-2.5 py-1.5 rounded-lg text-xs sm:text-sm font-bold whitespace-nowrap transition-colors cursor-pointer ${viewMode === "report" ? "bg-blue-600 text-white" : "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"}`}>Report</button>
+          <button onClick={() => setViewMode("matrix")} className={`px-2.5 py-1.5 rounded-lg text-xs sm:text-sm font-bold whitespace-nowrap transition-colors cursor-pointer ${viewMode === "matrix" ? "bg-indigo-600 text-white" : "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"}`}>📅 31-Day Matrix</button>
         </div>
       </div>
+
+      {offlineAlertMsg && (
+        <div className="max-w-2xl mx-auto px-4 pt-3">
+          <div className="p-3 bg-amber-500/15 border border-amber-500/40 text-amber-900 dark:text-amber-200 text-xs font-bold rounded-xl flex items-center justify-between gap-2 shadow-sm animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <CloudOff className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+              <span>{offlineAlertMsg}</span>
+            </div>
+            <button
+              onClick={() => setOfflineAlertMsg(null)}
+              className="p-1 hover:bg-amber-500/20 rounded text-slate-500 cursor-pointer"
+            >
+              <XCircle className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {viewMode === "mark" ? (
         <div className="p-4 space-y-4 max-w-2xl mx-auto">
@@ -511,31 +681,40 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
             </div>
           )}
 
-          {/* Smart Attendance Actions: AI Face Kiosk, Camera QR, and Class QR */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          {/* Smart Attendance Actions: AI Face Kiosk, Live Face Studio, Camera QR, and Class QR */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             <button
               type="button"
               onClick={() => setShowFaceKiosk(true)}
-              className="py-2.5 px-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-95 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/20 transition cursor-pointer"
+              className="py-2.5 px-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-95 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/20 transition cursor-pointer"
             >
-              <Sparkles size={15} className="text-amber-300" />
-              <span>✨ AI Face Kiosk (फेस अटेंडेंस)</span>
+              <Sparkles size={14} className="text-amber-300" />
+              <span>AI Face Kiosk</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowFaceStudio(true)}
+              className="py-2.5 px-2.5 bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-500 hover:to-cyan-500 active:scale-95 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow-md shadow-teal-600/20 transition cursor-pointer"
+              title="लाइव कैमरे से छात्र का चेहरा रजिस्टर व टेस्ट करें"
+            >
+              <Camera size={14} className="text-amber-200" />
+              <span>📷 लाइव फेस आईडी</span>
             </button>
             <button
               type="button"
               onClick={() => setShowQrScanner(true)}
-              className="py-2.5 px-3 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/20 transition cursor-pointer"
+              className="py-2.5 px-2.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/20 transition cursor-pointer"
             >
-              <Camera size={15} />
-              <span>📷 Camera / Media QR Scan</span>
+              <Camera size={14} />
+              <span>📷 QR Scan</span>
             </button>
             <button
               type="button"
               onClick={() => setShowClassQrModal(true)}
-              className="py-2.5 px-3 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 border border-slate-700 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition cursor-pointer"
+              className="py-2.5 px-2.5 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 border border-slate-700 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition cursor-pointer"
             >
-              <QrCode size={15} className="text-emerald-400" />
-              <span>📱 Class Attendance QR</span>
+              <QrCode size={14} className="text-emerald-400" />
+              <span>📱 Class QR</span>
             </button>
           </div>
 
@@ -1300,6 +1479,22 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
           });
         }}
       />
+
+      {/* Universal Live Face ID Studio & Match Test Modal */}
+      {showFaceStudio && (
+        <UniversalFaceIdStudioModal
+          isOpen={showFaceStudio}
+          onClose={() => setShowFaceStudio(false)}
+          schoolId={schoolId}
+          students={students}
+          classes={className ? [{ id: classId, name: className }] : []}
+          onEnrollmentUpdated={() => {
+            getStudents(schoolId, classId).then((stList) => {
+              if (stList) setStudents(stList);
+            });
+          }}
+        />
+      )}
 
       {/* QR Code Scanner for Teacher / Admin */}
       <QrAttendanceScannerModal

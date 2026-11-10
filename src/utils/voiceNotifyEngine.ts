@@ -88,13 +88,40 @@ export const pickBestVoice = (voices: SpeechSynthesisVoice[], preferredLang: str
 
 let isSpeakingActive = false;
 
+// Pleasant two-tone chime (880Hz -> 1320Hz) alerting user before speech
+export const playNotificationTone = () => {
+  if (typeof window === "undefined") return;
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    if (ctx.state === "suspended") {
+      void ctx.resume();
+    }
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    gain.gain.setValueAtTime(0.18, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.45);
+
+    // Two-tone bell chime
+    osc.frequency.setValueAtTime(880, ctx.currentTime); // A5
+    osc.frequency.setValueAtTime(1320, ctx.currentTime + 0.12); // E6
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.45);
+  } catch {}
+};
+
 /**
  * Main speech trigger for any notification title & body
  */
 export const speakNotification = (
   title: string,
   body?: string,
-  options?: { force?: boolean; rate?: number }
+  options?: { force?: boolean; rate?: number; playTone?: boolean }
 ): boolean => {
   if (typeof window === "undefined" || !("speechSynthesis" in window)) {
     return false;
@@ -106,6 +133,10 @@ export const speakNotification = (
   }
 
   try {
+    if (options?.playTone !== false) {
+      playNotificationTone();
+    }
+
     const rawContent = body ? `${title}. ${body}` : title;
     const cleanSpeech = cleanTextForSpeech(rawContent);
     if (!cleanSpeech) return false;
@@ -143,7 +174,13 @@ export const speakNotification = (
       window.dispatchEvent(new CustomEvent("nst_voice_speaking_state", { detail: { speaking: false } }));
     };
 
-    window.speechSynthesis.speak(utterance);
+    // Small delay if chime is playing so bell sounds first, then speech
+    setTimeout(() => {
+      try {
+        window.speechSynthesis.speak(utterance);
+      } catch {}
+    }, 120);
+
     return true;
   } catch (err) {
     console.warn("[VoiceNotifyEngine] Failed to speak notification:", err);
@@ -192,4 +229,28 @@ if (typeof window !== "undefined") {
       speakNotification(detail.title || detail.text, detail.body);
     }
   });
+
+  // 3. User Gesture Audio & Speech Unlocker (pre-warm on first tap/interaction)
+  let hasUnlockedAudio = false;
+  const unlockAudioContext = () => {
+    if (hasUnlockedAudio) return;
+    hasUnlockedAudio = true;
+    try {
+      if ("speechSynthesis" in window) {
+        window.speechSynthesis.getVoices();
+      }
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioCtx) {
+        const ctx = new AudioCtx();
+        if (ctx.state === "suspended") {
+          void ctx.resume();
+        }
+      }
+    } catch {}
+    window.removeEventListener("click", unlockAudioContext);
+    window.removeEventListener("touchstart", unlockAudioContext);
+  };
+  window.addEventListener("click", unlockAudioContext, { once: true, passive: true });
+  window.addEventListener("touchstart", unlockAudioContext, { once: true, passive: true });
 }
+

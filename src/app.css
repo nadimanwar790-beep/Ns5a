@@ -4055,3 +4055,231 @@ select:focus {
   color: #ffffff !important;
   caret-color: #818cf8 !important;
 }
+
+/* ========================================================
+   GLOBAL 3-THEME ENGINE (White / AMOLED Black / Current Midnight)
+   Supported across Student, Teacher, and Admin Portals
+   ======================================================== */
+
+/* 1. WHITE THEME (Clean Crisp Day Mode) */
+.student-theme-white,
+.admin-theme-white,
+.teacher-theme-white,
+.app-theme-white {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+.student-theme-white .bg-slate-950,
+.admin-theme-white .bg-slate-950,
+.teacher-theme-white .bg-slate-950,
+.app-theme-white .bg-slate-950,
+.student-theme-white .bg-slate-950\/70,
+.admin-theme-white .bg-slate-950\/70,
+.teacher-theme-white .bg-slate-950\/70,
+.app-theme-white .bg-slate-950\/70,
+.student-theme-white .bg-slate-950\/80,
+.admin-theme-white .bg-slate-950\/80,
+.teacher-theme-white .bg-slate-950\/80,
+.app-theme-white .bg-slate-950\/80,
+.student-theme-white .bg-slate-950\/90,
+.admin-theme-white .bg-slate-950\/90,
+.teacher-theme-white .bg-slate-950\/90,
+.app-theme-white .bg-slate-950\/90 {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+}
+.student-theme-white .bg-slate-900,
+.admin-theme-white .bg-slate-900,
+.teacher-theme-white .bg-slate-900,
+.app-theme-white .bg-slate-900,
+.student-theme-white .bg-slate-900\/70,
+.admin-theme-white .bg-slate-900\/70,
+.teacher-theme-white .bg-slate-900\/70,
+.app-theme-white .bg-slate-900\/70,
+.student-theme-white .bg-slate-900\/80,
+.admin-theme-white .bg-slate-900\/80,
+.teacher-theme-white .bg-slate-900\/80,
+.app-theme-white .bg-slate-900\/80,
+.student-theme-white .bg-slate-900\/90,
+.admin-theme-white .bg-slate-900\/90,
+.teacher-theme-white .bg-slate-900\/90,
+.app-theme-white .bg-slate-900\/90,
+.student-theme-white .bg-slate-900\/95,
+.admin-theme-white .bg-slate-900\/95,
+.teacher-theme-white .bg-slate-900\/95,
+.app-theme-white .bg-slate-900\/95 {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+}
+.student-theme-white .bg-slate-800,
+.admin-theme-white .bg-slate-800,
+.teacher-theme-white .bg-slate-800,
+.app-theme-white .bg-slate-800,
+.student-theme-white .bg-slate-800\/80,
+.admin-theme-white .bg-slate-800\/80,
+.teacher-theme-white .bg-slate-800\/80,
+.app-theme-white .bg-slate-800\/80,
+.student-theme-white .bg-slate-800\/90,
+.admin-theme-white .bg-slate-800\/90,
+.teacher-theme-white .bg-slate-800\/90,
+.app-theme-white .bg-slate-800\/90 {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+.student-theme-white .border-slate-800,
+.admin-theme-white .border-slate-800,
+.teacher-theme-white .border-slate-800,
+.app-theme-white .border-slate-800,
+.student-theme-white .border-slate-700,
+.admin-theme-white .border-slate-700,
+.teacher-theme-white .border-slate-700,
+.app-theme-white .border-slate-700 {
+  border-color: #e2e8f0 !important;
+}
+.student-theme-white .border-slate-600,
+.admin-theme-white .border-slate-600,
+.teacher-theme-white .border-slate-600,
+.app-theme-white .border-slate-600 {
+  border-color: #cbd5e1 !important;
+}
+.student-theme-white .text-slate-100,
+.admin-theme-white .text-slate-100,
+.teacher-theme-white .text-slate-100,
+.app-theme-white .text-slate-100,
+.student-theme-white .text-slate-200,
+.admin-theme-white .text-slate-200,
+.teacher-theme-white .text-slate-200,
+.app-theme-white .text-slate-200,
+.student-theme-white .text-white,
+.admin-theme-white .text-white,
+.teacher-theme-white .text-white,
+.app-theme-white .text-white {
+  color: #0f172a !important;
+}
+.student-theme-white .text-slate-300,
+.admin-theme-white .text-slate-300,
+.teacher-theme-white .text-slate-300,
+.app-theme-white .text-slate-300,
+.student-theme-white .text-slate-400,
+.admin-theme-white .text-slate-400,
+.teacher-theme-white .text-slate-400,
+.app-theme-white .text-slate-400 {
+  color: #475569 !important;
+}
+.student-theme-white .text-slate-500,
+.admin-theme-white .text-slate-500,
+.teacher-theme-white .text-slate-500,
+.app-theme-white .text-slate-500 {
+  color: #64748b !important;
+}
+.student-theme-white header,
+.admin-theme-white header,
+.teacher-theme-white header,
+.app-theme-white header {
+  background-color: rgba(255, 255, 255, 0.95) !important;
+  border-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+
+/* 2. BLACK THEME (AMOLED Pure Pitch Black Mode) */
+.student-theme-black,
+.admin-theme-black,
+.teacher-theme-black,
+.app-theme-black {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+}
+.student-theme-black .bg-slate-950,
+.admin-theme-black .bg-slate-950,
+.teacher-theme-black .bg-slate-950,
+.app-theme-black .bg-slate-950,
+.student-theme-black .bg-slate-950\/70,
+.admin-theme-black .bg-slate-950\/70,
+.teacher-theme-black .bg-slate-950\/70,
+.app-theme-black .bg-slate-950\/70,
+.student-theme-black .bg-slate-950\/80,
+.admin-theme-black .bg-slate-950\/80,
+.teacher-theme-black .bg-slate-950\/80,
+.app-theme-black .bg-slate-950\/80,
+.student-theme-black .bg-slate-950\/90,
+.admin-theme-black .bg-slate-950\/90,
+.teacher-theme-black .bg-slate-950\/90,
+.app-theme-black .bg-slate-950\/90 {
+  background-color: #050505 !important;
+  color: #ffffff !important;
+}
+.student-theme-black .bg-slate-900,
+.admin-theme-black .bg-slate-900,
+.teacher-theme-black .bg-slate-900,
+.app-theme-black .bg-slate-900,
+.student-theme-black .bg-slate-900\/70,
+.admin-theme-black .bg-slate-900\/70,
+.teacher-theme-black .bg-slate-900\/70,
+.app-theme-black .bg-slate-900\/70,
+.student-theme-black .bg-slate-900\/80,
+.admin-theme-black .bg-slate-900\/80,
+.teacher-theme-black .bg-slate-900\/80,
+.app-theme-black .bg-slate-900\/80,
+.student-theme-black .bg-slate-900\/90,
+.admin-theme-black .bg-slate-900\/90,
+.teacher-theme-black .bg-slate-900\/90,
+.app-theme-black .bg-slate-900\/90,
+.student-theme-black .bg-slate-900\/95,
+.admin-theme-black .bg-slate-900\/95,
+.teacher-theme-black .bg-slate-900\/95,
+.app-theme-black .bg-slate-900\/95 {
+  background-color: #0c0c0c !important;
+  color: #ffffff !important;
+}
+.student-theme-black .bg-slate-800,
+.admin-theme-black .bg-slate-800,
+.teacher-theme-black .bg-slate-800,
+.app-theme-black .bg-slate-800,
+.student-theme-black .bg-slate-800\/80,
+.admin-theme-black .bg-slate-800\/80,
+.teacher-theme-black .bg-slate-800\/80,
+.app-theme-black .bg-slate-800\/80,
+.student-theme-black .bg-slate-800\/90,
+.admin-theme-black .bg-slate-800\/90,
+.teacher-theme-black .bg-slate-800\/90,
+.app-theme-black .bg-slate-800\/90 {
+  background-color: #171717 !important;
+  color: #ffffff !important;
+}
+.student-theme-black .border-slate-800,
+.admin-theme-black .border-slate-800,
+.teacher-theme-black .border-slate-800,
+.app-theme-black .border-slate-800,
+.student-theme-black .border-slate-700,
+.admin-theme-black .border-slate-700,
+.teacher-theme-black .border-slate-700,
+.app-theme-black .border-slate-700 {
+  border-color: #262626 !important;
+}
+.student-theme-black header,
+.admin-theme-black header,
+.teacher-theme-black header,
+.app-theme-black header {
+  background-color: rgba(0, 0, 0, 0.95) !important;
+  border-color: #262626 !important;
+  color: #ffffff !important;
+}
+.student-theme-black .text-slate-300,
+.admin-theme-black .text-slate-300,
+.teacher-theme-black .text-slate-300,
+.app-theme-black .text-slate-300,
+.student-theme-black .text-slate-400,
+.admin-theme-black .text-slate-400,
+.teacher-theme-black .text-slate-400,
+.app-theme-black .text-slate-400 {
+  color: #a3a3a3 !important;
+}
+
+/* 3. CURRENT THEME (Midnight Slate / Indigo Navy Mode) */
+.student-theme-current,
+.admin-theme-current,
+.teacher-theme-current,
+.app-theme-current {
+  background-color: #020617 !important;
+  color: #f8fafc !important;
+}

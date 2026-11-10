@@ -179,7 +179,7 @@ interface Props {
   userRole?: string;
   user?: any;
   onBack?: () => void;
-  onOpenPlatformContent?: () => void;
+  onOpenPlatformContent?: (targetClass?: string) => void;
   onOpenStudentDashboard?: () => void;
   onLogout?: () => void;
   onOpenAdminDashboard?: () => void;
@@ -963,9 +963,20 @@ export const SchoolEcosystem: React.FC<Props> = ({
 
   const handleRemoveLinkedStudent = (studentKeyToRemove: string) => {
     setLinkedStudents((prev) => {
-      const remaining = prev.filter((s) => getStudentLinkKey(s, defaultSchoolId) !== studentKeyToRemove);
+      const remaining = prev.filter((s) => {
+        const k = getStudentLinkKey(s, defaultSchoolId);
+        return k !== studentKeyToRemove && s.id !== studentKeyToRemove && s.admissionNo !== studentKeyToRemove;
+      });
       const nextActive = remaining[0] ? getStudentLinkKey(remaining[0], defaultSchoolId) : "";
       setActiveStudentKey(nextActive);
+      try {
+        setLocalUserLinkedStudents(uid, remaining, nextActive);
+        localStorage.setItem("nst_linked_students", JSON.stringify(remaining));
+        localStorage.setItem(`nst_user_linked_students_${uid}`, JSON.stringify({ students: remaining, activeStudentKey: nextActive }));
+        if (nextActive && remaining[0]) {
+          localStorage.setItem("nst_current_user", JSON.stringify(remaining[0]));
+        }
+      } catch {}
       void saveUserLinkedStudents(uid, remaining, nextActive);
       void syncLinkedStudentsToPushSubscription(uid, remaining);
       return remaining;
@@ -1453,6 +1464,8 @@ export const SchoolEcosystem: React.FC<Props> = ({
             allLinkedStudents={linkedStudents}
             initialTab={requestedTab as any}
             onTabChange={(tab) => setStudentActiveTab(tab)}
+            onRemoveLinkedStudent={handleRemoveLinkedStudent}
+            onSwitchStudent={handleSelectLinkedStudent}
             onAddAnotherStudentQr={() => {
               setQrScanMode("STUDENT");
               setIsQrModalOpen(true);

@@ -252,6 +252,8 @@ export function App() {
         const r = (u?.role || '').toString().trim().toUpperCase();
         const isSchoolAccount = Boolean(
           u?.schoolId ||
+          u?.userType === 'SCHOOL_STUDENT' ||
+          u?.admissionNo ||
           r === 'SCHOOL_ADMIN' ||
           r === 'SCHOOLADMIN' ||
           r === 'TEACHER' ||
@@ -305,7 +307,17 @@ export function App() {
 
   // Listen for direct navigation events to Main Student Dashboard
   useEffect(() => {
-    const handleOpenStudent = () => {
+    const handleOpenStudent = (e?: any) => {
+      if (e?.detail?.tab) {
+        setStudentTab(e.detail.tab);
+      }
+      if (e?.detail?.targetClass) {
+        try {
+          localStorage.setItem('nst_active_session_class', e.detail.targetClass);
+          localStorage.setItem('nst_academic_selected_class', e.detail.targetClass);
+          localStorage.setItem('nst_syllabus_mode', e.detail.targetClass === 'COMPETITION' ? 'COMPETITION' : 'SCHOOL');
+        } catch {}
+      }
       handleSetView('STUDENT');
     };
     window.addEventListener('nst_open_student_dashboard', handleOpenStudent);
@@ -389,6 +401,8 @@ export function App() {
     const r = (newUser?.role || '').toString().trim().toUpperCase();
     const isSchoolAccount = Boolean(
       newUser?.schoolId ||
+      newUser?.userType === 'SCHOOL_STUDENT' ||
+      newUser?.admissionNo ||
       r === 'SCHOOL_ADMIN' ||
       r === 'SCHOOLADMIN' ||
       r === 'TEACHER' ||
@@ -758,7 +772,17 @@ export function App() {
               forceAdminView={isSchoolAdminEmail(user.email) || user.role === 'SCHOOL_ADMIN' || user.role === 'ADMIN' || user.role === 'SUPERADMIN' || user.role === 'PRINCIPAL'}
               onBack={isSuperAdminEmail(user.email) || user.role === 'SUPERADMIN' ? () => handleSetView('ADMIN') : () => handleSetView('STUDENT')}
               onOpenAdminDashboard={isSuperAdminEmail(user.email) || user.role === 'SUPERADMIN' ? () => handleSetView('ADMIN') : undefined}
-              onOpenPlatformContent={() => handleSetView('STUDENT')}
+              onOpenPlatformContent={(targetClass?: string) => {
+                if (targetClass) {
+                  try {
+                    localStorage.setItem('nst_active_session_class', targetClass);
+                    localStorage.setItem('nst_academic_selected_class', targetClass);
+                    localStorage.setItem('nst_syllabus_mode', targetClass === 'COMPETITION' ? 'COMPETITION' : 'SCHOOL');
+                  } catch {}
+                }
+                setStudentTab('COURSES');
+                handleSetView('STUDENT');
+              }}
               onOpenStudentDashboard={() => handleSetView('STUDENT')}
               onLogout={handleLogout}
             />

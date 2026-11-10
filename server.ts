@@ -1121,6 +1121,7 @@ async function startServer() {
     }
   });
 
+  let retryTimer: NodeJS.Timeout | null = null;
   const httpServer = app.listen(PORT, "0.0.0.0", () => {
     console.log(`[Server] Running on http://0.0.0.0:${PORT} (${isProduction ? "production" : "development"})`);
     // Hydrate remote RTDB push state asynchronously so server startup & pre-warming are never blocked
@@ -1129,12 +1130,17 @@ async function startServer() {
 
   httpServer.on("error", (err: any) => {
     if (err?.code === "EADDRINUSE") {
-      console.warn(`[Server] Port ${PORT} temporarily busy, will retry listening...`);
-      setTimeout(() => {
+      console.warn(`[Server] Port ${PORT} temporarily busy, will retry listening in 1s...`);
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => {
         try {
           httpServer.close();
-          httpServer.listen(PORT, "0.0.0.0");
         } catch {}
+        try {
+          httpServer.listen(PORT, "0.0.0.0");
+        } catch (retryErr) {
+          console.warn("[Server] Port retry deferred:", retryErr);
+        }
       }, 1000);
       return;
     }
@@ -1148,6 +1154,7 @@ async function startServer() {
 
   const handleTermination = () => {
     try {
+      if (retryTimer) clearTimeout(retryTimer);
       httpServer.close(() => {
         process.exit(0);
       });
@@ -1159,4 +1166,6 @@ async function startServer() {
   process.on("SIGINT", handleTermination);
 }
 
-void startServer();
+startServer().catch((err) => {
+  console.error("[Server] Fatal startup error:", err?.message || err);
+});

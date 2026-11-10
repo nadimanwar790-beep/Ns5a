@@ -70,14 +70,16 @@ import {
   getAdmissions,
   saveStudent,
   updateStudent,
-  getLocalStudents,
   getAttendance,
-  todayStr
+  todayStr,
+  getTeachers
 } from "../../school-firebase";
 import { toast } from "sonner";
 import { FeeManager } from "./FeeManager";
 import { OnlineAdmissionManager } from "./OnlineAdmissionManager";
 import { AbsenteeActionPage } from "./AbsenteeActionPage";
+import { SiblingProfileManager } from "./SiblingProfileManager";
+import { NstaMessengerSuite } from "./NstaMessengerSuite";
 import {
   printPosSlipDirect,
   printA6SlipDirect,
@@ -99,11 +101,13 @@ type AccountantTab =
   | "counter"
   | "absentee"
   | "fee_collection"
+  | "sibling_profiles"
   | "admissions"
   | "dues_defaulters"
   | "daybook"
   | "expenses"
-  | "bus_fees";
+  | "bus_fees"
+  | "messenger";
 
 const DEFAULT_PERMISSIONS: AccountantPermissions = {
   canCollectFee: true,
@@ -145,6 +149,7 @@ export const AccountantPanel: React.FC<Props> = ({
   const [fees, setFees] = useState<MonthlyFee[]>([]);
   const [expenses, setExpenses] = useState<SchoolExpenseVoucher[]>([]);
   const [accountants, setAccountants] = useState<SchoolAccountant[]>([]);
+  const [teachers, setTeachers] = useState<any[]>([]);
   const [activeAccountant, setActiveAccountant] = useState<SchoolAccountant | null>(null);
   const [attendanceSummary, setAttendanceSummary] = useState<{
     presentCount: number;
@@ -205,12 +210,13 @@ export const AccountantPanel: React.FC<Props> = ({
     const loadAll = async () => {
       setLoading(true);
       try {
-        const [schData, clsData, sessData, expData, accData] = await Promise.all([
+        const [schData, clsData, sessData, expData, accData, tchData] = await Promise.all([
           getSchool(schoolId),
           getClasses(schoolId),
           getSessions(schoolId),
           getSchoolExpenseVouchers(schoolId),
-          getAccountants(schoolId)
+          getAccountants(schoolId),
+          getTeachers(schoolId)
         ]);
 
         const currentSess = sessData?.find((s: any) => s.active) || sessData?.[0];
@@ -229,6 +235,7 @@ export const AccountantPanel: React.FC<Props> = ({
         setFees(feeData || []);
         setExpenses(expData || []);
         setAccountants(accData || []);
+        setTeachers(tchData || []);
 
         // Load today's attendance summary across classes
         const todayDateStr = todayStr();
@@ -676,6 +683,18 @@ export const AccountantPanel: React.FC<Props> = ({
               </button>
             )}
 
+            <button
+              onClick={() => setActiveTab("sibling_profiles")}
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
+                activeTab === "sibling_profiles"
+                  ? "bg-amber-500 text-slate-950 shadow-md font-black"
+                  : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+              }`}
+            >
+              <Users className="w-4 h-4 text-indigo-400" />
+              <span>Sibling Profiles (भाई-बहन प्रोफाइल)</span>
+            </button>
+
             {permissions.canAdmitStudents && (
               <button
                 onClick={() => setActiveTab("admissions")}
@@ -750,6 +769,22 @@ export const AccountantPanel: React.FC<Props> = ({
                 <span>Bus & Transport Dues</span>
               </button>
             )}
+
+            <div className="text-[10px] font-black uppercase tracking-wider text-slate-500 px-3 py-1 pt-2">
+              कम्युनिकेशन व मेसेंजर (COMMUNICATION)
+            </div>
+
+            <button
+              onClick={() => setActiveTab("messenger")}
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
+                activeTab === "messenger"
+                  ? "bg-emerald-600 text-white shadow-md font-black"
+                  : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+              }`}
+            >
+              <MessageCircle className="w-4 h-4 text-emerald-400" />
+              <span>NSTA Messenger (मेसेंजर)</span>
+            </button>
           </div>
 
           {/* Quick Expense Action Button */}
@@ -958,6 +993,19 @@ export const AccountantPanel: React.FC<Props> = ({
                     <span>Bus & Transport Dues</span>
                   </button>
                 )}
+
+                <button
+                  onClick={() => {
+                    setActiveTab("messenger");
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
+                    activeTab === "messenger" ? "bg-emerald-600 text-white font-black" : "text-slate-300"
+                  }`}
+                >
+                  <MessageCircle className="w-4 h-4 text-emerald-400" />
+                  <span>NSTA Messenger (मेसेंजर)</span>
+                </button>
 
                 {/* Explore Full NSTA Learning App */}
                 <div className="pt-2">
@@ -1880,6 +1928,8 @@ export const AccountantPanel: React.FC<Props> = ({
                 school={school || undefined}
                 sessionId={activeSession.id}
                 adminId={activeAccountant?.id || "accountant"}
+                userRole="ACCOUNTANT"
+                actorName={activeAccountant?.name || "Accountant"}
                 onBack={() => setActiveTab("counter")}
               />
             </div>
@@ -1899,6 +1949,22 @@ export const AccountantPanel: React.FC<Props> = ({
                   onBack={() => setActiveTab("counter")}
                 />
               )}
+            </div>
+          )}
+
+          {/* SIBLING PROFILES TAB */}
+          {activeTab === "sibling_profiles" && school && (
+            <div className="max-w-6xl mx-auto space-y-4">
+              <SiblingProfileManager
+                school={school}
+                students={students}
+                classes={classes}
+                activeSession={activeSession}
+                onUpdateStudent={(updated) => {
+                  setStudents((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+                }}
+                onBack={() => setActiveTab("counter")}
+              />
             </div>
           )}
 
@@ -2218,6 +2284,22 @@ export const AccountantPanel: React.FC<Props> = ({
                   </div>
                 )}
               </div>
+            </div>
+          )}
+
+          {/* TAB 8: NSTA MESSENGER SUITE */}
+          {activeTab === "messenger" && school && (
+            <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col h-screen w-screen overflow-hidden">
+              <NstaMessengerSuite
+                school={school}
+                classes={classes}
+                students={students}
+                teachers={teachers}
+                currentUserId={accountantId || "accountant_admin"}
+                currentUserName={activeAccountant?.name || "School Accountant"}
+                currentUserRole="ADMIN"
+                onBack={() => setActiveTab("home")}
+              />
             </div>
           )}
         </main>

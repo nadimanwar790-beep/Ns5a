@@ -73,6 +73,7 @@ import {
   getDefaultSubjectsForClass,
   DEFAULT_ADMISSION_FIELD_SETTINGS,
 } from "../../school-types";
+import { enrollStudentFromPhotoUrl } from "../../utils/faceRecognitionEngine";
 import {
   getAdmissionApplications,
   saveAdmissionApplication,
@@ -1931,6 +1932,19 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
           },
           { immediate: true }
         ).catch(() => {});
+
+        // Auto-enroll biometric Face ID for new student so logout -> Face login works seamlessly
+        if (savedStudent.photoUrl) {
+          enrollStudentFromPhotoUrl({
+            id: savedStudent.id,
+            schoolId: school.id,
+            name: savedStudent.name,
+            rollNo: String(savedStudent.rollNo || ""),
+            classId: savedStudent.classId,
+            className: savedStudent.className,
+            photoUrl: savedStudent.photoUrl,
+          }).catch(() => {});
+        }
       } catch (cacheErr) {
         console.warn("Student profile sync notice:", cacheErr);
       }

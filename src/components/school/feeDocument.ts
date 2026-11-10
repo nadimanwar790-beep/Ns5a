@@ -20,7 +20,7 @@ import {
 
 interface FeeDocumentOptions {
   fee: MonthlyFee;
-  student?: Pick<SchoolStudent, "phone" | "fatherName" | "admissionNo" | "rollNo" | "name"> | null;
+  student?: Partial<SchoolStudent> | null;
   schoolName?: string;
   className?: string;
   feeHistory?: MonthlyFee[];
@@ -441,7 +441,11 @@ export function buildWhatsAppReceiptMessage(
         `--------------------------------\n` +
         `💰 *Gross Total:* ₹${totalBill.toLocaleString("en-IN")}\n` +
         ((Number(options.fee.earlyDiscount || 0) > 0 || Number(options.fee.concession || 0) > 0)
-          ? `🎁 *5% Early Bird Concession:* -₹${Number(options.fee.earlyDiscount || options.fee.concession).toLocaleString("en-IN")}\n` : "") +
+          ? (options.student?.isFreeEducation
+              ? `🎓 *100% Sibling Free / नि:शुल्क शिक्षा:* -₹${Number(options.fee.earlyDiscount || options.fee.concession).toLocaleString("en-IN")}\n`
+              : (options.student?.siblingDiscountPct || options.student?.siblingDiscountAmount)
+              ? `🎁 *Sibling Concession (भाई-बहन छूट):* -₹${Number(options.fee.earlyDiscount || options.fee.concession).toLocaleString("en-IN")}\n`
+              : `🎁 *5% Early Bird Concession:* -₹${Number(options.fee.earlyDiscount || options.fee.concession).toLocaleString("en-IN")}\n`) : "") +
         `✅ *NET PAID (जमा राशि):* *₹${paidAmount.toLocaleString("en-IN")}*\n` +
         `⚠️ *Balance Due (शेष):* ₹${balanceDue.toLocaleString("en-IN")}${balanceDue <= 0 ? " (FULL PAID ✓)" : ""}\n` +
         `================================\n` +
@@ -480,6 +484,12 @@ export function buildWhatsAppReceiptMessage(
         `🙏 *कृपया निर्धारित तिथि तक शुल्क स्कूल काउंटर या UPI QR द्वारा जमा करें।*`;
     } else {
       const earlyDiscountAmt = Number(options.fee.earlyDiscount || options.fee.concession || 0);
+      const discountLabel = options.student?.isFreeEducation
+        ? `🎓 *100% Sibling Free / नि:शुल्क शिक्षा:*`
+        : (options.student?.siblingDiscountPct || options.student?.siblingDiscountAmount)
+        ? `🎁 *Sibling Concession (भाई-बहन छूट):*`
+        : `🎁 *5% Early Bird Concession:*`;
+
       message = `🏫 *${schoolName.toUpperCase()}*\n` +
         `🧾 *OFFICIAL FEE PAYMENT RECEIPT / फीस रसीद*\n` +
         `----------------------------------------\n` +
@@ -493,7 +503,7 @@ export function buildWhatsAppReceiptMessage(
         `*FEE PARTICULARS:*\n${itemLines}\n` +
         `----------------------------------------\n` +
         `💰 *Gross Bill (कुल शुल्क):* ₹${totalBill.toLocaleString("en-IN")}\n` +
-        (earlyDiscountAmt > 0 ? `🎁 *5% Early Bird Concession:* -₹${earlyDiscountAmt.toLocaleString("en-IN")}\n` : "") +
+        (earlyDiscountAmt > 0 ? `${discountLabel} -₹${earlyDiscountAmt.toLocaleString("en-IN")}\n` : "") +
         `✅ *Amount Paid (जमा राशि):* *₹${paidAmount.toLocaleString("en-IN")}*\n` +
         `⚠️ *Remaining Balance (शेष बकाया):* ₹${balanceDue.toLocaleString("en-IN")}${balanceDue <= 0 ? " (FULL PAID ✓)" : ""}\n` +
         `----------------------------------------\n` +

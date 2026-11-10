@@ -32,6 +32,7 @@ import {
   saveSchoolReferralSettings,
 } from "../../school-firebase";
 import { saveUserToLive } from "../../firebase";
+import { enrollStudentFromPhotoUrl } from "../../utils/faceRecognitionEngine";
 import type {
   School,
   SchoolClass,
@@ -47,6 +48,14 @@ import {
   mergeSchoolReferrerList,
   type ReferrerOption,
 } from "../../utils/schoolReferralSiblingEngine";
+import {
+  canRoleGiveDiscount,
+  clampDiscountAmount,
+  getSilentMaxDiscountAmount,
+  buildSplitPayModeInfo,
+  recordDiscountEntry,
+  DISPLAY_DISCOUNT_LABEL,
+} from "../../utils/schoolDiscountAndPayment";
 import { AdmissionReferralAndSiblingPanel } from "./AdmissionReferralAndSiblingPanel";
 import {
   BLOOD_GROUPS,
@@ -73,7 +82,31 @@ interface Props {
   defaultClassId?: string;
   existingStudents?: SchoolStudent[];
   adminUid?: string;
+  userRole?: string;
+  actorName?: string;
   onSuccess: (student: SchoolStudent, admissionFee?: MonthlyFee | null) => void;
+}
+
+interface BatchStudentDraft {
+  id: string;
+  name: string;
+  classId: string;
+  className: string;
+  fatherName: string;
+  motherName: string;
+  phone: string;
+  whatsappNo: string;
+  gender: "male" | "female" | "other";
+  rollNo: string;
+  admissionNo: string;
+  monthlyFee: number;
+  baseMonthlyFee: number;
+  usesBus: boolean;
+  busRoute: string;
+  busFee: number;
+  feeLines: FeeLineDraft[];
+  grossTotal: number;
+  concession: number;
 }
 
 export const DirectAdmissionModal: React.FC<Props> = ({
@@ -85,8 +118,11 @@ export const DirectAdmissionModal: React.FC<Props> = ({
   defaultClassId,
   existingStudents = [],
   adminUid = "admin",
+  userRole = "SCHOOL_ADMIN",
+  actorName = "School Admin",
   onSuccess,
 }) => {
+  const canGiveDiscount = useMemo(() => canRoleGiveDiscount(userRole), [userRole]);
   const sortedClasses = useMemo(() => sortSchoolClasses(classes), [classes]);
   const [entryMode, setEntryMode] = useState<"quick" | "full">("full");
   const [classId, setClassId] = useState<string>(defaultClassId || classes[0]?.id || "");
@@ -160,14 +196,19 @@ export const DirectAdmissionModal: React.FC<Props> = ({
     "Passport Photos (पासपोर्ट फोटो)",
   ]);
 
-  // Instant Admission Fee Collection
+  // Instant Admission Fee Collection (with Online + Offline Split Payment & Multi-Admission Batch)
   const [collectFeeNow, setCollectFeeNow] = useState<boolean>(true);
   const [feeLines, setFeeLines] = useState<FeeLineDraft[]>([]);
   const [concession, setConcession] = useState<number>(0);
-  const [paidAmountInput, setPaidAmountInput] = useState<string>("");
+  const [onlinePaidInput, setOnlinePaidInput] = useState<string>("0");
+  const [offlinePaidInput, setOfflinePaidInput] = useState<string>("");
   const [paidManuallyEdited, setPaidManuallyEdited] = useState<boolean>(false);
-  const [payMode, setPayMode] = useState<string>("Cash");
   const [payRefNo, setPayRefNo] = useState<string>("");
+
+  // Multi-Admission Batch (2-3 Admissions together)
+  const [batchQueue, setBatchQueue] = useState<BatchStudentDraft[]>([]);
+  const [batchDiscountMode, setBatchDiscountMode] = useState<"per_head" | "one_time_total">("per_head");
+  const [batchTotalDiscount, setBatchTotalDiscount] = useState<number>(0);
 
   const [saving, setSaving] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -184,6 +225,7 @@ export const DirectAdmissionModal: React.FC<Props> = ({
   }, [selectedClass]);
 
   // Build dynamic fee rows from selected class feeStructure & Admin enabledHeads
+  // Build dynamic fee rows from selected class feeStructure & Admin enabledHeads
   const buildDefaultFeeLinesForClass = (cls: SchoolClass | null, includeBus: boolean, customBusAmt?: number): FeeLineDraft[] => {
     const fs = cls?.feeStructure;
     const lines: FeeLineDraft[] = [];
@@ -191,8 +233,13 @@ export const DirectAdmissionModal: React.FC<Props> = ({
       const toggles = fs.enabledHeads;
       const admEnabled = typeof toggles?.admissionFee === "boolean" ? toggles.admissionFee : Number(fs.admissionFee) > 0;
       const regEnabled = typeof toggles?.registrationFee === "boolean" ? toggles.registrationFee : Number(fs.registrationFee) > 0;
-      const tuiEnabled = typeof toggles?.tuitionFee === "boolean" ? toggles.tuitionFee : Number(fs.tuitionFee) > 0;
+      const examEnabled = typeof toggles?.examinationFee === "boolean" ? toggles.examinationFee : Number(fs.examinationFee) > 0;
+      const devEnabled = typeof toggles?.developmentCharge === "boolean" ? toggles.developmentCharge : Number(fs.developmentCharge) > 0;
       const annEnabled = typeof toggles?.annualCharges === "boolean" ? toggles.annualCharges : Number(fs.annualCharges) > 0;
+      const tuiEnabled = typeof toggles?.tuitionFee === "boolean" ? toggles.tuitionFee : Number(fs.tuitionFee) > 0;
+      const idEnabled = typeof toggles?.idCardCharge === "boolean" ? toggles.idCardCharge : true;
+      const diaryEnabled = typeof toggles?.diaryCharge === "boolean" ? toggles.diaryCharge : true;
+      const tieEnabled = typeof toggles?.tieBeltCharge === "boolean" ? toggles.tieBeltCharge : true;
       const cauEnabled = typeof toggles?.cautionMoney === "boolean" ? toggles.cautionMoney : Number(fs.cautionMoney) > 0;
       const busEnabled = typeof toggles?.busFee === "boolean" ? toggles.busFee : true;
 
@@ -200,16 +247,25 @@ export const DirectAdmissionModal: React.FC<Props> = ({
         lines.push({ id: "fs_adm", description: "Admission Fee (प्रवेश शुल्क)", due: Number(fs.admissionFee || 0) });
       }
       if (regEnabled && Number(fs.registrationFee || 0) >= 0) {
-        lines.push({ id: "fs_reg", description: "Registration Fee (पंजीकरण शुल्क)", due: Number(fs.registrationFee || 0) });
+        lines.push({ id: "fs_reg", description: "Registration & Form Fee (फॉर्म शुल्क)", due: Number(fs.registrationFee || 0) });
       }
-      if (annEnabled && Number(fs.annualCharges || 0) >= 0) {
-        lines.push({ id: "fs_ann", description: "Annual & Development Charges (वार्षिक शुल्क)", due: Number(fs.annualCharges || 0) });
+      if (idEnabled || diaryEnabled || tieEnabled) {
+        lines.push({ id: "fs_kit", description: "ID Card, Diary & Tie-Belt (आईडी व डायरी)", due: Number(fs.idCardCharge || 100) + Number(fs.diaryCharge || 100) + Number(fs.tieBeltCharge || 100) });
       }
       if (tuiEnabled && Number(fs.tuitionFee || 0) >= 0) {
         lines.push({ id: "fs_tui", description: "1st Month Tuition Fee (मासिक शिक्षण शुल्क)", due: Number(fs.tuitionFee || 0) });
       }
+      if (examEnabled && Number(fs.examinationFee || 0) > 0) {
+        lines.push({ id: "fs_exam", description: "Examination Fee (परीक्षा शुल्क)", due: Number(fs.examinationFee || 0) });
+      }
+      if (devEnabled && Number(fs.developmentCharge || 0) > 0) {
+        lines.push({ id: "fs_dev", description: "Development Charge (विकास शुल्क)", due: Number(fs.developmentCharge || 0) });
+      }
+      if (annEnabled && Number(fs.annualCharges || 0) >= 0) {
+        lines.push({ id: "fs_ann", description: "Annual Charges (वार्षिक शुल्क)", due: Number(fs.annualCharges || 0) });
+      }
       if (cauEnabled && Number(fs.cautionMoney || 0) >= 0) {
-        lines.push({ id: "fs_cau", description: "Caution / Kit & ID Fee (कॉशन व किट शुल्क)", due: Number(fs.cautionMoney || 0) });
+        lines.push({ id: "fs_cau", description: "Caution / Kit Fee (कॉशन व किट शुल्क)", due: Number(fs.cautionMoney || 0) });
       }
       if (Array.isArray(fs.customHeads)) {
         fs.customHeads.forEach((h, idx) => {
@@ -227,15 +283,15 @@ export const DirectAdmissionModal: React.FC<Props> = ({
     }
 
     if (lines.length === 0 && !fs?.enabledHeads) {
-      const defTuition = Number(cls?.defaultFee || 0);
+      const defTuition = Number(cls?.defaultFee || 0) || 350;
       lines.push(
         { id: "def_1", description: "Admission Fee (प्रवेश शुल्क)", due: 1000 },
         { id: "def_2", description: "Registration & Form Fee (फॉर्म शुल्क)", due: 200 },
-        { id: "def_3", description: "ID Card, Diary & Tie-Belt (आईडी व डायरी)", due: 300 }
+        { id: "def_3", description: "ID Card, Diary & Tie-Belt (आईडी व डायरी)", due: 300 },
+        { id: "def_4", description: "1st Month Tuition Fee (प्रथम माह शुल्क)", due: defTuition },
+        { id: "def_5", description: "Examination Fee (परीक्षा शुल्क)", due: 300 },
+        { id: "def_6", description: "Development Charge (विकास शुल्क)", due: 300 }
       );
-      if (defTuition > 0) {
-        lines.push({ id: "def_4", description: "1st Month Tuition Fee (प्रथम माह शुल्क)", due: defTuition });
-      }
       if (includeBus && (customBusAmt || 0) > 0) {
         lines.push({ id: "def_bus", description: "Transport / Bus Fee (वाहन शुल्क)", due: Number(customBusAmt) });
       }
@@ -322,10 +378,14 @@ export const DirectAdmissionModal: React.FC<Props> = ({
           motherName,
           whatsappNo: whatsappNo || phone,
           phone,
+          fatherAadhaar,
+          motherAadhaar,
+          aadhaarNo,
+          address,
         },
         studentPoolForFamilyCheck
       ),
-    [fatherName, motherName, whatsappNo, phone, studentPoolForFamilyCheck]
+    [fatherName, motherName, whatsappNo, phone, fatherAadhaar, motherAadhaar, aadhaarNo, address, studentPoolForFamilyCheck]
   );
 
   const grossTotal = useMemo(
@@ -344,17 +404,45 @@ export const DirectAdmissionModal: React.FC<Props> = ({
     [feeLines]
   );
   const eligibleGrossExclBus = Math.max(0, grossTotal - busLineTotal);
-  const netPayable = Math.max(0, grossTotal - (Number(concession) || 0));
+  const effectiveConcession = useMemo(() => {
+    if (!canGiveDiscount) return 0;
+    return clampDiscountAmount(grossTotal, concession);
+  }, [canGiveDiscount, grossTotal, concession]);
+
+  const netPayable = Math.max(0, grossTotal - effectiveConcession);
   const netPayableExclBus = Math.max(0, netPayable - busLineTotal);
+
+  const batchGrossSum = useMemo(
+    () => batchQueue.reduce((s, b) => s + b.grossTotal, 0) + (name.trim() ? grossTotal : 0),
+    [batchQueue, name, grossTotal]
+  );
+
+  const effectiveBatchTotalDiscount = useMemo(() => {
+    if (!canGiveDiscount) return 0;
+    if (batchQueue.length === 0) return effectiveConcession;
+    if (batchDiscountMode === "one_time_total") {
+      return clampDiscountAmount(batchGrossSum, batchTotalDiscount);
+    }
+    return (
+      batchQueue.reduce((s, b) => s + clampDiscountAmount(b.grossTotal, b.concession), 0) +
+      (name.trim() ? effectiveConcession : 0)
+    );
+  }, [canGiveDiscount, batchQueue, batchDiscountMode, batchGrossSum, batchTotalDiscount, effectiveConcession, name]);
+
+  const effectiveCombinedNetPayable = Math.max(0, batchGrossSum - effectiveBatchTotalDiscount);
 
   useEffect(() => {
     if (!paidManuallyEdited) {
-      setPaidAmountInput(String(netPayable));
+      setOnlinePaidInput("0");
+      setOfflinePaidInput(String(batchQueue.length > 0 ? effectiveCombinedNetPayable : netPayable));
     }
-  }, [netPayable, paidManuallyEdited]);
+  }, [netPayable, effectiveCombinedNetPayable, batchQueue.length, paidManuallyEdited]);
 
-  const paidNow = Math.max(0, Number(paidAmountInput) || 0);
-  const balanceDue = Math.max(0, netPayable - paidNow);
+  const onlinePaidNow = Math.max(0, Number(onlinePaidInput) || 0);
+  const offlinePaidNow = Math.max(0, Number(offlinePaidInput) || 0);
+  const paidNow = onlinePaidNow + offlinePaidNow;
+  const targetPayableForSummary = batchQueue.length > 0 ? effectiveCombinedNetPayable : netPayable;
+  const balanceDue = Math.max(0, targetPayableForSummary - paidNow);
 
   const eligiblePaidNowExclBus =
     netPayable > 0 && netPayableExclBus > 0
@@ -363,17 +451,20 @@ export const DirectAdmissionModal: React.FC<Props> = ({
   const eligibleDueExclBus = Math.max(0, netPayableExclBus - eligiblePaidNowExclBus);
 
   const handleApplySiblingPresetPct = (pct: number) => {
-    setSiblingDiscountPct(pct);
-    const admDisc = pct > 0 ? Math.round((eligibleGrossExclBus * pct) / 100) : 0;
+    if (!canGiveDiscount) return;
+    const safePct = Math.min(10, Math.max(0, pct));
+    setSiblingDiscountPct(safePct);
+    const admDisc = safePct > 0 ? clampDiscountAmount(grossTotal, Math.round((eligibleGrossExclBus * safePct) / 100)) : 0;
     setConcession(admDisc);
     setPaidManuallyEdited(false);
     if (applyMonthlySiblingDiscount) {
-      const mDisc = pct > 0 ? Math.round((baseMonthlyFee * pct) / 100) : 0;
+      const mDisc = safePct > 0 ? Math.round((baseMonthlyFee * safePct) / 100) : 0;
       setMonthlyFee(Math.max(0, baseMonthlyFee - mDisc));
     }
   };
 
   const handleToggleMonthlySiblingDiscount = (enabled: boolean) => {
+    if (!canGiveDiscount) return;
     setApplyMonthlySiblingDiscount(enabled);
     if (enabled && siblingDiscountPct > 0) {
       const mDisc = Math.round((baseMonthlyFee * siblingDiscountPct) / 100);
@@ -381,6 +472,46 @@ export const DirectAdmissionModal: React.FC<Props> = ({
     } else {
       setMonthlyFee(baseMonthlyFee);
     }
+  };
+
+  const handleAddToBatchQueue = () => {
+    if (!name.trim()) {
+      setError("बैच में जोड़ने के लिए छात्र का नाम (Student Name) भरें।");
+      return;
+    }
+    if (batchQueue.length >= 2) {
+      setError("एक बार में अधिकतम 3 छात्रों का बैच जोड़ा जा सकता है।");
+      return;
+    }
+    const draft: BatchStudentDraft = {
+      id: `draft_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+      name: name.trim(),
+      classId,
+      className: selectedClass ? `${selectedClass.name}${selectedClass.section ? ` (${selectedClass.section})` : ""}` : "",
+      fatherName: fatherName.trim(),
+      motherName: motherName.trim(),
+      phone: phone.trim() || fatherPhone.trim() || whatsappNo.trim(),
+      whatsappNo: whatsappNo.trim() || fatherWhatsapp.trim() || phone.trim(),
+      gender,
+      rollNo: rollNo.trim() || String(existingStudents.filter((s) => isStudentInClass(s, classId)).length + batchQueue.length + 1),
+      admissionNo: admissionNo.trim() || generateNextAdmissionNo(school, existingStudents.length + batchQueue.length),
+      monthlyFee: Number(monthlyFee) || 0,
+      baseMonthlyFee: baseMonthlyFee || Number(monthlyFee) || 0,
+      usesBus,
+      busRoute: busRoute.trim(),
+      busFee: Number(busFee) || 0,
+      feeLines: [...feeLines],
+      grossTotal,
+      concession: canGiveDiscount ? effectiveConcession : 0,
+    };
+    setBatchQueue((prev) => [...prev, draft]);
+    // Reset student-specific fields while keeping family/parent details for easy sibling multi-admission
+    setName("");
+    setRollNo("");
+    setAdmissionNo("");
+    setConcession(0);
+    setPaidManuallyEdited(false);
+    setError(null);
   };
 
   if (!isOpen) return null;
@@ -454,197 +585,366 @@ export const DirectAdmissionModal: React.FC<Props> = ({
       const isSenior = isSeniorClass(selectedClass?.name);
       const chosenStream = isSenior ? (selectedClass?.stream || stream) : undefined;
 
-      const newStudent: SchoolStudent = {
-        id: studentId,
-        schoolId: school.id,
-        sessionId: activeSession?.id || "",
-        classId,
-        className: selectedClass ? `${selectedClass.name}${selectedClass.section ? ` (${selectedClass.section})` : ""}` : "",
-        stream: chosenStream,
-        name: name.trim(),
-        rollNo: finalRoll,
-        admissionNo: finalAdmNo,
-        gender,
-        dateOfBirth: dateOfBirth || undefined,
-        bloodGroup: bloodGroup || undefined,
-        category: category || "General",
-        apaarId: apaarId.trim() || undefined,
-        aadhaarNo: aadhaarNo.trim() || undefined,
-        fatherName: fatherName.trim() || undefined,
-        fatherOccupation: fatherOccupation.trim() || undefined,
-        fatherAadhaar: fatherAadhaar.trim() || undefined,
-        fatherPhone: fatherPhone.trim() || undefined,
-        fatherWhatsapp: fatherWhatsapp.trim() || undefined,
-        motherName: motherName.trim() || undefined,
-        motherOccupation: motherOccupation.trim() || undefined,
-        motherAadhaar: motherAadhaar.trim() || undefined,
-        motherPhone: motherPhone.trim() || undefined,
-        motherWhatsapp: motherWhatsapp.trim() || undefined,
-        phone: phone.trim() || fatherPhone.trim() || whatsappNo.trim() || undefined,
-        whatsappNo: whatsappNo.trim() || fatherWhatsapp.trim() || phone.trim() || undefined,
-        email: email.trim() || undefined,
-        address: address.trim() || undefined,
-        city: city.trim() || undefined,
-        pincode: pincode.trim() || undefined,
-        previousSchool: previousSchool.trim() || undefined,
-        previousMarks: previousMarks.trim() || undefined,
-        religion: religion.trim() || undefined,
-        nationality: nationality.trim() || undefined,
-        annualIncome: annualIncome.trim() || undefined,
-        identificationMark: identificationMark.trim() || undefined,
-        medicalHistory: medicalHistory.trim() || undefined,
-        emergencyContact: emergencyContact.trim() || undefined,
-        emergencyPhone: emergencyPhone.trim() || undefined,
-        emergencyRelation: emergencyRelation.trim() || undefined,
-        emergencyWhatsapp: emergencyWhatsapp.trim() || undefined,
-        admissionType,
-        photoUrl: photoUrl || undefined,
-        usesBus,
-        busRoute: usesBus ? busRoute.trim() : undefined,
-        busFee: usesBus ? Number(busFee) || 0 : 0,
-        submittedDocs,
-        admissionReceiptNo: receiptNo,
-        admissionTotalAmount: collectFeeNow ? netPayable : 0,
-        admissionPaidAmount: collectFeeNow ? paidNow : 0,
-        admissionDueBalance: collectFeeNow && balanceDue > 0 ? balanceDue : 0,
-        advanceMonthlyFeePaid: false,
-        advanceMonthlyFeeDue: Number(monthlyFee) || 0,
-        advanceMonthlyFeeMonth: (admissionDate || new Date().toISOString()).slice(0, 7),
-        monthlyFee: Number(monthlyFee) || 0,
-        baseMonthlyFee: baseMonthlyFee || Number(monthlyFee) || 0,
-        referredByTeacherId: resolvedRefId,
-        referredByTeacherName: resolvedRefName,
-        referralCommissionPct: resolvedRefId ? Number(commissionPct) || 10 : undefined,
-        referralCommissionScope: resolvedRefId ? commissionScope : undefined,
-        referralCommissionDuration: resolvedRefId ? commissionDuration : undefined,
-        familyGroupId: resolvedFamilyGroupId,
-        isSiblingMarked: isFamilyMarked || undefined,
-        siblingStudentIds: siblingIds.length > 0 ? siblingIds : undefined,
-        siblingDiscountPct: isFamilyMarked && siblingDiscountPct > 0 ? siblingDiscountPct : undefined,
-        siblingDiscountAmount: monthlySiblingConcession > 0 ? monthlySiblingConcession : undefined,
-        admissionSiblingDiscount: isFamilyMarked && Number(concession) > 0 ? Number(concession) : undefined,
-        joinDate: admissionDate || new Date().toISOString().slice(0, 10),
-        active: true,
-        createdAt: new Date().toISOString(),
-      };
+      const splitPayInfo = buildSplitPayModeInfo({
+        onlineAmount: onlinePaidNow,
+        offlineAmount: offlinePaidNow,
+        date: new Date(admissionDate || Date.now()).toLocaleDateString("en-GB"),
+        number: payRefNo.trim() || "-",
+      });
 
-      const savedStudent = await saveStudent(newStudent);
+      // Helper to save a single student + fee + discount ledger entry
+      const saveSingleStudentBundle = async (
+        draft: {
+          name: string;
+          classId: string;
+          className: string;
+          rollNo: string;
+          admissionNo: string;
+          gender: "male" | "female" | "other";
+          fatherName: string;
+          motherName: string;
+          phone: string;
+          whatsappNo: string;
+          monthlyFee: number;
+          baseMonthlyFee: number;
+          usesBus: boolean;
+          busRoute: string;
+          busFee: number;
+          feeLines: FeeLineDraft[];
+          grossTotal: number;
+          concessionAmt: number;
+          allocatedPaidOnline: number;
+          allocatedPaidOffline: number;
+          isPrimaryForm: boolean;
+          discountWhereLabel: string;
+        }
+      ): Promise<{ student: SchoolStudent; fee: MonthlyFee | null }> => {
+        const sId = generateId();
+        const sAdmNo = draft.admissionNo || generateNextAdmissionNo(school, existingStudents.length);
+        const sRoll = draft.rollNo || "1";
+        const sNetPayable = Math.max(0, draft.grossTotal - draft.concessionAmt);
+        const sPaidTotal = draft.allocatedPaidOnline + draft.allocatedPaidOffline;
+        const sBalanceDue = Math.max(0, sNetPayable - sPaidTotal);
+        const sReceiptNo = collectFeeNow && draft.grossTotal > 0 ? `ADM-${Math.floor(10000 + Math.random() * 90000)}` : undefined;
 
-      // Link existing siblings in the same family group non-blockingly
-      if (isFamilyMarked && resolvedFamilyGroupId && linkedSiblings.length > 0) {
-        linkedSiblings.forEach((sib) => {
-          const mergedSibIds = Array.from(new Set([...(sib.siblingStudentIds || []), savedStudent.id]));
-          void updateStudent(school.id, sib.id, {
-            familyGroupId: sib.familyGroupId || resolvedFamilyGroupId,
-            isSiblingMarked: true,
-            siblingStudentIds: mergedSibIds,
-          });
-        });
-      }
-
-      // Strictly school-isolated student login profile (no cross-school copying!)
-      try {
-        const curLocals = getLocalStudents(school.id);
-        setLocalStudents(school.id, [savedStudent, ...curLocals.filter((s) => s.id !== savedStudent.id)]);
-
-        const safeSlug = (school.code || school.id || "school").toLowerCase().replace(/[^a-z0-9]/g, "") || "school";
-        const studentEmail =
-          savedStudent.email ||
-          `${finalAdmNo.toLowerCase().replace(/[^a-z0-9]/g, "")}@${safeSlug}.edu.in`;
-
-        await saveSchoolUserProfile({
-          uid: savedStudent.id,
+        const sObj: SchoolStudent = {
+          id: sId,
           schoolId: school.id,
-          role: "SCHOOL_STUDENT",
-          name: savedStudent.name,
-          email: studentEmail,
-          studentRef: savedStudent.id,
-          classId,
-          sessionId: activeSession?.id || "2026-27",
-        }).catch(() => {});
-
-        saveUserToLive(
-          {
-            id: savedStudent.id,
-            uid: savedStudent.id,
-            displayId: `ROLL-${savedStudent.rollNo}`,
-            name: savedStudent.name,
-            email: studentEmail,
-            mobile: savedStudent.phone || "",
-            role: "STUDENT",
-            schoolId: school.id,
-            classLevel: classId,
-            stream: chosenStream || "General",
-            credits: 100,
-            diamonds: 50,
-            streak: 1,
-            totalScore: 0,
-            profileCompleted: true,
-            subscriptionTier: "PRO",
-            provider: "qr_student_id",
-            isQrLogin: true,
-            admissionNo: savedStudent.admissionNo,
-            rollNo: savedStudent.rollNo,
-            fatherName: savedStudent.fatherName,
-            motherName: savedStudent.motherName,
-            bloodGroup: savedStudent.bloodGroup,
-            monthlyFee: savedStudent.monthlyFee,
-          },
-          { immediate: true }
-        ).catch(() => {});
-      } catch {}
-
-      let savedFeeRecord: MonthlyFee | null = null;
-      if (collectFeeNow && grossTotal > 0 && receiptNo) {
-        const validItems = feeLines
-          .filter((l) => l.description.trim() && Number(l.due) >= 0)
-          .map((l, idx) => ({
-            id: l.id,
-            slNo: idx + 1,
-            description: l.description.trim(),
-            due: Number(l.due) || 0,
-            con: idx === 0 ? Math.min(Number(l.due) || 0, Number(concession) || 0) : 0,
-            paid: Number(l.due) || 0,
-          }));
-
-        savedFeeRecord = {
-          schoolId: school.id,
-          sessionId: activeSession?.id || "2026-27",
-          studentId: savedStudent.id,
-          studentName: savedStudent.name,
-          rollNo: savedStudent.rollNo,
-          classId,
-          month: (admissionDate || new Date().toISOString()).slice(0, 7),
-          amount: netPayable,
-          monthlyAmount: Number(monthlyFee) || 0,
-          paid: paidNow >= netPayable,
-          paidDate: new Date().toISOString(),
-          paidBy: adminUid,
-          receiptNo,
-          paidAmount: paidNow,
-          balanceDue,
-          concession: Number(concession) || 0,
-          siblingDiscountAmount: isFamilyMarked && Number(concession) > 0 ? Number(concession) : undefined,
+          sessionId: activeSession?.id || "",
+          classId: draft.classId,
+          className: draft.className,
+          stream: draft.isPrimaryForm ? chosenStream : undefined,
+          name: draft.name,
+          rollNo: sRoll,
+          admissionNo: sAdmNo,
+          gender: draft.gender,
+          dateOfBirth: draft.isPrimaryForm ? (dateOfBirth || undefined) : undefined,
+          bloodGroup: draft.isPrimaryForm ? (bloodGroup || undefined) : undefined,
+          category: draft.isPrimaryForm ? (category || "General") : "General",
+          apaarId: draft.isPrimaryForm ? (apaarId.trim() || undefined) : undefined,
+          aadhaarNo: draft.isPrimaryForm ? (aadhaarNo.trim() || undefined) : undefined,
+          fatherName: draft.fatherName || undefined,
+          fatherOccupation: draft.isPrimaryForm ? (fatherOccupation.trim() || undefined) : undefined,
+          fatherAadhaar: draft.isPrimaryForm ? (fatherAadhaar.trim() || undefined) : undefined,
+          fatherPhone: draft.isPrimaryForm ? (fatherPhone.trim() || undefined) : undefined,
+          fatherWhatsapp: draft.isPrimaryForm ? (fatherWhatsapp.trim() || undefined) : undefined,
+          motherName: draft.motherName || undefined,
+          motherOccupation: draft.isPrimaryForm ? (motherOccupation.trim() || undefined) : undefined,
+          motherAadhaar: draft.isPrimaryForm ? (motherAadhaar.trim() || undefined) : undefined,
+          motherPhone: draft.isPrimaryForm ? (motherPhone.trim() || undefined) : undefined,
+          motherWhatsapp: draft.isPrimaryForm ? (motherWhatsapp.trim() || undefined) : undefined,
+          phone: draft.phone || undefined,
+          whatsappNo: draft.whatsappNo || undefined,
+          email: draft.isPrimaryForm ? (email.trim() || undefined) : undefined,
+          address: address.trim() || undefined,
+          city: city.trim() || undefined,
+          pincode: pincode.trim() || undefined,
+          previousSchool: draft.isPrimaryForm ? (previousSchool.trim() || undefined) : undefined,
+          previousMarks: draft.isPrimaryForm ? (previousMarks.trim() || undefined) : undefined,
+          religion: religion.trim() || undefined,
+          nationality: nationality.trim() || undefined,
+          annualIncome: annualIncome.trim() || undefined,
+          identificationMark: draft.isPrimaryForm ? (identificationMark.trim() || undefined) : undefined,
+          medicalHistory: draft.isPrimaryForm ? (medicalHistory.trim() || undefined) : undefined,
+          emergencyContact: emergencyContact.trim() || undefined,
+          emergencyPhone: emergencyPhone.trim() || undefined,
+          emergencyRelation: emergencyRelation.trim() || undefined,
+          emergencyWhatsapp: emergencyWhatsapp.trim() || undefined,
+          admissionType,
+          photoUrl: draft.isPrimaryForm ? (photoUrl || undefined) : undefined,
+          usesBus: draft.usesBus,
+          busRoute: draft.usesBus ? draft.busRoute : undefined,
+          busFee: draft.usesBus ? draft.busFee : 0,
+          submittedDocs,
+          admissionReceiptNo: sReceiptNo,
+          admissionTotalAmount: collectFeeNow ? sNetPayable : 0,
+          admissionPaidAmount: collectFeeNow ? sPaidTotal : 0,
+          admissionDueBalance: collectFeeNow && sBalanceDue > 0 ? sBalanceDue : 0,
+          advanceMonthlyFeePaid: false,
+          advanceMonthlyFeeDue: draft.monthlyFee,
+          advanceMonthlyFeeMonth: (admissionDate || new Date().toISOString()).slice(0, 7),
+          monthlyFee: draft.monthlyFee,
+          baseMonthlyFee: draft.baseMonthlyFee || draft.monthlyFee,
           referredByTeacherId: resolvedRefId,
           referredByTeacherName: resolvedRefName,
-          note: isFamilyMarked && Number(concession) > 0 ? "Sibling / Same-Family Concession Applied" : undefined,
-          feeType: "admission",
-          receiptCategory: "admission",
-          includeBusFee: usesBus,
-          busFeeAmount: usesBus ? Number(busFee) || 0 : 0,
-          busRoute: usesBus ? busRoute : undefined,
-          payModeInfo: {
-            payMode,
-            date: new Date(admissionDate || Date.now()).toLocaleDateString("en-GB"),
-            bank: payMode === "Cash" ? "School Counter" : payMode,
-            number: payRefNo.trim() || "-",
-          },
-          items: validItems,
+          referralCommissionPct: resolvedRefId ? Number(commissionPct) || 10 : undefined,
+          referralCommissionScope: resolvedRefId ? commissionScope : undefined,
+          referralCommissionDuration: resolvedRefId ? commissionDuration : undefined,
+          familyGroupId: resolvedFamilyGroupId,
+          isSiblingMarked: isFamilyMarked || undefined,
+          siblingStudentIds: siblingIds.length > 0 ? siblingIds : undefined,
+          siblingDiscountPct: canGiveDiscount && isFamilyMarked && siblingDiscountPct > 0 ? Math.min(10, siblingDiscountPct) : undefined,
+          siblingDiscountAmount: canGiveDiscount && monthlySiblingConcession > 0 ? monthlySiblingConcession : undefined,
+          admissionSiblingDiscount: canGiveDiscount && isFamilyMarked && draft.concessionAmt > 0 ? draft.concessionAmt : undefined,
+          joinDate: admissionDate || new Date().toISOString().slice(0, 10),
+          active: true,
+          createdAt: new Date().toISOString(),
         };
-        await saveFee(savedFeeRecord);
+
+        const saved = await saveStudent(sObj);
+
+        try {
+          const curLocals = getLocalStudents(school.id);
+          setLocalStudents(school.id, [saved, ...curLocals.filter((s) => s.id !== saved.id)]);
+          const safeSlug = (school.code || school.id || "school").toLowerCase().replace(/[^a-z0-9]/g, "") || "school";
+          const studentEmail =
+            saved.email ||
+            `${sAdmNo.toLowerCase().replace(/[^a-z0-9]/g, "")}@${safeSlug}.edu.in`;
+
+          await saveSchoolUserProfile({
+            uid: saved.id,
+            schoolId: school.id,
+            role: "SCHOOL_STUDENT",
+            name: saved.name,
+            email: studentEmail,
+            studentRef: saved.id,
+            classId: draft.classId,
+            sessionId: activeSession?.id || "2026-27",
+          }).catch(() => {});
+
+          saveUserToLive(
+            {
+              id: saved.id,
+              uid: saved.id,
+              displayId: `ROLL-${saved.rollNo}`,
+              name: saved.name,
+              email: studentEmail,
+              mobile: saved.phone || "",
+              role: "STUDENT",
+              schoolId: school.id,
+              classLevel: draft.classId,
+              stream: chosenStream || "General",
+              credits: 100,
+              diamonds: 50,
+              streak: 1,
+              totalScore: 0,
+              profileCompleted: true,
+              subscriptionTier: "PRO",
+              provider: "qr_student_id",
+              isQrLogin: true,
+              admissionNo: saved.admissionNo,
+              rollNo: saved.rollNo,
+              fatherName: saved.fatherName,
+              motherName: saved.motherName,
+              bloodGroup: saved.bloodGroup,
+              monthlyFee: saved.monthlyFee,
+            },
+            { immediate: true }
+          ).catch(() => {});
+
+          // Auto-enroll biometric Face ID for new student so logout -> Face login works seamlessly
+          if (saved.photoUrl) {
+            enrollStudentFromPhotoUrl({
+              id: saved.id,
+              schoolId: school.id,
+              name: saved.name,
+              rollNo: String(saved.rollNo || ""),
+              classId: saved.classId,
+              className: saved.className,
+              photoUrl: saved.photoUrl,
+            }).catch(() => {});
+          }
+        } catch {}
+
+        let savedFeeRec: MonthlyFee | null = null;
+        if (collectFeeNow && draft.grossTotal > 0 && sReceiptNo) {
+          const validItems = draft.feeLines
+            .filter((l) => l.description.trim() && Number(l.due) >= 0)
+            .map((l, idx) => ({
+              id: l.id,
+              slNo: idx + 1,
+              description: l.description.trim(),
+              due: Number(l.due) || 0,
+              con: idx === 0 ? Math.min(Number(l.due) || 0, draft.concessionAmt) : 0,
+              paid: Number(l.due) || 0,
+            }));
+
+          const sPayMode = buildSplitPayModeInfo({
+            onlineAmount: draft.allocatedPaidOnline,
+            offlineAmount: draft.allocatedPaidOffline,
+            date: splitPayInfo.date,
+            number: payRefNo.trim() || "-",
+          });
+
+          savedFeeRec = {
+            schoolId: school.id,
+            sessionId: activeSession?.id || "2026-27",
+            studentId: saved.id,
+            studentName: saved.name,
+            rollNo: saved.rollNo,
+            classId: draft.classId,
+            month: (admissionDate || new Date().toISOString()).slice(0, 7),
+            amount: sNetPayable,
+            monthlyAmount: draft.monthlyFee,
+            paid: sPaidTotal >= sNetPayable,
+            paidDate: new Date().toISOString(),
+            paidBy: adminUid,
+            receiptNo: sReceiptNo,
+            paidAmount: sPaidTotal,
+            balanceDue: sBalanceDue,
+            concession: draft.concessionAmt,
+            siblingDiscountAmount: isFamilyMarked && draft.concessionAmt > 0 ? draft.concessionAmt : undefined,
+            referredByTeacherId: resolvedRefId,
+            referredByTeacherName: resolvedRefName,
+            note: draft.concessionAmt > 0
+              ? `${draft.discountWhereLabel} • Waived (Not carried forward)`
+              : undefined,
+            feeType: "admission",
+            receiptCategory: "admission",
+            includeBusFee: draft.usesBus,
+            busFeeAmount: draft.usesBus ? draft.busFee : 0,
+            busRoute: draft.usesBus ? draft.busRoute : undefined,
+            payModeInfo: sPayMode,
+            items: validItems,
+          };
+          await saveFee(savedFeeRec);
+        }
+
+        if (canGiveDiscount && draft.concessionAmt > 0) {
+          recordDiscountEntry(school.id, {
+            studentId: saved.id,
+            studentName: saved.name,
+            className: draft.className,
+            rollNo: saved.rollNo,
+            category: batchQueue.length > 0 ? "multi_admission" : "admission",
+            whereLabel: draft.discountWhereLabel,
+            grossAmount: draft.grossTotal,
+            discountAmount: draft.concessionAmt,
+            discountPct: draft.grossTotal > 0 ? Math.round((draft.concessionAmt / draft.grossTotal) * 1000) / 10 : 5,
+            givenByName: actorName,
+            givenByRole: userRole,
+            note: `Online ₹${draft.allocatedPaidOnline} + Offline ₹${draft.allocatedPaidOffline}`,
+          });
+        }
+
+        return { student: saved, fee: savedFeeRec };
+      };
+
+      // Build combined list (queued batch + current form)
+      const allDrafts = [
+        ...batchQueue.map((b) => ({
+          name: b.name,
+          classId: b.classId,
+          className: b.className,
+          rollNo: b.rollNo,
+          admissionNo: b.admissionNo,
+          gender: b.gender,
+          fatherName: b.fatherName,
+          motherName: b.motherName,
+          phone: b.phone,
+          whatsappNo: b.whatsappNo,
+          monthlyFee: b.monthlyFee,
+          baseMonthlyFee: b.baseMonthlyFee,
+          usesBus: b.usesBus,
+          busRoute: b.busRoute,
+          busFee: b.busFee,
+          feeLines: b.feeLines,
+          grossTotal: b.grossTotal,
+          rawConcession: b.concession,
+          isPrimaryForm: false,
+        })),
+        {
+          name: name.trim(),
+          classId,
+          className: selectedClass ? `${selectedClass.name}${selectedClass.section ? ` (${selectedClass.section})` : ""}` : "",
+          rollNo: finalRoll,
+          admissionNo: finalAdmNo,
+          gender,
+          fatherName: fatherName.trim(),
+          motherName: motherName.trim(),
+          phone: phone.trim() || fatherPhone.trim() || whatsappNo.trim(),
+          whatsappNo: whatsappNo.trim() || fatherWhatsapp.trim() || phone.trim(),
+          monthlyFee: Number(monthlyFee) || 0,
+          baseMonthlyFee: baseMonthlyFee || Number(monthlyFee) || 0,
+          usesBus,
+          busRoute: busRoute.trim(),
+          busFee: Number(busFee) || 0,
+          feeLines,
+          grossTotal,
+          rawConcession: effectiveConcession,
+          isPrimaryForm: true,
+        },
+      ];
+
+      const totalGrossAll = allDrafts.reduce((s, d) => s + d.grossTotal, 0);
+      let remainingOneTimeDisc = batchQueue.length > 0 && batchDiscountMode === "one_time_total" ? effectiveBatchTotalDiscount : 0;
+      let remainingOnline = onlinePaidNow;
+      let remainingOffline = offlinePaidNow;
+
+      let primarySaved: { student: SchoolStudent; fee: MonthlyFee | null } | null = null;
+      for (let i = 0; i < allDrafts.length; i++) {
+        const d = allDrafts[i];
+        let discAmt = 0;
+        let whereLabel = "Admission Fee";
+        if (canGiveDiscount) {
+          if (batchQueue.length > 0 && batchDiscountMode === "one_time_total") {
+            whereLabel = "Multi-Admission (One-Time Total)";
+            if (i === allDrafts.length - 1) {
+              discAmt = Math.min(d.grossTotal, remainingOneTimeDisc);
+            } else {
+              const share = totalGrossAll > 0 ? Math.round((d.grossTotal / totalGrossAll) * effectiveBatchTotalDiscount) : 0;
+              discAmt = Math.min(remainingOneTimeDisc, share);
+              remainingOneTimeDisc = Math.max(0, remainingOneTimeDisc - discAmt);
+            }
+          } else {
+            whereLabel = batchQueue.length > 0 ? "Multi-Admission (Per Head)" : "Admission Fee";
+            discAmt = clampDiscountAmount(d.grossTotal, d.rawConcession);
+          }
+        }
+
+        const dNet = Math.max(0, d.grossTotal - discAmt);
+        const allocOnline = Math.min(dNet, remainingOnline);
+        remainingOnline = Math.max(0, remainingOnline - allocOnline);
+        const allocOffline = Math.min(Math.max(0, dNet - allocOnline), remainingOffline);
+        remainingOffline = Math.max(0, remainingOffline - allocOffline);
+
+        const res = await saveSingleStudentBundle({
+          ...d,
+          concessionAmt: discAmt,
+          allocatedPaidOnline: allocOnline,
+          allocatedPaidOffline: allocOffline,
+          discountWhereLabel: whereLabel,
+        });
+
+        if (isFamilyMarked && resolvedFamilyGroupId && linkedSiblings.length > 0) {
+          linkedSiblings.forEach((sib) => {
+            const mergedSibIds = Array.from(new Set([...(sib.siblingStudentIds || []), res.student.id]));
+            void updateStudent(school.id, sib.id, {
+              familyGroupId: sib.familyGroupId || resolvedFamilyGroupId,
+              isSiblingMarked: true,
+              siblingStudentIds: mergedSibIds,
+            });
+          });
+        }
+
+        if (d.isPrimaryForm) {
+          primarySaved = res;
+        }
       }
 
-      onSuccess(savedStudent, savedFeeRecord);
+      if (primarySaved) {
+        onSuccess(primarySaved.student, primarySaved.fee);
+      }
     } catch (err: any) {
       console.error("Admission save error:", err);
       setError(err?.message || "Admission save करने में समस्या आई।");
@@ -978,6 +1278,64 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                 />
               </div>
             </div>
+
+            {/* Online Admission Matching Structure: Aadhaar & Address (Powers Auto Sibling Detection) */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-2.5 border-t border-slate-200 dark:border-slate-700">
+              <div>
+                <label className="text-[11px] font-bold text-blue-600 dark:text-blue-400 block mb-1">
+                  💳 Student Aadhaar (छात्र आधार)
+                </label>
+                <input
+                  type="text"
+                  maxLength={14}
+                  value={aadhaarNo}
+                  onChange={(e) => setAadhaarNo(e.target.value.replace(/[^\d\s]/g, ""))}
+                  placeholder="12-digit UIDAI"
+                  className="w-full px-3 py-2 rounded-xl border border-blue-200 dark:border-blue-900 bg-white dark:bg-slate-900 text-xs font-mono font-bold text-slate-800 dark:text-white"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 block mb-1">
+                  💳 Father Aadhaar (पिता का आधार)
+                </label>
+                <input
+                  type="text"
+                  maxLength={14}
+                  value={fatherAadhaar}
+                  onChange={(e) => setFatherAadhaar(e.target.value.replace(/[^\d\s]/g, ""))}
+                  placeholder="12-digit Aadhaar"
+                  className="w-full px-3 py-2 rounded-xl border border-indigo-200 dark:border-indigo-900 bg-white dark:bg-slate-900 text-xs font-mono font-bold text-slate-800 dark:text-white"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-pink-600 dark:text-pink-400 block mb-1">
+                  💳 Mother Aadhaar (माता का आधार)
+                </label>
+                <input
+                  type="text"
+                  maxLength={14}
+                  value={motherAadhaar}
+                  onChange={(e) => setMotherAadhaar(e.target.value.replace(/[^\d\s]/g, ""))}
+                  placeholder="12-digit Aadhaar"
+                  className="w-full px-3 py-2 rounded-xl border border-pink-200 dark:border-pink-900 bg-white dark:bg-slate-900 text-xs font-mono font-bold text-slate-800 dark:text-white"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 dark:text-slate-300 block mb-1">
+                  📍 Village / Address (गाँव/मोहल्ला/पता)
+                </label>
+                <input
+                  type="text"
+                  value={address}
+                  onChange={(e) => setAddress(e.target.value)}
+                  placeholder="Village / Street Address"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-800 dark:text-white"
+                />
+              </div>
+            </div>
           </div>
 
           {/* SAME-FAMILY SIBLING AUTO-DISCOUNT & TEACHER 10% REFERRAL COMMISSION */}
@@ -986,17 +1344,19 @@ export const DirectAdmissionModal: React.FC<Props> = ({
             manualSiblingMarked={manualSiblingMarked}
             onManualSiblingChange={setManualSiblingMarked}
             siblingDiscountPct={siblingDiscountPct}
-            siblingAdmissionDiscountAmt={concession}
+            siblingAdmissionDiscountAmt={effectiveConcession}
             applyMonthlySiblingDiscount={applyMonthlySiblingDiscount}
             baseMonthlyTuition={baseMonthlyFee}
             eligibleAdmissionGrossExclBus={eligibleGrossExclBus}
             onApplySiblingPresetPct={handleApplySiblingPresetPct}
             onCustomAdmissionDiscountChange={(amt) => {
+              if (!canGiveDiscount) return;
               setSiblingDiscountPct(0);
-              setConcession(amt);
+              setConcession(clampDiscountAmount(grossTotal, amt));
               setPaidManuallyEdited(false);
             }}
             onToggleMonthlySiblingDiscount={handleToggleMonthlySiblingDiscount}
+            canGiveDiscount={canGiveDiscount}
             referrers={referrers}
             referredByTeacherId={referredByTeacherId}
             customTeacherName={customTeacherName}
@@ -1550,31 +1910,159 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                   ))}
                 </div>
 
+                {/* Multi-Admission Batch (2-3 Students) Bar */}
+                <div className="bg-white dark:bg-slate-900 rounded-xl p-3 border border-indigo-200 dark:border-indigo-800/70 space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-[11px] font-black text-indigo-800 dark:text-indigo-300">
+                        👨‍👩‍👧‍👦 एक साथ 2–3 एडमिशन (Multi-Admission Batch: {batchQueue.length + 1}/3)
+                      </p>
+                      <p className="text-[10px] text-slate-500">
+                        {canGiveDiscount
+                          ? "2–3 एडमिशन एक साथ करने पर Per-Head या Total पर एक बार Discount दे सकते हैं।"
+                          : "एक साथ 2–3 छात्रों का एडमिशन एक ही रसीद/भुगतान में दर्ज करें।"}
+                      </p>
+                    </div>
+                    {batchQueue.length < 2 && (
+                      <button
+                        type="button"
+                        onClick={handleAddToBatchQueue}
+                        className="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-black cursor-pointer inline-flex items-center gap-1 shadow-xs"
+                      >
+                        <Plus className="w-3.5 h-3.5" /> Add Next Student ({batchQueue.length + 1}→{batchQueue.length + 2})
+                      </button>
+                    )}
+                  </div>
+
+                  {batchQueue.length > 0 && (
+                    <div className="space-y-1.5 pt-1 border-t border-slate-200 dark:border-slate-800">
+                      {batchQueue.map((b, idx) => (
+                        <div key={b.id} className="flex items-center justify-between gap-2 text-[11px] bg-indigo-50/70 dark:bg-indigo-950/30 px-2.5 py-1.5 rounded-lg">
+                          <span className="font-bold text-slate-800 dark:text-slate-200 truncate">
+                            #{idx + 1} {b.name} ({b.className}) — ₹{b.grossTotal.toLocaleString("en-IN")}
+                            {canGiveDiscount && batchDiscountMode === "per_head" && b.concession > 0 && (
+                              <span className="text-emerald-600 ml-1.5">(-₹{b.concession})</span>
+                            )}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setBatchQueue((p) => p.filter((x) => x.id !== b.id))}
+                            className="text-rose-500 hover:text-rose-700 font-bold text-[10px] cursor-pointer"
+                          >
+                            हटाएं
+                          </button>
+                        </div>
+                      ))}
+
+                      {canGiveDiscount && (
+                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                          <span className="text-[10px] font-black text-slate-500 uppercase">Discount Type:</span>
+                          <button
+                            type="button"
+                            onClick={() => setBatchDiscountMode("per_head")}
+                            className={`px-2.5 py-1 rounded-lg text-[10px] font-black cursor-pointer border ${
+                              batchDiscountMode === "per_head"
+                                ? "bg-indigo-600 text-white border-indigo-600"
+                                : "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200"
+                            }`}
+                          >
+                            Per-Head (अलग-अलग)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setBatchDiscountMode("one_time_total")}
+                            className={`px-2.5 py-1 rounded-lg text-[10px] font-black cursor-pointer border ${
+                              batchDiscountMode === "one_time_total"
+                                ? "bg-emerald-600 text-white border-emerald-600"
+                                : "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200"
+                            }`}
+                          >
+                            Only One Total Discount (कुल पर एक बार)
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Role-based Discount Notice for Teacher */}
+                {!canGiveDiscount && (
+                  <div className="px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-[11px] font-bold text-amber-800 dark:text-amber-300">
+                    ⚠️ नोट: छूट (Discount) देने का विकल्प केवल Admin / Accountant के पास है। कम राशि जमा करने पर शेष राशि Due (बकाया) में गिनी जाएगी।
+                  </div>
+                )}
+
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-2 border-t border-emerald-200/80 dark:border-emerald-800/60">
+                  {canGiveDiscount && (
+                    <div>
+                      <div className="flex items-center justify-between gap-1 mb-1">
+                        <label className="text-[10px] font-bold uppercase text-slate-500">
+                          {batchQueue.length > 0 && batchDiscountMode === "one_time_total"
+                            ? "Total Discount (₹)"
+                            : "Discount (₹)"}
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const targetGross = batchQueue.length > 0 && batchDiscountMode === "one_time_total" ? batchGrossSum : grossTotal;
+                            const fivePct = Math.round((targetGross * 5) / 100);
+                            if (batchQueue.length > 0 && batchDiscountMode === "one_time_total") {
+                              setBatchTotalDiscount(fivePct);
+                            } else {
+                              setConcession(fivePct);
+                            }
+                            setPaidManuallyEdited(false);
+                          }}
+                          className="px-1.5 py-0.5 rounded bg-emerald-100 hover:bg-emerald-200 text-emerald-800 text-[9px] font-black cursor-pointer"
+                        >
+                          {DISPLAY_DISCOUNT_LABEL}
+                        </button>
+                      </div>
+                      <input
+                        type="number"
+                        min={0}
+                        value={batchQueue.length > 0 && batchDiscountMode === "one_time_total" ? batchTotalDiscount : concession}
+                        onChange={(e) => {
+                          const rawVal = Math.max(0, Number(e.target.value));
+                          if (batchQueue.length > 0 && batchDiscountMode === "one_time_total") {
+                            setBatchTotalDiscount(clampDiscountAmount(batchGrossSum, rawVal));
+                          } else {
+                            setConcession(clampDiscountAmount(grossTotal, rawVal));
+                          }
+                          setPaidManuallyEdited(false);
+                        }}
+                        className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-800 dark:text-white"
+                      />
+                    </div>
+                  )}
+
                   <div>
-                    <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">
-                      Concession / छूट (₹)
+                    <label className="text-[10px] font-bold uppercase text-blue-700 dark:text-blue-400 block mb-1">
+                      Online / UPI (₹)
                     </label>
                     <input
                       type="number"
                       min={0}
-                      value={concession}
-                      onChange={(e) => setConcession(Math.max(0, Number(e.target.value)))}
-                      className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-800 dark:text-white"
+                      value={onlinePaidInput}
+                      onChange={(e) => {
+                        setPaidManuallyEdited(true);
+                        setOnlinePaidInput(e.target.value);
+                      }}
+                      className="w-full px-2.5 py-1.5 rounded-xl border-2 border-blue-400 bg-white dark:bg-slate-900 text-xs font-black text-blue-700 dark:text-blue-300"
                     />
                   </div>
 
                   <div>
                     <label className="text-[10px] font-bold uppercase text-emerald-700 dark:text-emerald-400 block mb-1">
-                      Paid Now / प्राप्त राशि (₹)
+                      Offline / Cash (₹)
                     </label>
                     <input
                       type="number"
                       min={0}
-                      value={paidAmountInput}
+                      value={offlinePaidInput}
                       onChange={(e) => {
                         setPaidManuallyEdited(true);
-                        setPaidAmountInput(e.target.value);
+                        setOfflinePaidInput(e.target.value);
                       }}
                       className="w-full px-2.5 py-1.5 rounded-xl border-2 border-emerald-500 bg-white dark:bg-slate-900 text-xs font-black text-emerald-700 dark:text-emerald-300"
                     />
@@ -1582,24 +2070,7 @@ export const DirectAdmissionModal: React.FC<Props> = ({
 
                   <div>
                     <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">
-                      Payment Mode
-                    </label>
-                    <select
-                      value={payMode}
-                      onChange={(e) => setPayMode(e.target.value)}
-                      className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-800 dark:text-white"
-                    >
-                      <option value="Cash">Cash (नकद)</option>
-                      <option value="Online / UPI">Online / UPI / QR</option>
-                      <option value="Bank Transfer">Bank Transfer</option>
-                      <option value="Cheque">Cheque / DD</option>
-                      <option value="Card">Debit / Credit Card</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">
-                      UTR / Cheque No (Optional)
+                      UTR / Ref No (Optional)
                     </label>
                     <input
                       type="text"
@@ -1613,11 +2084,21 @@ export const DirectAdmissionModal: React.FC<Props> = ({
 
                 <div className="flex flex-wrap items-center justify-between gap-2 bg-white dark:bg-slate-900 rounded-xl px-3.5 py-2 border border-emerald-200 dark:border-emerald-800 text-xs">
                   <span>
-                    Total: <strong>₹{grossTotal.toLocaleString("en-IN")}</strong>
-                    {concession > 0 && <span className="text-emerald-600 ml-2">Discount: -₹{concession.toLocaleString("en-IN")}</span>}
+                    Total: <strong>₹{(batchQueue.length > 0 ? batchGrossSum : grossTotal).toLocaleString("en-IN")}</strong>
+                    {canGiveDiscount && (batchQueue.length > 0 ? effectiveBatchTotalDiscount : effectiveConcession) > 0 && (
+                      <span className="text-emerald-600 font-bold ml-2">
+                        Discount: -₹{(batchQueue.length > 0 ? effectiveBatchTotalDiscount : effectiveConcession).toLocaleString("en-IN")}
+                      </span>
+                    )}
                   </span>
-                  <div className="flex items-center gap-3">
-                    <span className="text-emerald-700 dark:text-emerald-400 font-black">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="text-blue-700 dark:text-blue-400 font-bold">
+                      Online: ₹{onlinePaidNow.toLocaleString("en-IN")}
+                    </span>
+                    <span className="text-emerald-700 dark:text-emerald-400 font-bold">
+                      Offline: ₹{offlinePaidNow.toLocaleString("en-IN")}
+                    </span>
+                    <span className="text-slate-900 dark:text-white font-black">
                       Paid: ₹{paidNow.toLocaleString("en-IN")}
                     </span>
                     <span className={`font-black ${balanceDue > 0 ? "text-rose-600" : "text-slate-500"}`}>

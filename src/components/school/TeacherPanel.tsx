@@ -32,7 +32,10 @@ import {
   GraduationCap, LogOut, Home, Megaphone, Image as ImageIcon,
   Clock, Book, MessageSquare, Plus, X, Trash2, Check, Layers, IndianRupee, Wallet, Bell,
   Youtube, RotateCw, Menu, Building2, AlertCircle, UserPlus, Crown, ArrowRight,
-  Cake, Gift
+  Sun, Moon, Palette,
+  Cake, Gift,
+  Smartphone, Laptop, Monitor,
+  Camera
 } from "lucide-react";
 import { TimetableManager } from "./TimetableManager";
 import { ClassroomVideoArchive } from "./ClassroomVideoArchive";
@@ -46,6 +49,10 @@ import { getSavedSchoolLogo } from "./feeReceiptUtils";
 import { ClassCurriculumNotesManager } from "./ClassCurriculumNotesManager";
 import { isSchoolEliteCurriculum } from "../../school-types";
 import { GroupStudyModal } from "../GroupStudyModal";
+import { ParentLeaveManager } from "./ParentLeaveManager";
+import { PtmSchedulerModal } from "./PtmSchedulerModal";
+import { QuestionPaperBuilder } from "./QuestionPaperBuilder";
+import { UniversalFaceIdStudioModal } from "./UniversalFaceIdStudioModal";
 
 interface Props {
   schoolId: string;
@@ -78,7 +85,10 @@ type TeacherView =
   | "referrals"
   | "messenger_broadcast"
   | "online_admission"
-  | "school_study_room";
+  | "school_study_room"
+  | "leaves_desk"
+  | "question_paper_builder"
+  | "ptm_scheduler";
 
 export const COMMON_BOOK_PRESETS = [
   { name: "Hindi", icon: "📖", category: "Language" },
@@ -190,13 +200,69 @@ export const TeacherPanel: React.FC<Props> = ({
   });
 
   // Native Landscape / Rotate state
-  const [isNativeLandscape, setIsNativeLandscape] = useState(false);
+  const [isRotatedLandscape, setIsRotatedLandscape] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("school_erp_rotated_landscape") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [isNativeLandscape, setIsNativeLandscape] = useState(() => {
+    if (typeof window !== "undefined") {
+      return window.innerWidth > window.innerHeight;
+    }
+    return false;
+  });
+  const isEffectiveLandscape = isRotatedLandscape || isNativeLandscape;
   const [showRotatePrompt, setShowRotatePrompt] = useState(false);
+
+  // 3-Theme Switcher (White / Black / Midnight Current)
+  const [appTheme, setAppTheme] = useState<"current" | "white" | "black">(() => {
+    try {
+      const saved = (localStorage.getItem("nst_app_theme") || localStorage.getItem("nst_student_theme")) as any;
+      if (saved === "white" || saved === "black" || saved === "current") return saved;
+    } catch {}
+    return "current";
+  });
+
+  const applyTeacherTheme = (nextTheme: "current" | "white" | "black") => {
+    setAppTheme(nextTheme);
+    try {
+      localStorage.setItem("nst_app_theme", nextTheme);
+      localStorage.setItem("nst_student_theme", nextTheme);
+      if (typeof document !== "undefined") {
+        document.documentElement.classList.remove(
+          "teacher-theme-white",
+          "teacher-theme-black",
+          "teacher-theme-current",
+          "app-theme-white",
+          "app-theme-black",
+          "app-theme-current",
+          "dark-mode-black",
+          "dark-mode-blue"
+        );
+        document.documentElement.classList.add(`teacher-theme-${nextTheme}`, `app-theme-${nextTheme}`);
+        if (nextTheme === "white") {
+          document.documentElement.classList.remove("dark", "dark-mode");
+        } else if (nextTheme === "black") {
+          document.documentElement.classList.add("dark", "dark-mode", "dark-mode-black");
+        } else {
+          document.documentElement.classList.add("dark", "dark-mode", "dark-mode-blue");
+        }
+      }
+      window.dispatchEvent(new Event("nst-dark-theme-change"));
+    } catch {}
+  };
+
+  useEffect(() => {
+    applyTeacherTheme(appTheme);
+  }, []);
 
   // Students state
   const [allStudents, setAllStudents] = useState<SchoolStudent[]>([]);
   const [studentSearch, setStudentSearch] = useState("");
   const [selectedClassFilter, setSelectedClassFilter] = useState<string>("ALL");
+  const [showFaceStudio, setShowFaceStudio] = useState(false);
 
   // Multi-book addition state
   const [showAddBooksModal, setShowAddBooksModal] = useState(false);
@@ -517,35 +583,47 @@ export const TeacherPanel: React.FC<Props> = ({
   }, [allStudents]);
 
   const handleToggleScreenRotate = async () => {
+    const nextIsRotated = !isRotatedLandscape;
+    setIsRotatedLandscape(nextIsRotated);
     try {
-      if (document.fullscreenElement) {
+      localStorage.setItem("school_erp_rotated_landscape", nextIsRotated ? "true" : "false");
+    } catch {}
+
+    if (nextIsRotated) {
+      try {
+        const root = document.documentElement;
+        if (!document.fullscreenElement) {
+          if (root.requestFullscreen) {
+            await root.requestFullscreen().catch(() => {});
+          } else if ((root as any).webkitRequestFullscreen) {
+            await (root as any).webkitRequestFullscreen().catch(() => {});
+          }
+        }
+      } catch {}
+
+      let locked = false;
+      try {
+        if (screen.orientation && (screen.orientation as any).lock) {
+          await (screen.orientation as any).lock("landscape");
+          locked = true;
+        }
+      } catch {}
+
+      if (!locked) {
+        setShowRotatePrompt(true);
+        setTimeout(() => setShowRotatePrompt(false), 4500);
+      }
+    } else {
+      try {
         if (screen.orientation && (screen.orientation as any).unlock) {
           (screen.orientation as any).unlock();
         }
-        await document.exitFullscreen();
-        setIsNativeLandscape(false);
-      } else {
-        const root = document.documentElement;
-        if (root.requestFullscreen) {
-          await root.requestFullscreen();
+        if (document.fullscreenElement && document.exitFullscreen) {
+          await document.exitFullscreen().catch(() => {});
+        } else if ((document as any).webkitExitFullscreen) {
+          await (document as any).webkitExitFullscreen().catch(() => {});
         }
-        if (screen.orientation && (screen.orientation as any).lock) {
-          try {
-            await (screen.orientation as any).lock("landscape");
-            setIsNativeLandscape(true);
-            setShowRotatePrompt(false);
-          } catch {
-            setShowRotatePrompt(true);
-            setTimeout(() => setShowRotatePrompt(false), 5000);
-          }
-        } else {
-          setShowRotatePrompt(true);
-          setTimeout(() => setShowRotatePrompt(false), 5000);
-        }
-      }
-    } catch {
-      setShowRotatePrompt(true);
-      setTimeout(() => setShowRotatePrompt(false), 5000);
+      } catch {}
     }
   };
 
@@ -659,7 +737,9 @@ export const TeacherPanel: React.FC<Props> = ({
         { id: "classes" as TeacherView, label: "My Classes & Sections", icon: BookOpen, desc: "कक्षाएं व छात्र रोस्टर" },
         { id: "all_students" as TeacherView, label: "Students Directory", icon: Users, desc: "छात्र प्रोफाइल व रोल नंबर" },
         { id: "attendance" as TeacherView, label: "Daily Attendance", icon: ClipboardList, desc: "दैनिक रोल-कॉल व उपस्थिति" },
+        { id: "leaves_desk" as TeacherView, label: "Student Leaves Desk", icon: Calendar, desc: "छुट्टी आवेदन व 1-टैप अप्रूवल" },
         { id: "marks" as TeacherView, label: "Marks & Exam Entry", icon: Edit3, desc: "यूनिट टेस्ट व परीक्षा अंक" },
+        { id: "question_paper_builder" as TeacherView, label: "Question Paper Builder", icon: FileText, desc: "अर्धवार्षिक व वार्षिक परीक्षा पेपर" },
         { id: "homework" as TeacherView, label: "Daily Homework & Diary", icon: BookOpen, desc: "दैनिक गृहकार्य व डायरी" },
         { id: "timetable" as TeacherView, label: "Timetable & Routine", icon: Clock, desc: "साप्ताहिक घंटी व समय सारणी" },
       ]
@@ -696,6 +776,7 @@ export const TeacherPanel: React.FC<Props> = ({
         { id: "absentee" as TeacherView, label: "Absenty Action Center", icon: AlertCircle, desc: "1-दिन अलर्ट व 2-दिन+ कॉल" },
         { id: "messenger_broadcast" as TeacherView, label: "Messenger & Broadcast", icon: MessageSquare, desc: "क्लास ग्रुप्स व 1-वे पुश अलर्ट्स" },
         { id: "parent_queries" as TeacherView, label: "Parent Helpdesk & Leaves", icon: MessageSquare, desc: "अभिभावक संवाद व लीव आवेदन" },
+        { id: "ptm_scheduler" as TeacherView, label: "PTM Slot Scheduler", icon: Calendar, desc: "अभिभावक-शिक्षक बैठक समय सारणी" },
       ]
     },
     // Referral Incentive is ONLY visible to teachers approved by Admin
@@ -748,7 +829,7 @@ export const TeacherPanel: React.FC<Props> = ({
   // ── DESKTOP PERMANENT LEFT SIDEBAR (20% SLIMMER: w-52 lg:w-56) ───────────
   const renderDesktopSidebar = () => {
     const displaySchoolLogo = school ? getSavedSchoolLogo(school.logoUrl, schoolId) : "";
-    const isSidebarDefault = isNativeLandscape;
+    const isSidebarDefault = isEffectiveLandscape;
 
     if (isSidebarHidden) {
       return (
@@ -1030,31 +1111,28 @@ export const TeacherPanel: React.FC<Props> = ({
   const renderTopHeader = () => {
     return (
       <header className="sticky top-0 z-20 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 py-2.5 flex items-center justify-between gap-3 shadow-xs">
-        {/* Left: Mobile Toggle Button & View Name */}
+        {/* Left: View Name & Navigation */}
         <div className="flex items-center gap-2.5 min-w-0">
-          {!isNativeLandscape && (
-            <button
-              type="button"
-              onClick={() => setIsSidebarOpen(true)}
-              className="md:hidden p-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-black text-xs flex items-center gap-1.5 shadow-md shadow-slate-900/20 active:scale-95 transition cursor-pointer"
-              title="मेनू खोलें"
-            >
-              <Menu className="w-4 h-4 text-amber-400" />
-              <span className="text-[11px]">मेनू</span>
-            </button>
-          )}
-
           <div className="min-w-0 flex items-center gap-2">
             {view !== "dashboard" && (
               <button
                 type="button"
                 onClick={() => setView("dashboard")}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition cursor-pointer"
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition cursor-pointer shrink-0"
               >
                 <ChevronLeft className="w-3.5 h-3.5" />
-                <span>Dashboard</span>
+                <span className="hidden xs:inline">Dashboard</span>
               </button>
             )}
+
+            {/* Academic Session Badge on Left */}
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-emerald-500/15 text-emerald-800 dark:text-emerald-200 border border-emerald-500/35 text-[11px] font-black shrink-0">
+              <Calendar className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="tabular-nums font-mono">
+                सत्र: {activeSession?.name ? activeSession.name.replace(/Academic Session |Session /i, "") : "2026-27"}
+              </span>
+            </span>
             <h1 className="text-xs sm:text-sm font-black text-slate-800 dark:text-white capitalize truncate">
               {view === "dashboard"
                 ? "Teacher Dashboard (अकादमिक पोर्टल)"
@@ -1080,6 +1158,12 @@ export const TeacherPanel: React.FC<Props> = ({
                 ? "Class Messenger Broadcast"
                 : view === "parent_queries"
                 ? "Parent Helpdesk & Queries"
+                : view === "leaves_desk"
+                ? "Student Leaves Desk (छुट्टी आवेदन व अप्रूवल)"
+                : view === "question_paper_builder"
+                ? "Question Paper & Blueprint Generator"
+                : view === "ptm_scheduler"
+                ? "PTM Slot Scheduler & Appointments"
                 : view === "online_admission"
                 ? "Online Student Admission (छात्र प्रवेश)"
                 : view === "referrals"
@@ -1089,21 +1173,77 @@ export const TeacherPanel: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Right: Screen Rotate Toggle & Faculty Badge */}
+        {/* Right: 3-Theme Switcher, Screen Rotate Toggle & Faculty Badge */}
         <div className="flex items-center gap-2 shrink-0">
+          {/* 3-Theme Switcher Segmented Pill */}
+          <div className="inline-flex items-center p-0.5 rounded-xl bg-slate-800/90 border border-slate-700/80 shadow-xs">
+            <button
+              type="button"
+              onClick={() => applyTeacherTheme("white")}
+              className={`px-2 py-1 rounded-lg text-[10px] sm:text-xs font-black flex items-center gap-1 transition cursor-pointer ${
+                appTheme === "white"
+                  ? "bg-amber-400 text-slate-950 shadow-sm"
+                  : "text-slate-400 hover:text-white"
+              }`}
+              title="White (Light) थीम - सफेद"
+            >
+              <Sun className="w-3.5 h-3.5" />
+              <span className="hidden xs:inline">White</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => applyTeacherTheme("black")}
+              className={`px-2 py-1 rounded-lg text-[10px] sm:text-xs font-black flex items-center gap-1 transition cursor-pointer ${
+                appTheme === "black"
+                  ? "bg-cyan-400 text-slate-950 shadow-sm"
+                  : "text-slate-400 hover:text-white"
+              }`}
+              title="Black (AMOLED) थीम - सुपर डार्क"
+            >
+              <Moon className="w-3.5 h-3.5" />
+              <span className="hidden xs:inline">Black</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => applyTeacherTheme("current")}
+              className={`px-2 py-1 rounded-lg text-[10px] sm:text-xs font-black flex items-center gap-1 transition cursor-pointer ${
+                appTheme === "current"
+                  ? "bg-indigo-600 text-white shadow-sm"
+                  : "text-slate-400 hover:text-white"
+              }`}
+              title="Midnight (Default) थीम - डिफ़ॉल्ट"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span className="hidden xs:inline">Midnight</span>
+            </button>
+          </div>
+
+          {/* Mobile / Laptop Rotate Toggle Button */}
           <button
             type="button"
             onClick={handleToggleScreenRotate}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl font-black text-xs transition cursor-pointer active:scale-95 shadow-md ${
-              isNativeLandscape
-                ? "bg-gradient-to-r from-emerald-400 via-teal-400 to-emerald-500 text-slate-950 ring-2 ring-emerald-300 shadow-emerald-500/30"
-                : "bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/30"
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl font-black text-xs transition cursor-pointer active:scale-95 shadow-md border ${
+              isEffectiveLandscape
+                ? "bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 text-white border-cyan-300/60 shadow-cyan-500/30 ring-2 ring-cyan-400/30"
+                : "bg-slate-800 hover:bg-slate-700 text-emerald-300 border-emerald-500/40 shadow-emerald-500/10"
             }`}
-            title={isNativeLandscape ? "Portrait Mode me wapas layein" : "Screen Rotate karein (Landscape Computer Mode)"}
+            title={
+              isEffectiveLandscape
+                ? "Mobile (Portrait) Mode me wapas layein"
+                : "Laptop (Desktop) Mode me badlein"
+            }
           >
-            <RotateCw className={`w-3.5 h-3.5 transition-transform duration-300 ${isNativeLandscape ? "rotate-90 text-slate-950 stroke-[2.5]" : "text-white"}`} />
-            <span className="hidden xs:inline">{isNativeLandscape ? "📱 Portrait" : "🔄 Screen Rotate"}</span>
-            <span className="xs:hidden">{isNativeLandscape ? "📱" : "🔄 Rotate"}</span>
+            {isEffectiveLandscape ? (
+              <>
+                <Laptop className="w-3.5 h-3.5 text-cyan-200 animate-pulse" />
+                <span className="inline">💻 Laptop</span>
+              </>
+            ) : (
+              <>
+                <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="inline">📱 Mobile</span>
+              </>
+            )}
           </button>
 
           <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 text-[11px] font-bold">
@@ -1363,7 +1503,7 @@ export const TeacherPanel: React.FC<Props> = ({
     // 10. Messenger Broadcast Studio
     if (view === "messenger_broadcast") {
       return (
-        <div className="rounded-3xl overflow-hidden bg-slate-950 p-2 shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col h-screen w-screen overflow-hidden">
           <NstaMessengerSuite
             school={school!}
             classes={classes}
@@ -1389,6 +1529,57 @@ export const TeacherPanel: React.FC<Props> = ({
           currentUserRole="TEACHER"
           classes={classes}
           onBack={() => setView("dashboard")}
+        />
+      );
+    }
+
+    // 12. Student Leaves Desk
+    if (view === "leaves_desk") {
+      return (
+        <div className="space-y-4 max-w-5xl mx-auto">
+          <div className="flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setView("dashboard")}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-bold transition cursor-pointer"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              <span>Back to Dashboard</span>
+            </button>
+          </div>
+          <ParentLeaveManager school={school} mode="TEACHER_ADMIN" />
+        </div>
+      );
+    }
+
+    // 13. Question Paper & Blueprint Builder
+    if (view === "question_paper_builder") {
+      return (
+        <div className="space-y-4 max-w-5xl mx-auto">
+          <div className="flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setView("dashboard")}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-bold transition cursor-pointer"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              <span>Back to Dashboard</span>
+            </button>
+          </div>
+          <QuestionPaperBuilder school={school} activeSession={activeSession} />
+        </div>
+      );
+    }
+
+    // 14. PTM Slot Scheduler
+    if (view === "ptm_scheduler") {
+      return (
+        <PtmSchedulerModal
+          isOpen={true}
+          onClose={() => setView("dashboard")}
+          school={school}
+          activeSession={activeSession}
+          mode="ADMIN_TEACHER"
         />
       );
     }
@@ -1570,12 +1761,22 @@ export const TeacherPanel: React.FC<Props> = ({
               <h2 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white">Students Directory</h2>
               <p className="text-xs text-slate-500">Total {filteredStudents.length} students found</p>
             </div>
-            <button
-              onClick={() => setView("classes")}
-              className="px-3 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-300 font-bold text-xs border border-blue-200 dark:border-blue-800 hover:bg-blue-100 transition cursor-pointer"
-            >
-              View by Class
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowFaceStudio(true)}
+                className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs shadow-sm flex items-center gap-1.5 transition cursor-pointer"
+              >
+                <Camera className="w-3.5 h-3.5" />
+                <span>📷 लाइव फेस आईडी</span>
+              </button>
+              <button
+                onClick={() => setView("classes")}
+                className="px-3 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-300 font-bold text-xs border border-blue-200 dark:border-blue-800 hover:bg-blue-100 transition cursor-pointer"
+              >
+                View by Class
+              </button>
+            </div>
           </div>
 
           <div className="relative flex items-center">
@@ -2157,6 +2358,24 @@ export const TeacherPanel: React.FC<Props> = ({
               </div>
             </button>
 
+            {/* Live Face ID Studio */}
+            <button
+              type="button"
+              onClick={() => setShowFaceStudio(true)}
+              className="bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-emerald-300 dark:border-emerald-800/60 flex flex-col justify-between gap-3 hover:shadow-md hover:border-emerald-500 transition text-left cursor-pointer"
+            >
+              <div className="flex items-center justify-between w-full">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white flex items-center justify-center shadow-md">
+                  <Camera className="w-5 h-5" />
+                </div>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">Live 📷</span>
+              </div>
+              <div>
+                <p className="font-black text-slate-900 dark:text-white text-sm">Live Face ID</p>
+                <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">Enroll &amp; Match Test</p>
+              </div>
+            </button>
+
             {/* Absenty Action Center */}
             <button
               type="button"
@@ -2321,15 +2540,21 @@ export const TeacherPanel: React.FC<Props> = ({
   // ── MASTER TEACHER ERP SHELL (LEFT SIDEBAR & MOBILE DRAWER) ────────────────
   const renderTeacherShell = (content: React.ReactNode) => {
     return (
-      <div className="h-screen h-[100dvh] max-h-screen overflow-hidden flex bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 w-full relative">
+      <div className={`h-screen h-[100dvh] max-h-screen overflow-hidden flex transition-colors duration-200 teacher-theme-${appTheme} app-theme-${appTheme} ${
+        appTheme === "white"
+          ? "bg-slate-100 text-slate-900"
+          : appTheme === "black"
+          ? "bg-black text-white"
+          : "bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+      } w-full relative`}>
         {/* Left Sidebar (fixed on desktop or landscape, never scrolls with page) */}
         {renderDesktopSidebar()}
 
         {/* Mobile Slide-Out Drawer (only when in portrait and drawer toggled) */}
-        {!isNativeLandscape && isSidebarOpen && renderMobileSidebarDrawer()}
+        {!isEffectiveLandscape && isSidebarOpen && renderMobileSidebarDrawer()}
 
         {/* 1% Ultra-slim left edge indicator on mobile portrait when drawer is hidden */}
-        {!isNativeLandscape && !isSidebarOpen && (
+        {!isEffectiveLandscape && !isSidebarOpen && (
           <div
             onClick={() => setIsSidebarOpen(true)}
             className="fixed left-0 top-1/2 -translate-y-1/2 w-2.5 h-20 rounded-r-full bg-gradient-to-b from-indigo-500 via-amber-400 to-indigo-500 opacity-60 hover:opacity-100 hover:w-3.5 transition-all z-30 cursor-pointer shadow-[0_0_10px_rgba(99,102,241,0.5)] flex items-center justify-center group"
@@ -2340,19 +2565,23 @@ export const TeacherPanel: React.FC<Props> = ({
         )}
 
         {/* Main Content Area (Independent scroll container) */}
-        <div className="flex-1 flex flex-col min-w-0 h-screen h-[100dvh] max-h-screen overflow-y-auto overflow-x-hidden">
+        <div className={`flex-1 flex flex-col min-w-0 h-screen h-[100dvh] max-h-screen overflow-y-auto ${
+          isEffectiveLandscape ? "overflow-x-auto" : "overflow-x-hidden"
+        }`}>
           {renderTopHeader()}
-          <main className="flex-1 p-2.5 sm:p-4 lg:p-5 w-full max-w-7xl mx-auto pb-16 md:pb-12">
+          <main className={`flex-1 p-2.5 sm:p-4 lg:p-5 w-full mx-auto pb-16 md:pb-12 ${
+            isEffectiveLandscape ? "min-w-[980px] sm:min-w-0 max-w-7xl" : "max-w-7xl"
+          }`}>
             {content}
           </main>
         </div>
 
         {/* Screen rotate floating prompt if needed */}
         {showRotatePrompt && (
-          <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 text-white border border-amber-400/40 px-4 py-2.5 rounded-2xl shadow-2xl flex items-center gap-3 backdrop-blur-md animate-in slide-in-from-bottom-4 duration-300 max-w-sm text-center">
-            <RotateCw className="w-5 h-5 text-amber-400 animate-spin shrink-0" />
-            <p className="text-xs font-bold text-amber-200">
-              कृपया फोन को Landscape (आड़ा) घुमाएं — पूरा ऐप कंप्यूटर मोड में रोटेट हो जाएगा!
+          <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 text-white border border-cyan-400/40 px-4 py-2.5 rounded-2xl shadow-2xl flex items-center gap-3 backdrop-blur-md animate-in slide-in-from-bottom-4 duration-300 max-w-sm text-center">
+            <Laptop className="w-5 h-5 text-cyan-400 shrink-0" />
+            <p className="text-xs font-bold text-cyan-200">
+              💻 Laptop (Desktop) मोड सक्रिय है! आप फोन को आड़ा (Landscape) करके पूरे लैपटॉप व्यू का उपयोग कर सकते हैं।
             </p>
           </div>
         )}
@@ -2388,7 +2617,22 @@ export const TeacherPanel: React.FC<Props> = ({
     );
   }
 
-  return renderTeacherShell(renderViewContent());
+  return (
+    <>
+      {renderTeacherShell(renderViewContent())}
+      {showFaceStudio && (
+        <UniversalFaceIdStudioModal
+          isOpen={showFaceStudio}
+          onClose={() => setShowFaceStudio(false)}
+          schoolId={schoolId}
+          students={allStudents}
+          teachers={currentTeacher ? [currentTeacher] : []}
+          classes={classes}
+          onEnrollmentUpdated={() => {}}
+        />
+      )}
+    </>
+  );
 };
 
 export default TeacherPanel;

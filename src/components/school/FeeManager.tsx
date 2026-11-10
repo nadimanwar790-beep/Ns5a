@@ -18,6 +18,7 @@ import { QrFeeScannerModal } from "./QrFeeScannerModal";
 import { BusTransportModal } from "./BusTransportModal";
 import { AdmissionFormPrintModal, type AdmissionPrintMode } from "./AdmissionFormPrintModal";
 import { ClassFeeAlertBroadcastModal } from "./ClassFeeAlertBroadcastModal";
+import { ReceiptCancellationModal } from "./ReceiptCancellationModal";
 import {
   generateDpsReceiptHtml,
   generateSingleA6SlipHtml,
@@ -44,6 +45,13 @@ import {
   type FifoPaymentResult,
   type FifoMonthAllocation
 } from "../../utils/feeFifoAllocation";
+import {
+  canRoleGiveDiscount,
+  clampDiscountAmount,
+  buildSplitPayModeInfo,
+  recordDiscountEntry,
+  DISPLAY_DISCOUNT_LABEL,
+} from "../../utils/schoolDiscountAndPayment";
 
 interface Props {
   schoolId: string;
@@ -53,11 +61,14 @@ interface Props {
   school?: School;
   sessionId: string;
   adminId: string;
+  userRole?: string;
+  actorName?: string;
   onBack?: () => void;
   initialTool?: "qr_scanner" | "bus" | "admission_receipt" | "class_rates" | "fee_alert" | "header";
 }
 
-export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, schoolName, school, sessionId, adminId, onBack, initialTool }) => {
+export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, schoolName, school, sessionId, adminId, userRole = "SCHOOL_ADMIN", actorName = "Admin / Accountant", onBack, initialTool }) => {
+  const canGiveDiscount = canRoleGiveDiscount(userRole);
   const [students, setStudents] = useState<SchoolStudent[]>([]);
   const [fees, setFees] = useState<MonthlyFee[]>([]);
   const [feeHistory, setFeeHistory] = useState<MonthlyFee[]>([]);
@@ -108,6 +119,8 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
   const [customBusFeeAmount, setCustomBusFeeAmount] = useState<string>("1000");
   const [customMonthlyAmount, setCustomMonthlyAmount] = useState<string>("");
   const [customPaidAmount, setCustomPaidAmount] = useState<string>("");
+  const [customOnlinePaid, setCustomOnlinePaid] = useState<string>("0");
+  const [customOfflinePaid, setCustomOfflinePaid] = useState<string>("");
   const [customPayMode, setCustomPayMode] = useState<string>("Cash");
   const [customBankName, setCustomBankName] = useState<string>("");
   const [customChequeNo, setCustomChequeNo] = useState<string>("");
@@ -116,10 +129,13 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
 
   // Admission Fee Collection Modal State
   const [showAdmissionModal, setShowAdmissionModal] = useState<boolean>(false);
+  const [showReceiptCancellationModal, setShowReceiptCancellationModal] = useState<boolean>(false);
   const [admSelectedStudentId, setAdmSelectedStudentId] = useState<string>("");
   const [admFeeItems, setAdmFeeItems] = useState<{ id: string; description: string; due: number }[]>([]);
   const [admConcession, setAdmConcession] = useState<number>(0);
   const [admPaidAmount, setAdmPaidAmount] = useState<string>("");
+  const [admOnlinePaid, setAdmOnlinePaid] = useState<string>("0");
+  const [admOfflinePaid, setAdmOfflinePaid] = useState<string>("");
   const [admPaidManual, setAdmPaidManual] = useState<boolean>(false);
   const [admPayMode, setAdmPayMode] = useState<string>("Cash");
   const [admPayRef, setAdmPayRef] = useState<string>("");
@@ -396,7 +412,9 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       const pctDisc = Number(student.siblingDiscountPct || 0) > 0
         ? Math.round((monthlyAmount * Number(student.siblingDiscountPct)) / 100)
         : 0;
-      const permanentStudentDiscount = Math.max(Number(student.siblingDiscountAmount || 0), pctDisc);
+      const permanentStudentDiscount = student.isFreeEducation
+        ? monthlyAmount
+        : Math.max(Number(student.siblingDiscountAmount || 0), pctDisc);
       const concession = Number(existing?.concession ?? permanentStudentDiscount);
 
       const currentMonthHeadsTotal = Math.max(0, monthlyAmount + admFee + cauFee + annFee + busFee - concession);
@@ -615,7 +633,9 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     const pctDisc = Number(student?.siblingDiscountPct || 0) > 0
       ? Math.round((baseMonthly * Number(student?.siblingDiscountPct)) / 100)
       : 0;
-    const permanentDisc = Math.max(Number(student?.siblingDiscountAmount || 0), pctDisc);
+    const permanentDisc = student?.isFreeEducation
+      ? baseMonthly
+      : Math.max(Number(student?.siblingDiscountAmount || 0), pctDisc);
     const baseConcession = Number(fee.concession ?? permanentDisc);
     const effectiveConcession = (fee.earlyDiscount && fee.earlyDiscount > 0)
       ? fee.earlyDiscount + permanentDisc
@@ -699,7 +719,8 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
   };
 
   const admGross = admFeeItems.reduce((sum, it) => sum + (Number(it.due) || 0), 0);
-  const admNet = Math.max(0, admGross - (Number(admConcession) || 0));
+  const effectiveAdmConcession = canGiveDiscount ? clampDiscountAmount(admGross, admConcession) : 0;
+  const admNet = Math.max(0, admGross - effectiveAdmConcession);
 
   const handleSaveAdmissionFee = async (mode: AdmissionPrintMode = "receipt_only") => {
     const student = students.find(s => s.id === admSelectedStudentId);
@@ -710,7 +731,9 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     setFeeError(null);
     setAdmSaving(true);
     try {
-      const paidAmt = Math.max(0, Number(admPaidAmount) || 0);
+      const onlAmt = Math.max(0, Number(admOnlinePaid) || 0);
+      const offAmt = Math.max(0, Number(admOfflinePaid) || 0);
+      const paidAmt = onlAmt + offAmt > 0 ? onlAmt + offAmt : Math.max(0, Number(admPaidAmount) || 0);
       const balanceAmt = Math.max(0, admNet - paidAmt);
       const receiptNo = `ADM-${Math.floor(10000 + Math.random() * 90000)}`;
       const paidIso = new Date().toISOString();
@@ -722,9 +745,17 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
           slNo: idx + 1,
           description: it.description.trim(),
           due: Number(it.due) || 0,
-          con: idx === 0 ? Math.min(Number(it.due) || 0, Number(admConcession) || 0) : 0,
+          con: idx === 0 ? Math.min(Number(it.due) || 0, effectiveAdmConcession) : 0,
           paid: Number(it.due) || 0,
         }));
+
+      const splitAdmPayInfo = buildSplitPayModeInfo({
+        onlineAmount: onlAmt,
+        offlineAmount: offAmt > 0 || onlAmt > 0 ? offAmt : paidAmt,
+        date: new Date(admPaymentDate || Date.now()).toLocaleDateString("en-IN"),
+        number: admPayRef.trim() || "-",
+        fallbackMode: admPayMode,
+      });
 
       const admissionFeeRecord: MonthlyFee = {
         schoolId,
@@ -742,22 +773,36 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
         receiptNo,
         paidAmount: paidAmt,
         balanceDue: balanceAmt,
-        concession: Number(admConcession) || 0,
+        concession: effectiveAdmConcession,
+        note: effectiveAdmConcession > 0 ? "Admission Fee Concession • Waived (Not carried forward)" : undefined,
         feeType: "admission",
         receiptCategory: "admission",
         includeBusFee: Boolean(student.usesBus),
         busFeeAmount: student.usesBus ? Number(student.busFee) || 0 : 0,
         busRoute: student.busRoute,
-        payModeInfo: {
-          payMode: admPayMode,
-          date: new Date(admPaymentDate || Date.now()).toLocaleDateString("en-IN"),
-          bank: admPayMode === "Cash" ? "School Counter" : admPayMode,
-          number: admPayRef.trim() || "-",
-        },
+        payModeInfo: splitAdmPayInfo,
         items: finalItems,
       };
 
       await saveFee(admissionFeeRecord);
+
+      if (effectiveAdmConcession > 0) {
+        recordDiscountEntry(schoolId, {
+          studentId: student.id,
+          studentName: student.name,
+          className: classNames[student.classId] || student.className || "",
+          section: student.section || "",
+          rollNo: student.rollNo,
+          category: "admission",
+          whereLabel: "Admission Fee",
+          grossAmount: admGross,
+          discountAmount: effectiveAdmConcession,
+          discountPct: admGross > 0 ? Math.round((effectiveAdmConcession / admGross) * 1000) / 10 : 5,
+          givenByName: actorName,
+          givenByRole: userRole,
+          note: `Online ₹${splitAdmPayInfo.onlineAmount || 0} + Offline ₹${splitAdmPayInfo.offlineAmount || 0}`,
+        });
+      }
 
       if (!student.admissionReceiptNo) {
         await updateStudent(schoolId, student.id, { admissionReceiptNo: receiptNo }).catch(() => {});
@@ -803,12 +848,14 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     const dayParts = dateStr.split("-");
     const paymentDay = dayParts.length >= 3 ? parseInt(dayParts[2], 10) : new Date().getDate();
     const isEarlyBirdEligible = paymentDay <= 10;
-    const earlyDiscount = isEarlyBirdEligible && monthlyAmount > 0 ? Math.round(monthlyAmount * 0.05) : 0;
+    const earlyDiscount = canGiveDiscount && isEarlyBirdEligible && monthlyAmount > 0 ? Math.round(monthlyAmount * 0.05) : 0;
 
-    const manualConcession = Number(customConcession) || 0;
+    const currentHeadsGross = monthlyAmount + admAmount + cauAmount + annAmount + busAmount;
+    const rawManualConcession = canGiveDiscount ? Math.max(0, Number(customConcession) || 0) : 0;
+    const manualConcession = clampDiscountAmount(currentHeadsGross, rawManualConcession);
     const totalConcession = Math.max(manualConcession, earlyDiscount);
 
-    // 5% discount applies ONLY to current month regular tuition fee (e.g. ₹400 -> ₹380), NEVER to old arrears!
+    // Discount is permanently waived on current month heads and NEVER added to next month's due/arrears
     const currentMonthTuition = Math.max(0, monthlyAmount - earlyDiscount);
     const currentMonthHeadDue = Math.max(0, currentMonthTuition + admAmount + cauAmount + annAmount + busAmount - (manualConcession > earlyDiscount ? manualConcession - earlyDiscount : 0));
     const totalBill = currentMonthHeadDue + arrearsAmount;
@@ -853,7 +900,10 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       return;
     }
 
-    const effectivePaid = Math.max(0, Number(customPaidAmount));
+    const splitOnline = Math.max(0, Number(customOnlinePaid) || 0);
+    const splitOffline = Math.max(0, Number(customOfflinePaid) || 0);
+    const combinedSplit = splitOnline + splitOffline;
+    const effectivePaid = combinedSplit > 0 ? combinedSplit : Math.max(0, Number(customPaidAmount) || 0);
     const isPaid = effectivePaid >= totalBill && totalBill > 0;
 
     const receiptNo = fee.receiptNo || `DPS-RCP-${Math.floor(10000 + Math.random() * 90000)}`;
@@ -870,12 +920,32 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     } else {
       paidDate = now.toISOString();
     }
-    const payModeInfo = {
-      payMode: customPayMode,
+    const payModeInfo = buildSplitPayModeInfo({
+      onlineAmount: splitOnline,
+      offlineAmount: splitOffline > 0 || splitOnline > 0 ? splitOffline : (customPayMode === "Cash" ? effectivePaid : 0),
       date: new Date(paidDate).toLocaleDateString("en-IN"),
       bank: customBankName,
       number: customChequeNo,
-    };
+      fallbackMode: customPayMode,
+    });
+
+    if (totalConcession > 0) {
+      recordDiscountEntry(schoolId, {
+        studentId: fee.studentId,
+        studentName: student?.name || fee.studentName || "Student",
+        className: classNames[fee.classId] || student?.className || "",
+        section: student?.section || "",
+        rollNo: student?.rollNo || fee.rollNo,
+        category: "monthly_fee",
+        whereLabel: `Monthly Fee (${formatMonthLabel(fee.month)})`,
+        grossAmount: currentHeadsGross,
+        discountAmount: totalConcession,
+        discountPct: currentHeadsGross > 0 ? Math.round((totalConcession / currentHeadsGross) * 1000) / 10 : 5,
+        givenByName: actorName,
+        givenByRole: userRole,
+        note: `Online ₹${payModeInfo.onlineAmount || 0} + Offline ₹${payModeInfo.offlineAmount || 0}`,
+      });
+    }
 
     // ── FIFO MULTI-MONTH ALLOCATION EXECUTION ──
     // Build complete chronological unpaid months array for this student
@@ -2040,6 +2110,28 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                         </p>
                         <p className="text-[10px] text-slate-400 truncate">
                           स्कूल लोगो, पता, संबद्धता व डिजिटल हस्ताक्षर सेटिंग्स
+                        </p>
+                      </div>
+                    </button>
+
+                    {/* Tool 8: Receipt Cancellation & Refund */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowToolsDropdown(false);
+                        setShowReceiptCancellationModal(true);
+                      }}
+                      className="w-full px-3 py-2 rounded-xl text-left hover:bg-rose-50 dark:hover:bg-rose-950/40 transition flex items-center gap-2.5 group cursor-pointer"
+                    >
+                      <div className="w-8 h-8 rounded-lg bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                        <RotateCcw className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-bold text-rose-700 dark:text-rose-300">
+                          रसीद निरस्तीकरण व रिफंड (Cancel Receipt)
+                        </p>
+                        <p className="text-[10px] text-slate-400 truncate">
+                          गलत रसीद रद्द करें व आधिकारिक रिफंड वाउचर जारी करें
                         </p>
                       </div>
                     </button>
@@ -3349,6 +3441,56 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                   )}
                 </div>
 
+                {/* Online + Offline Split Payment Inputs */}
+                <div className="bg-slate-50 dark:bg-slate-800/70 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="font-bold text-xs text-slate-700 dark:text-slate-300">
+                      💳 Online + 💵 Offline Split Payment (दोनों में अलग-अलग राशि डाल सकते हैं):
+                    </label>
+                    <span className="text-[11px] font-black text-emerald-700 dark:text-emerald-400">
+                      कुल जमा: ₹{((Number(customOnlinePaid) || 0) + (Number(customOfflinePaid) || 0) > 0 ? (Number(customOnlinePaid) || 0) + (Number(customOfflinePaid) || 0) : (Number(customPaidAmount) || 0)).toLocaleString("en-IN")}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-blue-700 dark:text-blue-400 mb-0.5">Online / UPI (₹)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        placeholder="0"
+                        value={customOnlinePaid}
+                        onChange={e => {
+                          const v = e.target.value;
+                          setCustomOnlinePaid(v);
+                          const sum = (Number(v) || 0) + (Number(customOfflinePaid) || 0);
+                          setCustomPaidAmount(String(sum));
+                          if ((Number(v) || 0) > 0 && (Number(customOfflinePaid) || 0) > 0) setCustomPayMode("Online + Offline");
+                          else if ((Number(v) || 0) > 0) setCustomPayMode("Online / UPI");
+                        }}
+                        className="w-full px-2.5 py-1.5 rounded-lg border-2 border-blue-400 bg-white dark:bg-slate-900 font-black text-xs text-blue-700 dark:text-blue-300"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-emerald-700 dark:text-emerald-400 mb-0.5">Offline / Cash (₹)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        placeholder="0"
+                        value={customOfflinePaid}
+                        onChange={e => {
+                          const v = e.target.value;
+                          setCustomOfflinePaid(v);
+                          const sum = (Number(customOnlinePaid) || 0) + (Number(v) || 0);
+                          setCustomPaidAmount(String(sum));
+                          if ((Number(customOnlinePaid) || 0) > 0 && (Number(v) || 0) > 0) setCustomPayMode("Online + Offline");
+                          else if ((Number(v) || 0) > 0) setCustomPayMode("Cash");
+                        }}
+                        className="w-full px-2.5 py-1.5 rounded-lg border-2 border-emerald-500 bg-white dark:bg-slate-900 font-black text-xs text-emerald-700 dark:text-emerald-300"
+                      />
+                    </div>
+                  </div>
+                </div>
+
                 {/* Payment Mode Selector */}
                 <div>
                   <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
@@ -3398,16 +3540,38 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
 
                 {/* Concession & Payment Date */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  <div>
-                    <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Concession / Discount (₹):</label>
-                    <input
-                      type="number"
-                      placeholder="0"
-                      value={customConcession}
-                      onChange={e => setCustomConcession(e.target.value)}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 font-bold text-slate-800 dark:text-white"
-                    />
-                  </div>
+                  {canGiveDiscount ? (
+                    <div>
+                      <div className="flex items-center justify-between gap-1 mb-1">
+                        <label className="block font-bold text-slate-700 dark:text-slate-300">Concession / Discount (₹):</label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const fivePct = Math.round(((Number(customMonthlyAmount) || 0) * 5) / 100);
+                            setCustomConcession(String(fivePct));
+                          }}
+                          className="px-1.5 py-0.5 rounded bg-emerald-100 hover:bg-emerald-200 text-emerald-800 text-[9px] font-black cursor-pointer"
+                        >
+                          {DISPLAY_DISCOUNT_LABEL}
+                        </button>
+                      </div>
+                      <input
+                        type="number"
+                        placeholder="0"
+                        value={customConcession}
+                        onChange={e => {
+                          const gross = Number(customMonthlyAmount) || 0;
+                          const clamped = clampDiscountAmount(gross, Math.max(0, Number(e.target.value) || 0));
+                          setCustomConcession(String(clamped));
+                        }}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 font-bold text-slate-800 dark:text-white"
+                      />
+                    </div>
+                  ) : (
+                    <div className="px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 text-[11px] font-bold text-amber-800 dark:text-amber-300 flex items-center">
+                      ⚠️ Discount केवल Admin / Accountant दे सकते हैं।
+                    </div>
+                  )}
                   <div>
                     <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
                       Payment Date {isEarlyBirdEligible ? <span className="text-emerald-600 font-bold">(10 तारीख तक: 5% OFF लागू)</span> : <span className="text-amber-600 font-bold">(10 के बाद: छूट समाप्त)</span>}:
@@ -3613,41 +3777,56 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
                 </div>
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-2 border-t border-emerald-200 dark:border-emerald-800/60">
+                  {canGiveDiscount && (
+                    <div>
+                      <div className="flex items-center justify-between gap-1 mb-1">
+                        <label className="block text-[10px] font-bold text-slate-500">Discount (छूट ₹)</label>
+                        <button
+                          type="button"
+                          onClick={() => setAdmConcession(Math.round((admGross * 5) / 100))}
+                          className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[9px] font-black cursor-pointer"
+                        >
+                          {DISPLAY_DISCOUNT_LABEL}
+                        </button>
+                      </div>
+                      <input
+                        type="number"
+                        min={0}
+                        value={admConcession}
+                        onChange={(e) => setAdmConcession(clampDiscountAmount(admGross, Math.max(0, Number(e.target.value))))}
+                        className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-bold"
+                      />
+                    </div>
+                  )}
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-500 mb-1">Concession (छूट ₹)</label>
+                    <label className="block text-[10px] font-bold text-blue-700 dark:text-blue-300 mb-1">Online / UPI (₹)</label>
                     <input
                       type="number"
                       min={0}
-                      value={admConcession}
-                      onChange={(e) => setAdmConcession(Math.max(0, Number(e.target.value)))}
-                      className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-bold"
+                      value={admOnlinePaid}
+                      onChange={(e) => {
+                        setAdmPaidManual(true);
+                        const v = e.target.value;
+                        setAdmOnlinePaid(v);
+                        setAdmPaidAmount(String((Number(v) || 0) + (Number(admOfflinePaid) || 0)));
+                      }}
+                      className="w-full px-2.5 py-1.5 rounded-xl border-2 border-blue-400 bg-white dark:bg-slate-900 text-xs font-black text-blue-700 dark:text-blue-300"
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold text-emerald-700 dark:text-emerald-300 mb-1">Amount Paid Now (₹)</label>
+                    <label className="block text-[10px] font-bold text-emerald-700 dark:text-emerald-300 mb-1">Offline / Cash (₹)</label>
                     <input
                       type="number"
                       min={0}
-                      value={admPaidAmount}
+                      value={admOfflinePaid || admPaidAmount}
                       onChange={(e) => {
                         setAdmPaidManual(true);
-                        setAdmPaidAmount(e.target.value);
+                        const v = e.target.value;
+                        setAdmOfflinePaid(v);
+                        setAdmPaidAmount(String((Number(admOnlinePaid) || 0) + (Number(v) || 0)));
                       }}
                       className="w-full px-2.5 py-1.5 rounded-xl border-2 border-emerald-500 bg-white dark:bg-slate-900 text-xs font-black text-emerald-700 dark:text-emerald-300"
                     />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-500 mb-1">Payment Mode</label>
-                    <select
-                      value={admPayMode}
-                      onChange={(e) => setAdmPayMode(e.target.value)}
-                      className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-bold"
-                    >
-                      <option value="Cash">Cash (नकद)</option>
-                      <option value="Online / UPI">UPI / QR</option>
-                      <option value="Bank Transfer">Bank Transfer</option>
-                      <option value="Cheque">Cheque</option>
-                    </select>
                   </div>
                   <div>
                     <label className="block text-[10px] font-bold text-slate-500 mb-1">Ref / UTR No.</label>
@@ -3759,6 +3938,19 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
             onViewStudentFeeSlip={(f, st) => {
               setDpsReceiptFee(f);
               setSelectedStudentForModal(st);
+            }}
+          />
+        )}
+
+        {/* ── RECEIPT CANCELLATION & REFUND VOUCHER MODAL ── */}
+        {showReceiptCancellationModal && (
+          <ReceiptCancellationModal
+            school={school || { id: schoolId, name: schoolName || "School" }}
+            activeSession={null}
+            isOpen={showReceiptCancellationModal}
+            onClose={() => setShowReceiptCancellationModal(false)}
+            onReceiptCancelled={() => {
+              loadFees();
             }}
           />
         )}

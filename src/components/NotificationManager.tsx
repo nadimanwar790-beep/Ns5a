@@ -1,6 +1,7 @@
 import { VAPID_KEY, getFirebaseMessaging, db, rtdb, auth } from '../firebase';
 import { doc, updateDoc } from 'firebase/firestore';
 import { get, ref, set, onValue, remove, update } from 'firebase/database';
+import { speakNotification } from '../utils/voiceNotifyEngine';
 
 export const NOTIFICATION_CATEGORY_DEFINITIONS = [
   { key: 'DAILY_ROUTINE', label: 'Today’s routine', description: 'Subah ka daily study target' },
@@ -508,6 +509,11 @@ export const listenToForegroundMessages = async (onMessageReceived?: (payload: a
         audio.volume = 0.5;
         audio.play().catch(() => {});
       } catch (_) {}
+
+      // Auto-speak notification aloud in voice hands-free!
+      try {
+        speakNotification(title, body, { force: true });
+      } catch {}
 
       window.dispatchEvent(new CustomEvent('nst_foreground_notification', {
         detail: { title, body, payload }

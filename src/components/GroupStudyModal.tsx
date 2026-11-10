@@ -166,6 +166,7 @@ import { detectQuestionType } from '../utils/questionTypeDetector';
 import { type MCQResult } from '../types';
 import { notifyStudyRoomInviteInBackground, notifyStudyRoomChallengeInBackground } from './NotificationManager';
 import { MarksheetCard } from './MarksheetCard';
+import { getLocalSchoolCurriculumNotes } from '../school-firebase';
 
 // Normalize any raw MCQ question to GroupStudyMcqQuestion format with all 8 competition types
 function parseQuestionToGroupMcq(q: any): GroupStudyMcqQuestion | null {
@@ -908,6 +909,58 @@ export const GroupStudyModal: React.FC<GroupStudyModalProps> = ({
       sourceType: 'REVISION_HUB' | 'NOTES' | 'HOMEWORK' | 'CURATED' | 'CONTEXT' | 'COMPETITION' | 'SCHOOL';
       schoolId?: string;
     }>();
+
+    // 0. STRICT SCHOOL STUDY ROOM ISOLATION:
+    // When room is hosted by a school, only that school's uploaded notes & MCQs are used
+    if (schoolId) {
+      try {
+        const schoolNotes = getLocalSchoolCurriculumNotes(schoolId);
+        schoolNotes.forEach((n: any) => {
+          if (!n) return;
+          const title = (n.lessonTitle || n.title || '').trim();
+          if (!title) return;
+          const cleanQs: GroupStudyMcqQuestion[] = [];
+          const rawQs = Array.isArray(n.mcqs) ? n.mcqs : (Array.isArray(n.questions) ? n.questions : (Array.isArray(n.parsedMcqs) ? n.parsedMcqs : []));
+          for (const q of rawQs) {
+            const parsed = parseQuestionToGroupMcq(q);
+            if (parsed) {
+              cleanQs.push({
+                ...parsed,
+                topic: parsed.topic || title,
+                chapterTitle: parsed.chapterTitle || title,
+                subject: parsed.subject || n.subject || n.subjectName || 'School Curriculum',
+              });
+            }
+          }
+          if (cleanQs.length === 0 && typeof n.content === 'string' && n.content.length > 30) {
+            try {
+              const parsed = parseMCQText(n.content);
+              if (parsed?.questions?.length) {
+                for (const q of parsed.questions) {
+                  const pq = parseQuestionToGroupMcq(q);
+                  if (pq) cleanQs.push({ ...pq, topic: title, chapterTitle: title, subject: n.subject || n.subjectName || 'School Curriculum' });
+                }
+              }
+            } catch {}
+          }
+          const cls = String(n.classLevel || n.classId || '10').replace(/^cls_/i, '');
+          const key = `school_${cls}__${title.toLowerCase()}`;
+          lessonsMap.set(key, {
+            id: n.id || `school_note_${title}`,
+            lessonTitle: title,
+            classLevel: cls,
+            subject: n.subject || n.subjectName || 'School Curriculum',
+            questions: cleanQs,
+            mcqCount: cleanQs.length,
+            sourceType: 'SCHOOL',
+            schoolId: schoolId,
+          });
+        });
+        return Array.from(lessonsMap.values());
+      } catch (err) {
+        console.warn('Could not load school study room notes:', err);
+      }
+    }
 
     // 1. From Firebase mcq_lessons (Admin Class MCQs & Competition MCQs - Revision Hub)
     (firebaseMcqLessons || []).forEach((l: any) => {

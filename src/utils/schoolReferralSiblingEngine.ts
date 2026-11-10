@@ -108,6 +108,10 @@ export const detectFamilySiblings = (
     motherName?: string;
     whatsappNo?: string;
     phone?: string;
+    fatherAadhaar?: string;
+    motherAadhaar?: string;
+    aadhaarNo?: string;
+    address?: string;
     excludeStudentId?: string;
   },
   existingStudents: SchoolStudent[]
@@ -116,6 +120,10 @@ export const detectFamilySiblings = (
   const candMother = normalizePersonName(candidate.motherName);
   const candWhatsapp = normalizeWhatsappOrPhone(candidate.whatsappNo || candidate.phone);
   const candPhone = normalizeWhatsappOrPhone(candidate.phone);
+  const candFatherAadhaar = normalizeAadhaar(candidate.fatherAadhaar);
+  const candMotherAadhaar = normalizeAadhaar(candidate.motherAadhaar);
+  const candStudentAadhaar = normalizeAadhaar(candidate.aadhaarNo);
+  const candAddress = normalizeAddress(candidate.address);
 
   const familyGroupId = buildFamilyGroupId(
     candidate.fatherName,
@@ -134,6 +142,10 @@ export const detectFamilySiblings = (
     const stMother = normalizePersonName(st.motherName);
     const stWhatsapp = normalizeWhatsappOrPhone(st.whatsappNo || st.phone);
     const stPhone = normalizeWhatsappOrPhone(st.phone);
+    const stFatherAadhaar = normalizeAadhaar(st.fatherAadhaar);
+    const stMotherAadhaar = normalizeAadhaar(st.motherAadhaar);
+    const stStudentAadhaar = normalizeAadhaar(st.aadhaarNo);
+    const stAddress = normalizeAddress(st.address);
 
     const fatherMatch = Boolean(candFather && stFather && candFather === stFather);
     const motherMatch = Boolean(candMother && stMother && candMother === stMother);
@@ -150,11 +162,31 @@ export const detectFamilySiblings = (
     );
     const numberMatch = whatsappMatch || altPhoneMatch;
 
-    if (fatherMatch && motherMatch && numberMatch) {
+    // Aadhaar matching
+    const fatherAadhaarMatch = Boolean(candFatherAadhaar && stFatherAadhaar && candFatherAadhaar === stFatherAadhaar);
+    const motherAadhaarMatch = Boolean(candMotherAadhaar && stMotherAadhaar && candMotherAadhaar === stMotherAadhaar);
+    const studentAadhaarMatch = Boolean(candStudentAadhaar && stStudentAadhaar && candStudentAadhaar === stStudentAadhaar && (fatherMatch || motherMatch));
+    const anyAadhaarMatch = fatherAadhaarMatch || motherAadhaarMatch || studentAadhaarMatch;
+
+    // Address matching
+    const addressMatch = Boolean(candAddress && stAddress && candAddress.length >= 6 && candAddress === stAddress && (fatherMatch || motherMatch));
+
+    // Exact Match criteria:
+    // 1. Same Father + Same Mother
+    // 2. Or Same Aadhaar (Father or Mother)
+    // 3. Or Same Phone + (Father or Mother)
+    // 4. Or Same Address + (Father or Mother)
+    if (
+      (fatherMatch && motherMatch) ||
+      anyAadhaarMatch ||
+      addressMatch ||
+      (numberMatch && fatherMatch && motherMatch)
+    ) {
       exactMatches.push(st);
     } else if (
       (numberMatch && (fatherMatch || motherMatch)) ||
-      (fatherMatch && motherMatch && (candFather.length >= 3 && candMother.length >= 3))
+      (fatherMatch && candFather.length >= 3) ||
+      (motherMatch && candMother.length >= 3)
     ) {
       partialMatches.push(st);
     }
@@ -463,3 +495,305 @@ export const calculateTeacherReferralLedger = (params: {
 
   return { teachers, totals };
 };
+
+export const normalizeAadhaar = (raw?: string | null): string => {
+  if (!raw) return "";
+  const digits = String(raw).replace(/\D/g, "");
+  return digits.length >= 8 ? digits : "";
+};
+
+export const normalizeAddress = (raw?: string | null): string => {
+  if (!raw) return "";
+  return String(raw)
+    .toLowerCase()
+    .replace(/[^a-z0-9\u0900-\u097f\s]/gi, " ")
+    .replace(/\b(near|post|po|ps|dist|district|village|vill|ward|colony|mohalla|road|street|nagar)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+};
+
+export interface SiblingFamilyGroup {
+  id: string;
+  familyName: string;
+  fatherName: string;
+  motherName: string;
+  fatherAadhaar?: string;
+  motherAadhaar?: string;
+  phone?: string;
+  whatsappNo?: string;
+  address?: string;
+  matchReasons: string[];
+  students: SchoolStudent[];
+  totalStudents: number;
+  hasDiscount: boolean;
+  hasFreeEducation: boolean;
+  totalMonthlyFee: number;
+  totalMonthlyDiscount: number;
+  netPayableMonthly: number;
+}
+
+/**
+ * Automatically detects and groups all students in the school into Sibling Families.
+ * Uses Disjoint Set Union (DSU) based on:
+ * 1. Mother Name + Father Name match (at least 3 characters each)
+ * 2. Father Aadhaar or Mother Aadhaar or Student Aadhaar match
+ * 3. Mobile / WhatsApp match + Father or Mother match
+ * 4. Residential Address match + Father or Mother match
+ * 5. Pre-existing familyGroupId or siblingStudentIds link
+ */
+export const groupAllSchoolSiblings = (students: SchoolStudent[]): {
+  families: SiblingFamilyGroup[];
+  singleStudents: SchoolStudent[];
+  stats: {
+    totalFamilies: number;
+    totalSiblingStudents: number;
+    discountedStudents: number;
+    freeEducationStudents: number;
+    totalMonthlySavings: number;
+  };
+} => {
+  const activeStudents = (students || []).filter((s) => s && s.active !== false);
+  const n = activeStudents.length;
+
+  // DSU Parent Array
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (i: number): number => {
+    if (parent[i] === i) return i;
+    parent[i] = find(parent[i]);
+    return parent[i];
+  };
+  const union = (i: number, j: number) => {
+    const rootI = find(i);
+    const rootJ = find(j);
+    if (rootI !== rootJ) {
+      parent[rootI] = rootJ;
+    }
+  };
+
+  const reasonsMap = new Map<string, Set<string>>();
+  const addReason = (idxA: number, idxB: number, reason: string) => {
+    const key = [idxA, idxB].sort().join(":");
+    if (!reasonsMap.has(key)) reasonsMap.set(key, new Set());
+    reasonsMap.get(key)!.add(reason);
+  };
+
+  // Pre-normalize student data
+  const normalized = activeStudents.map((s) => {
+    const fn = normalizePersonName(s.fatherName);
+    const mn = normalizePersonName(s.motherName);
+    const fa = normalizeAadhaar(s.fatherAadhaar);
+    const ma = normalizeAadhaar(s.motherAadhaar);
+    const sa = normalizeAadhaar(s.aadhaarNo);
+    const ph = normalizeWhatsappOrPhone(s.phone);
+    const wa = normalizeWhatsappOrPhone(s.whatsappNo);
+    const fph = normalizeWhatsappOrPhone(s.fatherPhone);
+    const fwa = normalizeWhatsappOrPhone(s.fatherWhatsapp);
+    const mph = normalizeWhatsappOrPhone(s.motherPhone);
+    const mwa = normalizeWhatsappOrPhone(s.motherWhatsapp);
+    const ad = normalizeAddress(s.address);
+
+    const phones = new Set([ph, wa, fph, fwa, mph, mwa].filter((p) => p && p.length >= 10));
+    const aadhaars = new Set([fa, ma, sa].filter((a) => a && a.length >= 8));
+
+    return {
+      student: s,
+      fn,
+      mn,
+      fa,
+      ma,
+      sa,
+      phones,
+      aadhaars,
+      ad,
+      familyGroupId: s.familyGroupId || "",
+      siblingStudentIds: new Set(Array.isArray(s.siblingStudentIds) ? s.siblingStudentIds : []),
+    };
+  });
+
+  // Pairwise clustering
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const a = normalized[i];
+      const b = normalized[j];
+
+      // Explicit family ID or sibling link
+      if (
+        (a.familyGroupId && b.familyGroupId && a.familyGroupId === b.familyGroupId) ||
+        a.siblingStudentIds.has(b.student.id) ||
+        b.siblingStudentIds.has(a.student.id)
+      ) {
+        union(i, j);
+        addReason(i, j, "मैनुअल / पूर्व लिंक फैमिली");
+        continue;
+      }
+
+      // Rule 1: Mother Name + Father Name Match
+      const fatherMatch = Boolean(a.fn && b.fn && a.fn.length >= 3 && a.fn === b.fn);
+      const motherMatch = Boolean(a.mn && b.mn && a.mn.length >= 3 && a.mn === b.mn);
+      if (fatherMatch && motherMatch) {
+        union(i, j);
+        addReason(i, j, "समान माता-पिता का नाम (Mother & Father Name Match)");
+        continue;
+      }
+
+      // Rule 2: Aadhaar Match (Father Aadhaar, Mother Aadhaar, or Aadhaar)
+      let aadhaarMatch = false;
+      if (a.fa && b.fa && a.fa === b.fa) {
+        aadhaarMatch = true;
+        addReason(i, j, "समान पिता आधार कार्ड (Father Aadhaar Match)");
+      } else if (a.ma && b.ma && a.ma === b.ma) {
+        aadhaarMatch = true;
+        addReason(i, j, "समान माता आधार कार्ड (Mother Aadhaar Match)");
+      } else if (a.sa && b.sa && a.sa === b.sa && (fatherMatch || motherMatch)) {
+        aadhaarMatch = true;
+        addReason(i, j, "समान आधार कार्ड (Aadhaar Match)");
+      }
+      if (aadhaarMatch) {
+        union(i, j);
+        continue;
+      }
+
+      // Rule 3: Mobile / WhatsApp Match + (Father OR Mother Match)
+      const commonPhone = Array.from(a.phones).some((p) => b.phones.has(p));
+      if (commonPhone && (fatherMatch || motherMatch)) {
+        union(i, j);
+        addReason(i, j, "समान मोबाइल नंबर + माता/पिता का नाम");
+        continue;
+      }
+
+      // Rule 4: Residential Address Match + (Father OR Mother Match)
+      if (a.ad && b.ad && a.ad.length >= 6 && a.ad === b.ad && (fatherMatch || motherMatch)) {
+        union(i, j);
+        addReason(i, j, "समान निवास पता + माता/पिता का नाम");
+        continue;
+      }
+    }
+  }
+
+  // Group by DSU root
+  const clusters = new Map<number, number[]>();
+  for (let i = 0; i < n; i++) {
+    const root = find(i);
+    const list = clusters.get(root) || [];
+    list.push(i);
+    clusters.set(root, list);
+  }
+
+  const families: SiblingFamilyGroup[] = [];
+  const singleStudents: SchoolStudent[] = [];
+
+  clusters.forEach((indices) => {
+    if (indices.length <= 1) {
+      singleStudents.push(activeStudents[indices[0]]);
+      return;
+    }
+
+    const clusterStudents = indices.map((idx) => activeStudents[idx]);
+
+    // Gather match reasons for this cluster
+    const reasonsSet = new Set<string>();
+    for (let x = 0; x < indices.length; x++) {
+      for (let y = x + 1; y < indices.length; y++) {
+        const key = [indices[x], indices[y]].sort().join(":");
+        const rList = reasonsMap.get(key);
+        if (rList) rList.forEach((r) => reasonsSet.add(r));
+      }
+    }
+
+    // Resolve primary family attributes
+    const firstFather = clusterStudents.find((s) => s.fatherName?.trim())?.fatherName || "";
+    const firstMother = clusterStudents.find((s) => s.motherName?.trim())?.motherName || "";
+    const firstFatherAadhaar = clusterStudents.find((s) => s.fatherAadhaar?.trim())?.fatherAadhaar;
+    const firstMotherAadhaar = clusterStudents.find((s) => s.motherAadhaar?.trim())?.motherAadhaar;
+    const firstPhone = clusterStudents.find((s) => s.phone?.trim())?.phone || clusterStudents.find((s) => s.fatherPhone?.trim())?.fatherPhone;
+    const firstWhatsapp = clusterStudents.find((s) => s.whatsappNo?.trim())?.whatsappNo || clusterStudents.find((s) => s.fatherWhatsapp?.trim())?.fatherWhatsapp;
+    const firstAddress = clusterStudents.find((s) => s.address?.trim())?.address;
+
+    const existingFamId = clusterStudents.find((s) => s.familyGroupId)?.familyGroupId;
+    const familyId = existingFamId || buildFamilyGroupId(firstFather, firstMother, firstWhatsapp || firstPhone) || `FAM_${Date.now()}_${indices[0]}`;
+
+    // Sort students: higher classes / elders first (e.g. Class 10 > Class 9 > ... > Nursery)
+    const sortedStudents = clusterStudents.sort((a, b) => {
+      const getNum = (c?: string) => {
+        if (!c) return 0;
+        const match = c.match(/\d+/);
+        return match ? parseInt(match[0], 10) : 0;
+      };
+      const numA = getNum(a.className);
+      const numB = getNum(b.className);
+      if (numA !== numB) return numB - numA;
+      return (a.admissionNo || "").localeCompare(b.admissionNo || "");
+    });
+
+    let totalMonthlyFee = 0;
+    let totalMonthlyDiscount = 0;
+    let hasDiscount = false;
+    let hasFreeEducation = false;
+
+    sortedStudents.forEach((st) => {
+      const baseMonthly = Number(st.baseMonthlyFee ?? st.monthlyFee ?? 0);
+      totalMonthlyFee += baseMonthly;
+
+      let discAmt = 0;
+      if (st.isFreeEducation) {
+        discAmt = baseMonthly;
+        hasFreeEducation = true;
+        hasDiscount = true;
+      } else if (Number(st.siblingDiscountPct || 0) > 0) {
+        discAmt = Math.round((baseMonthly * Number(st.siblingDiscountPct)) / 100);
+        hasDiscount = true;
+      } else if (Number(st.siblingDiscountAmount || 0) > 0) {
+        discAmt = Number(st.siblingDiscountAmount);
+        hasDiscount = true;
+      }
+      totalMonthlyDiscount += Math.min(baseMonthly, discAmt);
+    });
+
+    const netPayableMonthly = Math.max(0, totalMonthlyFee - totalMonthlyDiscount);
+
+    const familyName = firstFather && firstMother
+      ? `श्री ${firstFather} एवं श्रीमती ${firstMother} का परिवार`
+      : firstFather
+      ? `श्री ${firstFather} का परिवार`
+      : firstMother
+      ? `श्रीमती ${firstMother} का परिवार`
+      : `भाई-बहन परिवार (${sortedStudents.map((s) => s.name).join(", ")})`;
+
+    families.push({
+      id: familyId,
+      familyName,
+      fatherName: firstFather,
+      motherName: firstMother,
+      fatherAadhaar: firstFatherAadhaar,
+      motherAadhaar: firstMotherAadhaar,
+      phone: firstPhone,
+      whatsappNo: firstWhatsapp,
+      address: firstAddress,
+      matchReasons: Array.from(reasonsSet),
+      students: sortedStudents,
+      totalStudents: sortedStudents.length,
+      hasDiscount,
+      hasFreeEducation,
+      totalMonthlyFee,
+      totalMonthlyDiscount,
+      netPayableMonthly,
+    });
+  });
+
+  // Sort families: those with most children or active discounts first
+  families.sort((a, b) => b.totalStudents - a.totalStudents || b.totalMonthlyDiscount - a.totalMonthlyDiscount);
+
+  const stats = {
+    totalFamilies: families.length,
+    totalSiblingStudents: families.reduce((sum, f) => sum + f.totalStudents, 0),
+    discountedStudents: families.reduce(
+      (sum, f) => sum + f.students.filter((s) => s.isFreeEducation || Number(s.siblingDiscountPct || 0) > 0 || Number(s.siblingDiscountAmount || 0) > 0).length,
+      0
+    ),
+    freeEducationStudents: families.reduce((sum, f) => sum + f.students.filter((s) => s.isFreeEducation).length, 0),
+    totalMonthlySavings: families.reduce((sum, f) => sum + f.totalMonthlyDiscount, 0),
+  };
+
+  return { families, singleStudents, stats };
+};
+

@@ -16,7 +16,9 @@ import {
   Volume2,
   Check,
   ChevronRight,
-  UserPlus
+  UserPlus,
+  Eye,
+  EyeOff
 } from "lucide-react";
 import {
   detectFacesInFrame,
@@ -26,6 +28,8 @@ import {
   enrollStudentFromPhotoUrl,
   playAttendanceSuccessChime,
   playCooldownTick,
+  EyeBlinkDetector,
+  BlinkState,
   FaceDescriptorRecord,
   DetectedFaceBox
 } from "../../utils/faceRecognitionEngine";
@@ -34,6 +38,7 @@ import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 import { speakNotification } from "../../utils/voiceNotifyEngine";
 import { hapticStrong, hapticMedium } from "../../utils/haptic";
 import { FaceEnrollmentModal } from "./FaceEnrollmentModal";
+import { UniversalFaceIdStudioModal } from "./UniversalFaceIdStudioModal";
 
 export interface FaceAttendanceKioskModalProps {
   isOpen: boolean;
@@ -91,6 +96,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
     confidence: number;
   } | null>(null);
   const [kioskScanMode, setKioskScanMode] = useState<"auto" | "in" | "out">("auto");
+  const [currentShiftMode, setCurrentShiftMode] = useState<"in" | "out">("in");
 
   const [cooldownToast, setCooldownToast] = useState<string | null>(null);
   const [manualSearchQuery, setManualSearchQuery] = useState<string>("");
@@ -99,13 +105,28 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
   const [currentTimeStr, setCurrentTimeStr] = useState<string>("");
   const [hasFaceInView, setHasFaceInView] = useState<boolean>(false);
 
-  // Scan cooldown tracker: studentId -> timestamp
+  // Eye Blink & Liveness + 1-Tap Candidate state
+  const [pendingBlinkStudent, setPendingBlinkStudent] = useState<any>(null);
+  const [lowConfidenceCandidate, setLowConfidenceCandidate] = useState<any>(null);
+  const [activeCooldownInfo, setActiveCooldownInfo] = useState<{ name: string; rollNo?: string; remainingSec: number } | null>(null);
+  const blinkDetectorRef = useRef<EyeBlinkDetector>(new EyeBlinkDetector());
+
+  // 15-20s Cooldown Guard tracker: studentId -> timestamp
   const scanCooldownsRef = useRef<Map<string, number>>(new Map());
   const isProcessingRef = useRef<boolean>(false);
   const streamRef = useRef<MediaStream | null>(null);
   const lastLiveDescriptorRef = useRef<number[] | null>(null);
 
-  // Live Clock Ticker
+  // Compute Shift Routine based on school prayer time (Default: 09:00 AM -> 10:00 AM cutoff)
+  const computeRoutineShift = useCallback((): "in" | "out" => {
+    const now = new Date();
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const prayerMinutes = 9 * 60 + 0; // 09:00 AM
+    const inCutoffMinutes = prayerMinutes + 60; // 10:00 AM (600 mins)
+    return currentMinutes <= inCutoffMinutes ? "in" : "out";
+  }, []);
+
+  // Live Clock & Shift Ticker
   useEffect(() => {
     const updateTime = () => {
       const now = new Date();
@@ -117,11 +138,12 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           hour12: true
         })
       );
+      setCurrentShiftMode(computeRoutineShift());
     };
     updateTime();
     const interval = setInterval(updateTime, 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [computeRoutineShift]);
 
   // Load Enrolled Descriptors from IndexedDB & Auto-Enroll Roster
   const loadDescriptors = useCallback(async () => {
@@ -232,19 +254,19 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
       const now = Date.now();
       const lastScanned = scanCooldownsRef.current.get(match.studentId) || 0;
 
-      // 60-Second Duplicate Scan Cooldown Guard
-      if (now - lastScanned < 60000) {
-        playCooldownTick();
-        setCooldownToast(`${match.name} (Roll #${match.rollNo || "—"}) pehle se darj hai`);
-        setTimeout(() => setCooldownToast(null), 2500);
+      // RULE 1: 15-20 Second Cooldown Guard
+      const COOLDOWN_MS = 20000;
+      if (now - lastScanned < COOLDOWN_MS) {
+        // Quietly maintain locked state without annoying sound or alerts
+        const rem = Math.max(1, Math.ceil((COOLDOWN_MS - (now - lastScanned)) / 1000));
+        setActiveCooldownInfo({ name: match.name, rollNo: match.rollNo, remainingSec: rem });
         return;
       }
 
       scanCooldownsRef.current.set(match.studentId, now);
-
-      // Play Sound Chime & Haptic
-      playAttendanceSuccessChime();
-      hapticStrong();
+      setActiveCooldownInfo(null);
+      setPendingBlinkStudent(null);
+      setLowConfidenceCandidate(null);
 
       const timeFormatted = new Date().toLocaleTimeString("en-IN", {
         hour: "2-digit",
@@ -257,7 +279,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
       const targetClassId = match.classId || classId || "cls_default";
       const targetClassName = match.className || className || "Class";
 
-      // 1. Mark in school database with selected gate mode (auto, in, out)
+      // 1. Mark in school database with Shift Rule (morning IN, afternoon OUT)
       try {
         const res = await markStudentQrAttendance({
           schoolId,
@@ -266,10 +288,22 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           studentName: match.name,
           rollNo: match.rollNo,
           markedBy: teacherId,
-          scanMode: kioskScanMode
+          scanMode: kioskScanMode,
+          prayerTime: "09:00"
         });
 
-        const action = res?.action || (kioskScanMode === "out" ? "out" : "in");
+        if (res?.alreadyMarked) {
+          playCooldownTick();
+          setCooldownToast(res.message);
+          setTimeout(() => setCooldownToast(null), 2500);
+          return;
+        }
+
+        // Fresh attendance punch!
+        playAttendanceSuccessChime();
+        hapticStrong();
+
+        const action = res?.action || (kioskScanMode === "out" ? "out" : currentShiftMode);
         const isLate = Boolean(res?.isLate);
         const status = action === "out" ? "OUT" : isLate ? "LATE" : "PRESENT";
         const stayDuration = res?.stayDuration;
@@ -325,12 +359,22 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
         console.warn("Error marking face attendance:", err);
       }
     },
-    [schoolId, classId, className, teacherId, kioskScanMode, onAttendanceUpdated]
+    [schoolId, classId, className, teacherId, kioskScanMode, currentShiftMode, onAttendanceUpdated]
   );
 
-  // Manual Attendance Mark + Live Face Auto-Enrollment
+  // Manual Attendance Mark + Mandatory Live Face Auto-Enrollment
   const handleManualMark = (st: any) => {
-    if (lastLiveDescriptorRef.current && lastLiveDescriptorRef.current.length === 128) {
+    const alreadyEnrolled = Boolean(enrolledMap[st.id]);
+    const hasLiveFace = Boolean(lastLiveDescriptorRef.current && lastLiveDescriptorRef.current.length === 128);
+
+    if (!alreadyEnrolled && !hasLiveFace) {
+      setCooldownToast(`⚠️ ${st.name} का चेहरा सेव नहीं है! पहले चेहरा कैमरे के सामने लाएं, फिर टैप करें।`);
+      setTimeout(() => setCooldownToast(null), 3500);
+      return;
+    }
+
+    let justEnrolled = false;
+    if (hasLiveFace && lastLiveDescriptorRef.current) {
       const liveRec: FaceDescriptorRecord = {
         studentId: st.id,
         schoolId: schoolId || "default_school",
@@ -345,6 +389,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
       };
       void saveFaceDescriptor(liveRec);
       setEnrolledMap((prev) => ({ ...prev, [st.id]: liveRec }));
+      justEnrolled = !alreadyEnrolled;
     }
     handleMarkAttendanceSuccess({
       studentId: st.id,
@@ -355,11 +400,15 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
       photoUrl: st.photoUrl,
       confidencePercent: 100
     });
+    if (justEnrolled) {
+      setCooldownToast(`✅ ${st.name} की हाजिरी लगी व चेहरा सेव हो गया!`);
+      setTimeout(() => setCooldownToast(null), 3000);
+    }
     setShowManualSearch(false);
     setManualSearchQuery("");
   };
 
-  // Live Camera Detection Animation Loop
+  // Live Camera Detection Animation Loop (RULE 4: Throttled to 380ms for Battery Saver)
   useEffect(() => {
     if (!isOpen) return;
 
@@ -367,8 +416,8 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
     let lastScanTime = 0;
 
     const renderLoop = async (time: number) => {
-      // Throttle inference to every 120ms (approx 8-10 inferences/sec) for fluid 60fps UI
-      if (time - lastScanTime >= 120 && videoRef.current && canvasRef.current) {
+      // RULE 4: Battery Saver - Throttle inference to every 380ms (~2.5 FPS)
+      if (time - lastScanTime >= 380 && videoRef.current && canvasRef.current) {
         lastScanTime = time;
 
         const video = videoRef.current;
@@ -386,78 +435,132 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           try {
             const detected = await detectFacesInFrame(video, enrolledMap);
             setHasFaceInView(detected.length > 0);
-            lastLiveDescriptorRef.current = detected[0]?.descriptor || null;
+            if (detected[0]?.descriptor && detected[0].descriptor.length === 128) {
+              lastLiveDescriptorRef.current = detected[0].descriptor;
+            }
 
-            detected.forEach((face: DetectedFaceBox) => {
-              const { x, y, width, height, matchedStudent } = face;
-              const isMatched = Boolean(matchedStudent);
+            if (detected.length === 0) {
+              setPendingBlinkStudent(null);
+              setLowConfidenceCandidate(null);
+              setActiveCooldownInfo(null);
+            } else {
+              const primaryFace = detected[0];
+              const bState = blinkDetectorRef.current.update(video, primaryFace);
+              const hasBlinked = bState.blinkDetected || blinkDetectorRef.current.hasBlinkedRecently(3500);
 
-              // Corner bracket styling
-              ctx.lineWidth = 3.5;
-              ctx.strokeStyle = isMatched ? "#10b981" : "#f59e0b"; // Emerald if matched, Amber if evaluating
+              detected.forEach((face: DetectedFaceBox) => {
+                const { x: rawX, y, width, height, matchedStudent } = face;
+                // Front camera video is mirrored via CSS (-scale-x-100); mirror box X on canvas
+                const x = facingMode === "user" ? Math.max(0, canvas.width - rawX - width) : rawX;
+                const isMatched = Boolean(matchedStudent);
 
-              const cornerLen = Math.min(width, height) * 0.22;
+                // RULE 1: Cooldown Guard Check
+                const lastScanned = matchedStudent ? (scanCooldownsRef.current.get(matchedStudent.studentId) || 0) : 0;
+                const isUnderCooldown = matchedStudent && (Date.now() - lastScanned < 20000);
 
-              // Top-Left Corner
-              ctx.beginPath();
-              ctx.moveTo(x, y + cornerLen);
-              ctx.lineTo(x, y);
-              ctx.lineTo(x + cornerLen, y);
-              ctx.stroke();
+                if (isUnderCooldown && matchedStudent) {
+                  const rem = Math.max(1, Math.ceil((20000 - (Date.now() - lastScanned)) / 1000));
+                  setActiveCooldownInfo({ name: matchedStudent.name, rollNo: matchedStudent.rollNo, remainingSec: rem });
+                  setPendingBlinkStudent(null);
+                  setLowConfidenceCandidate(null);
+                } else if (matchedStudent) {
+                  setActiveCooldownInfo(null);
+                  if (matchedStudent.confidencePercent >= 88) {
+                    setLowConfidenceCandidate(null);
+                    if (hasBlinked) {
+                      setPendingBlinkStudent(null);
+                      void handleMarkAttendanceSuccess(matchedStudent);
+                    } else {
+                      setPendingBlinkStudent(matchedStudent);
+                    }
+                  } else if (matchedStudent.confidencePercent >= 60) {
+                    setLowConfidenceCandidate(matchedStudent);
+                    setPendingBlinkStudent(null);
+                  }
+                }
 
-              // Top-Right Corner
-              ctx.beginPath();
-              ctx.moveTo(x + width - cornerLen, y);
-              ctx.lineTo(x + width, y);
-              ctx.lineTo(x + width, y + cornerLen);
-              ctx.stroke();
+                // Corner bracket styling
+                ctx.lineWidth = 3.5;
+                ctx.strokeStyle = isUnderCooldown
+                  ? "#10b981"
+                  : pendingBlinkStudent
+                  ? "#22d3ee"
+                  : isMatched
+                  ? "#10b981"
+                  : "#f59e0b";
 
-              // Bottom-Left Corner
-              ctx.beginPath();
-              ctx.moveTo(x, y + height - cornerLen);
-              ctx.lineTo(x, y + height);
-              ctx.lineTo(x + cornerLen, y + height);
-              ctx.stroke();
+                const cornerLen = Math.min(width, height) * 0.22;
 
-              // Bottom-Right Corner
-              ctx.beginPath();
-              ctx.moveTo(x + width - cornerLen, y + height);
-              ctx.lineTo(x + width, y + height);
-              ctx.lineTo(x + width, y + height - cornerLen);
-              ctx.stroke();
+                // Top-Left Corner
+                ctx.beginPath();
+                ctx.moveTo(x, y + cornerLen);
+                ctx.lineTo(x, y);
+                ctx.lineTo(x + cornerLen, y);
+                ctx.stroke();
 
-              // Overlay Label Card
-              const labelText = matchedStudent
-                ? `${matchedStudent.name} (${matchedStudent.confidencePercent}%)`
-                : "Scanning Face...";
+                // Top-Right Corner
+                ctx.beginPath();
+                ctx.moveTo(x + width - cornerLen, y);
+                ctx.lineTo(x + width, y);
+                ctx.lineTo(x + width, y + cornerLen);
+                ctx.stroke();
 
-              ctx.font = "bold 15px system-ui, -apple-system, sans-serif";
-              const textWidth = ctx.measureText(labelText).width;
-              const badgeW = textWidth + 24;
-              const badgeH = 28;
-              const badgeX = x + width / 2 - badgeW / 2;
-              const badgeY = Math.max(10, y - badgeH - 8);
+                // Bottom-Left Corner
+                ctx.beginPath();
+                ctx.moveTo(x, y + height - cornerLen);
+                ctx.lineTo(x, y + height);
+                ctx.lineTo(x + cornerLen, y + height);
+                ctx.stroke();
 
-              // Card Background
-              ctx.fillStyle = isMatched ? "rgba(6, 78, 59, 0.90)" : "rgba(30, 41, 59, 0.85)";
-              ctx.beginPath();
-              ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 8);
-              ctx.fill();
+                // Bottom-Right Corner
+                ctx.beginPath();
+                ctx.moveTo(x + width - cornerLen, y + height);
+                ctx.lineTo(x + width, y + height);
+                ctx.lineTo(x + width, y + height - cornerLen);
+                ctx.stroke();
 
-              // Border
-              ctx.strokeStyle = isMatched ? "#34d399" : "#64748b";
-              ctx.lineWidth = 1;
-              ctx.stroke();
+                // Overlay Label Card
+                let labelText = "Scanning Face...";
+                if (isUnderCooldown && matchedStudent) {
+                  labelText = `⏸️ ${matchedStudent.name} (उपस्थिति दर्ज)`;
+                } else if (pendingBlinkStudent && matchedStudent) {
+                  labelText = `👁️ ${matchedStudent.name} (${matchedStudent.confidencePercent}%) • Blink Eyes`;
+                } else if (matchedStudent) {
+                  labelText = `${matchedStudent.name} (${matchedStudent.confidencePercent}%)`;
+                }
 
-              // Text
-              ctx.fillStyle = "#ffffff";
-              ctx.fillText(labelText, badgeX + 12, badgeY + 19);
+                ctx.font = "bold 14px system-ui, -apple-system, sans-serif";
+                const textWidth = ctx.measureText(labelText).width;
+                const badgeW = textWidth + 24;
+                const badgeH = 28;
+                const badgeX = Math.max(8, Math.min(canvas.width - badgeW - 8, x + width / 2 - badgeW / 2));
+                const badgeY = Math.max(10, y - badgeH - 8);
 
-              // If matched, trigger attendance
-              if (matchedStudent) {
-                void handleMarkAttendanceSuccess(matchedStudent);
-              }
-            });
+                ctx.fillStyle = isUnderCooldown
+                  ? "rgba(6, 78, 59, 0.90)"
+                  : pendingBlinkStudent
+                  ? "rgba(8, 51, 68, 0.92)"
+                  : isMatched
+                  ? "rgba(6, 78, 59, 0.90)"
+                  : "rgba(30, 41, 59, 0.85)";
+                ctx.beginPath();
+                ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 8);
+                ctx.fill();
+
+                ctx.strokeStyle = isUnderCooldown
+                  ? "#34d399"
+                  : pendingBlinkStudent
+                  ? "#38bdf8"
+                  : isMatched
+                  ? "#34d399"
+                  : "#64748b";
+                ctx.lineWidth = 1;
+                ctx.stroke();
+
+                ctx.fillStyle = "#ffffff";
+                ctx.fillText(labelText, badgeX + 12, badgeY + 19);
+              });
+            }
           } catch (e) {
             // Frame processing blip ignored
           }
@@ -469,7 +572,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
 
     animId = requestAnimationFrame(renderLoop);
     return () => cancelAnimationFrame(animId);
-  }, [isOpen, enrolledMap, handleMarkAttendanceSuccess]);
+  }, [isOpen, enrolledMap, facingMode, handleMarkAttendanceSuccess, pendingBlinkStudent]);
 
   if (!isOpen) return null;
 
@@ -510,6 +613,26 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
 
         {/* Live Clock & Actions */}
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          {/* Shift / Routine Status Pill */}
+          <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800/90 border border-slate-700 text-xs">
+            <span
+              className={`w-2 h-2 rounded-full ${
+                (kioskScanMode === "auto" ? currentShiftMode : kioskScanMode) === "in"
+                  ? "bg-emerald-400 animate-pulse"
+                  : "bg-rose-400 animate-pulse"
+              }`}
+            />
+            <span className="font-bold text-slate-200">
+              {kioskScanMode === "auto"
+                ? currentShiftMode === "in"
+                  ? "🌅 सुबह (IN मोड • 10:00 AM तक)"
+                  : "🌇 दोपहर/छुट्टी (OUT मोड)"
+                : kioskScanMode === "in"
+                ? "🟢 फ़ोर्स्ड IN मोड"
+                : "🔴 फ़ोर्स्ड OUT मोड"}
+            </span>
+          </div>
+
           {/* Gate Scan Mode Toggle (Auto / IN / OUT) */}
           <div className="flex items-center p-0.5 rounded-xl bg-slate-800/90 border border-slate-700 text-xs font-bold">
             <button
@@ -520,7 +643,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                   ? "bg-indigo-600 text-white shadow-xs"
                   : "text-slate-400 hover:text-slate-200"
               }`}
-              title="स्वतः पहचानें (सुबह IN, बाद में OUT)"
+              title="स्वतः पहचानें (सुबह 10:00 AM तक IN, बाद में OUT)"
             >
               Auto
             </button>
@@ -560,12 +683,12 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           <button
             type="button"
             onClick={() => setShowEnrollmentModal(true)}
-            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold transition cursor-pointer"
-            title="Inspect & Enroll Student Face Data"
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-bold transition cursor-pointer shadow-sm shadow-emerald-900/30"
+            title="Open Universal Live Face ID Studio & Match Test"
           >
-            <UserPlus className="w-3.5 h-3.5 text-indigo-400" />
-            <span className="hidden sm:inline">Face Enrollment</span>
-            <span className="text-[11px] text-slate-400">({enrolledCount})</span>
+            <Camera className="w-3.5 h-3.5 text-amber-300" />
+            <span className="hidden sm:inline">📷 Live Face Studio</span>
+            <span className="text-[11px] text-emerald-100 font-mono">({enrolledCount})</span>
           </button>
 
           <button
@@ -581,12 +704,14 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
 
       {/* ── MAIN VIEWFINDER CANVAS & TARGETING RETICLE ── */}
       <div className="relative flex-1 bg-black flex items-center justify-center overflow-hidden">
-        {/* Camera Video Stream */}
+        {/* Camera Video Stream (mirror naturally when using front selfie camera) */}
         <video
           ref={videoRef}
           playsInline
           muted
-          className="absolute inset-0 w-full h-full object-cover"
+          className={`absolute inset-0 w-full h-full object-cover transition-transform ${
+            facingMode === "user" ? "-scale-x-100" : ""
+          }`}
         />
 
         {/* Real-time Facial Bounding Box Overlay Canvas */}
@@ -612,17 +737,116 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           </div>
         )}
 
-        {/* Center Framing Guide Oval */}
+        {/* Center Framing Guide Oval with Dynamic Biometric State Colors */}
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center z-10">
-          <div className="w-64 h-80 sm:w-72 sm:h-96 rounded-[50%] border-2 border-dashed border-white/20 flex flex-col items-center justify-between p-6">
-            <span className="text-[11px] font-bold tracking-wider uppercase text-white/50 bg-black/40 px-2 py-0.5 rounded-full backdrop-blur-xs">
-              Position Face Inside
-            </span>
-            <span className="text-[11px] font-bold text-emerald-400/80 bg-black/40 px-2 py-0.5 rounded-full backdrop-blur-xs">
-              {enrolledCount > 0 ? `⚡ ${enrolledCount} Students Enrolled` : "⚠️ 0 Face Enrolled"}
-            </span>
+          <div
+            className={`w-64 h-80 sm:w-72 sm:h-96 rounded-[50%] border-2 transition-all duration-300 flex flex-col items-center justify-between p-6 relative ${
+              lastMatchedAlert && !activeCooldownInfo
+                ? "border-emerald-400 shadow-[0_0_40px_rgba(52,211,153,0.7)] ring-4 ring-emerald-500/40"
+                : activeCooldownInfo
+                ? "border-emerald-500/70 shadow-[0_0_25px_rgba(16,185,129,0.4)] ring-2 ring-emerald-500/30"
+                : pendingBlinkStudent
+                ? "border-cyan-400 shadow-[0_0_35px_rgba(34,211,238,0.7)] ring-4 ring-cyan-500/40 animate-pulse"
+                : lowConfidenceCandidate
+                ? "border-amber-400 shadow-[0_0_25px_rgba(251,191,36,0.5)] ring-2 ring-amber-500/30"
+                : hasFaceInView
+                ? "border-blue-400/80 shadow-[0_0_20px_rgba(96,165,250,0.4)] ring-2 ring-blue-500/30"
+                : "border-dashed border-white/25"
+            }`}
+          >
+            {/* Top Oval Pill */}
+            <div className="pointer-events-auto">
+              {activeCooldownInfo ? (
+                <span className="text-[11px] font-bold tracking-wider uppercase text-emerald-300 bg-emerald-950/85 border border-emerald-500/40 px-3 py-1 rounded-full backdrop-blur-md flex items-center gap-1.5 shadow-lg">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                  <span>{activeCooldownInfo.name} • उपस्थिति दर्ज ({activeCooldownInfo.remainingSec}s Lock)</span>
+                </span>
+              ) : pendingBlinkStudent ? (
+                <span className="text-[11px] font-bold tracking-wider text-cyan-200 bg-cyan-950/90 border border-cyan-400 px-3 py-1 rounded-full backdrop-blur-md flex items-center gap-1.5 shadow-lg animate-pulse">
+                  <span>👁️</span>
+                  <span>{pendingBlinkStudent.name} • कृपया आँखें झपकाएँ (Blink)</span>
+                </span>
+              ) : (
+                <span className="text-[11px] font-bold tracking-wider uppercase text-white/70 bg-black/50 px-3 py-1 rounded-full backdrop-blur-xs">
+                  {hasFaceInView ? "Scanning Face..." : "Position Face Inside"}
+                </span>
+              )}
+            </div>
+
+            {/* Bottom Oval Pill / Shift Indicator */}
+            <div className="pointer-events-auto flex flex-col items-center gap-1">
+              <span className="text-[11px] font-bold text-emerald-400/90 bg-black/60 px-2.5 py-0.5 rounded-full backdrop-blur-xs flex items-center gap-1">
+                <span>{(kioskScanMode === "auto" ? currentShiftMode : kioskScanMode) === "in" ? "🟢 IN Mode (आगमन)" : "🔴 OUT Mode (प्रस्थान)"}</span>
+                <span>•</span>
+                <span>{enrolledCount > 0 ? `${enrolledCount} Enrolled` : "0 Enrolled"}</span>
+              </span>
+            </div>
           </div>
         </div>
+
+        {/* 1-Tap Eye Blink Confirmation Button (when waiting for blink) */}
+        {pendingBlinkStudent && !activeCooldownInfo && (
+          <div className="absolute top-20 left-1/2 -translate-x-1/2 z-30 max-w-sm w-[90%] pointer-events-auto animate-in fade-in slide-in-from-top-3 duration-200">
+            <div className="bg-cyan-950/90 border border-cyan-400 rounded-2xl p-3 shadow-2xl backdrop-blur-md flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-white truncate flex items-center gap-1.5">
+                  <span>👁️</span>
+                  <span>{pendingBlinkStudent.name} ({pendingBlinkStudent.confidencePercent}%)</span>
+                </p>
+                <p className="text-[10px] text-cyan-300">
+                  कृपया 1 बार आँखें झपकाएँ या पुष्टि के लिए बटन दबाएँ
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  blinkDetectorRef.current.simulateBlink();
+                  void handleMarkAttendanceSuccess(pendingBlinkStudent);
+                }}
+                className="px-3 py-1.5 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-black text-xs shrink-0 active:scale-95 transition shadow-lg shadow-cyan-400/30 cursor-pointer flex items-center gap-1"
+              >
+                <Eye className="w-3.5 h-3.5" />
+                <span>पलक झपकी (Tap)</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* 1-Tap Low-Confidence Assisted Attendance Help (when 60% - 87% match in low light/angle) */}
+        {lowConfidenceCandidate && !activeCooldownInfo && !pendingBlinkStudent && (
+          <div className="absolute top-20 left-1/2 -translate-x-1/2 z-30 max-w-sm w-[90%] pointer-events-auto animate-in fade-in slide-in-from-top-3 duration-200">
+            <div className="bg-amber-950/90 border border-amber-400/80 rounded-2xl p-3 shadow-2xl backdrop-blur-md flex items-center justify-between gap-3">
+              <div className="min-w-0 flex items-center gap-2">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center justify-center font-bold text-xs shrink-0 overflow-hidden">
+                  {lowConfidenceCandidate.photoUrl ? (
+                    <img src={lowConfidenceCandidate.photoUrl} alt="" className="w-full h-full object-cover" />
+                  ) : (
+                    <span>{lowConfidenceCandidate.name.slice(0, 2).toUpperCase()}</span>
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-white truncate">
+                    क्या आप {lowConfidenceCandidate.name} हैं?
+                  </p>
+                  <p className="text-[10px] text-amber-300">
+                    कम रोशनी / कोण ({lowConfidenceCandidate.confidencePercent}% मैच)
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  void handleMarkAttendanceSuccess(lowConfidenceCandidate);
+                  setLowConfidenceCandidate(null);
+                }}
+                className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs shrink-0 active:scale-95 transition shadow-lg shadow-emerald-500/30 cursor-pointer flex items-center gap-1"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>हाँ, हाजिरी लगाएं</span>
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Notification Toast for Already Scanned Student */}
         {cooldownToast && (
@@ -710,23 +934,32 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                   <p className="text-[11px] font-black text-white truncate">
                     {hasFaceInView ? "⚡ कैमरा में चेहरा सक्रिय (Face Detected)" : "📷 1-टैप हाजिरी (Quick Attendance)"}
                   </p>
-                  <p className="text-[10px] text-slate-400 truncate">
-                    नाम पर टैप करके तुरंत हाजिरी लगाएं:
+                  <p className="text-[10px] text-amber-300 font-semibold truncate">
+                    {enrolledCount === 0
+                      ? "अभी 0 चेहरा सेव है — नीचे नाम पर 1 बार टैप करें (चेहरा सेव + हाजिरी हो जाएगी)"
+                      : "नाम पर टैप करके तुरंत हाजिरी लगाएं व चेहरा अपडेट करें:"}
                   </p>
                 </div>
               </div>
               <div className="flex items-center gap-1.5 overflow-x-auto py-0.5 max-w-full sm:max-w-md">
-                {students.slice(0, 5).map((st) => (
-                  <button
-                    key={st.id}
-                    type="button"
-                    onClick={() => handleManualMark(st)}
-                    className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-bold text-xs shrink-0 flex items-center gap-1 shadow-sm transition cursor-pointer"
-                    title={`Mark ${st.name} attendance`}
-                  >
-                    <span>✓ {st.name.split(" ")[0]} (#{st.rollNo})</span>
-                  </button>
-                ))}
+                {students.slice(0, 5).map((st) => {
+                  const isEnrolled = Boolean(enrolledMap[st.id]);
+                  return (
+                    <button
+                      key={st.id}
+                      type="button"
+                      onClick={() => handleManualMark(st)}
+                      className={`px-2.5 py-1.5 rounded-xl active:scale-95 text-white font-bold text-xs shrink-0 flex items-center gap-1 shadow-sm transition cursor-pointer ${
+                        isEnrolled
+                          ? "bg-emerald-600 hover:bg-emerald-500 ring-1 ring-emerald-300/50"
+                          : "bg-indigo-600 hover:bg-indigo-500"
+                      }`}
+                      title={isEnrolled ? `${st.name} (चेहरा सेव है)` : `${st.name} का चेहरा सेव करें व हाजिरी लगाएं`}
+                    >
+                      <span>{isEnrolled ? "✓📷" : "+📸"} {st.name.split(" ")[0]} (#{st.rollNo})</span>
+                    </button>
+                  );
+                })}
                 {students.length > 5 && (
                   <button
                     type="button"
@@ -902,18 +1135,20 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
         </div>
       )}
 
-      {/* ── FACE ENROLLMENT MANAGEMENT MODAL ── */}
-      <FaceEnrollmentModal
-        isOpen={showEnrollmentModal}
-        onClose={() => {
-          setShowEnrollmentModal(false);
-          loadDescriptors();
-        }}
-        schoolId={schoolId}
-        students={students}
-        enrolledMap={enrolledMap}
-        onEnrollmentUpdated={loadDescriptors}
-      />
+      {/* ── UNIVERSAL LIVE FACE ID STUDIO & ENROLLMENT MODAL ── */}
+      {showEnrollmentModal && (
+        <UniversalFaceIdStudioModal
+          isOpen={showEnrollmentModal}
+          onClose={() => {
+            setShowEnrollmentModal(false);
+            loadDescriptors();
+          }}
+          schoolId={schoolId}
+          students={students}
+          classes={className ? [{ id: classId, name: className }] : []}
+          onEnrollmentUpdated={loadDescriptors}
+        />
+      )}
     </div>
   );
 };

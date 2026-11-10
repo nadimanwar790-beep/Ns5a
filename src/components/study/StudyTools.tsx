@@ -73,7 +73,13 @@ export const StudyTools: React.FC = () => {
       setShowExplanation(false);
     } else {
       setIsFinished(true);
-      confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
+      try {
+        if (typeof confetti === 'function') {
+          confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
+        }
+      } catch (err) {
+        console.info('[StudyTools] Confetti animation completed or skipped:', err);
+      }
     }
   };
 
