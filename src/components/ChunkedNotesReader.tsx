@@ -953,7 +953,7 @@ export const ChunkedNotesReader: React.FC<Props> = ({ content, className, langua
 
   const toggleDesktopMode = () => {
     const newVal = !isDesktopMode;
-    setDesktopMode(newVal);
+    setDesktopMode(newVal, true);
     setIsDesktopModeLocal(newVal);
     onDesktopModeChange?.(newVal);
   };

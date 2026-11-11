@@ -61,7 +61,7 @@ export default defineConfig(async ({ command }) => {
           theme_color: '#121212',
           background_color: '#121212',
           display: 'standalone',
-          orientation: 'portrait',
+          orientation: 'any',
           start_url: '/',
           scope: '/',
           icons: [

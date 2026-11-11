@@ -60,7 +60,7 @@ export const isDesktopModeOn = (): boolean => {
   }
 };
 
-export const setDesktopMode = (on: boolean): void => {
+export const setDesktopMode = (on: boolean, autoRotate = false): void => {
   try {
     localStorage.setItem(DESKTOP_MODE_KEY, on ? '1' : '0');
   } catch {}
@@ -71,9 +71,15 @@ export const setDesktopMode = (on: boolean): void => {
   if (on) {
     document.documentElement.classList.add('force-desktop-mode');
     document.body.classList.add('force-desktop-mode');
+    if (autoRotate) {
+      void rotateToLandscape();
+    }
   } else {
     document.documentElement.classList.remove('force-desktop-mode');
     document.body.classList.remove('force-desktop-mode');
+    if (autoRotate) {
+      void rotateToPortrait();
+    }
   }
   // Dispatch custom event for immediate React component state sync
   try {
@@ -81,9 +87,9 @@ export const setDesktopMode = (on: boolean): void => {
   } catch {}
 };
 
-export const toggleDesktopMode = (): boolean => {
+export const toggleDesktopMode = (autoRotate = true): boolean => {
   const next = !isDesktopModeOn();
-  setDesktopMode(next);
+  setDesktopMode(next, autoRotate);
   return next;
 };
 
@@ -159,65 +165,133 @@ export const getScreenOrientation = (): 'portrait' | 'landscape' => {
   return 'portrait';
 };
 
+export const rotateToLandscape = async (): Promise<'landscape'> => {
+  _rotatingForOrientation = true;
+  setTimeout(() => { _rotatingForOrientation = false; }, 1200);
+
+  const so: any = (typeof screen !== 'undefined' ? (screen as any).orientation : null);
+
+  // 1. Try direct lock (works in installed PWA / WebAPK)
+  if (so && typeof so.lock === 'function') {
+    try {
+      await so.lock('landscape');
+      try { window.dispatchEvent(new CustomEvent('nst-screen-rotate', { detail: { orientation: 'landscape' } })); } catch {}
+      return 'landscape';
+    } catch {}
+
+    // 2. Browser requires fullscreen before locking orientation (e.g. Chrome on Android)
+    try {
+      await requestFullscreenSafe();
+      await so.lock('landscape');
+      try { window.dispatchEvent(new CustomEvent('nst-screen-rotate', { detail: { orientation: 'landscape' } })); } catch {}
+      return 'landscape';
+    } catch {}
+  }
+
+  // Fallback: visual layout notification for browsers that do not expose screen.orientation.lock (iOS Safari, desktop)
+  try { window.dispatchEvent(new CustomEvent('nst-screen-rotate', { detail: { orientation: 'landscape' } })); } catch {}
+  return 'landscape';
+};
+
+export const rotateToPortrait = async (): Promise<'portrait'> => {
+  _rotatingForOrientation = true;
+  setTimeout(() => { _rotatingForOrientation = false; }, 1200);
+
+  const so: any = (typeof screen !== 'undefined' ? (screen as any).orientation : null);
+
+  if (so) {
+    try {
+      if (typeof so.unlock === 'function') so.unlock();
+      else if (typeof so.lock === 'function') await so.lock('portrait');
+    } catch {}
+  }
+
+  // Exit fullscreen if it was entered to rotate
+  await exitFullscreenSafe().catch(() => {});
+
+  try { window.dispatchEvent(new CustomEvent('nst-screen-rotate', { detail: { orientation: 'portrait' } })); } catch {}
+  return 'portrait';
+};
+
 /**
  * Rotate Button Handler:
- * Rotates the device screen between portrait and landscape cleanly.
- * Does NOT force native HTML5 fullscreen to eliminate the browser's
- * "to exit full screen, drag from the top and touch the back button" system banner.
- * Dispatches 'nst-screen-rotate' event and returns the new orientation ('portrait' | 'landscape').
+ * Cleanly flips orientation between portrait and landscape.
+ * When switching to landscape, enters fullscreen & locks landscape.
+ * When switching to portrait, unlocks orientation & exits fullscreen.
  */
-export const rotateScreen = async (): Promise<'portrait' | 'landscape' | null> => {
+export const rotateScreen = async (): Promise<'portrait' | 'landscape'> => {
   try {
     const current = getScreenOrientation();
-    const goingTo: 'portrait' | 'landscape' = current === 'landscape' ? 'portrait' : 'landscape';
-    const so: any = (screen as any).orientation;
-
-    _rotatingForOrientation = true;
-    // Keep rotation flag active for 1200ms so orientation reflows don't trigger fullscreen/blanking
-    setTimeout(() => {
-      _rotatingForOrientation = false;
-    }, 1200);
-
-    if (so && typeof so.lock === 'function') {
-      const candidates = goingTo === 'landscape'
-        ? ['landscape-primary', 'landscape']
-        : ['portrait-primary', 'portrait'];
-
-      // 1. Try direct orientation lock (works seamlessly in installed PWA without banners)
-      for (const target of candidates) {
-        try {
-          await so.lock(target);
-          try { window.dispatchEvent(new CustomEvent('nst-screen-rotate', { detail: { orientation: goingTo } })); } catch {}
-          return goingTo;
-        } catch {}
-      }
-
-      // 2. If browser requires fullscreen permission for orientation lock (e.g. mobile Chrome tab)
-      try {
-        if (goingTo === 'landscape') {
-          await requestFullscreenSafe();
-          for (const target of candidates) {
-            try {
-              await so.lock(target);
-              try { window.dispatchEvent(new CustomEvent('nst-screen-rotate', { detail: { orientation: 'landscape' } })); } catch {}
-              return 'landscape';
-            } catch {}
-          }
-        } else {
-          await exitFullscreenSafe();
-          await so.unlock?.().catch(() => {});
-          try { window.dispatchEvent(new CustomEvent('nst-screen-rotate', { detail: { orientation: 'portrait' } })); } catch {}
-          return 'portrait';
-        }
-      } catch {}
+    if (current === 'landscape') {
+      return await rotateToPortrait();
+    } else {
+      return await rotateToLandscape();
     }
-
-    // Visual layout toggle fallback (works on mobile web, iOS, and desktop without triggering browser fullscreen popups)
-    try { window.dispatchEvent(new CustomEvent('nst-screen-rotate', { detail: { orientation: goingTo } })); } catch {}
-    return goingTo;
   } catch {
     setTimeout(() => { _rotatingForOrientation = false; }, 300);
-    return null;
+    return 'portrait';
   }
+};
+
+/**
+ * Hook to continuously track physical screen orientation, window size, and desktop mode.
+ * Accurately updates when user rotates phone, toggles Desktop Site in browser, or resizes window.
+ */
+export const useDeviceOrientation = () => {
+  const [orientationState, setOrientationState] = useState(() => {
+    const isLand = getScreenOrientation() === 'landscape';
+    const isDesk = isDesktopModeOn();
+    const isWide = typeof window !== 'undefined' && window.innerWidth >= 1024;
+    return {
+      isLandscape: isLand || isDesk,
+      isDesktopMode: isDesk,
+      isWideScreen: isWide,
+    };
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const sync = () => {
+      const isLand = getScreenOrientation() === 'landscape';
+      const isDesk = isDesktopModeOn();
+      const isWide = window.innerWidth >= 1024;
+      setOrientationState({
+        isLandscape: isLand || isDesk,
+        isDesktopMode: isDesk,
+        isWideScreen: isWide,
+      });
+    };
+
+    window.addEventListener('resize', sync);
+    window.addEventListener('orientationchange', sync);
+    window.addEventListener('nst-screen-rotate', sync);
+    window.addEventListener('nst-desktop-mode-change', sync);
+
+    const mql = window.matchMedia ? window.matchMedia('(orientation: landscape)') : null;
+    if (mql && mql.addEventListener) {
+      mql.addEventListener('change', sync);
+    }
+
+    const so: any = (screen as any)?.orientation;
+    if (so && so.addEventListener) {
+      so.addEventListener('change', sync);
+    }
+
+    return () => {
+      window.removeEventListener('resize', sync);
+      window.removeEventListener('orientationchange', sync);
+      window.removeEventListener('nst-screen-rotate', sync);
+      window.removeEventListener('nst-desktop-mode-change', sync);
+      if (mql && mql.removeEventListener) {
+        mql.removeEventListener('change', sync);
+      }
+      if (so && so.removeEventListener) {
+        so.removeEventListener('change', sync);
+      }
+    };
+  }, []);
+
+  return orientationState;
 };
 

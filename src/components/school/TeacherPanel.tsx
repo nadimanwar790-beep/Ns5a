@@ -51,8 +51,8 @@ import { isSchoolEliteCurriculum } from "../../school-types";
 import { GroupStudyModal } from "../GroupStudyModal";
 import { ParentLeaveManager } from "./ParentLeaveManager";
 import { PtmSchedulerModal } from "./PtmSchedulerModal";
-import { QuestionPaperBuilder } from "./QuestionPaperBuilder";
 import { UniversalFaceIdStudioModal } from "./UniversalFaceIdStudioModal";
+import { rotateToLandscape, rotateToPortrait, setDesktopMode, useDeviceOrientation } from "../../utils/displayPrefs";
 
 interface Props {
   schoolId: string;
@@ -199,7 +199,10 @@ export const TeacherPanel: React.FC<Props> = ({
     }
   });
 
-  // Desktop/Laptop Mode state (Strictly Manual 1-Tap Toggle, Never Auto-Triggered)
+  // Continuous Device Orientation & Screen Width Hook
+  const { isLandscape: isClientLandscape, isWideScreen } = useDeviceOrientation();
+
+  // Desktop/Laptop Mode state (Manual Toggle Preserved in localStorage)
   const [isRotatedLandscape, setIsRotatedLandscape] = useState<boolean>(() => {
     try {
       return localStorage.getItem("school_erp_rotated_landscape") === "true";
@@ -207,8 +210,9 @@ export const TeacherPanel: React.FC<Props> = ({
       return false;
     }
   });
-  // isEffectiveLandscape strictly follows user button tap, never auto-triggers from screen tilt
-  const isEffectiveLandscape = isRotatedLandscape;
+
+  // Effective landscape: active when manual desktop mode is ON, or device is held in landscape, or wide desktop monitor
+  const isEffectiveLandscape = isRotatedLandscape || isClientLandscape || isWideScreen;
   const [showRotatePrompt, setShowRotatePrompt] = useState(false);
 
   // 3-Theme Switcher (White / Black / Midnight Current)
@@ -464,7 +468,7 @@ export const TeacherPanel: React.FC<Props> = ({
 
   // Subscribe to classes
   useEffect(() => {
-    const useDemo = shouldUseDemoForSchool(schoolId);
+    const useDemo = shouldUseDemoForSchool(schoolId, activeSession?.id);
     const unsub = subscribeToClasses(schoolId, activeSession?.id || "", (clsList) => {
       if (clsList && clsList.length > 0) {
         const clean = !useDemo ? clsList.filter((c) => !isDemoRecord(c)) : clsList;
@@ -482,7 +486,7 @@ export const TeacherPanel: React.FC<Props> = ({
   // Subscribe to subjects
   useEffect(() => {
     if (!selectedClass) return;
-    const useDemo = shouldUseDemoForSchool(schoolId);
+    const useDemo = shouldUseDemoForSchool(schoolId, activeSession?.id);
     const unsub = subscribeToSubjects(schoolId, selectedClass.id, (subs) => {
       if (subs && subs.length > 0) {
         const clean = !useDemo ? subs.filter((s) => !isDemoRecord(s)) : subs;
@@ -581,43 +585,21 @@ export const TeacherPanel: React.FC<Props> = ({
   }, [allStudents]);
 
   const handleToggleScreenRotate = async () => {
-    const nextIsRotated = !isRotatedLandscape;
+    const nextIsRotated = !isEffectiveLandscape;
     setIsRotatedLandscape(nextIsRotated);
     try {
       localStorage.setItem("school_erp_rotated_landscape", nextIsRotated ? "true" : "false");
     } catch {}
 
     if (nextIsRotated) {
-      try {
-        const root = document.documentElement;
-        if (!document.fullscreenElement) {
-          if (root.requestFullscreen) {
-            await root.requestFullscreen().catch(() => {});
-          } else if ((root as any).webkitRequestFullscreen) {
-            await (root as any).webkitRequestFullscreen().catch(() => {});
-          }
-        }
-      } catch {}
-
-      try {
-        if (screen.orientation && (screen.orientation as any).lock) {
-          await (screen.orientation as any).lock("landscape").catch(() => {});
-        }
-      } catch {}
+      await rotateToLandscape();
+      setDesktopMode(true, false);
+      setShowRotatePrompt(true);
+      setTimeout(() => setShowRotatePrompt(false), 3500);
     } else {
-      // 1 single tap switches directly back to Mobile (Portrait) Mode
-      try {
-        if (screen.orientation && (screen.orientation as any).unlock) {
-          (screen.orientation as any).unlock();
-        }
-      } catch {}
-      try {
-        if (document.fullscreenElement && document.exitFullscreen) {
-          await document.exitFullscreen().catch(() => {});
-        } else if ((document as any).webkitExitFullscreen) {
-          await (document as any).webkitExitFullscreen().catch(() => {});
-        }
-      } catch {}
+      await rotateToPortrait();
+      setDesktopMode(false, false);
+      setShowRotatePrompt(false);
     }
   };
 

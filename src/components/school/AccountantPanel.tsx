@@ -41,8 +41,11 @@ import {
   UserX,
   CalendarDays,
   PhoneCall,
-  Sparkles
+  Sparkles,
+  Laptop,
+  Smartphone
 } from "lucide-react";
+import { rotateToLandscape, rotateToPortrait, setDesktopMode, useDeviceOrientation } from "../../utils/displayPrefs";
 import type {
   School,
   SchoolStudent,
@@ -193,15 +196,32 @@ export const AccountantPanel: React.FC<Props> = ({
     saving: boolean;
   } | null>(null);
 
-  // Screen rotation helper
-  const handleToggleOrientation = () => {
+  // Continuous Device Orientation & Screen Width Hook
+  const { isLandscape: isClientLandscape, isWideScreen } = useDeviceOrientation();
+  const [isDesktopMode, setIsDesktopMode] = useState<boolean>(() => {
     try {
-      if (document.fullscreenElement) {
-        document.exitFullscreen().catch(() => {});
-      } else {
-        document.documentElement.requestFullscreen().catch(() => {});
-      }
+      return localStorage.getItem("accountant_desktop_mode") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const isEffectiveLandscape = isDesktopMode || isClientLandscape || isWideScreen;
+
+  // Screen rotation helper
+  const handleToggleOrientation = async () => {
+    const next = !isEffectiveLandscape;
+    setIsDesktopMode(next);
+    try {
+      localStorage.setItem("accountant_desktop_mode", next ? "true" : "false");
     } catch {}
+
+    if (next) {
+      await rotateToLandscape();
+      setDesktopMode(true, false);
+    } else {
+      await rotateToPortrait();
+      setDesktopMode(false, false);
+    }
   };
 
   // Load core school and finance data
@@ -559,14 +579,31 @@ export const AccountantPanel: React.FC<Props> = ({
             <span className="hidden sm:inline">रीफ्रेश</span>
           </button>
 
-          {/* Screen Rotate Toggle */}
+          {/* Mobile / Laptop Rotate Toggle Button */}
           <button
             onClick={handleToggleOrientation}
-            className="p-2 rounded-lg bg-indigo-950/80 border border-indigo-700/50 text-indigo-300 hover:bg-indigo-900 transition flex items-center gap-1 cursor-pointer text-xs font-semibold"
-            title="Rotate Screen / Fullscreen"
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl font-black text-xs transition cursor-pointer active:scale-95 shadow-md border ${
+              isEffectiveLandscape
+                ? "bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 text-white border-cyan-300/60 shadow-cyan-500/30 ring-2 ring-cyan-400/30"
+                : "bg-slate-800 hover:bg-slate-700 text-emerald-300 border-emerald-500/40 shadow-emerald-500/10"
+            }`}
+            title={
+              isEffectiveLandscape
+                ? "Mobile (Portrait) Mode me wapas layein"
+                : "Laptop (Desktop) Mode me badlein"
+            }
           >
-            <RotateCw className="w-4 h-4" />
-            <span className="hidden sm:inline">Rotate</span>
+            {isEffectiveLandscape ? (
+              <>
+                <Laptop className="w-3.5 h-3.5 text-cyan-200 animate-pulse" />
+                <span className="inline">💻 Laptop</span>
+              </>
+            ) : (
+              <>
+                <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="inline">📱 Mobile</span>
+              </>
+            )}
           </button>
 
           {/* Back to Admin ERP button */}

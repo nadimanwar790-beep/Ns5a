@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useEffect } from "react";
 import {
-  getStudents, getMonthlyFees, getClasses, saveFee, markFeePaid, currentMonthStr, getSchoolFeeHistory, isStudentInClass, updateStudent, getLocalFees
+  getStudents, getMonthlyFees, getClasses, saveFee, markFeePaid, currentMonthStr, getSchoolFeeHistory, isStudentInClass, updateStudent, getLocalFees, isDemoRecord
 } from "../../school-firebase";
 import type { SchoolStudent, SchoolClass, MonthlyFee, School, SchoolDocumentPrintFields } from "../../school-types";
 import { schoolPrintFieldEnabled } from "../../school-types";
@@ -238,16 +238,20 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       getSchoolFeeHistory(schoolId, sessionId),
     ]);
 
+    const isDemoSession = Boolean(sessionId && (sessionId === "demo_session_2026_27" || sessionId.startsWith("demo_") || sessionId.includes("demo")));
+
     let allStudents = fetchedStudents || [];
+    if (!isDemoSession) {
+      allStudents = allStudents.filter(s => !isDemoRecord(s));
+    }
     if (allStudents.length === 0 && classId) {
       // Fallback: fetch all school students and filter with isStudentInClass
       const allSchoolStudents = await getStudents(schoolId, undefined, undefined, sessionId);
-      allStudents = allSchoolStudents.filter(s => isStudentInClass(s, classId, className));
+      const filteredSchoolStudents = !isDemoSession ? allSchoolStudents.filter(s => !isDemoRecord(s)) : allSchoolStudents;
+      allStudents = filteredSchoolStudents.filter(s => isStudentInClass(s, classId, className));
     }
 
     // Resilient session matching:
-    // If students don't have matching sessionId string (or have demo_session vs 2026-27 vs undefined),
-    // never discard students when loading the class roster!
     const matchesSession = (entitySessionId?: string) => {
       if (!sessionId || !entitySessionId) return true;
       const cleanA = sessionId.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -260,9 +264,14 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       sts = allStudents;
     }
 
-    let feeData = allFeeData.filter(fee => matchesSession(fee.sessionId));
-    if (feeData.length === 0 && allFeeData.length > 0) {
-      feeData = allFeeData;
+    let cleanAllFeeData = allFeeData || [];
+    if (!isDemoSession) {
+      cleanAllFeeData = cleanAllFeeData.filter(f => !isDemoRecord(f));
+    }
+
+    let feeData = cleanAllFeeData.filter(fee => matchesSession(fee.sessionId));
+    if (feeData.length === 0 && cleanAllFeeData.length > 0) {
+      feeData = cleanAllFeeData;
     }
 
     // Unpaid fee balances belong to the student and carry across academic sessions.

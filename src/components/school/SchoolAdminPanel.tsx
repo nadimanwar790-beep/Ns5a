@@ -97,8 +97,14 @@ import { StaffPayrollManager } from "./StaffPayrollManager";
 import { QuestionPaperBuilder } from "./QuestionPaperBuilder";
 import { SiblingProfileManager } from "./SiblingProfileManager";
 import { SessionRollOverModal } from "./SessionRollOverModal";
-import { UniversalFaceIdStudioModal } from "./UniversalFaceIdStudioModal";
+import { MultiBranchManager } from "./MultiBranchManager";
+import { HostelMessManager } from "./HostelMessManager";
+import { SyllabusPacingTracker } from "./SyllabusPacingTracker";
+import { BusFleetLogbookModal } from "./BusFleetLogbookModal";
+import { VisitorGateSecurityManager } from "./VisitorGateSecurityManager";
+import { DocumentVerificationView } from "./DocumentVerificationView";
 import { ShieldCheck, Receipt } from "lucide-react";
+import { rotateToLandscape, rotateToPortrait, isDesktopModeOn, setDesktopMode, useDeviceOrientation } from "../../utils/displayPrefs";
 
 interface Props {
   schoolId: string;
@@ -135,7 +141,13 @@ type AdminView =
   | "question_paper_builder"
   | "face_id_studio"
   | "class_qr"
-  | "receipt_cancellation";
+  | "receipt_cancellation"
+  | "multi_branch"
+  | "hostel_mess"
+  | "syllabus_pacing"
+  | "bus_logbook"
+  | "visitor_security"
+  | "doc_verify";
 
 
 export const SchoolAdminPanel: React.FC<Props> = ({
@@ -198,6 +210,13 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
   // School info card
   const [schoolCardExpanded, setSchoolCardExpanded] = useState(false);
+  const [activeBranchName, setActiveBranchName] = useState<string>(() => {
+    try {
+      return localStorage.getItem(`active_branch_name_${schoolId}`) || "DPS Senior Campus";
+    } catch {
+      return "DPS Senior Campus";
+    }
+  });
   const [editingSchoolInfo, setEditingSchoolInfo] = useState(false);
   const [showFullSchoolProfileEditor, setShowFullSchoolProfileEditor] = useState(false);
   const [showDigitalSignatureModal, setShowDigitalSignatureModal] = useState(false);
@@ -227,7 +246,10 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     }
   });
 
-  // Manual Desktop/Laptop Mode Toggle (Strictly User Controlled, Never Auto-Triggered)
+  // Continuous Device Orientation & Screen Width Hook
+  const { isLandscape: isClientLandscape, isWideScreen } = useDeviceOrientation();
+
+  // Manual Desktop/Laptop Mode Toggle (Preserved in localStorage)
   const [isDesktopMode, setIsDesktopMode] = useState<boolean>(() => {
     try {
       return localStorage.getItem("school_erp_desktop_mode") === "true";
@@ -236,7 +258,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     }
   });
 
-  const isEffectiveLandscape = isDesktopMode;
+  // Effective landscape: active when manual desktop mode is ON, or device is held in landscape, or wide desktop monitor
+  const isEffectiveLandscape = isDesktopMode || isClientLandscape || isWideScreen;
 
   const [showRotatePrompt, setShowRotatePrompt] = useState(false);
 
@@ -344,34 +367,23 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     };
   }, []);
 
-  const handleToggleScreenRotate = () => {
-    setIsDesktopMode(prev => {
-      const next = !prev;
-      try {
-        localStorage.setItem("school_erp_desktop_mode", next ? "true" : "false");
-      } catch {}
-      if (!next) {
-        try {
-          if (screen.orientation && (screen.orientation as any).unlock) {
-            (screen.orientation as any).unlock();
-          }
-        } catch {}
-        try {
-          if (document.fullscreenElement && document.exitFullscreen) {
-            document.exitFullscreen().catch(() => {});
-          } else if ((document as any).webkitExitFullscreen) {
-            (document as any).webkitExitFullscreen().catch(() => {});
-          }
-        } catch {}
-      } else {
-        try {
-          if (screen.orientation && (screen.orientation as any).lock) {
-            (screen.orientation as any).lock("landscape").catch(() => {});
-          }
-        } catch {}
-      }
-      return next;
-    });
+  const handleToggleScreenRotate = async () => {
+    const next = !isEffectiveLandscape;
+    setIsDesktopMode(next);
+    try {
+      localStorage.setItem("school_erp_desktop_mode", next ? "true" : "false");
+    } catch {}
+
+    if (next) {
+      await rotateToLandscape();
+      setDesktopMode(true, false);
+      setShowRotatePrompt(true);
+      setTimeout(() => setShowRotatePrompt(false), 3500);
+    } else {
+      await rotateToPortrait();
+      setDesktopMode(false, false);
+      setShowRotatePrompt(false);
+    }
   };
 
   const isMenuItemActive = (itemId: string) => {
@@ -608,22 +620,26 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     }
   };
 
-  const schoolDemoActive = Boolean(demoEnabled && shouldUseDemoForSchool(schoolId));
+  // Strict rule: Demo data is ONLY enabled if the active session is explicitly the Demo Session!
+  const isCurrentSessionDemo = Boolean(
+    activeSession &&
+    (activeSession.id === DEMO_SESSION_ID ||
+     activeSession.id?.startsWith("demo_") ||
+     activeSession.name?.toLowerCase().includes("demo") ||
+     (activeSession as any).isDemo === true)
+  );
+
+  const schoolDemoActive = Boolean(demoEnabled && isCurrentSessionDemo);
 
   const displayedStudents = React.useMemo(() => {
     if (schoolDemoActive) {
       const demo = getDemoSchoolDataset();
-      const all = demo?.students && demo.students.length > 0 ? demo.students : students;
-      if (activeSession?.id) {
-        const filtered = all.filter(s => s.sessionId === activeSession.id || !s.sessionId);
-        if (filtered.length > 0) return filtered;
-      }
-      return all;
+      return (demo?.students && demo.students.length > 0) ? demo.students : [];
     }
+    // REAL ACADEMIC SESSION: ZERO DUMMY DATA! Only real students for this school & session.
     const realStudents = students.filter(s => !isDemoRecord(s));
     if (activeSession?.id) {
-      const filtered = realStudents.filter(s => s.sessionId === activeSession.id || !s.sessionId);
-      if (filtered.length > 0) return filtered;
+      return realStudents.filter(s => s.sessionId === activeSession.id);
     }
     return realStudents;
   }, [students, schoolDemoActive, activeSession]);
@@ -631,17 +647,12 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const displayedClasses = React.useMemo(() => {
     if (schoolDemoActive) {
       const demo = getDemoSchoolDataset();
-      const all = demo?.classes && demo.classes.length > 0 ? demo.classes : classes;
-      if (activeSession?.id) {
-        const filtered = all.filter(c => c.sessionId === activeSession.id || !c.sessionId);
-        if (filtered.length > 0) return filtered;
-      }
-      return all;
+      return (demo?.classes && demo.classes.length > 0) ? demo.classes : [];
     }
+    // REAL ACADEMIC SESSION: ZERO DUMMY CLASSES!
     const realClasses = classes.filter(c => !isDemoRecord(c));
     if (activeSession?.id) {
-      const filtered = realClasses.filter(c => c.sessionId === activeSession.id || !c.sessionId);
-      if (filtered.length > 0) return filtered;
+      return realClasses.filter(c => c.sessionId === activeSession.id);
     }
     return realClasses;
   }, [classes, schoolDemoActive, activeSession]);
@@ -649,32 +660,31 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const displayedTeachers = React.useMemo(() => {
     if (schoolDemoActive) {
       const demo = getDemoSchoolDataset();
-      const all = demo?.teachers && demo.teachers.length > 0 ? demo.teachers : teachers;
-      if (activeSession?.id) {
-        const activeClassIds = new Set(displayedClasses.map(c => c.id));
-        const filtered = all.filter(t => !t.classes || t.classes.length === 0 || t.classes.some(cid => activeClassIds.has(cid)));
-        if (filtered.length > 0) return filtered;
-      }
-      return all;
+      return (demo?.teachers && demo.teachers.length > 0) ? demo.teachers : [];
     }
+    // REAL ACADEMIC SESSION: ZERO DUMMY TEACHERS!
     return teachers.filter(t => !isDemoRecord(t));
-  }, [teachers, schoolDemoActive, displayedClasses, activeSession]);
+  }, [teachers, schoolDemoActive]);
 
   const displayedSessions = React.useMemo(() => {
-    let list: SchoolSession[] = [];
-    if (schoolDemoActive) {
-      const demo = getDemoSchoolDataset();
-      const demoSessions = demo?.sessions && demo.sessions.length > 0 ? demo.sessions : (demo?.session ? [demo.session] : []);
-      const realSess = sessions.filter(s => !isDemoRecord(s));
-      list = demoSessions.length > 0 ? [...demoSessions, ...realSess.filter(r => !demoSessions.some(d => d.id === r.id))] : sessions;
-    } else {
-      list = sessions.filter(s => !isDemoRecord(s));
-    }
+    const realSess = sessions.filter(s => !isDemoRecord(s));
+    // The demo session is provided so that dummy data is ONLY visible when the user selects this session
+    const demoSessionItem: SchoolSession = {
+      id: DEMO_SESSION_ID,
+      schoolId: schoolId,
+      name: "🧪 Demo Session (केवल डमी डेटा)",
+      startDate: "2026-04-01",
+      endDate: "2027-03-31",
+      active: activeSession?.id === DEMO_SESSION_ID,
+      isDemo: true,
+      createdAt: "2026-04-01T00:00:00Z"
+    };
+    const list = [...realSess, demoSessionItem];
     if (activeSession?.id) {
       return list.map(s => ({ ...s, active: s.id === activeSession.id }));
     }
     return list;
-  }, [sessions, schoolDemoActive, activeSession]);
+  }, [sessions, activeSession, schoolId]);
 
   // Today's Birthdays automated detection
   const todaysBirthdayStudents = React.useMemo(() => {
@@ -779,7 +789,11 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         return sess;
       });
       const savedSessionId = typeof localStorage !== "undefined" ? localStorage.getItem(`nst_active_session_${schoolId}`) : null;
-      const active = (savedSessionId && sess.find(s => s.id === savedSessionId)) || sess.find(s => s.active) || sess[0] || null;
+      const realSess = sess.filter(s => !isDemoRecord(s));
+      const pool = realSess.length > 0 ? realSess : sess;
+      const active = (savedSessionId && sess.find(s => s.id === savedSessionId)) ||
+                     pool.find(s => s.active && !isDemoRecord(s)) ||
+                     pool[0] || sess[0] || null;
       setActiveSession(prev => {
         if (!prev && !active) return null;
         if (prev?.id === active?.id && prev?.name === active?.name && prev?.active === active?.active) {
@@ -1676,6 +1690,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         { id: "video_lectures" as AdminView, label: "Class Video Archive", icon: Youtube, desc: "यूट्यूब वीडियो लेक्चर्स" },
         { id: "question_paper_builder" as AdminView, label: "Question Paper Builder", icon: FileText, desc: "अर्धवार्षिक व वार्षिक परीक्षा प्रश्न-पत्र जनरेटर" },
         { id: "ptm_scheduler" as AdminView, label: "PTM Slot Scheduler", icon: Users, desc: "अभिभावक-शिक्षक बैठक स्लॉट बुकिंग" },
+        { id: "syllabus_pacing" as AdminView, label: "Syllabus Pacing Tracker", icon: TrendingUp, desc: "कक्षा व विषय-वार पाठ्यक्रम प्रगति, बैकलॉग अलर्ट व रिपोर्ट" },
       ]
     },
     {
@@ -1697,6 +1712,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         { id: "online_admission_fee" as AdminView, label: "Online Admission & Fee", icon: Sliders, desc: "कक्षा-वार प्रवेश शुल्क व एक्टिव हेड सेट-अप" },
         { id: "fee_structure" as AdminView, label: "Class Fee Rates & Structure", icon: Sparkles, desc: "क्लास फीस दरें व शिक्षक वेतन हेड" },
         { id: "bus_transport" as AdminView, label: "Bus & Transport Service", icon: Bus, desc: "बस रूट व वाहन शुल्क प्रबंधन" },
+        { id: "bus_logbook" as AdminView, label: "Transport Fuel & Fitness Log", icon: Bus, desc: "डीजल/CNG खर्च, माइलेज व वाहन फिटनेस/बीमा एक्सपायरी काउंटडाउन" },
+        { id: "hostel_mess" as AdminView, label: "Hostel & Mess Management", icon: Building2, desc: "छात्रावास भवन, कमरा/बेड आवंटन, 7-दिवसीय मेस मेनू व उपस्थिति" },
         { id: "qr_pay" as AdminView, label: "Scan QR to Pay (फास्ट पे)", icon: QrCode, desc: "स्मार्ट आईडी कार्ड क्यूआर स्कैनर" },
         { id: "fee_alerts" as AdminView, label: "Class Fee Alerts & Push", icon: Bell, desc: "NSTA मैसेंजर व लॉक स्क्रीन पुश" },
         { id: "receipt_header" as AdminView, label: "Receipt Header & Letterhead", icon: Building2, desc: "स्कूल लेटरहेड व रसीद प्रिंट सेटिंग्स" },
@@ -1720,6 +1737,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         { id: "id_cards" as AdminView, label: "QR ID Cards", icon: CreditCard, desc: "स्मार्ट क्यूआर छात्र पहचान पत्र" },
         { id: "admit_cards" as AdminView, label: "Exam Admit Cards", icon: FileText, desc: "परीक्षा प्रवेश पत्र (हॉल टिकट)" },
         { id: "certificates" as AdminView, label: "Certificates (TC & Merit)", icon: Award, desc: "स्थानांतरण व चरित्र प्रमाण पत्र" },
+        { id: "doc_verify" as AdminView, label: "Document QR Verification", icon: CheckCircle2, desc: "टीसी, मार्कशीट व चरित्र प्रमाण पत्र ऑनलाइन सत्यापन पोर्टल" },
         { id: "promotion" as AdminView, label: "Class Promotion", icon: TrendingUp, desc: "अगले सत्र में कक्षा अपग्रेड" },
         { id: "reports_hub" as AdminView, label: "Register Reports & Print", icon: FileSpreadsheet, desc: "40+ मास्टर स्कूल रजिस्टर्स" },
       ]
@@ -1755,6 +1773,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         hoverBg: "hover:bg-cyan-950/40 hover:text-cyan-200",
       },
       items: [
+        { id: "multi_branch" as AdminView, label: "Multi-Branch & Franchise Hub", icon: Building2, desc: "मल्टी-कैंपस 1-क्लिक स्विचिंग, कंबाइंड रिपोर्ट व इंटर-ब्रांच ट्रांसफर" },
+        { id: "visitor_security" as AdminView, label: "Visitor & Main Gate Security", icon: Shield, desc: "गेट-पास पर्ची, गार्ड चेक-इन व स्टूडेंट अर्ली एग्जिट पास" },
         { id: "staff_hrm" as AdminView, label: "Staff HRM Directory", icon: Briefcase, desc: "कर्मचारी प्रोफाइल व उपस्थिति" },
         { id: "staff_payroll" as AdminView, label: "Staff Payroll & Pay Slips", icon: Briefcase, desc: "बायोमेट्रिक वेतन पर्ची व बैंक NEFT लिस्ट" },
         { id: "backup_recovery" as AdminView, label: "Backup & Disaster Recovery", icon: ShieldCheck, desc: "1-क्लिक सम्पूर्ण स्कूल डेटा ZIP बैकअप व रीस्टोर" },
@@ -2159,6 +2179,21 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               <ChevronDown className="w-3 h-3 text-emerald-700 dark:text-emerald-300 opacity-80 shrink-0" />
             </button>
 
+            {/* 1-Click Multi-Branch Campus Selector */}
+            <button
+              type="button"
+              onClick={() => setView("multi_branch")}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-800 dark:text-indigo-200 border border-indigo-500/35 text-xs font-black transition cursor-pointer active:scale-95 shadow-xs shrink-0"
+              title="ब्रांच बदलें या नया कैंपस जोड़ें (1-Click Multi-Branch / Franchise Switcher)"
+            >
+              <Building2 className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+              <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0" />
+              <span className="font-mono text-[11px] sm:text-xs max-w-[120px] truncate">
+                ब्रांच: {activeBranchName}
+              </span>
+              <ChevronDown className="w-3 h-3 text-indigo-700 dark:text-indigo-300 opacity-80 shrink-0" />
+            </button>
+
             <h1 className="text-xs sm:text-sm font-black text-slate-800 dark:text-white capitalize truncate hidden md:inline-block">
               {view === "dashboard"
                 ? "Home Dashboard"
@@ -2170,6 +2205,18 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                 ? "School Profile & Settings"
                 : view === "memories"
                 ? "School Memories & Events"
+                : view === "multi_branch"
+                ? "मल्टी-ब्रांच व फ्रैंचाइज़ी प्रबंधन (Multi-Branch Hub)"
+                : view === "hostel_mess"
+                ? "छात्रावास व मेस प्रबंधन (Hostel & Mess)"
+                : view === "syllabus_pacing"
+                ? "पाठ्यक्रम प्रगति व बैकलॉग ट्रैकर (Syllabus Pacing)"
+                : view === "bus_logbook"
+                ? "परिवहन डीजल व फिटनेस लॉगबुक (Transport Logbook)"
+                : view === "visitor_security"
+                ? "विजिटर गेट-पास व सुरक्षा डेस्क (Visitor & Security)"
+                : view === "doc_verify"
+                ? "दस्तावेज़ ऑनलाइन सत्यापन पोर्टल (Document Verification)"
                 : view.replace(/_/g, " ")}
             </h1>
           </div>
@@ -6383,7 +6430,82 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     );
   }
 
+  if (view === "multi_branch") {
+    return renderErpShell(
+      <MultiBranchManager
+        school={school!}
+        currentSchoolId={schoolId}
+        onSwitchBranch={(branchId, branchSchoolId) => {
+          try {
+            const bName = branchId === "branch_main" ? "DPS Senior Campus" : branchId === "branch_rural" ? "DPS Rural Campus" : "DPS Primary Wing";
+            setActiveBranchName(bName);
+            localStorage.setItem(`active_branch_name_${schoolId}`, bName);
+            localStorage.setItem("nst_active_school_id", branchSchoolId);
+          } catch {}
+          setView("dashboard");
+        }}
+        onClose={() => setView("dashboard")}
+      />
+    );
+  }
+
+  if (view === "hostel_mess") {
+    return renderErpShell(
+      <HostelMessManager
+        school={school!}
+        students={displayedStudents}
+        classes={displayedClasses}
+        onBack={() => setView("dashboard")}
+      />
+    );
+  }
+
+  if (view === "syllabus_pacing") {
+    return renderErpShell(
+      <SyllabusPacingTracker
+        school={school!}
+        classes={displayedClasses}
+        onBack={() => setView("dashboard")}
+      />
+    );
+  }
+
+  if (view === "bus_logbook") {
+    return renderErpShell(
+      <BusFleetLogbookModal
+        school={school!}
+        onClose={() => setView("dashboard")}
+      />
+    );
+  }
+
+  if (view === "visitor_security") {
+    return renderErpShell(
+      <VisitorGateSecurityManager
+        school={school!}
+        students={displayedStudents}
+        classes={displayedClasses}
+        onBack={() => setView("dashboard")}
+      />
+    );
+  }
+
+  if (view === "doc_verify") {
+    return renderErpShell(
+      <DocumentVerificationView
+        verifyType="marksheet"
+        onBack={() => setView("dashboard")}
+      />
+    );
+  }
+
   const menuItems = [
+    { label: "Multi-Branch & Franchise Hub", subtitle: "1-Click Campus Switcher & Consolidated Stats", icon: <Building2 className="w-5 h-5 text-indigo-500" />, view: "multi_branch", count: "Multi-Campus 🏢", locked: false, featured: true },
+    { label: "Hostel & Mess Management", subtitle: "Rooms, Bed Allocation & 7-Day Diet Plan", icon: <Building2 className="w-5 h-5 text-amber-500" />, view: "hostel_mess", count: "Hostel 🛏️", locked: false, featured: true },
+    { label: "Syllabus Pacing Tracker", subtitle: "Chapter Velocity, Backlog & Teacher Alerts", icon: <TrendingUp className="w-5 h-5 text-emerald-500" />, view: "syllabus_pacing", count: "Pacing 🎯", locked: false, featured: true },
+    { label: "Transport Fuel & Mileage Log", subtitle: "Daily Diesel/CNG & RTO Fitness Alarms", icon: <Bus className="w-5 h-5 text-blue-500" />, view: "bus_logbook", count: "Fuel & RTO ⛽", locked: false, featured: true },
+    { label: "Visitor & Security Desk", subtitle: "Visitor Gate Pass & Student Early Exit", icon: <Shield className="w-5 h-5 text-cyan-500" />, view: "visitor_security", count: "Gate Pass 🛡️", locked: false, featured: true },
+    { label: "Document QR Verification", subtitle: "Public Verification for TC & Marksheet", icon: <CheckCircle2 className="w-5 h-5 text-emerald-600" />, view: "doc_verify", count: "100% Genuine ✔️", locked: false },
     { label: "Absenty Action Center", subtitle: "1-Day Push Notice & 2-Day+ Direct Call Tracker", icon: <AlertCircle className="w-5 h-5 text-rose-500" />, view: "absentee", count: "Action 🚨", locked: false, featured: true },
     { label: "NSTA Messenger", subtitle: "Class Groups, School Desk & Teacher Chat", icon: <MessageSquare className="w-5 h-5 text-indigo-500" />, view: "nsta_broadcast", count: "3 Screens ⚡", locked: false, featured: true },
     { label: "School Community", subtitle: "Photo, Video & Chhutti Post", icon: <ImageIcon className="w-5 h-5 text-rose-500" />, view: "community", count: "LIVE", locked: false, featured: true },

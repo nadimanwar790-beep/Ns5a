@@ -33,22 +33,29 @@ export const DocumentVerificationView: React.FC<Props> = ({
         const urlName = p.get('n') || p.get('name') || p.get('studentName');
         const urlRoll = p.get('r') || p.get('roll') || p.get('rollNo');
         const urlSchoolId = p.get('s') || p.get('schoolId') || "";
+        const urlSchoolName = p.get('school') || p.get('schoolName') || "";
+        const urlCertNo = p.get('cNo') || p.get('certNo') || p.get('dispatchNo') || "";
+        const urlCertTitle = p.get('certTitle') || p.get('title') || "";
+        const urlSession = p.get('session') || "2026-27";
         const urlStudentId = p.get('u') || p.get('uid') || p.get('studentId') || "";
+        const urlAdmNo = p.get('adm') || p.get('admNo') || p.get('regNo') || "";
         const urlClassId = p.get('c') || p.get('classId') || "";
         const urlType = p.get('v') === 'id' ? 'idcard' : (p.get('type') || verifyType);
 
-        if (urlName || urlRoll || p.get('v') === 'id') {
+        if (urlName || urlRoll || urlCertNo || p.get('v') === 'id' || p.get('verify')) {
           const initialRecord = {
             type: urlType,
             officialVerified: true,
-            school: "NSTA Registered School / Academy",
+            school: urlSchoolName ? decodeURIComponent(urlSchoolName) : "NSTA Registered School / Academy",
             schoolCode: urlSchoolId ? `SCH-${urlSchoolId.slice(0, 8)}` : "SCH-REG",
             student: urlName ? decodeURIComponent(urlName) : "Verified Candidate",
             roll: urlRoll || "—",
-            regNo: urlStudentId ? `REG-${urlStudentId.slice(0, 8)}` : "REG-VERIFIED",
+            regNo: urlAdmNo ? decodeURIComponent(urlAdmNo) : (urlStudentId ? `REG-${urlStudentId.slice(0, 8)}` : "REG-VERIFIED"),
             class: urlClassId ? `Class ${urlClassId.slice(0, 6)}` : "Enrolled Class",
-            session: "2026-27",
-            status: "VERIFIED ACTIVE",
+            session: urlSession,
+            certificateNo: urlCertNo ? decodeURIComponent(urlCertNo) : "TC-2026-0842",
+            certificateType: urlCertTitle ? decodeURIComponent(urlCertTitle) : "Transfer & Character Certificate",
+            status: "VERIFIED ACTIVE & GENUINE",
             date: new Date().toISOString().split("T")[0],
             photoUrl: "",
             phone: "Official ID on Record",

@@ -230,17 +230,8 @@ export const CertificateManager: React.FC<Props> = ({
     window.print();
   };
 
-  // QR verification code data
-  const qrData = JSON.stringify({
-    certificate: customTitle,
-    dispatchNo,
-    school: schoolDetails.schoolName,
-    student: candidateName,
-    rollNo: candidateRoll,
-    rank: candidateRank,
-    issueDate,
-    verified: true
-  });
+  // QR verification code data (Public URL that opens when scanned by mobile camera)
+  const qrData = `${typeof window !== "undefined" ? window.location.origin : ""}/?verify=1&type=certificate&n=${encodeURIComponent(candidateName || "")}&r=${encodeURIComponent(candidateRoll || "")}&adm=${encodeURIComponent(candidateAdmNo || "")}&s=${encodeURIComponent(school?.id || "")}&cNo=${encodeURIComponent(dispatchNo || "")}&session=${encodeURIComponent(academicSession || "")}&school=${encodeURIComponent(schoolDetails.schoolName || school?.name || "")}&certTitle=${encodeURIComponent(customTitle || "Transfer & Character Certificate")}`;
 
   // Border theme styles
   const themeStyles: Record<CertTheme, { border: string; accent: string; headerColor: string; ribbonBg: string }> = {

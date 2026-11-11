@@ -1710,3 +1710,178 @@ export interface NstaMessage {
   }>;
   isForwarded?: boolean;
 }
+
+// ── Multi-Branch / Franchise Management ────────────────────────────────────
+export interface SchoolBranch {
+  id: string;
+  schoolId: string;
+  name: string;
+  code: string; // e.g. "MAIN", "CITY", "RURAL"
+  address: string;
+  city: string;
+  phone: string;
+  principalName: string;
+  isMainBranch?: boolean;
+  totalStudents?: number;
+  totalTeachers?: number;
+  monthlyRevenue?: number;
+}
+
+// ── Hostel & Mess Management ───────────────────────────────────────────────
+export interface HostelBuilding {
+  id: string;
+  schoolId: string;
+  name: string;
+  type: "BOYS" | "GIRLS" | "COED";
+  wardenName: string;
+  wardenPhone: string;
+  totalRooms: number;
+  floors: number;
+}
+
+export interface HostelRoom {
+  id: string;
+  schoolId: string;
+  buildingId: string;
+  roomNumber: string;
+  floor: number;
+  capacity: number;
+  monthlyRent: number;
+}
+
+export interface HostelBedAllocation {
+  id: string;
+  schoolId: string;
+  buildingId: string;
+  buildingName: string;
+  roomId: string;
+  roomNumber: string;
+  bedNumber: string;
+  studentId: string;
+  studentName: string;
+  className: string;
+  allocatedAt: string;
+  monthlyFee: number;
+  guardianPhone: string;
+  status: "OCCUPIED" | "VACANT";
+}
+
+export interface MessMenuDay {
+  day: "Monday" | "Tuesday" | "Wednesday" | "Thursday" | "Friday" | "Saturday" | "Sunday";
+  breakfast: string;
+  lunch: string;
+  eveningSnacks: string;
+  dinner: string;
+  specialDiet?: string;
+}
+
+export interface HostelAttendanceRecord {
+  id: string;
+  schoolId: string;
+  date: string; // YYYY-MM-DD
+  studentId: string;
+  studentName: string;
+  roomNumber: string;
+  status: "PRESENT" | "NIGHT_OUT" | "LEAVE" | "ABSENT";
+  mealsTaken: {
+    breakfast: boolean;
+    lunch: boolean;
+    dinner: boolean;
+  };
+  remarks?: string;
+}
+
+// ── Syllabus Pacing & Teacher Progress Tracker ──────────────────────────────
+export interface SyllabusChapter {
+  chapterNo: number;
+  title: string;
+  targetMonth: string; // e.g. "April", "May", "November"
+  status: "COMPLETED" | "IN_PROGRESS" | "PENDING";
+  completedDate?: string;
+}
+
+export interface SubjectSyllabusPacing {
+  id: string;
+  schoolId: string;
+  classId: string;
+  className: string;
+  subject: string;
+  teacherName: string;
+  totalChapters: number;
+  chapters: SyllabusChapter[];
+  targetCompletionDate: string;
+  pacingStatus: "ON_TRACK" | "LAGGING" | "CRITICAL_DELAY" | "COMPLETED";
+  backlogChaptersCount: number;
+  updatedAt: string;
+}
+
+// ── Bus Fleet Fuel & Mileage Logbook & Fitness Expiry ───────────────────────
+export interface VehicleFuelLog {
+  id: string;
+  schoolId: string;
+  vehicleNumber: string; // e.g. "DL 01 AB 1234 (Bus #1)"
+  date: string;
+  fuelType: "DIESEL" | "CNG" | "PETROL";
+  quantityUnits: number; // liters or kg
+  ratePerUnit: number;
+  totalAmount: number;
+  odometerStartKm: number;
+  odometerEndKm: number;
+  totalKmDriven: number;
+  mileageKmPerUnit: number;
+  driverName: string;
+  pumpName?: string;
+  receiptNumber?: string;
+}
+
+export interface VehicleFitnessRecord {
+  id: string;
+  schoolId: string;
+  vehicleNumber: string;
+  model: string;
+  driverName: string;
+  driverPhone: string;
+  fitnessExpiryDate: string; // YYYY-MM-DD
+  insuranceExpiryDate: string;
+  pollutionPucExpiryDate: string;
+  roadTaxExpiryDate: string;
+  permitExpiryDate?: string;
+}
+
+// ── Visitor & Main Gate Security Desk ───────────────────────────────────────
+export interface SecurityVisitorPass {
+  id: string;
+  passNumber: string; // e.g. "VP-2026-042"
+  schoolId: string;
+  visitorName: string;
+  visitorPhone: string;
+  visitorPhotoUrl?: string;
+  visitorType: "PARENT" | "VENDOR" | "OFFICIAL" | "GUEST" | "ALUMNI";
+  purpose: string;
+  personToMeet: string;
+  studentName?: string;
+  studentClass?: string;
+  inTime: string;
+  outTime?: string;
+  idProofType?: string;
+  status: "CHECKED_IN" | "CHECKED_OUT";
+  guardName: string;
+}
+
+export interface StudentEarlyGatePass {
+  id: string;
+  passNumber: string; // e.g. "EGP-2026-108"
+  schoolId: string;
+  studentId: string;
+  studentName: string;
+  className: string;
+  rollNo?: string;
+  parentName: string;
+  parentPhone: string;
+  reason: string;
+  approvedBy: string; // e.g. "Principal / Class Teacher"
+  approvalStatus: "APPROVED" | "PENDING" | "REJECTED";
+  requestTime: string;
+  exitTime?: string;
+  gateSecurityConfirmed: boolean;
+}

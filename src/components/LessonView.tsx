@@ -615,7 +615,7 @@ export const LessonView: React.FC<Props> = ({
 
   const toggleDesktopMode = () => {
     const newVal = !isDesktopMode;
-    setDesktopMode(newVal);
+    setDesktopMode(newVal, true);
     setIsDesktopMode(newVal);
   };
 

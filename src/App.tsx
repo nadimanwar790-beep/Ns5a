@@ -108,6 +108,11 @@ const Auth = lazyWithRetry(
   'Auth Portal'
 );
 
+const DocumentVerificationView = lazyWithRetry(
+  () => import('./components/school/DocumentVerificationView').then(m => ({ default: m.DocumentVerificationView || (m as any).default })),
+  'Document Verification Portal'
+);
+
 export type AppViewMode = 'STUDENT' | 'ADMIN' | 'SCHOOL_ERP';
 
 export const isSuperAdminEmail = (emailStr?: string | null): boolean => {
@@ -771,6 +776,47 @@ export function App() {
     handleLogin(guestUser);
     setShowGuestStudyJoin(false);
   };
+
+  // Public QR Document Verification Route (Live check for TC, Marksheet & ID Card scans without requiring login)
+  const isPublicDocVerify = (() => {
+    try {
+      const p = new URLSearchParams(window.location.search);
+      return Boolean(
+        p.get('verify') ||
+        p.get('verify-certificate') ||
+        p.get('cNo') ||
+        p.get('certNo') ||
+        p.get('dispatchNo') ||
+        (p.get('v') === 'id') ||
+        (p.get('type') === 'certificate') ||
+        (p.get('type') === 'marksheet') ||
+        window.location.pathname.startsWith('/verify')
+      );
+    } catch {
+      return false;
+    }
+  })();
+
+  if (isPublicDocVerify) {
+    return (
+      <Suspense
+        fallback={
+          <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-8 text-center text-white">
+            <Loader2 className="w-8 h-8 animate-spin text-emerald-400 mb-3" />
+            <p className="text-sm font-bold">Verifying Official Document...</p>
+          </div>
+        }
+      >
+        <DocumentVerificationView
+          onBack={() => {
+            try {
+              window.location.href = window.location.origin;
+            } catch {}
+          }}
+        />
+      </Suspense>
+    );
+  }
 
   // If user is logged out, render the authentication screen
   if (!user) {

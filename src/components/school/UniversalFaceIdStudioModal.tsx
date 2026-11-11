@@ -107,7 +107,26 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
   useEffect(() => {
     if (isOpen) {
       loadDescriptors();
+    } else {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+      if (testStreamRef.current) {
+        testStreamRef.current.getTracks().forEach((t) => t.stop());
+        testStreamRef.current = null;
+      }
     }
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+      if (testStreamRef.current) {
+        testStreamRef.current.getTracks().forEach((t) => t.stop());
+        testStreamRef.current = null;
+      }
+    };
   }, [isOpen, loadDescriptors]);
 
   // Start Camera for Enrollment
@@ -116,11 +135,28 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
     try {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
       }
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 640 } },
-        audio: false
-      });
+      // Progressive constraints fallback for Android and mobile browsers
+      let stream: MediaStream | null = null;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false
+        });
+      } catch {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "user" },
+            audio: false
+          });
+        } catch {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false
+          });
+        }
+      }
       streamRef.current = stream;
       setCameraActive(true);
       if (liveVideoRef.current) {

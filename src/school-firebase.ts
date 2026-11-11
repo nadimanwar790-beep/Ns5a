@@ -60,12 +60,27 @@ import {
 } from "./utils/schoolIndexedDb";
 import { uploadImageToImgBB } from "./services/imgbbService";
 
-// Only use the 910-student demo fallback for the default demo school when Demo Mode is ON.
-export const shouldUseDemoForSchool = (schoolId?: string): boolean => {
-  if (!schoolId || schoolId === "demo_school" || schoolId.startsWith("demo_") || schoolId.includes("demo")) {
-    return isDemoDataEnabled();
+export const isDemoSessionId = (sessionId?: string | null): boolean => {
+  if (!sessionId) return false;
+  const s = String(sessionId).toLowerCase();
+  return s === "demo_session_2026_27" || s.startsWith("demo_") || s.includes("demo");
+};
+
+// Strict rule: Demo data is ONLY allowed when in an explicit Demo Session. Real sessions have ZERO dummy data!
+export const shouldUseDemoForSchool = (schoolId?: string, sessionId?: string): boolean => {
+  if (sessionId && !isDemoSessionId(sessionId)) {
+    return false;
   }
-  return isDemoDataEnabled();
+  if (!isDemoDataEnabled()) {
+    return false;
+  }
+  if (sessionId && isDemoSessionId(sessionId)) {
+    return true;
+  }
+  if (schoolId && (schoolId === "demo_school" || schoolId.startsWith("demo_") || schoolId.includes("demo"))) {
+    return true;
+  }
+  return false;
 };
 
 // Automatically converts heavy Base64 data:image strings into lightweight Cloud CDN URLs (~80 bytes)
@@ -1002,7 +1017,7 @@ export const saveClass = async (cls: SchoolClass) => {
 };
 
 export const getClasses = async (schoolId: string, sessionId?: string): Promise<SchoolClass[]> => {
-  const useDemo = shouldUseDemoForSchool(schoolId);
+  const useDemo = shouldUseDemoForSchool(schoolId, sessionId);
   const local = getLocalClasses(schoolId);
 
   if (local.length > 0) {
@@ -1044,7 +1059,7 @@ export const getClasses = async (schoolId: string, sessionId?: string): Promise<
 };
 
 export const subscribeToClasses = (schoolId: string, sessionId: string, cb: (classes: SchoolClass[]) => void) => {
-  const useDemo = shouldUseDemoForSchool(schoolId);
+  const useDemo = shouldUseDemoForSchool(schoolId, sessionId);
   const deliverLocal = () => {
     const local = getLocalClasses(schoolId);
     if (!useDemo) {
@@ -1645,7 +1660,7 @@ export const isStudentInClass = (
 };
 
 export const getStudents = async (schoolId: string, classId?: string, className?: string, sessionId?: string): Promise<SchoolStudent[]> => {
-  const useDemo = shouldUseDemoForSchool(schoolId);
+  const useDemo = shouldUseDemoForSchool(schoolId, sessionId);
   const local = getLocalStudents(schoolId);
   const matchingLocal = local.filter((s: any) => {
     if (s.active === false) return false;
@@ -1716,7 +1731,7 @@ export const getStudents = async (schoolId: string, classId?: string, className?
 };
 
 export const subscribeToStudents = (schoolId: string, classId: string, cb: (students: SchoolStudent[]) => void, sessionId?: string) => {
-  const useDemo = shouldUseDemoForSchool(schoolId);
+  const useDemo = shouldUseDemoForSchool(schoolId, sessionId);
   const deliverLocal = () => {
     const local = getLocalStudents(schoolId);
     const matchingLocal = local.filter(s => {
@@ -1958,12 +1973,13 @@ const LOCAL_ATTENDANCE_PREFIX = "nst_school_attendance_";
 export const getLocalAttendance = (schoolId: string): AttendanceRecord[] => {
   try {
     const list = getSchoolCacheSync<AttendanceRecord[]>(`${LOCAL_ATTENDANCE_PREFIX}${schoolId}`, []);
+    if (!shouldUseDemoForSchool(schoolId)) {
+      return Array.isArray(list) ? list.filter(r => !isDemoRecord(r)) : [];
+    }
     if (Array.isArray(list) && list.length > 0) return list;
-    if (shouldUseDemoForSchool(schoolId)) {
-      const demo = getDemoSchoolDataset();
-      if (demo && demo.attendanceRecords && demo.attendanceRecords.length > 0) {
-        return demo.attendanceRecords;
-      }
+    const demo = getDemoSchoolDataset();
+    if (demo && demo.attendanceRecords && demo.attendanceRecords.length > 0) {
+      return demo.attendanceRecords;
     }
     return Array.isArray(list) ? list : [];
   } catch {
@@ -2679,7 +2695,7 @@ export const getStudentFees = async (schoolId: string, studentId: string): Promi
 };
 
 export const getMonthlyFees = async (schoolId: string, month: string, classId?: string, sessionId?: string): Promise<MonthlyFee[]> => {
-  const useDemo = shouldUseDemoForSchool(schoolId);
+  const useDemo = shouldUseDemoForSchool(schoolId, sessionId);
   const local = getLocalFees(schoolId).filter(
     f => f.month === month && (!classId || isStudentInClass(f, classId)) && (!sessionId || f.sessionId === sessionId)
   );
@@ -2750,7 +2766,7 @@ export const getMonthlyFees = async (schoolId: string, month: string, classId?: 
 export const getAllMonthlyFees = getMonthlyFees;
 
 export const getSchoolFeeHistory = async (schoolId: string, sessionId?: string): Promise<MonthlyFee[]> => {
-  const useDemo = shouldUseDemoForSchool(schoolId);
+  const useDemo = shouldUseDemoForSchool(schoolId, sessionId);
   const local = getLocalFees(schoolId);
   const demo = useDemo ? getDemoSchoolDataset() : null;
   let demoFees: MonthlyFee[] = (demo && demo.fees) ? demo.fees : [];

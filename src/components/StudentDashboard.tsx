@@ -4548,16 +4548,36 @@ export const StudentDashboard: React.FC<Props> = ({
     window.addEventListener('nst-desktop-mode-change', handleDesktopMode);
     return () => window.removeEventListener('nst-desktop-mode-change', handleDesktopMode);
   }, []);
-  // Listen for screen rotate events (works in both mobile and desktop modes)
+  // Listen for screen rotate & orientation changes (physical rotation, desktop mode, resize)
   useEffect(() => {
-    const handleOrientation = (e: any) => {
-      const orient = e.detail?.orientation;
+    const syncOrientation = (e?: any) => {
+      const orient = e?.detail?.orientation;
       if (orient) {
         setIsLandscape(orient === 'landscape');
+        return;
       }
+      const isLand = (window.matchMedia && window.matchMedia('(orientation: landscape)').matches) ||
+                     (window.innerWidth > window.innerHeight) ||
+                     isDesktopModeOn();
+      setIsLandscape(isLand);
     };
-    window.addEventListener('nst-screen-rotate', handleOrientation);
-    return () => window.removeEventListener('nst-screen-rotate', handleOrientation);
+
+    window.addEventListener('nst-screen-rotate', syncOrientation);
+    window.addEventListener('resize', syncOrientation);
+    window.addEventListener('orientationchange', syncOrientation);
+
+    const mql = window.matchMedia ? window.matchMedia('(orientation: landscape)') : null;
+    if (mql && mql.addEventListener) mql.addEventListener('change', syncOrientation);
+    const so: any = (screen as any)?.orientation;
+    if (so && so.addEventListener) so.addEventListener('change', syncOrientation);
+
+    return () => {
+      window.removeEventListener('nst-screen-rotate', syncOrientation);
+      window.removeEventListener('resize', syncOrientation);
+      window.removeEventListener('orientationchange', syncOrientation);
+      if (mql && mql.removeEventListener) mql.removeEventListener('change', syncOrientation);
+      if (so && so.removeEventListener) so.removeEventListener('change', syncOrientation);
+    };
   }, []);
 
   // Listen for video top bar toggle (NSTA logo / fullscreen tap hides/shows dashboard UI)

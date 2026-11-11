@@ -33,7 +33,8 @@ import {
   FaceDescriptorRecord,
   DetectedFaceBox
 } from "../../utils/faceRecognitionEngine";
-import { markStudentQrAttendance, todayStr } from "../../school-firebase";
+import { markStudentQrAttendance, todayStr, saveNstaMessage } from "../../school-firebase";
+import type { NstaMessage } from "../../school-types";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 import { speakNotification } from "../../utils/voiceNotifyEngine";
 import { hapticStrong, hapticMedium } from "../../utils/haptic";
@@ -104,6 +105,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
   const [showEnrollmentModal, setShowEnrollmentModal] = useState<boolean>(false);
   const [currentTimeStr, setCurrentTimeStr] = useState<string>("");
   const [hasFaceInView, setHasFaceInView] = useState<boolean>(false);
+  const [detectedFaceCount, setDetectedFaceCount] = useState<number>(0);
 
   // Eye Blink & Liveness + 1-Tap Candidate state
   const [pendingBlinkStudent, setPendingBlinkStudent] = useState<any>(null);
@@ -230,15 +232,21 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
   }, [facingMode]);
 
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && !showEnrollmentModal) {
       startCamera();
+    } else {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
     }
     return () => {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
       }
     };
-  }, [isOpen, startCamera]);
+  }, [isOpen, showEnrollmentModal, startCamera]);
 
   // Handle successful attendance marking
   const handleMarkAttendanceSuccess = useCallback(
@@ -341,10 +349,32 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           title: pushTitle,
           body: pushBody,
           type: "DEFAULT",
-          url: `/?schoolPortal=1&studentId=${encodeURIComponent(match.studentId)}&schoolTab=attendance`
+          url: `/?schoolPortal=1&studentId=${encodeURIComponent(match.studentId)}&schoolTab=messenger&thread=desk`
         }).catch(() => {});
 
-        // Speak Hindi Voice Confirmation
+        // 3. Save Official NSTA Messenger Chat Message in Parent Thread
+        try {
+          const messengerChatText = action === "out"
+            ? `🏠 [विद्यालय प्रस्थान सूचना]\nनमस्ते! आपका बच्चा ${match.name} (${targetClassName}, रोल #${match.rollNo || "—"}) आज समय ${recordedTime} पर विद्यालय से प्रस्थान कर चुका है।\nकुल उपस्थिति समय: ${stayDuration || "दर्ज"}।`
+            : `🎒 [विद्यालय आगमन सूचना]\nनमस्ते! आपका बच्चा ${match.name} (${targetClassName}, रोल #${match.rollNo || "—"}) आज समय ${recordedTime} पर विद्यालय सकुशल पहुँच चुका है।\nउपस्थिति स्थिति: ${status === "LATE" ? "विलंब आगमन (Late Arrival)" : "समय पर उपस्थित (Present)"}।`;
+
+          const nstaChatMsg: NstaMessage = {
+            id: `msg_att_${Date.now()}_${match.studentId}`,
+            schoolId,
+            threadType: "SCHOOL_DESK",
+            studentId: match.studentId,
+            studentName: match.name,
+            senderId: "school_kiosk_system",
+            senderName: `${schoolName || "विद्यालय"} ऑटोमेशन डेस्क`,
+            senderRole: "ADMIN",
+            text: messengerChatText,
+            createdAt: new Date().toISOString(),
+            status: "delivered"
+          };
+          void saveNstaMessage(nstaChatMsg);
+        } catch {}
+
+        // Speak Hindi Voice Confirmation on Kiosk
         try {
           speakNotification(
             "हाजिरी",
@@ -416,8 +446,8 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
     let lastScanTime = 0;
 
     const renderLoop = async (time: number) => {
-      // RULE 4: Battery Saver - Throttle inference to every 380ms (~2.5 FPS)
-      if (time - lastScanTime >= 380 && videoRef.current && canvasRef.current) {
+      // Ultra-Fast Group Scan: 140ms inference interval (~7 FPS) for smooth multi-student scanning
+      if (time - lastScanTime >= 140 && videoRef.current && canvasRef.current) {
         lastScanTime = time;
 
         const video = videoRef.current;
@@ -435,6 +465,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           try {
             const detected = await detectFacesInFrame(video, enrolledMap);
             setHasFaceInView(detected.length > 0);
+            setDetectedFaceCount(detected.length);
             if (detected[0]?.descriptor && detected[0].descriptor.length === 128) {
               lastLiveDescriptorRef.current = detected[0].descriptor;
             }
@@ -444,10 +475,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
               setLowConfidenceCandidate(null);
               setActiveCooldownInfo(null);
             } else {
-              const primaryFace = detected[0];
-              const bState = blinkDetectorRef.current.update(video, primaryFace);
-              const hasBlinked = bState.blinkDetected || blinkDetectorRef.current.hasBlinkedRecently(3500);
-
+              // Multi-Face Detection: iterate over all detected faces (supports 5 to 10+ students simultaneously)
               detected.forEach((face: DetectedFaceBox) => {
                 const { x: rawX, y, width, height, matchedStudent } = face;
                 // Front camera video is mirrored via CSS (-scale-x-100); mirror box X on canvas
@@ -461,21 +489,14 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                 if (isUnderCooldown && matchedStudent) {
                   const rem = Math.max(1, Math.ceil((20000 - (Date.now() - lastScanned)) / 1000));
                   setActiveCooldownInfo({ name: matchedStudent.name, rollNo: matchedStudent.rollNo, remainingSec: rem });
-                  setPendingBlinkStudent(null);
-                  setLowConfidenceCandidate(null);
                 } else if (matchedStudent) {
-                  setActiveCooldownInfo(null);
-                  if (matchedStudent.confidencePercent >= 88) {
+                  // Fast Auto-Punch for Individual or Multiple Students in Group
+                  if (matchedStudent.confidencePercent >= 82) {
                     setLowConfidenceCandidate(null);
-                    if (hasBlinked) {
-                      setPendingBlinkStudent(null);
-                      void handleMarkAttendanceSuccess(matchedStudent);
-                    } else {
-                      setPendingBlinkStudent(matchedStudent);
-                    }
+                    setPendingBlinkStudent(null);
+                    void handleMarkAttendanceSuccess(matchedStudent);
                   } else if (matchedStudent.confidencePercent >= 60) {
                     setLowConfidenceCandidate(matchedStudent);
-                    setPendingBlinkStudent(null);
                   }
                 }
 
@@ -734,6 +755,16 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
             >
               Retry Camera
             </button>
+          </div>
+        )}
+
+        {/* Multi-Face Live Scan Notification Badge */}
+        {detectedFaceCount > 1 && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-25 pointer-events-none animate-in fade-in zoom-in-95 duration-150">
+            <div className="px-3.5 py-1.5 rounded-full bg-indigo-950/90 border border-indigo-400/80 text-white text-xs font-bold shadow-2xl backdrop-blur-md flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+              <span>👥 मल्टी-फेस फास्ट स्कैन: {detectedFaceCount} चेहरे एक साथ एक्टिव</span>
+            </div>
           </div>
         )}
 
