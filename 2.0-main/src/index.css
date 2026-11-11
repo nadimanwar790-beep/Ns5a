@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', 'Noto Sans Devanagari', system-ui, -apple-system, sans-serif;
+    overflow-x: hidden;
+  }
+
+  code, kbd, samp, pre {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+/* Custom modern scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #090d16;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #27354a;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3b82f6;
+}
+
+/* Canvas styling */
+canvas {
+  touch-action: none;
+  outline: none;
+}
+
+/* Print Optimization Styles for Mobile & Desktop */
+@media print {
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* Hide UI elements during print */
+  nav, header, footer, button, .no-print, input, select, .pwa-install, .toast-notification {
+    display: none !important;
+  }
+
+  /* Optimize printable page */
+  #printable-textbook-page, .printable-card {
+    background: #ffffff !important;
+    color: #000000 !important;
+    border: 1px solid #94a3b8 !important;
+    box-shadow: none !important;
+    border-radius: 8px !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    page-break-inside: avoid;
+  }
+
+  /* High contrast text */
+  .text-slate-900, .text-slate-950, .text-indigo-950, .text-emerald-950 {
+    color: #000000 !important;
+  }
+
+  /* Make sure formulas and steps are visible clearly */
+  pre, code {
+    white-space: pre-wrap !important;
+    color: #000000 !important;
+  }
+}

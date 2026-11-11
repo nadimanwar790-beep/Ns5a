@@ -1,0 +1,8 @@
+{
+  "name": "Remix 3D Math Geometry Lab",
+  "description": "Visualize and manipulate 3D shapes, solve math problems, and explore geometry through interactive 3D modeling and sectioning tools.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
