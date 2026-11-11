@@ -196,16 +196,18 @@ export const rotateScreen = async (): Promise<'portrait' | 'landscape' | null> =
       try {
         if (goingTo === 'landscape') {
           await requestFullscreenSafe();
+          for (const target of candidates) {
+            try {
+              await so.lock(target);
+              try { window.dispatchEvent(new CustomEvent('nst-screen-rotate', { detail: { orientation: 'landscape' } })); } catch {}
+              return 'landscape';
+            } catch {}
+          }
         } else {
           await exitFullscreenSafe();
           await so.unlock?.().catch(() => {});
-        }
-        for (const target of candidates) {
-          try {
-            await so.lock(target);
-            try { window.dispatchEvent(new CustomEvent('nst-screen-rotate', { detail: { orientation: goingTo } })); } catch {}
-            return goingTo;
-          } catch {}
+          try { window.dispatchEvent(new CustomEvent('nst-screen-rotate', { detail: { orientation: 'portrait' } })); } catch {}
+          return 'portrait';
         }
       } catch {}
     }

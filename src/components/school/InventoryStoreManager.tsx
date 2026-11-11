@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import {
   ShoppingBag, Plus, Search, Tag, AlertTriangle, Printer, Trash2,
-  Edit3, CheckCircle2, IndianRupee, QrCode, Filter, ChevronLeft,
+  Edit3, CheckCircle2, Check, IndianRupee, QrCode, Filter, ChevronLeft,
   Package, Receipt, ArrowRight, Sparkles, RefreshCw, Clock
 } from "lucide-react";
 import type {

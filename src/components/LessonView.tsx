@@ -2201,57 +2201,59 @@ export const LessonView: React.FC<Props> = ({
             // Small extra delay to let viewport change settle
             await new Promise(r => setTimeout(r, 200));
 
-            if (type === 'MHTML') {
-                downloadAsMHTML('printable-analysis-report', `${chapter.title}_Analysis`);
-            } else {
-                const element = document.getElementById('printable-analysis-report');
-                if (element) {
-                    try {
-                        const canvas = await html2canvas(element, {
-                            scale: 1.5,
-                            backgroundColor: '#ffffff',
-                            useCORS: true,
-                            onclone: (clonedDocument) => {
-                                const styles = Array.from(clonedDocument.querySelectorAll('style, link[rel="stylesheet"]'));
-                                for (const s of styles) {
-                                    if (s.textContent && s.textContent.includes('oklch')) {
-                                        s.textContent = s.textContent.replace(/oklch\([^)]+\)/gi, '#1e3a8a');
-                                    }
-                                }
-                            },
-                        });
-                        const imgData = canvas.toDataURL('image/png');
+            try {
+              if (type === 'MHTML') {
+                  downloadAsMHTML('printable-analysis-report', `${chapter.title}_Analysis`);
+              } else {
+                  const element = document.getElementById('printable-analysis-report');
+                  if (element) {
+                      try {
+                          const canvas = await html2canvas(element, {
+                              scale: 1.5,
+                              backgroundColor: '#ffffff',
+                              useCORS: true,
+                              onclone: (clonedDocument) => {
+                                  const styles = Array.from(clonedDocument.querySelectorAll('style, link[rel="stylesheet"]'));
+                                  for (const s of styles) {
+                                      if (s.textContent && s.textContent.includes('oklch')) {
+                                          s.textContent = s.textContent.replace(/oklch\([^)]+\)/gi, '#1e3a8a');
+                                      }
+                                  }
+                              },
+                          });
+                          const imgData = canvas.toDataURL('image/png');
 
-                        const pdf = new jsPDF('p', 'mm', 'a4');
-                        const pdfWidth = pdf.internal.pageSize.getWidth();
-                        const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+                          const pdf = new jsPDF('p', 'mm', 'a4');
+                          const pdfWidth = pdf.internal.pageSize.getWidth();
+                          const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
 
-                        let heightLeft = pdfHeight;
-                        let position = 0;
-                        const pageHeight = pdf.internal.pageSize.getHeight();
+                          let heightLeft = pdfHeight;
+                          let position = 0;
+                          const pageHeight = pdf.internal.pageSize.getHeight();
 
-                        pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
-                        heightLeft -= pageHeight;
+                          pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
+                          heightLeft -= pageHeight;
 
-                        while (heightLeft >= 0) {
-                            position = heightLeft - pdfHeight;
-                            pdf.addPage();
-                            pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
-                            heightLeft -= pageHeight;
-                        }
+                          while (heightLeft >= 0) {
+                              position = heightLeft - pdfHeight;
+                              pdf.addPage();
+                              pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
+                              heightLeft -= pageHeight;
+                          }
 
-                        pdf.save(`${chapter.title}_Analysis.pdf`);
-                    } catch (e) {
-                        console.error("PDF Gen Error", e);
-                        setAlertConfig({isOpen: true, message: "PDF Generation Failed."});
-                    }
-                }
+                          pdf.save(`${chapter.title}_Analysis.pdf`);
+                      } catch (e) {
+                          console.error("PDF Gen Error", e);
+                          setAlertConfig({isOpen: true, message: "PDF Generation Failed."});
+                      }
+                  }
+              }
+            } finally {
+              // Restore original viewport if we changed it
+              if (!wasDesktop) { setDesktopMode(false); setIsDesktopMode(false); }
+              setIsDownloading(false);
+              setAlertConfig({isOpen: true, message: `Download Complete! (${cost} Coins Deducted)`});
             }
-
-            // Restore original viewport if we changed it
-            if (!wasDesktop) { setDesktopMode(false); setIsDesktopMode(false); }
-            setIsDownloading(false);
-            setAlertConfig({isOpen: true, message: `Download Complete! (${cost} Coins Deducted)`});
         }, 500);
     };
 

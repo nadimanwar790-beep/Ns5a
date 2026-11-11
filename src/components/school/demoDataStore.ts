@@ -98,7 +98,7 @@ export function isDemoDataEnabled(): boolean {
       return parsed;
     }
   } catch {}
-  return true; // Default to ON for rich demo experience
+  return false; // Default OFF as requested by user (defuot me demo on na rahega)
 }
 
 export function setDemoDataEnabled(enabled: boolean): void {

@@ -1873,6 +1873,57 @@ export const getUserByMobileOrId = async (input: string) => {
             return rtdbUser;
         }
 
+        // ── 3. LocalStorage fallback for saved accounts ──
+        if (typeof window !== 'undefined' && window.localStorage) {
+            try {
+                const pool: any[] = [];
+                const p = localStorage.getItem('nst_user_profile');
+                if (p) { try { pool.push(JSON.parse(p)); } catch {} }
+                const c = localStorage.getItem('nst_current_user');
+                if (c) { try { pool.push(JSON.parse(c)); } catch {} }
+                const u = localStorage.getItem('nst_users');
+                if (u) { try { const arr = JSON.parse(u); if (Array.isArray(arr)) pool.push(...arr); } catch {} }
+
+                for (let i = 0; i < localStorage.length; i++) {
+                    const k = localStorage.key(i);
+                    if (k && k.startsWith('nst_user_profile_')) {
+                        try {
+                            const val = localStorage.getItem(k);
+                            if (val) pool.push(JSON.parse(val));
+                        } catch {}
+                    }
+                }
+
+                for (const user of pool) {
+                    if (!user) continue;
+                    const uId = String(user.id || user.uid || '').toLowerCase();
+                    const uDisp = String(user.displayId || '').toLowerCase();
+                    const uMail = String(user.email || '').toLowerCase();
+                    const uMob = String(user.mobile || user.phone || '').replace(/\D/g, '');
+                    const uAdm = String(user.admissionNo || '').toLowerCase();
+                    const uRoll = String(user.rollNo || '').toLowerCase();
+
+                    const matchCand = candidateIds.some(cid => {
+                        const cl = cid.toLowerCase();
+                        const cd = cid.replace(/\D/g, '');
+                        return (
+                            cl === uId ||
+                            cl === uDisp ||
+                            cl === uMail ||
+                            cl === uAdm ||
+                            cl === uRoll ||
+                            (cd.length >= 4 && (uId.includes(cd) || uDisp.includes(cd))) ||
+                            (cd.length >= 10 && uMob.endsWith(cd.slice(-10)))
+                        );
+                    });
+
+                    if (matchCand) {
+                        return user;
+                    }
+                }
+            } catch {}
+        }
+
         return null;
     } catch (e: any) {
         if (!e?.message?.includes('Missing or insufficient permissions') && e?.code !== 'permission-denied') {

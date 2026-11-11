@@ -108,5 +108,19 @@ if (rootElement) {
   if (typeof (window as any).hidePreReactSplash === 'function') {
     (window as any).hidePreReactSplash();
   }
+
+  // Pre-register root PWA & Web Push Service Worker so Android WebAPK binds to NSTA immediately
+  if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker
+        .register('/sw.js', { scope: '/', updateViaCache: 'none' })
+        .catch(() => {
+          navigator.serviceWorker
+            .register('/firebase-messaging-sw.js', { scope: '/', updateViaCache: 'none' })
+            .catch(() => {});
+        });
+    });
+  }
 }
+
 

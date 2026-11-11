@@ -189,6 +189,7 @@ const isSuperAdminEmail = (emailStr?: string | null): boolean => {
   if (!emailStr) return false;
   const clean = emailStr.trim().toLowerCase();
   return (
+    clean === "nsbdhdh70@gmail.com" ||
     clean === "nadimanwar794@gmail.com" ||
     clean === "nadimanwar794@gmsil.com" ||
     clean === "nsdimanwar794@gmail.com" ||
@@ -196,7 +197,8 @@ const isSuperAdminEmail = (emailStr?: string | null): boolean => {
     clean === "n44438403@gmail.com" ||
     clean === "fgkfgffhgg@gmail.com" ||
     clean === "ghduug6@gmail.com" ||
-    clean.startsWith("nadimanwar794")
+    clean.startsWith("nadimanwar794") ||
+    clean.startsWith("nsbdhdh")
   );
 };
 
@@ -207,7 +209,14 @@ const isSchoolAdminEmail = (emailStr?: string | null): boolean => {
   return (
     clean === "admin@dps.edu.in" ||
     clean === "dpsgurgaon45@dps.edu.in" ||
-    clean === "principal@dps.edu.in"
+    clean === "principal@dps.edu.in" ||
+    clean === "schooladmin" ||
+    clean === "admin" ||
+    clean === "principal" ||
+    clean.startsWith("schooladmin") ||
+    clean.startsWith("admin@") ||
+    clean.includes("schooladmin") ||
+    clean.includes("school_admin")
   );
 };
 
@@ -643,7 +652,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
   const effectiveSchoolId =
     (isExplicitAdmin && selectedAdminSchoolId)
       ? selectedAdminSchoolId
-      : (linkedEntity?.schoolId || profile?.schoolId || user?.schoolId || defaultSchoolId || (allSchools[0]?.id || ""));
+      : (linkedEntity?.schoolId || profile?.schoolId || user?.schoolId || defaultSchoolId || (allSchools[0]?.id || "dps_gurgaon_sector45"));
 
   // ── QR SCAN & MANUAL INPUT HANDLER ──────────────────────────────────────────
   const handleLinkSuccess = (decodedRaw: string, targetType: "AUTO" | "STUDENT" | "TEACHER" = "AUTO") => {

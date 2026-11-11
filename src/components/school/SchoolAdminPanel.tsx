@@ -227,26 +227,16 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     }
   });
 
-  // Screen Rotation & Landscape Mode
-  const [isRotatedLandscape, setIsRotatedLandscape] = useState<boolean>(() => {
+  // Manual Desktop/Laptop Mode Toggle (Strictly User Controlled, Never Auto-Triggered)
+  const [isDesktopMode, setIsDesktopMode] = useState<boolean>(() => {
     try {
-      return localStorage.getItem("school_erp_rotated_landscape") === "true";
+      return localStorage.getItem("school_erp_desktop_mode") === "true";
     } catch {
       return false;
     }
   });
 
-  const [isNativeLandscape, setIsNativeLandscape] = useState<boolean>(() => {
-    if (typeof window !== "undefined") {
-      return (
-        window.innerWidth > window.innerHeight ||
-        Boolean(window.screen?.orientation?.type?.includes("landscape"))
-      );
-    }
-    return false;
-  });
-
-  const isEffectiveLandscape = isRotatedLandscape || isNativeLandscape;
+  const isEffectiveLandscape = isDesktopMode;
 
   const [showRotatePrompt, setShowRotatePrompt] = useState(false);
 
@@ -293,26 +283,6 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   }, []);
 
   useEffect(() => {
-    const handleOrientationOrResize = () => {
-      const isLandscape =
-        window.innerWidth > window.innerHeight ||
-        Boolean(window.screen?.orientation?.type?.includes("landscape"));
-      setIsNativeLandscape(isLandscape);
-      if (isLandscape) {
-        setIsRotatedLandscape(true);
-      }
-    };
-
-    window.addEventListener("resize", handleOrientationOrResize);
-    window.addEventListener("orientationchange", handleOrientationOrResize);
-    if (window.screen?.orientation?.addEventListener) {
-      window.screen.orientation.addEventListener("change", handleOrientationOrResize);
-    }
-    const mediaQuery = window.matchMedia("(orientation: landscape)");
-    if (mediaQuery.addEventListener) {
-      mediaQuery.addEventListener("change", handleOrientationOrResize);
-    }
-
     // Ensure status bar theme color matches ERP dark theme
     try {
       let metaTheme = document.querySelector('meta[name="theme-color"]');
@@ -366,75 +336,39 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     window.addEventListener("touchend", onGlobalTouchEnd, { passive: true });
 
     return () => {
-      window.removeEventListener("resize", handleOrientationOrResize);
-      window.removeEventListener("orientationchange", handleOrientationOrResize);
       window.removeEventListener("touchstart", onGlobalTouchStart);
       window.removeEventListener("touchend", onGlobalTouchEnd);
-      if (window.screen?.orientation?.removeEventListener) {
-        window.screen.orientation.removeEventListener("change", handleOrientationOrResize);
-      }
-      if (mediaQuery.removeEventListener) {
-        mediaQuery.removeEventListener("change", handleOrientationOrResize);
-      }
     };
   }, []);
 
-  const handleToggleScreenRotate = async () => {
-    const isCurrentlyLaptop = isRotatedLandscape || isNativeLandscape;
-
-    if (!isCurrentlyLaptop) {
-      // Switch to Laptop / Landscape Mode
-      setIsRotatedLandscape(true);
+  const handleToggleScreenRotate = () => {
+    setIsDesktopMode(prev => {
+      const next = !prev;
       try {
-        localStorage.setItem("school_erp_rotated_landscape", "true");
+        localStorage.setItem("school_erp_desktop_mode", next ? "true" : "false");
       } catch {}
-
-      // 1. Enter Fullscreen so mobile browser bars collapse and orientation lock is allowed by Android OS
-      try {
-        const root = document.documentElement;
-        if (!document.fullscreenElement) {
-          if (root.requestFullscreen) {
-            await root.requestFullscreen().catch(() => {});
-          } else if ((root as any).webkitRequestFullscreen) {
-            await (root as any).webkitRequestFullscreen().catch(() => {});
+      if (!next) {
+        try {
+          if (screen.orientation && (screen.orientation as any).unlock) {
+            (screen.orientation as any).unlock();
           }
-        }
-      } catch (err) {}
-
-      // 2. Lock screen orientation to landscape so OS physically rotates display with status bar
-      let locked = false;
-      try {
-        if (screen.orientation && (screen.orientation as any).lock) {
-          await (screen.orientation as any).lock("landscape");
-          locked = true;
-        }
-      } catch (err) {
-        console.warn("Screen orientation lock:", err);
+        } catch {}
+        try {
+          if (document.fullscreenElement && document.exitFullscreen) {
+            document.exitFullscreen().catch(() => {});
+          } else if ((document as any).webkitExitFullscreen) {
+            (document as any).webkitExitFullscreen().catch(() => {});
+          }
+        } catch {}
+      } else {
+        try {
+          if (screen.orientation && (screen.orientation as any).lock) {
+            (screen.orientation as any).lock("landscape").catch(() => {});
+          }
+        } catch {}
       }
-
-      if (!locked) {
-        setShowRotatePrompt(true);
-        setTimeout(() => setShowRotatePrompt(false), 4500);
-      }
-    } else {
-      // Switch back to Mobile / Portrait Mode
-      setIsRotatedLandscape(false);
-      try {
-        localStorage.setItem("school_erp_rotated_landscape", "false");
-      } catch {}
-
-      // Exit fullscreen & unlock orientation
-      try {
-        if (screen.orientation && (screen.orientation as any).unlock) {
-          (screen.orientation as any).unlock();
-        }
-        if (document.fullscreenElement && document.exitFullscreen) {
-          await document.exitFullscreen().catch(() => {});
-        } else if ((document as any).webkitExitFullscreen) {
-          await (document as any).webkitExitFullscreen().catch(() => {});
-        }
-      } catch (err) {}
-    }
+      return next;
+    });
   };
 
   const isMenuItemActive = (itemId: string) => {
@@ -1832,7 +1766,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   // ── DESKTOP PERMANENT LEFT SIDEBAR (20% SLIMMER: w-52 lg:w-56) ───────────
   const renderDesktopSidebar = () => {
     const displaySchoolLogo = school ? getSavedSchoolLogo(school.logoUrl, schoolId) : "";
-    const isSidebarDefault = isRotatedLandscape || isNativeLandscape;
+    const isSidebarDefault = isEffectiveLandscape;
 
     // When hidden via Swipe-Left, render sleek 1% visible vertical strip
     if (isSidebarHidden) {

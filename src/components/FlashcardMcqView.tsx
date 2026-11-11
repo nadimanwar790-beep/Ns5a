@@ -156,22 +156,8 @@ export const FlashcardMcqView: React.FC<Props> = ({
   const [projectorFocused, setProjectorFocused] = useState(false);
   const [fcFocused, setFcFocused] = useState(false);
 
-  // ── Screen Rotation & Landscape Mode (1/20 Top, 18/20 Content, 1/20 Bottom) ──
-  const [isDeviceLandscape, setIsDeviceLandscape] = useState<boolean>(() => {
-    if (typeof window !== 'undefined') {
-      return window.innerWidth > window.innerHeight;
-    }
-    return false;
-  });
-
+  // ── Screen Rotation & Landscape Mode (Strictly Manual 1-Tap Toggle, Never Auto-Triggered) ──
   useEffect(() => {
-    const handleCheck = () => {
-      if (typeof window !== 'undefined') {
-        setIsDeviceLandscape(window.innerWidth > window.innerHeight);
-      }
-    };
-    window.addEventListener('resize', handleCheck);
-    window.addEventListener('orientationchange', handleCheck);
     const handleCustomRotate = (e: any) => {
       if (e?.detail?.orientation) {
         setProjectorRotated(e.detail.orientation === 'landscape');
@@ -179,13 +165,11 @@ export const FlashcardMcqView: React.FC<Props> = ({
     };
     window.addEventListener('nst-screen-rotate', handleCustomRotate);
     return () => {
-      window.removeEventListener('resize', handleCheck);
-      window.removeEventListener('orientationchange', handleCheck);
       window.removeEventListener('nst-screen-rotate', handleCustomRotate);
     };
   }, []);
 
-  const isEffectiveLandscape = projectorRotated || isDeviceLandscape;
+  const isEffectiveLandscape = projectorRotated;
   // ── Projector score tracking ──
   const [projectorCorrect, setProjectorCorrect] = useState(0);
   const [projectorWrong, setProjectorWrong] = useState(0);
@@ -1793,9 +1777,26 @@ export const FlashcardMcqView: React.FC<Props> = ({
                 {/* Rotate Screen */}
                 <button
                   onClick={async () => {
-                    const result = await rotateScreen();
-                    if (result !== null) { setProjectorRotated(result === 'landscape'); }
-                    else { alert('📱 Phone ko physically rotate karein — landscape ke liye sideways, portrait ke liye seedha.'); }
+                    const next = !projectorRotated;
+                    setProjectorRotated(next);
+                    if (!next) {
+                      try {
+                        if (screen.orientation && (screen.orientation as any).unlock) {
+                          (screen.orientation as any).unlock();
+                        }
+                      } catch {}
+                      try {
+                        if (document.fullscreenElement && document.exitFullscreen) {
+                          await document.exitFullscreen().catch(() => {});
+                        } else if ((document as any).webkitExitFullscreen) {
+                          await (document as any).webkitExitFullscreen().catch(() => {});
+                        }
+                      } catch {}
+                    } else {
+                      try {
+                        await rotateScreen();
+                      } catch {}
+                    }
                   }}
                   title={projectorRotated ? 'Portrait mode' : 'Landscape mode'}
                   aria-label={projectorRotated ? 'Portrait mode' : 'Landscape mode'}

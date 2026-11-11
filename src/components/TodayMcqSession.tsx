@@ -1608,8 +1608,24 @@ export const TodayMcqSession: React.FC<Props> = ({ user, topics, onClose, onComp
                                     </button>
                                     <button
                                         onClick={async () => {
-                                            const result = await rotateScreen();
-                                            setProjectorRotated(result === 'landscape');
+                                            const next = !projectorRotated;
+                                            setProjectorRotated(next);
+                                            if (!next) {
+                                                try {
+                                                    if (screen.orientation && (screen.orientation as any).unlock) {
+                                                        (screen.orientation as any).unlock();
+                                                    }
+                                                } catch {}
+                                                try {
+                                                    if (document.fullscreenElement && document.exitFullscreen) {
+                                                        await document.exitFullscreen().catch(() => {});
+                                                    }
+                                                } catch {}
+                                            } else {
+                                                try {
+                                                    await rotateScreen();
+                                                } catch {}
+                                            }
                                             playSoundClick();
                                         }}
                                         title={projectorRotated ? 'Mobile mode' : 'Desktop/Laptop mode'}

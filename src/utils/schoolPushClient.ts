@@ -49,12 +49,37 @@ export function getSchoolPushEnabledState(uid?: string): boolean {
 }
 
 async function getPushServiceWorkerRegistration(): Promise<ServiceWorkerRegistration> {
-  const reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js", {
-    scope: "/",
-    updateViaCache: "none",
-  });
-  await navigator.serviceWorker.ready;
-  return reg;
+  if (typeof window === "undefined" || !("serviceWorker" in navigator)) {
+    throw new Error("ServiceWorker not supported in this environment");
+  }
+
+  try {
+    const existing = await navigator.serviceWorker.getRegistrations();
+    const activeRoot = existing.find(
+      (r) => r.active && (r.scope === window.location.origin + "/" || r.scope.endsWith("/"))
+    );
+    if (activeRoot) return activeRoot;
+    if (existing.length > 0 && existing[0].active) {
+      return existing[0];
+    }
+  } catch (_) {}
+
+  // Prefer the unified root service worker /sw.js so WebAPK attributes notifications to NSTA
+  try {
+    const reg = await navigator.serviceWorker.register("/sw.js", {
+      scope: "/",
+      updateViaCache: "none",
+    });
+    await navigator.serviceWorker.ready;
+    return reg;
+  } catch {
+    const fallbackReg = await navigator.serviceWorker.register("/firebase-messaging-sw.js", {
+      scope: "/",
+      updateViaCache: "none",
+    });
+    await navigator.serviceWorker.ready;
+    return fallbackReg;
+  }
 }
 
 export async function enableSchoolPushForUser(params: {

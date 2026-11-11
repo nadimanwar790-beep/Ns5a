@@ -73,6 +73,48 @@ export const NotificationPermissionGate: React.FC<Props> = ({ userId, onUnlocked
   const [activeBrandTab, setActiveBrandTab] = useState<'samsung' | 'redmi' | 'vivo' | 'oppo' | 'chrome'>('samsung');
   const [testSent, setTestSent] = useState<boolean>(false);
   const [schoolName, setSchoolName] = useState<string>('');
+  const [isStandalone, setIsStandalone] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return (
+      window.matchMedia('(display-mode: standalone)').matches ||
+      (window.navigator as any)?.standalone === true
+    );
+  });
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mql = window.matchMedia('(display-mode: standalone)');
+    const check = () => {
+      setIsStandalone(mql.matches || (window.navigator as any)?.standalone === true);
+    };
+    mql.addEventListener?.('change', check);
+
+    const handleBeforeInstall = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+
+    return () => {
+      mql.removeEventListener?.('change', check);
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+    };
+  }, []);
+
+  const handleTriggerInstall = async () => {
+    if (deferredPrompt) {
+      try {
+        deferredPrompt.prompt();
+        const { outcome } = await deferredPrompt.userChoice;
+        if (outcome === 'accepted') {
+          setDeferredPrompt(null);
+        }
+      } catch (_) {}
+    } else {
+      alert('NSTA को होम स्क्रीन पर ऐप की तरह इंस्टॉल करने के लिए:\n1. Chrome में ऊपर दाएँ कोने में ⋮ (3 डॉट्स) दबाएँ।\n2. "Install app" या "Add to Home screen" चुनें।\n3. फिर होम स्क्रीन पर बने NSTA आइकन से ऐप खोलें!');
+    }
+  };
 
   // Sync Super Admin policy changes in real time
   useEffect(() => {
@@ -211,7 +253,9 @@ export const NotificationPermissionGate: React.FC<Props> = ({ userId, onUnlocked
       // 1. Dispatch high-priority local test notification
       dispatchSmartNotification({
         title: '🔔 NSTA टेस्ट पॉप-अप अलर्ट',
-        body: 'अगर यह मैसेज स्क्रीन के ऊपर तैरता हुआ (Pop-up) आया है, तो आपकी सेटिंग 100% सही है!',
+        body: isStandalone
+          ? 'शानदार! NSTA ऐप से स्क्रीन पर पॉप-अप सफलतापूर्वक काम कर रहा है।'
+          : 'अगर यह मैसेज स्क्रीन के ऊपर तैरता हुआ (Pop-up) आया है, तो आपकी सेटिंग 100% सही है!',
         category: 'CHAT',
         url: '/',
       });
@@ -220,9 +264,13 @@ export const NotificationPermissionGate: React.FC<Props> = ({ userId, onUnlocked
       await sendSchoolPushNotification({
         userId: userId || 'guest',
         title: '🔔 NSTA टेस्ट पॉप-अप अलर्ट',
-        body: 'शानदार! स्क्रीन पर नोटिफिकेशन पॉप-अप सफलतापूर्वक काम कर रहा है।',
+        body: isStandalone
+          ? 'शानदार! NSTA ऐप के अपने लोगो और नाम के साथ नोटिफिकेशन चालू है।'
+          : 'शानदार! स्क्रीन पर नोटिफिकेशन पॉप-अप सफलतापूर्वक काम कर रहा है।',
         type: 'SCHOOL_NOTICE',
         urgent: true,
+        icon: '/icons/icon-192.png?v=3',
+        senderPhoto: '/icons/icon-192.png?v=3',
       }).catch(() => {});
     } catch (e) {
       console.warn('Test pop up dispatch error:', e);
@@ -597,6 +645,36 @@ export const NotificationPermissionGate: React.FC<Props> = ({ userId, onUnlocked
                 </div>
               )}
             </div>
+
+            {/* Standalone vs Browser Attribution Banner */}
+            {isStandalone ? (
+              <div className="mb-3.5 p-3 rounded-2xl bg-emerald-500/15 border border-emerald-500/40 text-left flex items-start gap-2.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                <div className="text-[11px] text-emerald-200 leading-relaxed">
+                  <span className="font-bold text-white block">✅ NSTA होम-स्क्रीन ऐप मोड सक्रिय!</span>
+                  सभी नोटिफिकेशन अब <strong>NSTA के अपने ऐप लोगो</strong> और NSTA नाम से आएंगे।
+                </div>
+              </div>
+            ) : (
+              <div className="mb-3.5 p-3 rounded-2xl bg-amber-500/15 border border-amber-500/40 text-left space-y-2">
+                <div className="flex items-start gap-2">
+                  <Smartphone className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <div className="text-[11px] text-amber-200 leading-relaxed">
+                    <span className="font-bold text-amber-300 block">💡 ध्यान दें: आप अभी Chrome ब्राउज़र में हैं</span>
+                    Android के सुरक्षा नियम के तहत, ब्राउज़र के अंदर से आने वाले नोटिफिकेशन पर <strong>Chrome</strong> का लोगो दिखता है।<br />
+                    नोटिफिकेशन को <strong>NSTA के अपने ऐप लोगो</strong> से पाने के लिए ऐप को होम स्क्रीन पर इंस्टॉल करके होम स्क्रीन से खोलें।
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleTriggerInstall}
+                  className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-amber-400 to-yellow-400 hover:from-amber-300 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-md active:scale-95 transition cursor-pointer"
+                >
+                  <Smartphone className="w-3.5 h-3.5" />
+                  <span>📲 NSTA ऐप को होम स्क्रीन पर इंस्टॉल करें (Install App)</span>
+                </button>
+              </div>
+            )}
 
             {/* Live Test Button */}
             <div className="mb-4">

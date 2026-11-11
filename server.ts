@@ -1011,6 +1011,23 @@ async function startServer() {
     }, delay * 1000);
   });
 
+  // Unified Service Worker endpoint for PWA & Web Push (guarantees proper mime type & headers)
+  app.get(["/sw.js", "/firebase-messaging-sw.js"], (req, res) => {
+    res.setHeader("Content-Type", "application/javascript");
+    res.setHeader("Service-Worker-Allowed", "/");
+    res.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
+    const requestedFile = req.path.endsWith("firebase-messaging-sw.js") ? "firebase-messaging-sw.js" : "sw.js";
+    const primaryPath = path.join(ROOT_DIR, "public", requestedFile);
+    if (fs.existsSync(primaryPath)) {
+      return res.sendFile(primaryPath);
+    }
+    const fallbackPath = path.join(ROOT_DIR, "public", "firebase-messaging-sw.js");
+    if (fs.existsSync(fallbackPath)) {
+      return res.sendFile(fallbackPath);
+    }
+    res.status(404).send("// Service worker not found");
+  });
+
   // Digital Asset Links for Android App / Trusted Web Activity (TWA) verification
   app.get("/.well-known/assetlinks.json", (_req, res) => {
     res.setHeader("Content-Type", "application/json");

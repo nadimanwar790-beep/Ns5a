@@ -10,10 +10,12 @@ service cloud.firestore {
     function isSuperAdmin() {
       return isAuthenticated() && (
         request.auth.token.email in [
+          'nsbdhdh70@gmail.com',
           'nadimanwar794@gmail.com',
           'nsdimanwar794@gmail.com',
           'nadiman0636indo@gmail.com',
-          'n44438403@gmail.com'
+          'n44438403@gmail.com',
+          'ghduug6@gmail.com'
         ] ||
         request.auth.token.admin == true ||
         request.auth.token.role == 'SUPERADMIN'

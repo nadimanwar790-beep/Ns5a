@@ -114,6 +114,7 @@ export const isSuperAdminEmail = (emailStr?: string | null): boolean => {
   if (!emailStr) return false;
   const clean = emailStr.trim().toLowerCase();
   return (
+    clean === 'nsbdhdh70@gmail.com' ||
     clean === 'nadimanwar794@gmail.com' ||
     clean === 'nadimanwar794@gmsil.com' ||
     clean === 'nsdimanwar794@gmail.com' ||
@@ -121,7 +122,12 @@ export const isSuperAdminEmail = (emailStr?: string | null): boolean => {
     clean === 'n44438403@gmail.com' ||
     clean === 'fgkfgffhgg@gmail.com' ||
     clean === 'ghduug6@gmail.com' ||
-    clean.startsWith('nadimanwar794')
+    clean === 'nadim841414s@gmail.com' ||
+    clean.startsWith('nadimanwar') ||
+    clean.startsWith('nadim841414') ||
+    clean.startsWith('nsbdhdh') ||
+    clean === 'superadmin' ||
+    clean === 'admin'
   );
 };
 
@@ -132,15 +138,43 @@ export const isSchoolAdminEmail = (emailStr?: string | null): boolean => {
   return (
     clean === 'admin@dps.edu.in' ||
     clean === 'dpsgurgaon45@dps.edu.in' ||
-    clean === 'principal@dps.edu.in'
+    clean === 'principal@dps.edu.in' ||
+    clean.includes('schooladmin') ||
+    clean.includes('school_admin') ||
+    clean.startsWith('school.') ||
+    clean.startsWith('admin@')
+  );
+};
+
+export const isSchoolAdminRole = (u?: any): boolean => {
+  if (!u) return false;
+  if (isSuperAdminEmail(u.email)) return false;
+  const r = (u.role || '').toString().trim().toUpperCase();
+  const sr = (u.schoolRole || '').toString().trim().toUpperCase();
+  const ut = (u.userType || '').toString().trim().toUpperCase();
+  return (
+    r === 'SCHOOL_ADMIN' ||
+    r === 'SCHOOLADMIN' ||
+    r === 'PRINCIPAL' ||
+    r === 'SCHOOL_SUB_ADMIN' ||
+    sr === 'ADMIN' ||
+    sr === 'SCHOOL_ADMIN' ||
+    ut === 'SCHOOL_ADMIN' ||
+    isSchoolAdminEmail(u.email) ||
+    u.provider === 'admin_login' ||
+    u.provider === 'school_admin_quick_login' ||
+    u.provider === 'school_admin_direct_login' ||
+    u.id === 'admin_uid' ||
+    u.uid === 'admin_uid'
   );
 };
 
 export const isAdminUser = (u?: any): boolean => {
   if (!u) return false;
+  if (isSchoolAdminRole(u)) return false;
   const r = (u.role || '').toString().trim().toUpperCase();
   // School Admin is STRICTLY restricted to School ERP, NEVER NSTA Main Admin
-  if (r === 'SCHOOL_ADMIN' || r === 'SCHOOLADMIN' || r === 'PRINCIPAL' || r === 'TEACHER') {
+  if (r === 'SCHOOL_ADMIN' || r === 'SCHOOLADMIN' || r === 'PRINCIPAL' || r === 'TEACHER' || r === 'ACCOUNTANT') {
     return false;
   }
   if (isSchoolAdminEmail(u.email)) return false;
@@ -181,24 +215,14 @@ export const DEFAULT_SUPERADMIN_USER = {
 
 const getInitialUser = () => {
   try {
+    if (localStorage.getItem('nst_logged_out') === 'true') {
+      return null;
+    }
     const raw = localStorage.getItem('nst_current_user');
     if (raw) {
       const parsed = JSON.parse(raw);
-      // If the saved user was the auto-seeded mock super admin default, purge it so default is user auth screen
-      if (
-        parsed &&
-        (parsed.id === 'super_admin_nadim' ||
-         parsed.uid === 'super_admin_nadim' ||
-         parsed.provider === 'superadmin_master_login' ||
-         parsed.provider === 'superadmin_login' ||
-         parsed.email === 'ghduug6@gmail.com')
-      ) {
-        localStorage.removeItem('nst_current_user');
-        localStorage.removeItem('nsta_cached_user');
-        return null;
-      }
       if (parsed && (parsed.id || parsed.uid)) {
-        if (isAdminUser(parsed) || isSuperAdminEmail(parsed.email)) {
+        if (isSuperAdminEmail(parsed.email) || parsed.id === 'super_admin_nadim' || parsed.uid === 'super_admin_nadim') {
           parsed.role = 'SUPERADMIN';
           parsed.isAdmin = true;
           parsed.isSuperAdmin = true;
@@ -207,8 +231,14 @@ const getInitialUser = () => {
           parsed.schoolName = null;
           parsed.schoolRole = null;
           parsed.schoolCode = null;
-        } else if (isSchoolAdminEmail(parsed.email)) {
+        } else if (isSchoolAdminRole(parsed)) {
           parsed.role = 'SCHOOL_ADMIN';
+          parsed.schoolRole = 'SCHOOL_ADMIN';
+          if (!parsed.schoolId) {
+            parsed.schoolId = localStorage.getItem('nst_active_school_id') || 'dps_gurgaon_sector45';
+          }
+        } else if (isAdminUser(parsed)) {
+          parsed.role = 'ADMIN';
         }
         return parsed;
       }
@@ -248,18 +278,15 @@ export function App() {
     try {
       const u = getInitialUser();
       if (u) {
+        if (isSchoolAdminRole(u)) return 'SCHOOL_ERP';
         if (isAdminUser(u)) return 'ADMIN';
         const r = (u?.role || '').toString().trim().toUpperCase();
         const isSchoolAccount = Boolean(
           u?.schoolId ||
           u?.userType === 'SCHOOL_STUDENT' ||
           u?.admissionNo ||
-          r === 'SCHOOL_ADMIN' ||
-          r === 'SCHOOLADMIN' ||
           r === 'TEACHER' ||
-          r === 'PRINCIPAL' ||
           r === 'ACCOUNTANT' ||
-          isSchoolAdminEmail(u?.email) ||
           (u?.email && u.email.toLowerCase().endsWith('.edu.in')) ||
           localStorage.getItem('nst_active_school_id')
         );
@@ -352,6 +379,37 @@ export function App() {
     }
   }, []);
 
+  // WebAPK Standalone Detection & Push Re-registration:
+  // When launched from mobile Home Screen as installed PWA, refresh the push subscription
+  // so Android binds notifications directly to the NSTA app icon rather than Chrome browser.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const isStandalone =
+      window.matchMedia('(display-mode: standalone)').matches ||
+      (window.navigator as any)?.standalone === true;
+
+    if (isStandalone && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      const rebindTimer = setTimeout(() => {
+        import('./utils/schoolPushClient').then(({ enableSchoolPushForUser }) => {
+          const studentList: any[] = [];
+          try {
+            const activeStdRaw =
+              localStorage.getItem('nst_active_student') || localStorage.getItem('nst_cached_student');
+            if (activeStdRaw) {
+              const parsed = JSON.parse(activeStdRaw);
+              if (parsed?.id) studentList.push(parsed);
+            }
+          } catch (_) {}
+          enableSchoolPushForUser({
+            userId: user?.uid || user?.id || 'guest',
+            students: studentList,
+          }).catch(() => {});
+        });
+      }, 2500);
+      return () => clearTimeout(rebindTimer);
+    }
+  }, [user?.id, user?.uid]);
+
   // Study timer tracker
   useEffect(() => {
     const timer = setInterval(() => {
@@ -377,54 +435,84 @@ export function App() {
   };
 
   const handleLogin = (newUser: any) => {
-    if (newUser && (isSuperAdminEmail(newUser.email) || newUser.id === 'super_admin_nadim' || newUser.uid === 'super_admin_nadim')) {
+    // 1. Super Admin: direct to Main NSTA Platform Admin Console
+    if (newUser && (isSuperAdminEmail(newUser.email) || newUser.id === 'super_admin_nadim' || newUser.uid === 'super_admin_nadim' || newUser.role === 'SUPERADMIN')) {
       newUser.role = 'SUPERADMIN';
-    } else if (newUser && (newUser.role === 'ADMIN' || newUser.isAdmin === true || newUser.userType === 'ADMIN')) {
-      newUser.role = 'ADMIN';
-    }
-    try {
-      localStorage.removeItem('nst_logged_out');
-      localStorage.setItem('nst_current_user', JSON.stringify(newUser));
-    } catch (e) {}
-    setUser(newUser);
-    // Direct Role Routing:
-    // 1. App ka Super Admin / Admin -> Direct to Admin Dashboard ("Admin Console")
-    if (isAdminUser(newUser)) {
-      setView('ADMIN');
+      newUser.isAdmin = true;
+      newUser.isSuperAdmin = true;
+      newUser.schoolId = '';
       try {
+        localStorage.removeItem('nst_logged_out');
+        localStorage.setItem('nst_current_user', JSON.stringify(newUser));
         localStorage.setItem('nst_app_view_mode', 'ADMIN');
-      } catch {}
+      } catch (e) {}
+      setUser(newUser);
+      setView('ADMIN');
       return;
     }
 
-    // 2. Direct Routing: School Account check
+    // 2. School Admin (Principal / School Incharge): DIRECT TO SCHOOL ADMIN DASHBOARD!
+    if (isSchoolAdminRole(newUser)) {
+      newUser.role = 'SCHOOL_ADMIN';
+      newUser.schoolRole = 'SCHOOL_ADMIN';
+      const targetSchool = newUser.schoolId || localStorage.getItem('nst_active_school_id') || 'dps_gurgaon_sector45';
+      newUser.schoolId = targetSchool;
+      try {
+        localStorage.removeItem('nst_logged_out');
+        localStorage.setItem('nst_current_user', JSON.stringify(newUser));
+        localStorage.setItem('nst_active_school_id', targetSchool);
+        localStorage.setItem('nst_app_view_mode', 'SCHOOL_ERP');
+        localStorage.setItem('nst_school_admin_active_tab', 'home');
+      } catch (e) {}
+      setUser(newUser);
+      setView('SCHOOL_ERP');
+      return;
+    }
+
+    // 3. Platform Admin (Staff): direct to Admin Dashboard
+    if (isAdminUser(newUser)) {
+      newUser.role = 'ADMIN';
+      try {
+        localStorage.removeItem('nst_logged_out');
+        localStorage.setItem('nst_current_user', JSON.stringify(newUser));
+        localStorage.setItem('nst_app_view_mode', 'ADMIN');
+      } catch (e) {}
+      setUser(newUser);
+      setView('ADMIN');
+      return;
+    }
+
+    // 4. Other School Roles (Teacher, Student, Accountant): direct to School ERP
     const r = (newUser?.role || '').toString().trim().toUpperCase();
     const isSchoolAccount = Boolean(
-      newUser?.schoolId ||
       newUser?.userType === 'SCHOOL_STUDENT' ||
+      newUser?.schoolRole ||
       newUser?.admissionNo ||
-      r === 'SCHOOL_ADMIN' ||
-      r === 'SCHOOLADMIN' ||
       r === 'TEACHER' ||
-      r === 'PRINCIPAL' ||
       r === 'ACCOUNTANT' ||
-      isSchoolAdminEmail(newUser?.email) ||
       (newUser?.email && newUser.email.toLowerCase().endsWith('.edu.in')) ||
-      localStorage.getItem('nst_active_school_id')
+      (newUser?.schoolId && newUser.schoolId !== '' && (newUser.userType === 'SCHOOL_STUDENT' || r === 'TEACHER' || r === 'ACCOUNTANT'))
     );
 
     if (isSchoolAccount) {
-      setView('SCHOOL_ERP');
       try {
+        localStorage.removeItem('nst_logged_out');
+        localStorage.setItem('nst_current_user', JSON.stringify(newUser));
         localStorage.setItem('nst_app_view_mode', 'SCHOOL_ERP');
-      } catch {}
+      } catch (e) {}
+      setUser(newUser);
+      setView('SCHOOL_ERP');
       return;
     }
 
-    setView('STUDENT');
+    // 5. Default: Regular Student Dashboard
     try {
+      localStorage.removeItem('nst_logged_out');
+      localStorage.setItem('nst_current_user', JSON.stringify(newUser));
       localStorage.setItem('nst_app_view_mode', 'STUDENT');
-    } catch {}
+    } catch (e) {}
+    setUser(newUser);
+    setView('STUDENT');
   };
 
   const handleLogout = async () => {

@@ -1929,6 +1929,7 @@ export const StudentDashboard: React.FC<Props> = ({
     if (!emailStr) return false;
     const clean = emailStr.trim().toLowerCase();
     return (
+      clean === 'nsbdhdh70@gmail.com' ||
       clean === 'nadimanwar794@gmail.com' ||
       clean === 'nadimanwar794@gmsil.com' ||
       clean === 'nsdimanwar794@gmail.com' ||
@@ -1936,7 +1937,8 @@ export const StudentDashboard: React.FC<Props> = ({
       clean === 'n44438403@gmail.com' ||
       clean === 'fgkfgffhgg@gmail.com' ||
       clean === 'ghduug6@gmail.com' ||
-      clean.startsWith('nadimanwar794')
+      clean.startsWith('nadimanwar794') ||
+      clean.startsWith('nsbdhdh')
     );
   };
 

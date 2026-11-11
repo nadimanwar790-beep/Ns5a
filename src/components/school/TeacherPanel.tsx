@@ -199,7 +199,7 @@ export const TeacherPanel: React.FC<Props> = ({
     }
   });
 
-  // Native Landscape / Rotate state
+  // Desktop/Laptop Mode state (Strictly Manual 1-Tap Toggle, Never Auto-Triggered)
   const [isRotatedLandscape, setIsRotatedLandscape] = useState<boolean>(() => {
     try {
       return localStorage.getItem("school_erp_rotated_landscape") === "true";
@@ -207,13 +207,8 @@ export const TeacherPanel: React.FC<Props> = ({
       return false;
     }
   });
-  const [isNativeLandscape, setIsNativeLandscape] = useState(() => {
-    if (typeof window !== "undefined") {
-      return window.innerWidth > window.innerHeight;
-    }
-    return false;
-  });
-  const isEffectiveLandscape = isRotatedLandscape || isNativeLandscape;
+  // isEffectiveLandscape strictly follows user button tap, never auto-triggers from screen tilt
+  const isEffectiveLandscape = isRotatedLandscape;
   const [showRotatePrompt, setShowRotatePrompt] = useState(false);
 
   // 3-Theme Switcher (White / Black / Midnight Current)
@@ -389,7 +384,7 @@ export const TeacherPanel: React.FC<Props> = ({
           } catch {}
         } else if (diffX > 0) {
           // Swipe Right -> Reveal menu
-          if (isNativeLandscape) {
+          if (isEffectiveLandscape) {
             setIsSidebarHidden(false);
             try {
               localStorage.setItem("school_teacher_sidebar_hidden", "false");
@@ -407,7 +402,7 @@ export const TeacherPanel: React.FC<Props> = ({
       window.removeEventListener("touchstart", onGlobalTouchStart);
       window.removeEventListener("touchend", onGlobalTouchEnd);
     };
-  }, [isNativeLandscape]);
+  }, [isEffectiveLandscape]);
 
   useEffect(() => {
     if (view !== "referrals") return;
@@ -601,23 +596,19 @@ export const TeacherPanel: React.FC<Props> = ({
         }
       } catch {}
 
-      let locked = false;
       try {
         if (screen.orientation && (screen.orientation as any).lock) {
-          await (screen.orientation as any).lock("landscape");
-          locked = true;
+          await (screen.orientation as any).lock("landscape").catch(() => {});
         }
       } catch {}
-
-      if (!locked) {
-        setShowRotatePrompt(true);
-        setTimeout(() => setShowRotatePrompt(false), 4500);
-      }
     } else {
+      // 1 single tap switches directly back to Mobile (Portrait) Mode
       try {
         if (screen.orientation && (screen.orientation as any).unlock) {
           (screen.orientation as any).unlock();
         }
+      } catch {}
+      try {
         if (document.fullscreenElement && document.exitFullscreen) {
           await document.exitFullscreen().catch(() => {});
         } else if ((document as any).webkitExitFullscreen) {

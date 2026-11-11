@@ -39,9 +39,9 @@ function displayPushNotification(title, body, data, iconUrl) {
   }
 
   const candidateIcon = (data && (data.senderPhoto || data.icon)) || iconUrl;
-  const rawIcon = (candidateIcon && !candidateIcon.endsWith('.svg')) ? candidateIcon : '/icons/icon-192.png';
+  const rawIcon = (candidateIcon && !candidateIcon.endsWith('.svg')) ? candidateIcon : '/icons/icon-192.png?v=3';
   const icon = toAbsoluteUrl(rawIcon);
-  const badge = toAbsoluteUrl('/icons/badge-monochrome.png');
+  const badge = toAbsoluteUrl('/icons/badge-monochrome.png?v=4');
   // Fresh unique tag forces Android to pop up a heads-up banner over other apps instead of silently collapsing
   const tagKey = 'nsta-alert-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
 

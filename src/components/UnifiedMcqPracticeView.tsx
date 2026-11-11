@@ -140,23 +140,10 @@ export const UnifiedMcqPracticeView: React.FC<UnifiedMcqPracticeProps> = ({
   const [showExitModal, setShowExitModal] = useState<boolean>(false);
   const [isFinished, setIsFinished] = useState<boolean>(false);
 
-  // ── Screen Rotation & Landscape Mode (1/20 Top, 18/20 Content, 1/20 Bottom) ──
+  // ── Screen Rotation & Landscape Mode (Strictly Manual 1-Tap Toggle, Never Auto-Triggered) ──
   const [isManualLandscape, setIsManualLandscape] = useState<boolean>(false);
-  const [isDeviceLandscape, setIsDeviceLandscape] = useState<boolean>(() => {
-    if (typeof window !== 'undefined') {
-      return window.innerWidth > window.innerHeight;
-    }
-    return false;
-  });
 
   useEffect(() => {
-    const handleCheckOrientation = () => {
-      if (typeof window !== 'undefined') {
-        setIsDeviceLandscape(window.innerWidth > window.innerHeight);
-      }
-    };
-    window.addEventListener('resize', handleCheckOrientation);
-    window.addEventListener('orientationchange', handleCheckOrientation);
     const handleCustomRotate = (e: any) => {
       if (e?.detail?.orientation) {
         setIsManualLandscape(e.detail.orientation === 'landscape');
@@ -164,25 +151,34 @@ export const UnifiedMcqPracticeView: React.FC<UnifiedMcqPracticeProps> = ({
     };
     window.addEventListener('nst-screen-rotate', handleCustomRotate);
     return () => {
-      window.removeEventListener('resize', handleCheckOrientation);
-      window.removeEventListener('orientationchange', handleCheckOrientation);
       window.removeEventListener('nst-screen-rotate', handleCustomRotate);
     };
   }, []);
 
-  const isRotatedOrLandscape = isManualLandscape || isDeviceLandscape;
+  // isRotatedOrLandscape strictly follows user button tap, never auto-triggers from screen tilt
+  const isRotatedOrLandscape = isManualLandscape;
 
   const handleToggleRotate = async () => {
     hapticLight();
-    try {
-      const res = await rotateScreen();
-      if (res !== null) {
-        setIsManualLandscape(res === 'landscape');
-      } else {
-        setIsManualLandscape(prev => !prev);
-      }
-    } catch {
-      setIsManualLandscape(prev => !prev);
+    const next = !isManualLandscape;
+    setIsManualLandscape(next);
+    if (!next) {
+      try {
+        if (screen.orientation && (screen.orientation as any).unlock) {
+          (screen.orientation as any).unlock();
+        }
+      } catch {}
+      try {
+        if (document.fullscreenElement && document.exitFullscreen) {
+          await document.exitFullscreen().catch(() => {});
+        } else if ((document as any).webkitExitFullscreen) {
+          await (document as any).webkitExitFullscreen().catch(() => {});
+        }
+      } catch {}
+    } else {
+      try {
+        await rotateScreen();
+      } catch {}
     }
   };
 

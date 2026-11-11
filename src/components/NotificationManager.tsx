@@ -143,7 +143,8 @@ export const requestNotificationPermission = async (): Promise<boolean> => {
   return false;
 };
 
-const FCM_SERVICE_WORKER_PATH = '/firebase-messaging-sw.js';
+const PRIMARY_SERVICE_WORKER_PATH = '/sw.js';
+const FALLBACK_SERVICE_WORKER_PATH = '/firebase-messaging-sw.js';
 
 const getFcmServiceWorkerRegistration = async (): Promise<ServiceWorkerRegistration> => {
   if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
@@ -163,14 +164,25 @@ const getFcmServiceWorkerRegistration = async (): Promise<ServiceWorkerRegistrat
     return registrations[0];
   }
 
-  // Fallback to registering firebase-messaging-sw.js
+  // Fallback to registering unified /sw.js, then fallback to /firebase-messaging-sw.js
   try {
-    return await navigator.serviceWorker.register(FCM_SERVICE_WORKER_PATH, {
+    const reg = await navigator.serviceWorker.register(PRIMARY_SERVICE_WORKER_PATH, {
+      scope: '/',
       updateViaCache: 'none',
     });
+    await navigator.serviceWorker.ready;
+    return reg;
   } catch (err) {
-    console.warn('[NotificationManager] Register fallback warning:', err);
-    return await navigator.serviceWorker.ready;
+    try {
+      const fallbackReg = await navigator.serviceWorker.register(FALLBACK_SERVICE_WORKER_PATH, {
+        scope: '/',
+        updateViaCache: 'none',
+      });
+      await navigator.serviceWorker.ready;
+      return fallbackReg;
+    } catch {
+      return await navigator.serviceWorker.ready;
+    }
   }
 };
 
