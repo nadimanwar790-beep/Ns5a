@@ -26,6 +26,7 @@ import {
   saveFaceDescriptor,
   extractDescriptorFromCanvas,
   enrollStudentFromPhotoUrl,
+  enrollTeacherFromPhotoUrl,
   playAttendanceSuccessChime,
   playCooldownTick,
   EyeBlinkDetector,
@@ -33,7 +34,7 @@ import {
   FaceDescriptorRecord,
   DetectedFaceBox
 } from "../../utils/faceRecognitionEngine";
-import { markStudentQrAttendance, todayStr, saveNstaMessage } from "../../school-firebase";
+import { markStudentQrAttendance, todayStr, saveNstaMessage, getStaffDailyAttendance, saveStaffDailyAttendance } from "../../school-firebase";
 import type { NstaMessage } from "../../school-types";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 import { speakNotification } from "../../utils/voiceNotifyEngine";
@@ -49,6 +50,7 @@ export interface FaceAttendanceKioskModalProps {
   classId?: string;
   className?: string;
   students: any[];
+  teachers?: any[];
   teacherId?: string;
   onAttendanceUpdated?: () => void;
 }
@@ -56,6 +58,8 @@ export interface FaceAttendanceKioskModalProps {
 interface RecentCheckIn {
   studentId: string;
   name: string;
+  role?: "STUDENT" | "TEACHER" | "STAFF";
+  designation?: string;
   rollNo?: string;
   className?: string;
   photoUrl?: string;
@@ -74,6 +78,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
   classId,
   className,
   students = [],
+  teachers = [],
   teacherId = "teacher",
   onAttendanceUpdated
 }) => {
@@ -87,6 +92,8 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
   const [recentScans, setRecentScans] = useState<RecentCheckIn[]>([]);
   const [lastMatchedAlert, setLastMatchedAlert] = useState<{
     name: string;
+    role?: "STUDENT" | "TEACHER" | "STAFF";
+    designation?: string;
     rollNo?: string;
     className?: string;
     photoUrl?: string;
@@ -183,6 +190,38 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           });
           if (anyAdded) {
             setEnrolledMap(updatedMap);
+            map = updatedMap;
+          }
+        }
+      }
+
+      // Auto-enroll teachers who have photos if not already enrolled
+      if (teachers && teachers.length > 0) {
+        const teachersToEnroll = teachers.filter(
+          (t) => t && t.photoUrl && typeof t.photoUrl === "string" && t.photoUrl.trim() && !map[t.id]
+        );
+        if (teachersToEnroll.length > 0) {
+          const teacherRecords = await Promise.all(
+            teachersToEnroll.slice(0, 30).map((t) =>
+              enrollTeacherFromPhotoUrl({
+                id: t.id,
+                schoolId: schoolId || "default_school",
+                name: t.name,
+                designation: t.designation || (Array.isArray(t.subjects) ? t.subjects.join(", ") : "Faculty"),
+                photoUrl: t.photoUrl
+              })
+            )
+          );
+          const updatedMap = { ...map };
+          let anyAdded = false;
+          teacherRecords.forEach((rec) => {
+            if (rec) {
+              updatedMap[rec.studentId] = rec;
+              anyAdded = true;
+            }
+          });
+          if (anyAdded) {
+            setEnrolledMap(updatedMap);
           }
         }
       }
@@ -191,7 +230,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
     } finally {
       setLoadingDescriptors(false);
     }
-  }, [schoolId, students, classId, className]);
+  }, [schoolId, students, teachers, classId, className]);
 
   useEffect(() => {
     if (isOpen) {
@@ -283,11 +322,97 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
         hour12: true
       });
 
-      // Target class ID resolution
+      // Check if match is a Teacher
+      const descriptorRec = enrolledMap[match.studentId];
+      const isTeacherMatch =
+        descriptorRec?.role === "TEACHER" ||
+        (teachers && teachers.some((t) => t.id === match.studentId));
+
+      if (isTeacherMatch) {
+        // Teacher Attendance Punch
+        try {
+          const today = todayStr();
+          const staffAtt = getStaffDailyAttendance(schoolId, today);
+          const existingRec = staffAtt.records[match.studentId];
+
+          let action: "in" | "out" =
+            kioskScanMode === "out" ? "out" : kioskScanMode === "in" ? "in" : currentShiftMode;
+          if (kioskScanMode === "auto" && existingRec?.inTime && !existingRec?.outTime) {
+            action = "out";
+          }
+
+          let stayDuration = existingRec?.stayDuration;
+          if (action === "out" && existingRec?.inTime) {
+            try {
+              const [inH, inM] = existingRec.inTime.split(":");
+              const inDate = new Date();
+              inDate.setHours(parseInt(inH) || 9, parseInt(inM) || 0, 0);
+              const diffMs = Math.max(0, Date.now() - inDate.getTime());
+              const hrs = Math.floor(diffMs / (1000 * 60 * 60));
+              const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+              stayDuration = `${hrs}h ${mins}m`;
+            } catch {}
+          }
+
+          const updatedRec = {
+            ...staffAtt,
+            schoolId,
+            date: today,
+            records: {
+              ...staffAtt.records,
+              [match.studentId]: {
+                id: match.studentId,
+                name: match.name,
+                role: "TEACHER",
+                employeeId: descriptorRec?.designation || "Faculty",
+                present: true,
+                status: "present",
+                inTime: action === "in" ? timeFormatted : (existingRec?.inTime || timeFormatted),
+                outTime: action === "out" ? timeFormatted : existingRec?.outTime,
+                stayDuration,
+                scanType: action,
+              }
+            }
+          };
+          await saveStaffDailyAttendance(updatedRec);
+
+          playAttendanceSuccessChime();
+          hapticStrong();
+
+          const checkInEntry: RecentCheckIn = {
+            studentId: match.studentId,
+            name: match.name,
+            role: "TEACHER",
+            designation: descriptorRec?.designation || "Faculty",
+            className: "शिक्षक (Faculty)",
+            photoUrl: match.photoUrl || descriptorRec?.photoUrl,
+            time: action === "out" ? timeFormatted : (existingRec?.inTime || timeFormatted),
+            status: action === "out" ? "OUT" : "PRESENT",
+            action,
+            stayDuration,
+            confidence: match.confidencePercent
+          };
+
+          setLastMatchedAlert(checkInEntry);
+          setRecentScans((prev) => [checkInEntry, ...prev.filter((p) => p.studentId !== match.studentId)].slice(0, 8));
+
+          speakNotification(
+            "शिक्षक हाजिरी दर्ज",
+            `${match.name} जी, आपकी उपस्थिति दर्ज कर ली गई है।`
+          );
+
+          if (onAttendanceUpdated) onAttendanceUpdated();
+          return;
+        } catch (err) {
+          console.error("Teacher attendance punch error:", err);
+        }
+      }
+
+      // Target class ID resolution for Student
       const targetClassId = match.classId || classId || "cls_default";
       const targetClassName = match.className || className || "Class";
 
-      // 1. Mark in school database with Shift Rule (morning IN, afternoon OUT)
+      // 1. Mark student in school database with Shift Rule (morning IN, afternoon OUT)
       try {
         const res = await markStudentQrAttendance({
           schoolId,
@@ -303,7 +428,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
         if (res?.alreadyMarked) {
           playCooldownTick();
           setCooldownToast(res.message);
-          setTimeout(() => setCooldownToast(null), 2500);
+          setTimeout(() => setCooldownToast(null), res?.tooEarlyForOut ? 4000 : 2500);
           return;
         }
 
@@ -755,16 +880,6 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
             >
               Retry Camera
             </button>
-          </div>
-        )}
-
-        {/* Multi-Face Live Scan Notification Badge */}
-        {detectedFaceCount > 1 && (
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-25 pointer-events-none animate-in fade-in zoom-in-95 duration-150">
-            <div className="px-3.5 py-1.5 rounded-full bg-indigo-950/90 border border-indigo-400/80 text-white text-xs font-bold shadow-2xl backdrop-blur-md flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
-              <span>👥 मल्टी-फेस फास्ट स्कैन: {detectedFaceCount} चेहरे एक साथ एक्टिव</span>
-            </div>
           </div>
         )}
 

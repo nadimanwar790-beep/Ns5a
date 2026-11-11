@@ -33,7 +33,7 @@ import {
   FaceDescriptorRecord,
   DetectedFaceBox
 } from "../../utils/faceRecognitionEngine";
-import { updateStudentPhoto, updateTeacher } from "../../school-firebase";
+import { updateStudentPhoto, updateTeacher, getTeachers, getLocalTeachers } from "../../school-firebase";
 import { speakNotification } from "../../utils/voiceNotifyEngine";
 import { hapticStrong } from "../../utils/haptic";
 
@@ -44,6 +44,9 @@ interface Props {
   students: any[];
   teachers?: any[];
   classes?: any[];
+  initialTab?: "STUDENTS" | "TEACHERS" | "TEST";
+  initialTargetPerson?: any;
+  initialTargetType?: "STUDENT" | "TEACHER";
   onEnrollmentUpdated?: () => void;
 }
 
@@ -54,10 +57,41 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
   students = [],
   teachers = [],
   classes = [],
+  initialTab,
+  initialTargetPerson,
+  initialTargetType,
   onEnrollmentUpdated
 }) => {
   // Navigation tabs: "STUDENTS" | "TEACHERS" | "TEST"
-  const [activeTab, setActiveTab] = useState<"STUDENTS" | "TEACHERS" | "TEST">("STUDENTS");
+  const [activeTab, setActiveTab] = useState<"STUDENTS" | "TEACHERS" | "TEST">(initialTab || "STUDENTS");
+  const [localTeachersList, setLocalTeachersList] = useState<any[]>(teachers || []);
+
+  useEffect(() => {
+    if (teachers && teachers.length > 0) {
+      setLocalTeachersList(teachers);
+    } else if (schoolId) {
+      const local = getLocalTeachers(schoolId);
+      if (local && local.length > 0) {
+        setLocalTeachersList(local);
+      } else {
+        getTeachers(schoolId).then((list) => {
+          if (list && list.length > 0) {
+            setLocalTeachersList(list);
+          }
+        }).catch(() => {});
+      }
+    }
+  }, [teachers, schoolId]);
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+    if (initialTargetPerson) {
+      setTargetPerson(initialTargetPerson);
+      setTargetType(initialTargetType || "TEACHER");
+    }
+  }, [isOpen, initialTab, initialTargetPerson, initialTargetType]);
 
   // Enrolled descriptors map
   const [enrolledMap, setEnrolledMap] = useState<Record<string, FaceDescriptorRecord>>({});
@@ -428,9 +462,9 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
   });
 
   // Filtered Teachers
-  const filteredTeachers = teachers.filter((t) => {
+  const filteredTeachers = localTeachersList.filter((t) => {
     const q = searchQuery.toLowerCase().trim();
-    const nameMatch = !q || t.name.toLowerCase().includes(q);
+    const nameMatch = !q || (t.name || "").toLowerCase().includes(q);
     const isEnrolled = Boolean(enrolledMap[t.id]);
     const statusMatch =
       filterEnrolledStatus === "ALL" ||
@@ -440,7 +474,7 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
   });
 
   const enrolledStudentCount = students.filter((s) => enrolledMap[s.id]).length;
-  const enrolledTeacherCount = teachers.filter((t) => enrolledMap[t.id]).length;
+  const enrolledTeacherCount = localTeachersList.filter((t) => enrolledMap[t.id]).length;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
@@ -497,7 +531,7 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
               }`}
             >
               <Briefcase className="w-4 h-4" />
-              <span>शिक्षक व स्टाफ ({enrolledTeacherCount}/{teachers.length})</span>
+              <span>शिक्षक व स्टाफ ({enrolledTeacherCount}/{localTeachersList.length})</span>
             </button>
 
             <button

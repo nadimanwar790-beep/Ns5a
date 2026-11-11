@@ -1354,6 +1354,17 @@ export const getTeachers = async (schoolId: string): Promise<SchoolTeacher[]> =>
   }
 };
 
+export const getLocalTeachers = (schoolId: string): SchoolTeacher[] => {
+  try {
+    const raw = localStorage.getItem(`nst_school_teachers_${schoolId}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch {}
+  return [];
+};
+
 export const subscribeToTeachers = (schoolId: string, cb: (teachers: SchoolTeacher[]) => void) =>
   onSnapshot(
     col(`schools/${schoolId}/teachers`),
@@ -2115,6 +2126,7 @@ export const markStudentQrAttendance = async (params: {
   stayDuration?: string;
   isLate?: boolean;
   alreadyMarked?: boolean;
+  tooEarlyForOut?: boolean;
   record?: AttendanceRecord;
 }> => {
   const date = params.date || todayStr();
@@ -2182,6 +2194,37 @@ export const markStudentQrAttendance = async (params: {
           message: `${params.studentName || 'छात्र'} का प्रस्थान समय पहले से दर्ज है (${existingEntry.outTime})।`,
           record: existing
         };
+      }
+
+      // ── 30-MINUTE MINIMUM STAY GAP GUARD (IN और OUT के बीच न्यूनतम 30 मिनट का अनिवार्य अंतराल) ──
+      if (existingEntry?.inTime) {
+        try {
+          const inParts = existingEntry.inTime.match(/(\d+):(\d+)(?::(\d+))?\s*(AM|PM)?/i);
+          if (inParts) {
+            let h = parseInt(inParts[1], 10);
+            const m = parseInt(inParts[2], 10);
+            const meridiem = (inParts[4] || "").toUpperCase();
+            if (meridiem === "PM" && h < 12) h += 12;
+            if (meridiem === "AM" && h === 12) h = 0;
+
+            const inDate = new Date();
+            inDate.setHours(h, m, 0, 0);
+
+            const elapsedMinutes = Math.floor((now.getTime() - inDate.getTime()) / (1000 * 60));
+            if (elapsedMinutes >= 0 && elapsedMinutes < 30) {
+              const remainingMin = 30 - elapsedMinutes;
+              return {
+                success: false,
+                action: "out",
+                alreadyMarked: true,
+                tooEarlyForOut: true,
+                inTime: existingEntry.inTime,
+                message: `⚠️ ${params.studentName || 'छात्र'} का आगमन अभी दर्ज हुआ है (${existingEntry.inTime})। प्रस्थान (OUT) 30 मिनट बाद ही मान्य होगा (शेष: ${remainingMin} मिनट)।`,
+                record: existing
+              };
+            }
+          }
+        } catch {}
       }
     }
 

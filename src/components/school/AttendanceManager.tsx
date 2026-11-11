@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import {
   saveAttendance, subscribeToAttendance, getAttendance, getMonthlyAttendance, getStudents, todayStr, currentMonthStr,
-  isStudentBirthdayToday, dispatchOfficialSchoolBirthdayWish
+  isStudentBirthdayToday, dispatchOfficialSchoolBirthdayWish, getTeachers, getLocalTeachers
 } from "../../school-firebase";
 import type { SchoolStudent, AttendanceRecord } from "../../school-types";
 import {
@@ -29,6 +29,23 @@ interface Props {
 
 export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, className, teacherId, onBack }) => {
   const [students, setStudents] = useState<SchoolStudent[]>([]);
+  const [teachersList, setTeachersList] = useState<any[]>(() => {
+    try {
+      const local = getLocalTeachers(schoolId);
+      return Array.isArray(local) ? local : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    if (schoolId) {
+      getTeachers(schoolId).then((list) => {
+        if (list && list.length > 0) setTeachersList(list);
+      }).catch(() => {});
+    }
+  }, [schoolId]);
+
   const [selectedDate, setSelectedDate] = useState(todayStr());
   const [attendance, setAttendance] = useState<{ [id: string]: boolean }>({});
   const [existingRecord, setExistingRecord] = useState<AttendanceRecord | null>(null);
@@ -1465,6 +1482,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
         classId={classId}
         className={className}
         students={students}
+        teachers={teachersList}
         teacherId={teacherId}
         onAttendanceUpdated={() => {
           getAttendance(schoolId, classId, selectedDate).then((rec) => {
@@ -1487,6 +1505,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
           onClose={() => setShowFaceStudio(false)}
           schoolId={schoolId}
           students={students}
+          teachers={teachersList}
           classes={className ? [{ id: classId, name: className }] : []}
           onEnrollmentUpdated={() => {
             getStudents(schoolId, classId).then((stList) => {

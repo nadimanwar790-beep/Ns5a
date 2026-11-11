@@ -9,12 +9,13 @@ import {
   assignSchoolSubAdminByEmail, getSchoolAdmins, removeSchoolUserByUid,
   getAllMonthlyFees, currentMonthStr, saveFee, markFeePaid, isStudentInClass, isDemoRecord,
   shouldUseDemoForSchool, getLocalAttendance, getLocalFees,
-  isStudentBirthdayToday, dispatchOfficialSchoolBirthdayWish, checkAndDispatchTodaysBirthdays
+  isStudentBirthdayToday, dispatchOfficialSchoolBirthdayWish, checkAndDispatchTodaysBirthdays,
+  getStaffDailyAttendance, saveStaffDailyAttendance, todayStr
 } from "../../school-firebase";
 import { COMMON_BOOK_PRESETS, PRESET_BOOK_BUNDLES } from "./TeacherPanel";
 import type { SchoolUserProfile } from "../../school-types";
 import type {
-  School, SchoolSession, SchoolClass, SchoolSubject, SchoolTeacher, SchoolStudent
+  School, SchoolSession, SchoolClass, SchoolSubject, SchoolTeacher, SchoolStudent, StaffDailyAttendanceRecord
 } from "../../school-types";
 import {
   BLOOD_GROUPS, getSchoolMaxStudents, getSchoolMaxTeachers, TIER_CONFIG,
@@ -86,7 +87,8 @@ import { SchoolBirthdayCalendar } from "./SchoolBirthdayCalendar";
 import { UniversalAttendanceDesk } from "./UniversalAttendanceDesk";
 import { UniversalAttendanceScannerModal } from "./UniversalAttendanceScannerModal";
 import { SchoolLocationModal } from "./SchoolLocationModal";
-import { getSchoolFaceDescriptors } from "../../utils/faceRecognitionEngine";
+import { getSchoolFaceDescriptors, playAttendanceSuccessChime } from "../../utils/faceRecognitionEngine";
+import { speakNotification } from "../../utils/voiceNotifyEngine";
 import { getCombinedDiscountLedger, DISPLAY_DISCOUNT_LABEL } from "../../utils/schoolDiscountAndPayment";
 import { SchoolBackupManager } from "./SchoolBackupManager";
 import { SchoolExpenseManager } from "./SchoolExpenseManager";
@@ -195,8 +197,30 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const [smartClassMode, setSmartClassMode] = useState<"reading" | "writing" | "pdf" | "mcq">("reading");
   const [saving, setSaving] = useState(false);
   const [showSessionRollOverModal, setShowSessionRollOverModal] = useState(false);
-  const [showFaceStudioModal, setShowFaceStudioModal] = useState(false);
   const [showExpiryPopup, setShowExpiryPopup] = useState(false);
+  const [showFaceStudioModal, setShowFaceStudioModal] = useState(false);
+  const [faceStudioInitialTab, setFaceStudioInitialTab] = useState<"STUDENTS" | "TEACHERS" | "TEST">("STUDENTS");
+  const [faceStudioTargetPerson, setFaceStudioTargetPerson] = useState<any | null>(null);
+  const [faceStudioTargetType, setFaceStudioTargetType] = useState<"STUDENT" | "TEACHER">("STUDENT");
+  const [attendanceTab, setAttendanceTab] = useState<"students" | "teachers">("students");
+  const [teacherAttendanceDate, setTeacherAttendanceDate] = useState<string>(todayStr());
+  const [teacherSearchInAttendance, setTeacherSearchInAttendance] = useState<string>("");
+  const [teacherAttRecords, setTeacherAttRecords] = useState<StaffDailyAttendanceRecord>(() =>
+    schoolId ? getStaffDailyAttendance(schoolId, todayStr()) : { schoolId: "", date: todayStr(), records: {} }
+  );
+
+  useEffect(() => {
+    if (schoolId) {
+      setTeacherAttRecords(getStaffDailyAttendance(schoolId, teacherAttendanceDate));
+    }
+  }, [schoolId, teacherAttendanceDate]);
+
+  const handleOpenTeacherFaceEnrollment = (teacher: any) => {
+    setFaceStudioInitialTab("TEACHERS");
+    setFaceStudioTargetPerson(teacher);
+    setFaceStudioTargetType("TEACHER");
+    setShowFaceStudioModal(true);
+  };
   const [expiryPopupExpired, setExpiryPopupExpired] = useState(false);
   const [studentSearchQuery, setStudentSearchQuery] = useState("");
   const [studentPage, setStudentPage] = useState(1);
@@ -4710,6 +4734,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             schoolName={school.name}
             classes={displayedClasses}
             students={displayedStudents}
+            teachers={displayedTeachers}
           />
         )}
 
@@ -5429,13 +5454,28 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         {showFaceStudioModal && (
           <UniversalFaceIdStudioModal
             isOpen={showFaceStudioModal}
-            onClose={() => setShowFaceStudioModal(false)}
+            onClose={() => {
+              setShowFaceStudioModal(false);
+              setFaceStudioTargetPerson(null);
+            }}
             schoolId={schoolId}
             students={displayedStudents}
             teachers={displayedTeachers}
             classes={displayedClasses}
+            initialTab={faceStudioInitialTab}
+            initialTargetPerson={faceStudioTargetPerson}
+            initialTargetType={faceStudioTargetType}
             onEnrollmentUpdated={() => {
               try { loadAll(); } catch {}
+              if (schoolId) {
+                getSchoolFaceDescriptors(schoolId).then((map) => {
+                  const next: Record<string, boolean> = {};
+                  Object.keys(map || {}).forEach((id) => {
+                    next[id] = true;
+                  });
+                  setEnrolledFaceIds(next);
+                }).catch(() => {});
+              }
             }}
           />
         )}
@@ -5690,42 +5730,507 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
   if (view === "attendance") {
     const activeClass = selectedClass || (displayedClasses.length > 0 ? displayedClasses[0] : null);
+
+    // Compute Teacher Attendance & Face ID Stats
+    const totalTeachersCount = displayedTeachers.length;
+    const enrolledTeachersCount = displayedTeachers.filter(t => enrolledFaceIds[t.id]).length;
+    const pendingFaceTeachersCount = totalTeachersCount - enrolledTeachersCount;
+
+    const teacherRecordsMap = teacherAttRecords?.records || {};
+    const presentTeachersCount = displayedTeachers.filter(t => teacherRecordsMap[t.id]?.present === true).length;
+    const absentTeachersCount = displayedTeachers.filter(t => teacherRecordsMap[t.id]?.present === false).length;
+
+    const filteredTeachersForAttendance = displayedTeachers.filter(t => {
+      if (!teacherSearchInAttendance.trim()) return true;
+      const q = teacherSearchInAttendance.toLowerCase().trim();
+      return (
+        t.name.toLowerCase().includes(q) ||
+        (t.employeeId && t.employeeId.toLowerCase().includes(q)) ||
+        (t.phone && t.phone.includes(q)) ||
+        (t.designation && t.designation.toLowerCase().includes(q))
+      );
+    });
+
+    const handleTeacherPunchInAttendance = async (teacher: SchoolTeacher, action: "in" | "out" | "absent") => {
+      if (!schoolId) return;
+      const nowTime = new Date().toLocaleTimeString("en-IN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: true,
+      });
+
+      const currentRecords = { ...(teacherAttRecords?.records || {}) };
+      const existing = currentRecords[teacher.id];
+
+      if (action === "absent") {
+        currentRecords[teacher.id] = {
+          id: teacher.id,
+          name: teacher.name,
+          role: "TEACHER",
+          employeeId: teacher.employeeId || teacher.id,
+          present: false,
+          status: "absent",
+          inTime: undefined,
+          outTime: undefined,
+        };
+      } else {
+        let stayDuration = existing?.stayDuration;
+        if (action === "out" && existing?.inTime) {
+          try {
+            const [inH, inM] = existing.inTime.split(":");
+            const inDate = new Date();
+            inDate.setHours(parseInt(inH) || 9, parseInt(inM) || 0, 0);
+            const diffMs = Math.max(0, Date.now() - inDate.getTime());
+            const hrs = Math.floor(diffMs / (1000 * 60 * 60));
+            const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+            stayDuration = `${hrs}h ${mins}m`;
+          } catch {}
+        }
+
+        currentRecords[teacher.id] = {
+          id: teacher.id,
+          name: teacher.name,
+          role: "TEACHER",
+          employeeId: teacher.employeeId || teacher.id,
+          present: true,
+          status: "present",
+          inTime: action === "in" ? (existing?.inTime || nowTime) : (existing?.inTime || nowTime),
+          outTime: action === "out" ? nowTime : existing?.outTime,
+          stayDuration,
+          scanType: action,
+        };
+      }
+
+      const updated: StaffDailyAttendanceRecord = {
+        schoolId,
+        date: teacherAttendanceDate,
+        records: currentRecords,
+      };
+
+      setTeacherAttRecords(updated);
+      await saveStaffDailyAttendance(updated);
+      playAttendanceSuccessChime();
+      speakNotification("हाजिरी दर्ज", `${teacher.name} का ${action === "in" ? "आगमन" : action === "out" ? "प्रस्थान" : "अनुपस्थिति"} दर्ज हुआ।`);
+    };
+
+    const handleMarkAllTeachersPresent = async () => {
+      if (!schoolId) return;
+      const nowTime = new Date().toLocaleTimeString("en-IN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: true,
+      });
+
+      const currentRecords = { ...(teacherAttRecords?.records || {}) };
+      displayedTeachers.forEach((t) => {
+        const existing = currentRecords[t.id];
+        currentRecords[t.id] = {
+          id: t.id,
+          name: t.name,
+          role: "TEACHER",
+          employeeId: t.employeeId || t.id,
+          present: true,
+          status: "present",
+          inTime: existing?.inTime || nowTime,
+          outTime: existing?.outTime,
+          stayDuration: existing?.stayDuration,
+          scanType: "in",
+        };
+      });
+
+      const updated: StaffDailyAttendanceRecord = {
+        schoolId,
+        date: teacherAttendanceDate,
+        records: currentRecords,
+      };
+
+      setTeacherAttRecords(updated);
+      await saveStaffDailyAttendance(updated);
+      playAttendanceSuccessChime();
+      speakNotification("हाजिरी पूर्ण", "सभी शिक्षक उपस्थित दर्ज हो गए।");
+    };
+
     return renderErpShell(
-      <div className="space-y-3">
-        {displayedClasses.length > 1 && (
-          <div className="bg-slate-900 border-b border-slate-800 p-2.5 px-4 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
-            <div className="flex items-center gap-1.5 shrink-0">
-              <Clock className="w-4 h-4 text-emerald-400" />
-              <span className="text-xs font-black text-white">कक्षा चुनें (Class):</span>
-            </div>
-            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
-              {displayedClasses.map(c => (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => setSelectedClass(c)}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
-                    (activeClass?.id === c.id)
-                      ? "bg-emerald-600 text-white shadow-xs ring-1 ring-emerald-400"
-                      : "bg-slate-800 hover:bg-slate-700 text-slate-300"
-                  }`}
-                >
-                  {c.name} {c.section ? `(${c.section})` : ""}
-                </button>
-              ))}
-            </div>
+      <div className="space-y-4 p-2 sm:p-4 max-w-7xl mx-auto">
+        {/* Top Master Role Switcher Tab: Students vs Teachers */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-2 sm:p-3 flex items-center justify-between gap-3 flex-wrap shadow-md">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setAttendanceTab("students")}
+              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-black flex items-center gap-2 transition cursor-pointer active:scale-95 ${
+                attendanceTab === "students"
+                  ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/30 ring-1 ring-emerald-400"
+                  : "bg-slate-800 hover:bg-slate-700 text-slate-300"
+              }`}
+            >
+              <GraduationCap className="w-4 h-4" />
+              <span>👨‍🎓 छात्र हाजिरी (Class Students)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setAttendanceTab("teachers")}
+              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-black flex items-center gap-2 transition cursor-pointer active:scale-95 ${
+                attendanceTab === "teachers"
+                  ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg shadow-purple-600/30 ring-1 ring-purple-400"
+                  : "bg-slate-800 hover:bg-slate-700 text-slate-300"
+              }`}
+            >
+              <Users className="w-4 h-4 text-purple-300" />
+              <span>👨‍🏫 शिक्षक व स्टाफ हाजिरी (Teachers Desk)</span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-purple-950 text-purple-200 border border-purple-700/80">
+                {displayedTeachers.length} शिक्षक
+              </span>
+            </button>
           </div>
-        )}
-        {activeClass ? (
-          <AttendanceManager
-            schoolId={schoolId}
-            classId={activeClass.id}
-            className={activeClass.name}
-            teacherId={adminUid}
-            onBack={() => setView("classes")}
-          />
+
+          <div className="flex items-center gap-2 text-xs font-bold text-slate-400">
+            <Calendar className="w-4 h-4 text-emerald-400" />
+            <input
+              type="date"
+              value={teacherAttendanceDate}
+              onChange={(e) => setTeacherAttendanceDate(e.target.value)}
+              className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-white text-xs font-mono font-bold focus:outline-none focus:border-emerald-500"
+            />
+          </div>
+        </div>
+
+        {attendanceTab === "students" ? (
+          <div className="space-y-3">
+            {displayedClasses.length > 1 && (
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-2.5 px-4 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar shadow-xs">
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Clock className="w-4 h-4 text-emerald-400" />
+                  <span className="text-xs font-black text-white">कक्षा चुनें (Class):</span>
+                </div>
+                <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+                  {displayedClasses.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => setSelectedClass(c)}
+                      className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+                        activeClass?.id === c.id
+                          ? "bg-emerald-600 text-white shadow-xs ring-1 ring-emerald-400"
+                          : "bg-slate-800 hover:bg-slate-700 text-slate-300"
+                      }`}
+                    >
+                      {c.name} {c.section ? `(${c.section})` : ""}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {activeClass ? (
+              <AttendanceManager
+                schoolId={schoolId}
+                classId={activeClass.id}
+                className={activeClass.name}
+                teacherId={adminUid}
+                onBack={() => setView("classes")}
+              />
+            ) : (
+              <div className="p-8 text-center text-slate-400">Pehle koi Class add karein.</div>
+            )}
+          </div>
         ) : (
-          <div className="p-8 text-center text-slate-400">Pehle koi Class add karein.</div>
+          /* TEACHER ATTENDANCE & FACE ID DESK */
+          <div className="space-y-4 animate-in fade-in">
+            {/* Header Metrics Banner */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3 sm:p-4 text-center">
+                <p className="text-[11px] font-bold text-slate-400">कुल शिक्षक (Faculty)</p>
+                <p className="text-xl sm:text-2xl font-black text-white mt-0.5">{totalTeachersCount}</p>
+              </div>
+              <div className="bg-emerald-950/40 border border-emerald-500/30 rounded-2xl p-3 sm:p-4 text-center">
+                <p className="text-[11px] font-bold text-emerald-300">आज उपस्थित (Present)</p>
+                <p className="text-xl sm:text-2xl font-black text-emerald-400 mt-0.5">{presentTeachersCount}</p>
+              </div>
+              <div className="bg-rose-950/40 border border-rose-500/30 rounded-2xl p-3 sm:p-4 text-center">
+                <p className="text-[11px] font-bold text-rose-300">अनुपस्थित (Absent)</p>
+                <p className="text-xl sm:text-2xl font-black text-rose-400 mt-0.5">{absentTeachersCount}</p>
+              </div>
+              <div className="bg-purple-950/40 border border-purple-500/30 rounded-2xl p-3 sm:p-4 text-center">
+                <p className="text-[11px] font-bold text-purple-300">फेस आईडी रजिस्टर्ड</p>
+                <p className="text-xl sm:text-2xl font-black text-purple-400 mt-0.5">{enrolledTeachersCount}</p>
+              </div>
+              <div className="bg-amber-950/40 border border-amber-500/30 rounded-2xl p-3 sm:p-4 text-center col-span-2 sm:col-span-1">
+                <p className="text-[11px] font-bold text-amber-300">फेस आईडी बाकी</p>
+                <p className="text-xl sm:text-2xl font-black text-amber-400 mt-0.5">{pendingFaceTeachersCount}</p>
+              </div>
+            </div>
+
+            {/* Quick Actions & Search Strip */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3 sm:p-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 shadow-sm">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+                <input
+                  type="text"
+                  placeholder="शिक्षक का नाम, फोन या Employee ID खोजें..."
+                  value={teacherSearchInAttendance}
+                  onChange={(e) => setTeacherSearchInAttendance(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setShowFaceKioskModal(true)}
+                  className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs flex items-center gap-1.5 shadow-md shadow-emerald-600/20 active:scale-95 transition cursor-pointer"
+                  title="लाइव कैमरे से शिक्षक हाजिरी लगाएं"
+                >
+                  <Sparkles className="w-4 h-4 text-amber-300" />
+                  <span>📷 AI Face Kiosk</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFaceStudioInitialTab("TEACHERS");
+                    setFaceStudioTargetPerson(null);
+                    setShowFaceStudioModal(true);
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-black text-xs flex items-center gap-1.5 shadow-md shadow-purple-600/20 active:scale-95 transition cursor-pointer"
+                  title="सभी शिक्षकों का फेस आईडी रजिस्टर व मैनेज करें"
+                >
+                  <Camera className="w-4 h-4 text-amber-200" />
+                  <span>✨ शिक्षक फेस आईडी स्टूडियो</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleMarkAllTeachersPresent}
+                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-emerald-500/30 font-black text-xs flex items-center gap-1.5 active:scale-95 transition cursor-pointer"
+                  title="आज सभी शिक्षकों को Present मार्क करें"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>⚡ 1-Tap सभी Present</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Notice banner if some teachers have pending Face ID */}
+            {pendingFaceTeachersCount > 0 && (
+              <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-3 text-xs text-amber-300">
+                <div className="flex items-center gap-2.5">
+                  <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
+                  <span>
+                    <strong>महत्वपूर्ण सूचना:</strong> {pendingFaceTeachersCount} शिक्षकों का फेस आईडी अभी तक पंजीकृत नहीं हुआ है। पहले नीचे दिए गए <strong>"📷 Face ID जोड़ें"</strong> बटन पर क्लिक करके उनका चेहरा कैमरे से रजिस्टर करें।
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const firstPending = displayedTeachers.find(t => !enrolledFaceIds[t.id]);
+                    if (firstPending) handleOpenTeacherFaceEnrollment(firstPending);
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs shrink-0 cursor-pointer shadow-xs active:scale-95 transition"
+                >
+                  पहले शिक्षक का रजिस्टर करें →
+                </button>
+              </div>
+            )}
+
+            {/* Teachers Attendance & Face ID Cards List */}
+            {filteredTeachersForAttendance.length === 0 ? (
+              <div className="text-center py-16 bg-slate-900 border border-slate-800 rounded-3xl p-6 text-slate-400">
+                <Users className="w-12 h-12 mx-auto mb-3 opacity-30 text-purple-400" />
+                <p className="text-base font-bold text-white">कोई शिक्षक नहीं मिला</p>
+                <p className="text-xs text-slate-400 mt-1">खोज शब्द बदलें या शिक्षक प्रबंधन से नए शिक्षक जोड़ें।</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                {filteredTeachersForAttendance.map((t) => {
+                  const rec = teacherRecordsMap[t.id];
+                  const isPresent = rec?.present === true;
+                  const isAbsent = rec?.present === false;
+                  const isLate = rec?.status === "late";
+                  const isFaceEnrolled = Boolean(enrolledFaceIds[t.id]);
+
+                  return (
+                    <div
+                      key={t.id}
+                      className={`p-4 rounded-3xl border transition flex flex-col justify-between space-y-3.5 ${
+                        isPresent
+                          ? "bg-slate-900/90 border-emerald-500/40 shadow-sm"
+                          : isAbsent
+                          ? "bg-slate-900/90 border-rose-500/40 shadow-sm"
+                          : "bg-slate-900/70 border-slate-800 hover:border-purple-500/40"
+                      }`}
+                    >
+                      {/* Teacher Profile & Face Status */}
+                      <div className="flex items-start gap-3">
+                        <div className="relative shrink-0">
+                          <div
+                            className={`w-13 h-15 rounded-2xl overflow-hidden border-2 flex items-center justify-center font-black text-white text-base ${
+                              isFaceEnrolled
+                                ? "border-emerald-400 shadow-md shadow-emerald-500/20"
+                                : "border-amber-400 shadow-md shadow-amber-500/20"
+                            } bg-gradient-to-tr from-purple-700 to-indigo-700`}
+                          >
+                            {t.photoUrl ? (
+                              <img src={t.photoUrl} alt={t.name} className="w-full h-full object-cover" />
+                            ) : (
+                              <span>{t.name ? t.name.charAt(0).toUpperCase() : "T"}</span>
+                            )}
+                          </div>
+                          {isFaceEnrolled && (
+                            <span
+                              className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[10px] font-black shadow-md border-2 border-slate-900"
+                              title="Face ID Verified"
+                            >
+                              ✓
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <h4 className="font-black text-sm text-white truncate">{t.name}</h4>
+                            <span
+                              className={`px-1.5 py-0.2 rounded text-[9px] font-black uppercase tracking-wider ${
+                                isPresent
+                                  ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                                  : isAbsent
+                                  ? "bg-rose-500/20 text-rose-300 border border-rose-500/40"
+                                  : "bg-slate-800 text-slate-400 border border-slate-700"
+                              }`}
+                            >
+                              {isPresent ? (isLate ? "विलंब (Late)" : "उपस्थित (Present)") : isAbsent ? "अनुपस्थित (Absent)" : "पेंडिंग (Pending)"}
+                            </span>
+                          </div>
+
+                          <p className="text-[11px] font-bold text-purple-300 truncate mt-0.5">
+                            {t.designation || "Faculty"} {t.subjects ? `• ${Array.isArray(t.subjects) ? t.subjects.join(", ") : t.subjects}` : ""}
+                          </p>
+
+                          <div className="flex items-center gap-2.5 text-[10px] text-slate-400 font-mono mt-1">
+                            {t.employeeId && <span>ID: {t.employeeId}</span>}
+                            {t.phone && <span>📞 {t.phone}</span>}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Face ID Status Strip & Direct Add Face ID Button */}
+                      <div className="p-2.5 rounded-2xl bg-slate-950/80 border border-slate-800 flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <div
+                            className={`w-7 h-7 rounded-xl flex items-center justify-center ${
+                              isFaceEnrolled
+                                ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                                : "bg-amber-500/20 text-amber-400 border border-amber-500/30 animate-pulse"
+                            }`}
+                          >
+                            <Camera className="w-3.5 h-3.5" />
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-bold text-slate-400">बायोमेट्रिक पहचान</p>
+                            <p className={`text-xs font-black ${isFaceEnrolled ? "text-emerald-400" : "text-amber-400"}`}>
+                              {isFaceEnrolled ? "✅ Face ID रजिस्टर्ड" : "⚠️ Face ID बाकी है"}
+                            </p>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleOpenTeacherFaceEnrollment(t)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition active:scale-95 cursor-pointer shadow-md ${
+                            isFaceEnrolled
+                              ? "bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
+                              : "bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-600/30 ring-2 ring-emerald-400/70"
+                          }`}
+                          title="लाइव कैमरे से इस शिक्षक का चेहरा स्कैन करें"
+                        >
+                          <Camera className="w-3.5 h-3.5" />
+                          <span>{isFaceEnrolled ? "री-स्कैन" : "📷 Face ID जोड़ें"}</span>
+                        </button>
+                      </div>
+
+                      {/* Attendance Punch Timings & Buttons */}
+                      <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                        <div className="flex items-center justify-between text-xs text-slate-300 font-mono px-1">
+                          <span>
+                            आगमन: <strong className="text-emerald-400">{rec?.inTime || "--:--"}</strong>
+                          </span>
+                          <span>
+                            प्रस्थान: <strong className="text-amber-400">{rec?.outTime || "--:--"}</strong>
+                          </span>
+                          {rec?.stayDuration && (
+                            <span className="text-[11px] font-bold text-purple-300 bg-purple-950/60 px-1.5 py-0.5 rounded border border-purple-800/60">
+                              ⏱️ {rec.stayDuration}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleTeacherPunchInAttendance(t, "in")}
+                            className={`py-1.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer active:scale-95 ${
+                              isPresent && !rec?.outTime
+                                ? "bg-emerald-600 text-white ring-2 ring-emerald-400 shadow"
+                                : "bg-emerald-950/40 text-emerald-300 hover:bg-emerald-900/60 border border-emerald-500/30"
+                            }`}
+                          >
+                            <LogIn className="w-3.5 h-3.5" />
+                            <span>Punch In</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleTeacherPunchInAttendance(t, "out")}
+                            className={`py-1.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer active:scale-95 ${
+                              rec?.outTime
+                                ? "bg-amber-600 text-white ring-2 ring-amber-400 shadow"
+                                : "bg-amber-950/40 text-amber-300 hover:bg-amber-900/60 border border-amber-500/30"
+                            }`}
+                          >
+                            <LogOut className="w-3.5 h-3.5" />
+                            <span>Punch Out</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleTeacherPunchInAttendance(t, "absent")}
+                            className={`py-1.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer active:scale-95 ${
+                              isAbsent
+                                ? "bg-rose-600 text-white ring-2 ring-rose-400 shadow"
+                                : "bg-rose-950/40 text-rose-300 hover:bg-rose-900/60 border border-rose-500/30"
+                            }`}
+                          >
+                            <X className="w-3.5 h-3.5" />
+                            <span>अनुपस्थित</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Footer Actions: ID Card & Call */}
+                      <div className="flex items-center justify-between gap-2 pt-1 text-[11px]">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedTeacherForIdCard(t)}
+                          className="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-indigo-500/30 font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <CreditCard className="w-3 h-3" />
+                          <span>🪪 ID कार्ड</span>
+                        </button>
+                        {t.phone && (
+                          <a
+                            href={`tel:${t.phone}`}
+                            className="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/30 font-bold flex items-center gap-1"
+                          >
+                            <Phone className="w-3 h-3" />
+                            <span>कॉल करें</span>
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         )}
       </div>
     );
@@ -8193,12 +8698,16 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 type="button"
-                onClick={() => setShowFaceStudioModal(true)}
+                onClick={() => {
+                  setFaceStudioInitialTab("TEACHERS");
+                  setFaceStudioTargetPerson(null);
+                  setShowFaceStudioModal(true);
+                }}
                 className="px-3.5 py-2.5 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 transition active:scale-95 cursor-pointer shadow-xs"
                 title="Register Live Face ID for Teachers"
               >
                 <Camera className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                <span>📷 लाइव फेस आईडी</span>
+                <span>📷 शिक्षक फेस आईडी स्टुडियो</span>
               </button>
               <button
                 type="button"
@@ -8638,6 +9147,15 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
                               {t.designation || "Faculty"}
                             </span>
+                            {enrolledFaceIds[t.id] ? (
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-500" /> Face ID दर्ज
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 flex items-center gap-1">
+                                <AlertTriangle className="w-3 h-3 text-amber-500" /> Face ID बाकी
+                              </span>
+                            )}
                             {t.experience && (
                               <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-900">
                                 ⏳ {t.experience}
@@ -8694,6 +9212,19 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
                       {/* Action buttons */}
                       <div className="flex sm:flex-col items-center gap-1.5 shrink-0 self-end sm:self-center">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenTeacherFaceEnrollment(t)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition active:scale-95 cursor-pointer shadow-xs ${
+                            enrolledFaceIds[t.id]
+                              ? "border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-300"
+                              : "bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-md shadow-emerald-600/30 ring-2 ring-emerald-400/50 animate-pulse"
+                          }`}
+                          title="शिक्षक का Face ID कैमरे से स्कैन करें"
+                        >
+                          <Camera className="w-3.5 h-3.5" />
+                          <span>{enrolledFaceIds[t.id] ? "📷 Face ID री-स्कैन" : "📷 Face ID जोड़ें"}</span>
+                        </button>
                         <button
                           type="button"
                           onClick={() => setSelectedTeacherForIdCard(t)}

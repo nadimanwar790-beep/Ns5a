@@ -854,7 +854,7 @@ export async function detectFacesInFrame(
     try {
       if (!(window as any).__nstaFaceDetector) {
         (window as any).__nstaFaceDetector = new (window as any).FaceDetector({
-          maxDetectedFaces: 12, // Supports recognizing up to 12 students simultaneously in a group
+          maxDetectedFaces: 2,
           fastMode: true,
         });
       }
@@ -862,48 +862,29 @@ export async function detectFacesInFrame(
       const detected = await detector.detect(videoElement);
 
       if (detected && detected.length > 0) {
-        return detected.map((face: any) => {
-          const bb = face.boundingBox;
-          // Pad bounding box by 15% for optimal chin & hairline capture
-          const padX = bb.width * 0.15;
-          const padY = bb.height * 0.15;
-          const box = {
-            x: Math.max(0, bb.x - padX),
-            y: Math.max(0, bb.y - padY),
-            width: Math.min(vWidth - bb.x, bb.width + padX * 2),
-            height: Math.min(vHeight - bb.y, bb.height + padY * 2),
-            confidence: 0.95,
-          };
+        // Focus on the primary / frontmost face standing in front of kiosk
+        const sorted = [...detected].sort((a: any, b: any) => {
+          const areaA = (a.boundingBox?.width || 0) * (a.boundingBox?.height || 0);
+          const areaB = (b.boundingBox?.width || 0) * (b.boundingBox?.height || 0);
+          return areaB - areaA;
+        });
+        const primary = sorted[0];
+        const bb = primary.boundingBox;
+        const padX = bb.width * 0.15;
+        const padY = bb.height * 0.15;
+        const box = {
+          x: Math.max(0, bb.x - padX),
+          y: Math.max(0, bb.y - padY),
+          width: Math.min(vWidth - bb.x, bb.width + padX * 2),
+          height: Math.min(vHeight - bb.y, bb.height + padY * 2),
+          confidence: 0.95,
+        };
 
-          // Extract eye & nose landmarks from native FaceDetector if available
-          let nativeLandmarks: FaceLandmarks | null = null;
-          if (Array.isArray(face.landmarks) && face.landmarks.length > 0) {
-            const eyePoints: Array<{ x: number; y: number }> = [];
-            let nosePt: { x: number; y: number } | undefined;
-            for (const lm of face.landmarks) {
-              const pts = Array.isArray(lm.locations) ? lm.locations : lm.location ? [lm.location] : [];
-              if (lm.type === "eye" && pts.length > 0) {
-                eyePoints.push({ x: pts[0].x, y: pts[0].y });
-              } else if (lm.type === "nose" && pts.length > 0) {
-                nosePt = { x: pts[0].x, y: pts[0].y };
-              }
-            }
-            if (eyePoints.length >= 2) {
-              eyePoints.sort((a, b) => a.x - b.x);
-              nativeLandmarks = {
-                leftEye: eyePoints[0],
-                rightEye: eyePoints[eyePoints.length - 1],
-                nose: nosePt,
-              };
-            }
-          }
+        const desc = extractDescriptorFromCanvas(videoElement, box);
+        const match = matchFaceDescriptor(desc, enrolledMap);
 
-          const landmarks = nativeLandmarks || estimateEyeNoseLandmarks(videoElement, box);
-          const desc = extractDescriptorFromCanvas(videoElement, box, false, landmarks);
-          const descMirrored = extractDescriptorFromCanvas(videoElement, box, true, landmarks);
-          const match = matchFaceDescriptor(desc, enrolledMap, 0.58, descMirrored);
-
-          return {
+        return [
+          {
             ...box,
             descriptor: desc,
             matchedStudent: match
@@ -918,13 +899,14 @@ export async function detectFacesInFrame(
                   distance: match.distance,
                 }
               : undefined,
-          };
-        });
+          },
+        ];
       }
     } catch {}
   }
 
-  // Method 2: High-speed Multi-Face Spatial Grid Scanner (Universal Canvas Fallback for 5-10+ students)
+  // Method 2: Clean Central Viewport Face Scanner (Universal Canvas Fallback)
+  // Scans the central reticle region to lock onto the single person in view
   const scanCanvas = (window as any).__nstaScanCanvas || ((window as any).__nstaScanCanvas = document.createElement("canvas"));
   const scale = 0.25; // 4x downscale for real-time 30+ FPS analysis
   const sW = Math.round(vWidth * scale);
@@ -940,166 +922,87 @@ export async function detectFacesInFrame(
   const frame = ctx.getImageData(0, 0, sW, sH);
   const data = frame.data;
 
-  // Multi-Face Zone Scanner: 6 columns x 4 rows overlapping spatial zones across whole screen
-  const cols = 6;
-  const rows = 4;
-  const cellW = sW / cols;
-  const cellH = sH / rows;
-  const candidateBoxes: Array<{ x: number; y: number; width: number; height: number; skinRatio: number }> = [];
+  // Center targeting oval region (matching Kiosk central framing reticle)
+  const centerX = sW / 2;
+  const centerY = sH / 2;
+  const searchW = sW * 0.50;
+  const searchH = sH * 0.60;
 
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const zStartX = Math.max(0, Math.floor((c - 0.2) * cellW));
-      const zEndX = Math.min(sW, Math.floor((c + 1.2) * cellW));
-      const zStartY = Math.max(0, Math.floor((r - 0.2) * cellH));
-      const zEndY = Math.min(sH, Math.floor((r + 1.2) * cellH));
+  let skinPixels = 0;
+  let totalChecked = 0;
+  let minX = sW;
+  let maxX = 0;
+  let minY = sH;
+  let maxY = 0;
 
-      let skinCount = 0;
-      let totalChecked = 0;
-      let minX = zEndX;
-      let maxX = zStartX;
-      let minY = zEndY;
-      let maxY = zStartY;
+  const startX = Math.floor(centerX - searchW / 2);
+  const endX = Math.floor(centerX + searchW / 2);
+  const startY = Math.floor(centerY - searchH / 2);
+  const endY = Math.floor(centerY + searchH / 2);
 
-      for (let y = zStartY; y < zEndY; y += 3) {
-        for (let x = zStartX; x < zEndX; x += 3) {
-          const idx = (y * sW + x) * 4;
-          const red = data[idx];
-          const green = data[idx + 1];
-          const blue = data[idx + 2];
-          totalChecked++;
+  for (let y = startY; y < endY; y += 3) {
+    for (let x = startX; x < endX; x += 3) {
+      const idx = (y * sW + x) * 4;
+      const r = data[idx];
+      const g = data[idx + 1];
+      const b = data[idx + 2];
+      totalChecked++;
 
-          if (
-            red > 55 &&
-            green > 35 &&
-            blue > 18 &&
-            red > green &&
-            red > blue &&
-            Math.abs(red - green) > 10 &&
-            red - blue > 12
-          ) {
-            skinCount++;
-            if (x < minX) minX = x;
-            if (x > maxX) maxX = x;
-            if (y < minY) minY = y;
-            if (y > maxY) maxY = y;
-          }
-        }
-      }
-
-      const skinRatio = skinCount / Math.max(1, totalChecked);
-      const spanW = maxX - minX;
-      const spanH = maxY - minY;
-
-      if (skinRatio > 0.18 && spanW >= 14 && spanH >= 16 && spanW <= sW * 0.75 && spanH <= sH * 0.85) {
-        candidateBoxes.push({
-          x: minX,
-          y: minY,
-          width: spanW,
-          height: spanH,
-          skinRatio,
-        });
+      // Skin Tone Chromatic Filter in RGB space
+      if (
+        r > 55 &&
+        g > 35 &&
+        b > 18 &&
+        r > g &&
+        r > b &&
+        Math.abs(r - g) > 10 &&
+        r - b > 12
+      ) {
+        skinPixels++;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
       }
     }
   }
 
-  // Non-Maximum Suppression (NMS) to merge overlapping boxes for the same student
-  const mergedBoxes: Array<{ x: number; y: number; width: number; height: number; skinRatio: number }> = [];
-  candidateBoxes.sort((a, b) => b.skinRatio - a.skinRatio);
+  const skinRatio = skinPixels / Math.max(1, totalChecked);
 
-  for (const box of candidateBoxes) {
-    let isOverlap = false;
-    for (const merged of mergedBoxes) {
-      const interX1 = Math.max(box.x, merged.x);
-      const interY1 = Math.max(box.y, merged.y);
-      const interX2 = Math.min(box.x + box.width, merged.x + merged.width);
-      const interY2 = Math.min(box.y + box.height, merged.y + merged.height);
-      const interW = Math.max(0, interX2 - interX1);
-      const interH = Math.max(0, interY2 - interY1);
-      const interArea = interW * interH;
-      const boxArea = box.width * box.height;
-      const mergedArea = merged.width * merged.height;
-      const iou = interArea / (boxArea + mergedArea - interArea + 1e-4);
-
-      if (iou > 0.32) {
-        isOverlap = true;
-        merged.x = Math.min(merged.x, box.x);
-        merged.y = Math.min(merged.y, box.y);
-        merged.width = Math.max(merged.x + merged.width, box.x + box.width) - merged.x;
-        merged.height = Math.max(merged.y + merged.height, box.y + box.height) - merged.y;
-        break;
-      }
-    }
-    if (!isOverlap && mergedBoxes.length < 12) {
-      mergedBoxes.push({ ...box });
-    }
-  }
-
-  // If no spatial cluster was strong enough, fallback to center oval check
-  if (mergedBoxes.length === 0) {
-    const cX = sW / 2;
-    const cY = sH / 2;
-    const w = sW * 0.45;
-    const h = sH * 0.55;
-    let sCount = 0;
-    let tCount = 0;
-    for (let y = Math.floor(cY - h / 2); y < Math.floor(cY + h / 2); y += 3) {
-      for (let x = Math.floor(cX - w / 2); x < Math.floor(cX + w / 2); x += 3) {
-        const idx = (y * sW + x) * 4;
-        const red = data[idx];
-        const green = data[idx + 1];
-        const blue = data[idx + 2];
-        tCount++;
-        if (red > 55 && green > 35 && blue > 18 && red > green && red - blue > 12) sCount++;
-      }
-    }
-    if (sCount / Math.max(1, tCount) > 0.16) {
-      mergedBoxes.push({
-        x: cX - w / 2,
-        y: cY - h / 2,
-        width: w,
-        height: h,
-        skinRatio: sCount / tCount,
-      });
-    }
-  }
-
-  // Extract descriptors & match enrolled students for EVERY detected face (up to 12 simultaneous students)
-  return mergedBoxes.map((mb) => {
-    const padW = (mb.width / scale) * 0.12;
-    const padH = (mb.height / scale) * 0.12;
-    const rawX = (mb.x / scale) - padW;
-    const rawY = (mb.y / scale) - padH;
+  // If sufficient facial skin pixels detected in center region
+  if (skinRatio > 0.16 && maxX > minX + 16 && maxY > minY + 20) {
     const box = {
-      x: Math.max(0, rawX),
-      y: Math.max(0, rawY),
-      width: Math.min(vWidth - Math.max(0, rawX), (mb.width / scale) + padW * 2),
-      height: Math.min(vHeight - Math.max(0, rawY), (mb.height / scale) + padH * 2),
-      confidence: Math.min(0.95, mb.skinRatio * 1.5),
+      x: minX / scale,
+      y: minY / scale,
+      width: Math.min(vWidth - minX / scale, (maxX - minX) / scale),
+      height: Math.min(vHeight - minY / scale, (maxY - minY) / scale),
+      confidence: Math.min(0.95, skinRatio * 1.5),
     };
 
-    const landmarks = estimateEyeNoseLandmarks(videoElement, box);
-    const desc = extractDescriptorFromCanvas(videoElement, box, false, landmarks);
-    const descMirrored = extractDescriptorFromCanvas(videoElement, box, true, landmarks);
-    const match = matchFaceDescriptor(desc, enrolledMap, 0.58, descMirrored);
+    const desc = extractDescriptorFromCanvas(videoElement, box);
+    const match = matchFaceDescriptor(desc, enrolledMap);
 
-    return {
-      ...box,
-      descriptor: desc,
-      matchedStudent: match
-        ? {
-            studentId: match.student.studentId,
-            name: match.student.name,
-            rollNo: match.student.rollNo,
-            classId: match.student.classId,
-            className: match.student.className,
-            photoUrl: match.student.photoUrl,
-            confidencePercent: match.confidencePercent,
-            distance: match.distance,
-          }
-        : undefined,
-    };
-  });
+    return [
+      {
+        ...box,
+        descriptor: desc,
+        matchedStudent: match
+          ? {
+              studentId: match.student.studentId,
+              name: match.student.name,
+              rollNo: match.student.rollNo,
+              classId: match.student.classId,
+              className: match.student.className,
+              photoUrl: match.student.photoUrl,
+              confidencePercent: match.confidencePercent,
+              distance: match.distance,
+            }
+          : undefined,
+      },
+    ];
+  }
+
+  return [];
 }
 
 // ── 5. AUTO-ENROLL FROM EXISTING STUDENT ID PHOTO ─────────────────────────────
@@ -1170,6 +1073,72 @@ export async function enrollStudentFromPhotoUrl(
 
     img.onerror = () => resolve(null);
     img.src = student.photoUrl;
+  });
+}
+
+/**
+ * Loads a teacher's existing profile photo URL and creates their 128-D descriptor.
+ */
+export async function enrollTeacherFromPhotoUrl(
+  teacher: {
+    id: string;
+    schoolId: string;
+    name: string;
+    designation?: string;
+    role?: "TEACHER" | "STAFF";
+    photoUrl?: string;
+  }
+): Promise<FaceDescriptorRecord | null> {
+  if (!teacher?.photoUrl) return null;
+
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.referrerPolicy = "no-referrer";
+
+    img.onload = async () => {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = img.naturalWidth || img.width || 200;
+        canvas.height = img.naturalHeight || img.height || 200;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        if (!ctx) {
+          resolve(null);
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0);
+
+        const box = {
+          x: canvas.width * 0.15,
+          y: canvas.height * 0.08,
+          width: canvas.width * 0.70,
+          height: canvas.height * 0.75,
+        };
+
+        const landmarks = estimateEyeNoseLandmarks(canvas, box);
+        const descriptor = extractDescriptorFromCanvas(canvas, box, false, landmarks);
+        const record: FaceDescriptorRecord = {
+          studentId: teacher.id,
+          schoolId: teacher.schoolId,
+          name: teacher.name,
+          role: "TEACHER",
+          designation: teacher.designation || "Faculty",
+          photoUrl: teacher.photoUrl,
+          descriptor,
+          enrolledAt: new Date().toISOString(),
+          source: "id_photo",
+        };
+
+        await saveFaceDescriptor(record);
+        resolve(record);
+      } catch {
+        resolve(null);
+      }
+    };
+
+    img.onerror = () => resolve(null);
+    img.src = teacher.photoUrl;
   });
 }
 
