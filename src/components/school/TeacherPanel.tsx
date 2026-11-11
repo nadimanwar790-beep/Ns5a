@@ -383,14 +383,17 @@ export const TeacherPanel: React.FC<Props> = ({
             localStorage.setItem("school_teacher_sidebar_hidden", "true");
           } catch {}
         } else if (diffX > 0) {
-          // Swipe Right -> Reveal menu
-          if (isEffectiveLandscape) {
-            setIsSidebarHidden(false);
-            try {
-              localStorage.setItem("school_teacher_sidebar_hidden", "false");
-            } catch {}
-          } else {
-            setIsSidebarOpen(true);
+          // Swipe Right -> Reveal menu ONLY if drag started from left 20% edge of screen
+          const maxLeftEdge = typeof window !== "undefined" ? window.innerWidth * 0.20 : 80;
+          if (touchStartX <= maxLeftEdge) {
+            if (isEffectiveLandscape) {
+              setIsSidebarHidden(false);
+              try {
+                localStorage.setItem("school_teacher_sidebar_hidden", "false");
+              } catch {}
+            } else {
+              setIsSidebarOpen(true);
+            }
           }
         }
       }

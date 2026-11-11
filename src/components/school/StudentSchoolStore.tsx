@@ -320,14 +320,21 @@ export const StudentSchoolStore: React.FC<Props> = ({ school, student, onBack })
               </button>
             </div>
 
-            <div className="bg-slate-950 p-3.5 rounded-2xl border border-slate-800">
-              <h4 className="font-bold text-sm text-white">{bookingItem.name}</h4>
-              <p className="text-xs text-slate-400 mt-0.5">
-                {bookingItem.sizeOrVariant} • Code: {bookingItem.itemCode}
-              </p>
-              <div className="mt-2 flex items-center justify-between">
-                <span className="text-xs text-slate-400">स्कूल मूल्य:</span>
-                <span className="text-base font-black text-amber-400">₹{bookingItem.salePrice}</span>
+            <div className="bg-slate-950 p-3.5 rounded-2xl border border-slate-800 flex gap-3 items-center">
+              {bookingItem.imageUrl && (
+                <div className="w-16 h-16 rounded-xl overflow-hidden bg-slate-900 border border-slate-800 shrink-0 flex items-center justify-center">
+                  <img src={bookingItem.imageUrl} alt={bookingItem.name} className="w-full h-full object-contain p-1" />
+                </div>
+              )}
+              <div className="flex-1 min-w-0">
+                <h4 className="font-bold text-sm text-white truncate">{bookingItem.name}</h4>
+                <p className="text-xs text-slate-400 mt-0.5 truncate">
+                  {bookingItem.sizeOrVariant} • Code: {bookingItem.itemCode}
+                </p>
+                <div className="mt-1 flex items-center justify-between">
+                  <span className="text-xs text-slate-400">स्कूल मूल्य:</span>
+                  <span className="text-base font-black text-amber-400">₹{bookingItem.salePrice}</span>
+                </div>
               </div>
             </div>
 
@@ -451,6 +458,12 @@ export const StudentSchoolStore: React.FC<Props> = ({ school, student, onBack })
                         </span>
                       )}
                     </div>
+
+                    {item.imageUrl && (
+                      <div className="w-full h-32 rounded-xl overflow-hidden mb-2.5 bg-slate-950/80 border border-slate-800 flex items-center justify-center">
+                        <img src={item.imageUrl} alt={item.name} className="w-full h-full object-contain p-1" />
+                      </div>
+                    )}
 
                     <h4 className="text-sm font-black text-white line-clamp-1">{item.name}</h4>
                     <p className="text-xs text-slate-400 mt-0.5">{item.sizeOrVariant || "Standard Size"}</p>

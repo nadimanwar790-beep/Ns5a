@@ -1401,6 +1401,10 @@ export interface DailyClassLecture {
   teacherId?: string;
   youtubeUrl: string;
   youtubeVideoId: string;
+  isLive?: boolean; // True when stream is currently LIVE
+  isUniversal?: boolean; // True when available to entire school / general
+  streamStartedAt?: string;
+  endedAt?: string;
   notes?: string;
   addedAt: string;
   addedBy: "TEACHER" | "ADMIN";
@@ -1516,6 +1520,7 @@ export interface StoreInventoryItem {
   stockQuantity: number;
   lowStockAlert: number;
   unit: string;
+  imageUrl?: string;
   updatedAt: string;
 }
 

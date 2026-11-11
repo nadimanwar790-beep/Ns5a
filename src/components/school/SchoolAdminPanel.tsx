@@ -315,19 +315,22 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       // Minimum swipe distance: 45px horizontal movement, dominating vertical
       if (Math.abs(diffX) > 45 && Math.abs(diffX) > Math.abs(diffY) * 1.2) {
         if (diffX < 0) {
-          // SWIPED LEFT anywhere on screen -> Hide menu (1% visible strip)
+          // SWIPED LEFT -> Hide menu (1% visible strip)
           setIsSidebarOpen(false);
           setIsSidebarHidden(true);
           try {
             localStorage.setItem("school_erp_sidebar_hidden", "true");
           } catch {}
         } else if (diffX > 0) {
-          // SWIPED RIGHT anywhere on screen -> Show menu back
-          setIsSidebarOpen(true);
-          setIsSidebarHidden(false);
-          try {
-            localStorage.setItem("school_erp_sidebar_hidden", "false");
-          } catch {}
+          // SWIPED RIGHT -> Show menu ONLY if touch started within the left 20% edge of screen
+          const maxLeftEdge = typeof window !== "undefined" ? window.innerWidth * 0.20 : 80;
+          if (touchStartX <= maxLeftEdge) {
+            setIsSidebarOpen(true);
+            setIsSidebarHidden(false);
+            try {
+              localStorage.setItem("school_erp_sidebar_hidden", "false");
+            } catch {}
+          }
         }
       }
     };
@@ -2934,12 +2937,12 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           </div>
         )}
 
-        {/* Compact Top Bar: 4 KPI Cards + Slim How to Use */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+        {/* Compact Top Bar: Max 4 Metrics in One Line (Students, Teachers, Classes, Attendance) */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
           <button
             type="button"
             onClick={() => setView("students")}
-            className="bg-white dark:bg-slate-800 p-3 rounded-2xl border border-slate-200/80 dark:border-slate-700 shadow-xs hover:border-blue-400 transition text-left cursor-pointer group"
+            className="bg-white dark:bg-slate-800 p-2.5 sm:p-3 rounded-2xl border border-slate-200/80 dark:border-slate-700 shadow-xs hover:border-blue-400 transition text-left cursor-pointer group"
           >
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-bold uppercase text-slate-400">Students</span>
@@ -2954,7 +2957,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           <button
             type="button"
             onClick={() => setView("teachers")}
-            className="bg-white dark:bg-slate-800 p-3 rounded-2xl border border-slate-200/80 dark:border-slate-700 shadow-xs hover:border-emerald-400 transition text-left cursor-pointer group"
+            className="bg-white dark:bg-slate-800 p-2.5 sm:p-3 rounded-2xl border border-slate-200/80 dark:border-slate-700 shadow-xs hover:border-emerald-400 transition text-left cursor-pointer group"
           >
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-bold uppercase text-slate-400">Teachers</span>
@@ -2969,7 +2972,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           <button
             type="button"
             onClick={() => setView("classes")}
-            className="bg-white dark:bg-slate-800 p-3 rounded-2xl border border-slate-200/80 dark:border-slate-700 shadow-xs hover:border-purple-400 transition text-left cursor-pointer group"
+            className="bg-white dark:bg-slate-800 p-2.5 sm:p-3 rounded-2xl border border-slate-200/80 dark:border-slate-700 shadow-xs hover:border-purple-400 transition text-left cursor-pointer group"
           >
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-bold uppercase text-slate-400">Classes</span>
@@ -2984,7 +2987,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           <button
             type="button"
             onClick={() => setView("classes")}
-            className="bg-white dark:bg-slate-800 p-3 rounded-2xl border border-slate-200/80 dark:border-slate-700 shadow-xs hover:border-teal-400 transition text-left cursor-pointer group"
+            className="bg-white dark:bg-slate-800 p-2.5 sm:p-3 rounded-2xl border border-slate-200/80 dark:border-slate-700 shadow-xs hover:border-teal-400 transition text-left cursor-pointer group"
           >
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-bold uppercase text-slate-400">Attendance</span>
@@ -2995,45 +2998,227 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             </p>
             <p className="text-[10px] text-teal-600 dark:text-teal-400 font-semibold">7-Day Avg →</p>
           </button>
-
-          <button
-            type="button"
-            onClick={() => setShowHowToUseModal(true)}
-            className="col-span-2 sm:col-span-1 bg-indigo-50 hover:bg-indigo-100/80 dark:bg-indigo-950/50 dark:hover:bg-indigo-950/80 p-3 rounded-2xl border border-indigo-200 dark:border-indigo-800 shadow-xs transition text-left cursor-pointer flex sm:flex-col items-center sm:items-stretch justify-between gap-2"
-          >
-            <div className="flex items-center justify-between w-full">
-              <span className="text-[10px] font-black uppercase text-indigo-700 dark:text-indigo-300">
-                📖 How to Use
-              </span>
-              {schoolDemoActive && (
-                <span className="px-1.5 py-0.5 rounded bg-amber-400 text-slate-950 text-[9px] font-black">
-                  Demo ON
-                </span>
-              )}
-            </div>
-            <p className="text-xs font-black text-indigo-900 dark:text-white leading-tight">
-              ERP गाइड व डमी सत्र
-            </p>
-            <p className="text-[10px] text-indigo-600 dark:text-indigo-400 font-bold shrink-0">
-              खोलें →
-            </p>
-          </button>
         </div>
 
-        {/* ── ROW 1 (3-COLUMN): QUICK PUNCH + QR/FACE SCANNER + LIVE BUS TRACKING ── */}
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+        {/* Slim How to Use Bar */}
+        <button
+          type="button"
+          onClick={() => setShowHowToUseModal(true)}
+          className="w-full bg-indigo-50 hover:bg-indigo-100/80 dark:bg-indigo-950/50 dark:hover:bg-indigo-950/80 px-3.5 py-2 rounded-2xl border border-indigo-200 dark:border-indigo-800 shadow-xs transition text-left cursor-pointer flex items-center justify-between gap-2"
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-black uppercase text-indigo-700 dark:text-indigo-300">
+              📖 How to Use ERP
+            </span>
+            {schoolDemoActive && (
+              <span className="px-1.5 py-0.5 rounded bg-amber-400 text-slate-950 text-[9px] font-black">
+                Demo ON
+              </span>
+            )}
+            <span className="text-xs text-indigo-900 dark:text-indigo-200 font-bold hidden sm:inline">
+              — ERP गाइड व डमी सत्र
+            </span>
+          </div>
+          <span className="text-[10px] text-indigo-600 dark:text-indigo-400 font-bold shrink-0">
+            खोलें →
+          </span>
+        </button>
+
+        {/* ── 3-CARD BIOMETRIC & IDENTITY ROW (FACE ID • QR ID • PENDING FACE) ── 1 LINE ── */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {/* Item 1: Face ID (AI Face स्कैनर) */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3 border border-purple-200/80 dark:border-purple-900/50 shadow-xs flex flex-col justify-between gap-2.5">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-xl bg-purple-50 dark:bg-purple-900/40 text-purple-600 dark:text-purple-300 flex items-center justify-center shrink-0">
+                  <Camera className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="font-black text-xs sm:text-sm text-slate-800 dark:text-white truncate">
+                    🤖 Face ID (AI Face स्कैनर)
+                  </h3>
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                    AI बायोमेट्रिक • चेहरा पहचान हाजिरी
+                  </p>
+                </div>
+              </div>
+              <span className="px-2 py-0.5 rounded-full bg-purple-50 dark:bg-purple-950 text-purple-700 dark:text-purple-300 text-[10px] font-bold shrink-0">
+                KYC AI
+              </span>
+            </div>
+
+            <div className="bg-purple-50/50 dark:bg-purple-950/20 p-2 rounded-xl border border-purple-100 dark:border-purple-900/40 text-[11px] text-purple-900 dark:text-purple-200 flex items-center justify-between">
+              <span className="font-bold flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>{enrolledFaceCount} फेस आईडी सक्रिय</span>
+              </span>
+              <span className="text-[10px] font-semibold text-purple-700 dark:text-purple-300">
+                Auto-Match
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowFaceKioskModal(true)}
+                className="flex-1 py-1.5 px-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-black text-[11px] transition cursor-pointer text-center flex items-center justify-center gap-1 shadow-xs"
+              >
+                <Camera className="w-3.5 h-3.5" />
+                <span>AI Face Kiosk</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowFaceStudioModal(true)}
+                className="py-1.5 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold text-[11px] transition cursor-pointer shrink-0"
+                title="लाइव फेस आईडी स्टुडियो"
+              >
+                <span>स्टुडियो</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Item 2: QR ID (QR स्कैनर) */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3 border border-sky-200/80 dark:border-sky-900/50 shadow-xs flex flex-col justify-between gap-2.5">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-xl bg-sky-50 dark:bg-sky-900/40 text-sky-600 dark:text-sky-300 flex items-center justify-center shrink-0">
+                  <QrCode className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="font-black text-xs sm:text-sm text-slate-800 dark:text-white truncate">
+                    📷 QR ID (QR स्कैनर)
+                  </h3>
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                    ID कार्ड QR कोड व बारकोड स्कैनर
+                  </p>
+                </div>
+              </div>
+              <span className="px-2 py-0.5 rounded-full bg-sky-50 dark:bg-sky-950 text-sky-700 dark:text-sky-300 text-[10px] font-bold shrink-0">
+                QR / ID
+              </span>
+            </div>
+
+            <div className="bg-sky-50/50 dark:bg-sky-950/20 p-2 rounded-xl border border-sky-100 dark:border-sky-900/40 text-[11px] text-sky-900 dark:text-sky-200 flex items-center justify-between">
+              <span className="font-bold flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-sky-500" />
+                <span>{displayedStudents.length} छात्र QR कोड जारी</span>
+              </span>
+              <span className="text-[10px] font-semibold text-sky-700 dark:text-sky-300">
+                Scan 0.1s
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowUniversalScannerModal(true)}
+                className="flex-1 py-1.5 px-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-black text-[11px] transition cursor-pointer text-center flex items-center justify-center gap-1 shadow-xs"
+              >
+                <QrCode className="w-3.5 h-3.5" />
+                <span>QR Scanner खोलें</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setView("id_cards")}
+                className="py-1.5 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold text-[11px] transition cursor-pointer shrink-0"
+                title="छात्र व स्टाफ ID कार्ड्स प्रिंट"
+              >
+                <span>ID कार्ड्स</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Item 3: फेस पहचान बाकी (Pending Face) */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3 border border-amber-200/80 dark:border-amber-900/50 shadow-xs flex flex-col justify-between gap-2.5">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+                  pendingFaceStudents.length > 0
+                    ? "bg-amber-50 dark:bg-amber-900/40 text-amber-600 dark:text-amber-300"
+                    : "bg-emerald-50 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-300"
+                }`}>
+                  {pendingFaceStudents.length > 0 ? <AlertCircle className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
+                </div>
+                <div className="min-w-0">
+                  <h3 className="font-black text-xs sm:text-sm text-slate-800 dark:text-white truncate">
+                    📸 फेस पहचान बाकी (Pending Face)
+                  </h3>
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                    {enrolledFaceCount}/{displayedStudents.length} सेव • {pendingFaceStudents.length} बाकी
+                  </p>
+                </div>
+              </div>
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
+                pendingFaceStudents.length > 0
+                  ? "bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300"
+                  : "bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300"
+              }`}>
+                {pendingFaceStudents.length > 0 ? `${pendingFaceStudents.length} बाकी` : "पूर्ण ✓"}
+              </span>
+            </div>
+
+            {pendingFaceStudents.length === 0 ? (
+              <div className="py-2.5 px-2 bg-emerald-50/50 dark:bg-emerald-950/20 rounded-xl border border-emerald-100 dark:border-emerald-900/40 text-center text-xs font-bold text-emerald-600 dark:text-emerald-400 flex items-center justify-center gap-1.5">
+                <CheckCircle2 className="w-4 h-4" />
+                <span>सभी छात्रों का चेहरा सेव है!</span>
+              </div>
+            ) : (
+              <div className="space-y-1 max-h-14 overflow-y-auto pr-0.5">
+                {pendingFaceStudents.slice(0, 5).map((st) => (
+                  <div
+                    key={`pface-${st.id}`}
+                    className="flex items-center justify-between gap-1.5 p-1 rounded-lg bg-slate-50 dark:bg-slate-900/60 border border-slate-200/70 dark:border-slate-700 text-[10px]"
+                  >
+                    <span className="font-bold text-slate-800 dark:text-white truncate">
+                      {st.name} ({getClassLabel(st.classId)})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowFaceKioskModal(true)}
+                      className="px-1.5 py-0.5 rounded bg-amber-500 hover:bg-amber-400 text-slate-950 font-black shrink-0 cursor-pointer text-[9px]"
+                    >
+                      +जोड़ें
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowFaceKioskModal(true)}
+                className="flex-1 py-1.5 px-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-black text-[11px] transition cursor-pointer text-center flex items-center justify-center gap-1 shadow-xs"
+              >
+                <Plus className="w-3.5 h-3.5 stroke-[3]" />
+                <span>+ चेहरा जोड़ें</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowFaceStudioModal(true)}
+                className="py-1.5 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold text-[11px] transition cursor-pointer shrink-0"
+                title="लाइव फेस आईडी स्टुडियो"
+              >
+                <span>मैच टेस्ट</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* ── UNIFIED OPERATIONAL ACTION CARDS (MAX 2 PER ROW • 2-4 ITEMS PER VIEWPORT) ── */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {/* Card 1: Quick Attendance & GPS */}
-          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3.5 border border-slate-200/80 dark:border-slate-700 shadow-xs flex flex-col justify-between gap-2.5">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3 border border-slate-200/80 dark:border-slate-700 shadow-xs flex flex-col justify-between gap-2">
             <div className="flex items-start justify-between gap-2">
               <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-300 flex items-center justify-center shrink-0">
+                <div className="w-8 h-8 rounded-xl bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-300 flex items-center justify-center shrink-0">
                   <Clock className="w-4 h-4" />
                 </div>
                 <div>
                   <h3 className="font-black text-xs sm:text-sm text-slate-800 dark:text-white">
                     ⚡ त्वरित हाजिरी व GPS
                   </h3>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400">
                     शिक्षक व छात्र Punch IN/OUT
                   </p>
                 </div>
@@ -3046,7 +3231,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => setShowPunchDeskExpanded((p) => !p)}
-                className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] transition cursor-pointer"
+                className="px-2.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] transition cursor-pointer"
               >
                 {showPunchDeskExpanded ? "▲ हाजिरी डेस्क छुपाएं" : "▼ 1-टैप हाजिरी खोलें"}
               </button>
@@ -3061,56 +3246,18 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* Card 2: QR & AI Face Kiosk */}
-          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3.5 border border-slate-200/80 dark:border-slate-700 shadow-xs flex flex-col justify-between gap-2.5">
+          {/* Card 2: Live Bus Location Tracking */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3 border border-slate-200/80 dark:border-slate-700 shadow-xs flex flex-col justify-between gap-2">
             <div className="flex items-start justify-between gap-2">
               <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-purple-50 dark:bg-purple-900/40 text-purple-600 dark:text-purple-300 flex items-center justify-center shrink-0">
-                  <Camera className="w-4 h-4" />
-                </div>
-                <div>
-                  <h3 className="font-black text-xs sm:text-sm text-slate-800 dark:text-white">
-                    📷 QR व AI Face स्कैनर
-                  </h3>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    ID QR या चेहरा पहचान हाजिरी
-                  </p>
-                </div>
-              </div>
-              <span className="px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold shrink-0">
-                KYC AI
-              </span>
-            </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <button
-                type="button"
-                onClick={() => setShowFaceKioskModal(true)}
-                className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-[11px] transition cursor-pointer"
-              >
-                🤖 AI Face Kiosk
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowUniversalScannerModal(true)}
-                className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold text-[11px] transition cursor-pointer"
-              >
-                📷 QR Scanner
-              </button>
-            </div>
-          </div>
-
-          {/* Card 3: Live Bus Location Tracking */}
-          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3.5 border border-slate-200/80 dark:border-slate-700 shadow-xs flex flex-col justify-between gap-2.5 md:col-span-2 xl:col-span-1">
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-amber-50 dark:bg-amber-900/40 text-amber-600 dark:text-amber-300 flex items-center justify-center shrink-0">
+                <div className="w-8 h-8 rounded-xl bg-amber-50 dark:bg-amber-900/40 text-amber-600 dark:text-amber-300 flex items-center justify-center shrink-0">
                   <Bus className="w-4 h-4" />
                 </div>
                 <div>
                   <h3 className="font-black text-xs sm:text-sm text-slate-800 dark:text-white">
                     🚌 Live Bus Location
                   </h3>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400">
                     {activeBusCount > 0
                       ? `${activeBusCount} बस लाइव • ${busStudentsCount} छात्र`
                       : `${liveBuses.length} बसें • ${busStudentsCount} छात्र पंजीकृत`}
@@ -3151,45 +3298,20 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               </button>
             </div>
           </div>
-        </div>
 
-        {/* Collapsible Quick Punch Desk */}
-        {showPunchDeskExpanded && school && (
-          <div className="max-h-[420px] overflow-y-auto rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
-            <UniversalAttendanceDesk
-              school={school}
-              classes={displayedClasses}
-              students={displayedStudents}
-              teachers={displayedTeachers}
-              staff={staffList}
-              onOpenScanner={() => setShowUniversalScannerModal(true)}
-              onOpenLocationModal={() => setShowSchoolLocationModal(true)}
-              onViewClassAttendance={(clsId) => {
-                const found = displayedClasses.find((c) => c.id === clsId);
-                if (found) {
-                  setSelectedClass(found);
-                  setView("attendance");
-                }
-              }}
-            />
-          </div>
-        )}
-
-        {/* ── ROW 2 (3-COLUMN): PENDING FACE ENROLLMENT + FEE DISCOUNTS LIST + ADMISSION/ADVANCE DUES ── */}
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-          {/* Card 4: Fee Discounts Summary Card */}
+          {/* Card 3: Fee Discounts Summary Card */}
           {(() => {
             const discEntries = getCombinedDiscountLedger(schoolId, displayedStudents, allFees);
             const totalDiscAmt = discEntries.reduce((s, d) => s + (Number(d.discountAmount) || 0), 0);
             return (
-              <div className="bg-white dark:bg-slate-800 rounded-2xl p-3.5 border border-emerald-200/80 dark:border-emerald-800/50 shadow-xs flex flex-col justify-between gap-2.5">
-                <div className="flex items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-700 pb-2">
+              <div className="bg-white dark:bg-slate-800 rounded-2xl p-3 border border-emerald-200/80 dark:border-emerald-800/50 shadow-xs flex flex-col justify-between gap-2">
+                <div className="flex items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-700 pb-1.5">
                   <div className="min-w-0">
                     <h3 className="text-xs sm:text-sm font-black text-slate-800 dark:text-white truncate">
                       🏷️ Fee Discounts ({DISPLAY_DISCOUNT_LABEL})
                     </h3>
                     <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                      {discEntries.length} छूट • कुल ₹{totalDiscAmt.toLocaleString("en-IN")} माफ (Next month due नहीं जुड़ेगा)
+                      {discEntries.length} छूट • कुल ₹{totalDiscAmt.toLocaleString("en-IN")} माफ
                     </p>
                   </div>
                   <button
@@ -3197,20 +3319,20 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                     onClick={() => setView("discount_list")}
                     className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black shrink-0 cursor-pointer"
                   >
-                    लिस्ट देखें →
+                    लिस्ट →
                   </button>
                 </div>
 
                 {discEntries.length === 0 ? (
-                  <div className="py-5 text-center text-xs font-semibold text-slate-400">
+                  <div className="py-4 text-center text-xs font-semibold text-slate-400">
                     अभी तक कोई Discount दर्ज नहीं है।
                   </div>
                 ) : (
-                  <div className="space-y-1.5 max-h-40 overflow-y-auto pr-0.5">
+                  <div className="space-y-1.5 max-h-28 overflow-y-auto pr-0.5">
                     {discEntries.slice(0, 6).map((d) => (
                       <div
                         key={d.id}
-                        className="flex items-center justify-between gap-2 p-2 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-800/40"
+                        className="flex items-center justify-between gap-2 p-1.5 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-800/40"
                       >
                         <div className="min-w-0">
                           <p className="text-xs font-bold text-slate-800 dark:text-white truncate">
@@ -3231,66 +3353,14 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             );
           })()}
 
-          {/* Card 5: Pending Face Enrollment List */}
-          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3.5 border border-slate-200/80 dark:border-slate-700 shadow-xs flex flex-col justify-between gap-2.5">
-            <div className="flex items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-700 pb-2">
-              <div className="min-w-0">
-                <h3 className="text-xs sm:text-sm font-black text-slate-800 dark:text-white truncate">
-                  📸 फेस पहचान बाकी (Pending Face)
-                </h3>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                  {enrolledFaceCount}/{displayedStudents.length} सेव • {pendingFaceStudents.length} बाकी
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowFaceKioskModal(true)}
-                className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-black shrink-0 cursor-pointer"
-              >
-                + चेहरा जोड़ें
-              </button>
-            </div>
-
-            {pendingFaceStudents.length === 0 ? (
-              <div className="py-6 text-center text-xs font-semibold text-emerald-600 dark:text-emerald-400">
-                ✅ सभी छात्रों का चेहरा सेव है!
-              </div>
-            ) : (
-              <div className="space-y-1.5 max-h-40 overflow-y-auto pr-0.5">
-                {pendingFaceStudents.slice(0, 15).map((st) => (
-                  <div
-                    key={`pface-${st.id}`}
-                    className="flex items-center justify-between gap-2 p-2 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/70 dark:border-slate-700"
-                  >
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold text-slate-800 dark:text-white truncate">
-                        {st.name}
-                      </p>
-                      <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
-                        {getClassLabel(st.classId)} • Roll #{st.rollNo || "—"}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setShowFaceKioskModal(true)}
-                      className="px-2 py-1 rounded-lg bg-amber-100 hover:bg-amber-200 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 text-[10px] font-black shrink-0 cursor-pointer"
-                    >
-                      📸 सेव करें
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Card 5: Combined Admission Arrears & 1-Month Advance Fee */}
-          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3.5 border border-slate-200/80 dark:border-slate-700 shadow-xs flex flex-col justify-between gap-2.5">
-            <div className="flex items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-700 pb-2">
+          {/* Card 6: Combined Admission Arrears & 1-Month Advance Fee */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3 border border-slate-200/80 dark:border-slate-700 shadow-xs flex flex-col justify-between gap-2">
+            <div className="flex items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-700 pb-1.5">
               <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-900 p-0.5 rounded-xl">
                 <button
                   type="button"
                   onClick={() => setDuesCardTab("admission")}
-                  className={`px-2 py-1 rounded-lg text-[10px] font-black transition cursor-pointer ${
+                  className={`px-2 py-0.5 rounded-lg text-[10px] font-black transition cursor-pointer ${
                     duesCardTab === "admission"
                       ? "bg-white dark:bg-slate-700 text-rose-700 dark:text-rose-300 shadow-xs"
                       : "text-slate-500 dark:text-slate-400"
@@ -3301,7 +3371,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                 <button
                   type="button"
                   onClick={() => setDuesCardTab("advance")}
-                  className={`px-2 py-1 rounded-lg text-[10px] font-black transition cursor-pointer ${
+                  className={`px-2 py-0.5 rounded-lg text-[10px] font-black transition cursor-pointer ${
                     duesCardTab === "advance"
                       ? "bg-white dark:bg-slate-700 text-amber-700 dark:text-amber-300 shadow-xs"
                       : "text-slate-500 dark:text-slate-400"
@@ -3319,17 +3389,17 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
             {duesCardTab === "admission" ? (
               studentsWithAdmissionDues.length === 0 ? (
-                <div className="py-6 text-center text-xs font-semibold text-slate-500 dark:text-slate-400">
+                <div className="py-4 text-center text-xs font-semibold text-slate-500 dark:text-slate-400">
                   ✅ सभी छात्रों का एडमिशन शुल्क पूर्ण जमा है।
                 </div>
               ) : (
-                <div className="space-y-1.5 max-h-40 overflow-y-auto pr-0.5">
+                <div className="space-y-1.5 max-h-28 overflow-y-auto pr-0.5">
                   {studentsWithAdmissionDues.slice(0, 12).map((st) => {
                     const due = Number(st.admissionDueBalance || 0);
                     return (
                       <div
                         key={st.id}
-                        className="flex items-center justify-between gap-2 p-2 rounded-xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-200/70 dark:border-rose-900/50"
+                        className="flex items-center justify-between gap-2 p-1.5 rounded-xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-200/70 dark:border-rose-900/50"
                       >
                         <div className="min-w-0">
                           <p className="text-xs font-bold text-slate-800 dark:text-white truncate">
@@ -3370,17 +3440,17 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                 </div>
               )
             ) : studentsWithAdvanceDues.length === 0 ? (
-              <div className="py-6 text-center text-xs font-semibold text-slate-500 dark:text-slate-400">
+              <div className="py-4 text-center text-xs font-semibold text-slate-500 dark:text-slate-400">
                 ✅ सभी नए छात्रों की 1-माह एडवांस फीस जमा है।
               </div>
             ) : (
-              <div className="space-y-1.5 max-h-40 overflow-y-auto pr-0.5">
+              <div className="space-y-1.5 max-h-28 overflow-y-auto pr-0.5">
                 {studentsWithAdvanceDues.slice(0, 12).map((st) => {
                   const advDue = Number(st.advanceMonthlyFeeDue || st.monthlyFee || 0);
                   return (
                     <div
                       key={st.id}
-                      className="flex items-center justify-between gap-2 p-2 rounded-xl bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200/70 dark:border-amber-900/50"
+                      className="flex items-center justify-between gap-2 p-1.5 rounded-xl bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200/70 dark:border-amber-900/50"
                     >
                       <div className="min-w-0">
                         <p className="text-xs font-bold text-slate-800 dark:text-white truncate">
@@ -3422,9 +3492,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             )}
           </div>
 
-          {/* Card 6: Absenty Action Center (Clean Light Professional Card) */}
-          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3.5 border border-rose-200/80 dark:border-rose-900/60 shadow-xs flex flex-col justify-between gap-2.5 md:col-span-2 xl:col-span-1">
-            <div className="flex items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-700 pb-2">
+          {/* Card 7: Absenty Action Center */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3 border border-rose-200/80 dark:border-rose-900/60 shadow-xs flex flex-col justify-between gap-2 sm:col-span-2">
+            <div className="flex items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-700 pb-1.5">
               <div className="flex items-center gap-2 min-w-0">
                 <div className="w-7 h-7 rounded-lg bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
                   <AlertCircle className="w-4 h-4" />
@@ -3455,15 +3525,15 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             </div>
 
             {absenteeTrackerData.consecutiveAbsentees.length === 0 ? (
-              <div className="py-6 text-center text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+              <div className="py-4 text-center text-xs font-semibold text-emerald-600 dark:text-emerald-400">
                 ✅ कोई लगातार अनुपस्थित छात्र नहीं है।
               </div>
             ) : (
-              <div className="space-y-1.5 max-h-40 overflow-y-auto pr-0.5">
+              <div className="space-y-1.5 max-h-28 overflow-y-auto pr-0.5">
                 {absenteeTrackerData.consecutiveAbsentees.map((st) => (
                   <div
                     key={`abs-${st.id}`}
-                    className="flex items-center justify-between gap-2 p-2 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/70 dark:border-slate-700"
+                    className="flex items-center justify-between gap-2 p-1.5 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/70 dark:border-slate-700"
                   >
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5">
@@ -3501,6 +3571,28 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             )}
           </div>
         </div>
+
+        {/* Collapsible Quick Punch Desk */}
+        {showPunchDeskExpanded && school && (
+          <div className="max-h-[380px] overflow-y-auto rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+            <UniversalAttendanceDesk
+              school={school}
+              classes={displayedClasses}
+              students={displayedStudents}
+              teachers={displayedTeachers}
+              staff={staffList}
+              onOpenScanner={() => setShowUniversalScannerModal(true)}
+              onOpenLocationModal={() => setShowSchoolLocationModal(true)}
+              onViewClassAttendance={(clsId) => {
+                const found = displayedClasses.find((c) => c.id === clsId);
+                if (found) {
+                  setSelectedClass(found);
+                  setView("attendance");
+                }
+              }}
+            />
+          </div>
+        )}
 
         {/* IN-PLACE 1-TAP DUES SETTLEMENT MODAL */}
         {duesSettlementModal && (
@@ -3589,10 +3681,10 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           </div>
         )}
 
-        {/* ── ROW 3 (2-COLUMN): COMPACT 7-DAY ATTENDANCE & FEE COLLECTION CHARTS ── */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {/* ── ROW 3 (2-COLUMN MAX): COMPACT 7-DAY ATTENDANCE & FEE COLLECTION CHARTS ── */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {/* Compact Attendance Chart */}
-          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3.5 border border-slate-200/80 dark:border-slate-700 shadow-xs flex flex-col justify-between">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3 border border-slate-200/80 dark:border-slate-700 shadow-xs flex flex-col justify-between">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <span className="p-1.5 rounded-lg bg-teal-50 dark:bg-teal-900/40 text-teal-600 dark:text-teal-300">
@@ -3607,7 +3699,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               </span>
             </div>
 
-            <div className="mt-3 grid grid-cols-7 gap-1.5 items-end h-28 border-b border-slate-100 dark:border-slate-700/60 pb-1.5">
+            <div className="mt-2.5 grid grid-cols-7 gap-1 items-end h-24 border-b border-slate-100 dark:border-slate-700/60 pb-1">
               {sevenDayAttendanceData.map((d, idx) => {
                 const barHeightPct = Math.max(15, Math.min(100, d.presentPct));
                 const isHigh = d.presentPct >= 90;
@@ -3616,7 +3708,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                     <span className="text-[9px] font-bold text-slate-600 dark:text-slate-300 mb-0.5 tabular-nums">
                       {d.presentPct}%
                     </span>
-                    <div className="w-full max-w-[20px] bg-slate-100 dark:bg-slate-700/50 rounded-t-lg overflow-hidden h-16 flex items-end">
+                    <div className="w-full max-w-[18px] bg-slate-100 dark:bg-slate-700/50 rounded-t-lg overflow-hidden h-14 flex items-end">
                       <div
                         style={{ height: `${barHeightPct}%` }}
                         className={`w-full rounded-t-lg ${
@@ -3633,13 +3725,13 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             </div>
 
             <div className="mt-2 flex items-center justify-between text-[11px]">
-              <span className="text-slate-500">
+              <span className="text-slate-500 text-[10px]">
                 उपस्थित: <strong className="text-emerald-600">{sevenDayAttendanceData[6]?.presentCount}</strong> | अनुपस्थित: <strong className="text-rose-600">{sevenDayAttendanceData[6]?.absentCount}</strong>
               </span>
               <button
                 type="button"
                 onClick={() => setView("classes")}
-                className="text-blue-600 dark:text-blue-400 font-bold hover:underline cursor-pointer"
+                className="text-blue-600 dark:text-blue-400 font-bold hover:underline cursor-pointer text-[10px]"
               >
                 हाजिरी देखें →
               </button>
@@ -3647,7 +3739,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           </div>
 
           {/* Compact Fee Collection Chart */}
-          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3.5 border border-slate-200/80 dark:border-slate-700 shadow-xs flex flex-col justify-between">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3 border border-slate-200/80 dark:border-slate-700 shadow-xs flex flex-col justify-between">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <span className="p-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-300">
@@ -3662,7 +3754,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               </span>
             </div>
 
-            <div className="mt-3 grid grid-cols-7 gap-1.5 items-end h-28 border-b border-slate-100 dark:border-slate-700/60 pb-1.5">
+            <div className="mt-2.5 grid grid-cols-7 gap-1 items-end h-24 border-b border-slate-100 dark:border-slate-700/60 pb-1">
               {sevenDayFeeData.map((f, idx) => {
                 const maxAmt = Math.max(...sevenDayFeeData.map((x) => x.amount), 35000);
                 const barHeightPct = Math.max(15, Math.min(100, Math.round((f.amount / maxAmt) * 100)));
@@ -3671,7 +3763,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                     <span className="text-[9px] font-bold text-slate-600 dark:text-slate-300 mb-0.5 tabular-nums">
                       ₹{(f.amount / 1000).toFixed(0)}k
                     </span>
-                    <div className="w-full max-w-[20px] bg-slate-100 dark:bg-slate-700/50 rounded-t-lg overflow-hidden h-16 flex items-end">
+                    <div className="w-full max-w-[18px] bg-slate-100 dark:bg-slate-700/50 rounded-t-lg overflow-hidden h-14 flex items-end">
                       <div
                         style={{ height: `${barHeightPct}%` }}
                         className="w-full rounded-t-lg bg-indigo-500"
@@ -3686,13 +3778,13 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             </div>
 
             <div className="mt-2 flex items-center justify-between text-[11px]">
-              <span className="text-slate-500">
+              <span className="text-slate-500 text-[10px]">
                 माह कुल: <strong className="text-emerald-600">₹{currentMonthCollection.toLocaleString("en-IN")}</strong>
               </span>
               <button
                 type="button"
                 onClick={() => setView("fees")}
-                className="text-emerald-600 dark:text-emerald-400 font-bold hover:underline cursor-pointer"
+                className="text-emerald-600 dark:text-emerald-400 font-bold hover:underline cursor-pointer text-[10px]"
               >
                 फीस काउंटर →
               </button>
@@ -3700,10 +3792,10 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* ── ROW 4 (2-COLUMN): FEE DUE LIST + BIRTHDAYS & CALENDAR ── */}
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 items-start">
+        {/* ── ROW 4 (2-COLUMN MAX): FEE DUE LIST + BIRTHDAYS & CALENDAR (HALF-PAGE) ── */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
           {/* Left: Compact Fee Due List */}
-          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3.5 border border-slate-200/80 dark:border-slate-700 shadow-xs space-y-2.5">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-3 border border-slate-200/80 dark:border-slate-700 shadow-xs space-y-2">
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <div className="flex items-center gap-2">
                 <span className="p-1.5 rounded-lg bg-amber-50 dark:bg-amber-900/40 text-amber-600 dark:text-amber-300">

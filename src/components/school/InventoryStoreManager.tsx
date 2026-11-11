@@ -1,9 +1,10 @@
 // @ts-nocheck
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   ShoppingBag, Plus, Search, Tag, AlertTriangle, Printer, Trash2,
   Edit3, CheckCircle2, Check, IndianRupee, QrCode, Filter, ChevronLeft,
-  Package, Receipt, ArrowRight, Sparkles, RefreshCw, Clock
+  Package, Receipt, ArrowRight, Sparkles, RefreshCw, Clock,
+  Camera, Upload, ImageIcon, X
 } from "lucide-react";
 import type {
   School, SchoolStudent, SchoolClass,
@@ -274,6 +275,24 @@ export const InventoryStoreManager: React.FC<Props> = ({
   const [itemFormStock, setItemFormStock] = useState(25);
   const [itemFormLowAlert, setItemFormLowAlert] = useState(5);
   const [itemFormUnit, setItemFormUnit] = useState("Pcs");
+  const [itemFormImageUrl, setItemFormImageUrl] = useState("");
+  const itemFileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleItemImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 3 * 1024 * 1024) {
+      alert("Kripya 3MB se kam size ki photo chunein.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        setItemFormImageUrl(reader.result);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
 
   // Quick Sale / Billing Modal
   const [showBillModal, setShowBillModal] = useState(false);
@@ -332,6 +351,7 @@ export const InventoryStoreManager: React.FC<Props> = ({
       stockQuantity: Number(itemFormStock) || 0,
       lowStockAlert: Number(itemFormLowAlert) || 5,
       unit: itemFormUnit || "Pcs",
+      imageUrl: itemFormImageUrl.trim() || undefined,
       updatedAt: new Date().toISOString()
     };
 
@@ -339,6 +359,7 @@ export const InventoryStoreManager: React.FC<Props> = ({
     setShowAddItemModal(false);
     setItemFormName("");
     setItemFormVariant("");
+    setItemFormImageUrl("");
   };
 
   // Delete Item
@@ -600,10 +621,21 @@ export const InventoryStoreManager: React.FC<Props> = ({
                             {item.itemCode}
                           </td>
                           <td className="p-3">
-                            <p className="font-black text-slate-900 dark:text-white">{item.name}</p>
-                            {item.sizeOrVariant && (
-                              <p className="text-[10px] text-slate-400 font-medium">Variant: {item.sizeOrVariant}</p>
-                            )}
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-700/80 overflow-hidden flex items-center justify-center shrink-0 border border-slate-200 dark:border-slate-600">
+                                {item.imageUrl ? (
+                                  <img src={item.imageUrl} alt={item.name} className="w-full h-full object-cover" />
+                                ) : (
+                                  <Package className="w-5 h-5 text-amber-500/70" />
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="font-black text-slate-900 dark:text-white truncate">{item.name}</p>
+                                {item.sizeOrVariant && (
+                                  <p className="text-[10px] text-slate-400 font-medium truncate">Variant: {item.sizeOrVariant}</p>
+                                )}
+                              </div>
+                            </div>
                           </td>
                           <td className="p-3">
                             <span className="capitalize px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 font-bold text-[10px]">
@@ -871,6 +903,75 @@ export const InventoryStoreManager: React.FC<Props> = ({
                 placeholder="e.g. School Track Pant, Maths Notebook"
                 className="w-full px-3 py-2 border rounded-xl dark:border-slate-600 dark:bg-slate-700 text-sm font-bold text-slate-800 dark:text-white"
               />
+            </div>
+
+            {/* ── PHOTO UPLOAD OPTION ── */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-bold text-slate-600 dark:text-slate-300">
+                  Item Photo (वस्तु की फोटो)
+                </label>
+                {itemFormImageUrl && (
+                  <button
+                    type="button"
+                    onClick={() => setItemFormImageUrl("")}
+                    className="text-[11px] text-rose-500 hover:text-rose-600 font-bold cursor-pointer"
+                  >
+                    हटाएं (Remove)
+                  </button>
+                )}
+              </div>
+
+              <input
+                type="file"
+                ref={itemFileInputRef}
+                accept="image/*"
+                onChange={handleItemImageUpload}
+                className="hidden"
+              />
+
+              {itemFormImageUrl ? (
+                <div className="relative group rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-700 h-28 flex items-center justify-center">
+                  <img
+                    src={itemFormImageUrl}
+                    alt="Product Preview"
+                    className="w-full h-full object-contain p-1"
+                  />
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => itemFileInputRef.current?.click()}
+                      className="px-2.5 py-1 rounded-lg bg-white text-slate-900 text-xs font-bold shadow-md cursor-pointer hover:bg-slate-100"
+                    >
+                      फोटो बदलें
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setItemFormImageUrl("")}
+                      className="px-2.5 py-1 rounded-lg bg-rose-600 text-white text-xs font-bold shadow-md cursor-pointer hover:bg-rose-700"
+                    >
+                      हटाएं
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  onClick={() => itemFileInputRef.current?.click()}
+                  className="border-2 border-dashed border-slate-300 dark:border-slate-600 hover:border-amber-500 dark:hover:border-amber-400 rounded-2xl p-3 text-center cursor-pointer transition bg-slate-50/60 dark:bg-slate-700/30 hover:bg-amber-50/40 dark:hover:bg-slate-700/60 flex items-center justify-center gap-3 group"
+                >
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 flex items-center justify-center group-hover:scale-105 transition shrink-0">
+                    <Camera className="w-4 h-4" />
+                  </div>
+                  <div className="text-left">
+                    <p className="text-xs font-bold text-slate-800 dark:text-white leading-tight">
+                      फोटो अपलोड करें (Click to Upload Photo)
+                    </p>
+                    <p className="text-[10px] text-slate-400 leading-tight">
+                      Camera से खींचें या Gallery से फोटो चुनें (Max 3MB)
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-3">

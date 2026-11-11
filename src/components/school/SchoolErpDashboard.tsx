@@ -261,8 +261,8 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
         {/* TAB 1: OVERVIEW DASHBOARD */}
         {activeTab === "dashboard" && (
           <div className="space-y-6 animate-in fade-in">
-            {/* Institutional Summary Cards */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+            {/* Institutional Summary Cards (Max 2 Per Row) */}
+            <div className="grid grid-cols-2 gap-3 sm:gap-4">
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm hover:border-slate-700 transition">
                 <div className="flex items-center justify-between text-slate-400 text-xs font-bold mb-1">
                   <span>TOTAL STUDENTS</span>

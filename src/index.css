@@ -61,4 +61,22 @@
     height: 100% !important;
     page-break-inside: avoid !important;
   }
+
+  /* Question Paper Print styling for 1-2 pages fit */
+  #exam-question-paper-print {
+    display: block !important;
+    width: 100% !important;
+    max-width: 210mm !important;
+    margin: 0 auto !important;
+    padding: 6mm 8mm !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+  }
+
+  .break-inside-avoid {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
 }

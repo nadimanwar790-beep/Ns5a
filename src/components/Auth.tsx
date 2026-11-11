@@ -2197,13 +2197,13 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full py-3.5 rounded-xl text-sm font-black tracking-wider text-white bg-slate-900 hover:bg-black dark:bg-indigo-600 dark:hover:bg-indigo-500 shadow-md transition-all flex items-center justify-center gap-2 uppercase cursor-pointer active:scale-[0.99]"
+                className="w-full py-3.5 rounded-xl text-sm font-black tracking-wider text-white bg-black hover:bg-neutral-900 border border-neutral-800 shadow-md shadow-black/40 transition-all flex items-center justify-center gap-2 uppercase cursor-pointer active:scale-[0.99]"
               >
                 {loading ? <Loader2 size={16} className="animate-spin text-white" /> : <span>LOGIN</span>}
                 <ArrowRight size={16} />
               </button>
 
-              {/* ── 1-TAP FACE ID LOGIN BUTTON (BINA QR BINA PASSWORD) ── */}
+              {/* ── 1-TAP FACE ID LOGIN BUTTON (LIGHT GRAY THEME) ── */}
               <button
                 type="button"
                 onClick={() => {
@@ -2211,25 +2211,23 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
                   setShowFaceLoginModal(true);
                 }}
                 disabled={loading}
-                className="w-full py-3 px-4 rounded-xl text-sm font-bold tracking-wide text-slate-800 dark:text-slate-100 bg-gradient-to-r from-emerald-500/15 via-teal-500/15 to-cyan-500/15 hover:from-emerald-500/25 hover:via-teal-500/25 hover:to-cyan-500/25 border border-emerald-500/40 dark:border-emerald-400/40 shadow-xs transition-all flex items-center justify-between gap-2.5 cursor-pointer active:scale-[0.99]"
+                className="w-full py-3 px-4 rounded-xl text-sm font-bold tracking-wide text-zinc-800 dark:text-zinc-200 bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800/80 dark:hover:bg-zinc-800 border border-zinc-300/80 dark:border-zinc-700 shadow-xs transition-all flex items-center justify-between gap-2.5 cursor-pointer active:scale-[0.99]"
               >
-                <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
-                  <ScanFace size={18} />
-                </div>
-                <div className="text-left flex-1 min-w-0">
-                  <p className="text-xs font-black tracking-wide text-slate-900 dark:text-white leading-tight flex items-center gap-1.5">
-                    Face ID Login (फेस से लॉगिन)
-                    <span className="px-1.5 py-0.5 rounded text-[9px] bg-emerald-600 text-white font-black uppercase tracking-wide">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-lg bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 flex items-center justify-center shrink-0 border border-zinc-200 dark:border-zinc-700 shadow-2xs">
+                    <ScanFace size={18} />
+                  </div>
+                  <p className="text-xs sm:text-sm font-bold tracking-wide text-zinc-800 dark:text-zinc-200 leading-tight flex items-center gap-1.5 truncate">
+                    <span>Face ID Login (फेस से लॉगिन)</span>
+                    <span className="px-1.5 py-0.5 rounded text-[9px] bg-zinc-200/90 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300 border border-zinc-300 dark:border-zinc-600 font-bold uppercase tracking-wide">
                       AI Instant
                     </span>
                   </p>
-                  <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight">
-                    बिना QR व बिना पासवर्ड के केवल चेहरा दिखाएं
-                  </p>
                 </div>
-                <ArrowRight size={16} className="text-emerald-500 shrink-0" />
+                <ArrowRight size={16} className="text-zinc-500 dark:text-zinc-400 shrink-0" />
               </button>
 
+              {/* ── 1-TAP QR CODE LOGIN BUTTON (LIGHT GRAY THEME) ── */}
               <button
                 type="button"
                 onClick={() => {
@@ -2237,25 +2235,25 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
                   setShowQrModal(true);
                 }}
                 disabled={loading}
-                className="w-full py-3 px-4 rounded-xl text-sm font-bold tracking-wide text-slate-800 dark:text-slate-100 bg-gradient-to-r from-amber-500/15 via-orange-500/15 to-yellow-500/15 hover:from-amber-500/25 hover:via-orange-500/25 hover:to-yellow-500/25 border border-amber-500/35 dark:border-amber-400/35 shadow-xs transition-all flex items-center justify-between gap-2.5 cursor-pointer active:scale-[0.99]"
+                className="w-full py-3 px-4 rounded-xl text-sm font-bold tracking-wide text-zinc-800 dark:text-zinc-200 bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800/80 dark:hover:bg-zinc-800 border border-zinc-300/80 dark:border-zinc-700 shadow-xs transition-all flex items-center justify-between gap-2.5 cursor-pointer active:scale-[0.99]"
               >
-                <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
-                  <QrCode size={18} />
-                </div>
-                <div className="text-left flex-1 min-w-0">
-                  <p className="text-xs font-black tracking-wide text-slate-900 dark:text-white leading-tight">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-lg bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 flex items-center justify-center shrink-0 border border-zinc-200 dark:border-zinc-700 shadow-2xs">
+                    <QrCode size={18} />
+                  </div>
+                  <p className="text-xs sm:text-sm font-bold tracking-wide text-zinc-800 dark:text-zinc-200 leading-tight truncate">
                     Login with ID Card QR Code
                   </p>
-                  <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight">
-                    ID card scan karke bina password ke direct login karein
-                  </p>
                 </div>
-                <ArrowRight size={16} className="text-amber-500 shrink-0" />
+                <ArrowRight size={16} className="text-zinc-500 dark:text-zinc-400 shrink-0" />
               </button>
 
-              <div className="relative my-3 flex items-center justify-center">
-                <div className="border-t border-slate-200 dark:border-slate-800 w-full" />
-                <span className="bg-slate-50 dark:bg-slate-950 px-3 text-[11px] font-bold text-slate-400 uppercase tracking-wider absolute">OR</span>
+              {/* ── HIGHLIGHTED DIVIDER ABOVE GOOGLE BUTTON ── */}
+              <div className="relative my-4 flex items-center justify-center">
+                <div className="w-full border-t-2 border-slate-400 dark:border-slate-600 shadow-xs" />
+                <span className="bg-slate-100 dark:bg-slate-900 border-2 border-slate-400 dark:border-slate-600 px-3.5 py-0.5 rounded-full text-[11px] font-extrabold text-slate-800 dark:text-slate-200 uppercase tracking-wider shadow-sm absolute">
+                  OR
+                </span>
               </div>
 
               <button
@@ -2403,6 +2401,14 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
                 {loading ? <Loader2 size={16} className="animate-spin text-white" /> : <span>CREATE ACCOUNT</span>}
                 <CheckCircle2 size={16} />
               </button>
+
+              {/* ── HIGHLIGHTED DIVIDER ABOVE GOOGLE BUTTON ── */}
+              <div className="relative my-4 flex items-center justify-center">
+                <div className="w-full border-t-2 border-slate-300 dark:border-slate-700 shadow-xs" />
+                <span className="bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 px-3.5 py-0.5 rounded-full text-[11px] font-extrabold text-slate-700 dark:text-slate-200 uppercase tracking-wider shadow-sm absolute">
+                  OR
+                </span>
+              </div>
 
               <button
                 type="button"

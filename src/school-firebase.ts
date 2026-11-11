@@ -4515,6 +4515,7 @@ export const getClassLectures = async (schoolId: string, classId?: string, date?
   if (classId) {
     const cleanCid = classId.toLowerCase().replace(/[^a-z0-9]/g, "");
     const classFiltered = filtered.filter(l => {
+      if (l.isUniversal === true || l.classId === "all" || l.classId === "universal") return true;
       if (l.classId === classId || l.className === classId) return true;
       const cleanLCid = (l.classId || "").toLowerCase().replace(/[^a-z0-9]/g, "");
       const cleanLName = (l.className || "").toLowerCase().replace(/[^a-z0-9]/g, "");

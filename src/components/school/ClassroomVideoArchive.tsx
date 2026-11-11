@@ -3,7 +3,8 @@ import React, { useState, useEffect, useMemo } from "react";
 import {
   Youtube, Calendar, BookOpen, Clock, User, Plus, Trash2, Edit3,
   Search, Play, ChevronLeft, ChevronRight, Video, Sparkles, Filter,
-  Layers, CheckCircle2, AlertCircle, Save, X, ExternalLink, Crown
+  Layers, CheckCircle2, AlertCircle, Save, X, ExternalLink, Crown,
+  Radio, Globe, Bell, StopCircle, Share2
 } from "lucide-react";
 import {
   type School, type SchoolClass, type SchoolSession, type SchoolTeacher, type SchoolSubject,
@@ -13,6 +14,7 @@ import {
   getClassLectures, saveClassLecture, deleteClassLecture,
   extractYouTubeVideoId, generateId
 } from "../../school-firebase";
+import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 import { CustomPlayer } from "../CustomPlayer";
 import { rotateScreen } from "../../utils/displayPrefs";
 
@@ -60,7 +62,10 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
   const isTeacher = currentUserRole === "TEACHER";
   const canEdit = isAdmin || isTeacher;
 
-  // Hierarchical State
+  // View Tabs: LIVE vs RECORDED vs UNIVERSAL
+  const [activeTab, setActiveTab] = useState<"LIVE" | "RECORDED" | "UNIVERSAL">("RECORDED");
+
+  // Hierarchical Class State
   const defaultClass = studentClassId
     ? classes.find(c => c.id === studentClassId) || classes[0]
     : classes[0];
@@ -87,12 +92,16 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
   const [editingLecture, setEditingLecture] = useState<DailyClassLecture | null>(null);
 
   // Form State
+  const [formIsLive, setFormIsLive] = useState(false);
+  const [formIsUniversal, setFormIsUniversal] = useState(false);
+  const [formTargetClassId, setFormTargetClassId] = useState(selectedClassId || "");
   const [formPeriod, setFormPeriod] = useState<number>(1);
   const [formSubject, setFormSubject] = useState("");
   const [formTeacher, setFormTeacher] = useState(isTeacher ? currentTeacherName : "");
   const [formTopic, setFormTopic] = useState("");
   const [formUrl, setFormUrl] = useState("");
   const [formNotes, setFormNotes] = useState("");
+  const [formSendPush, setFormSendPush] = useState(true);
   const [saving, setSaving] = useState(false);
   const [formNotice, setFormNotice] = useState<string | null>(null);
 
@@ -101,8 +110,15 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
     if (!school?.id) return;
     setLoading(true);
     try {
-      const data = await getClassLectures(school.id, selectedClassId || undefined);
+      // Fetch all lectures for school so Live & Universal can be parsed
+      const data = await getClassLectures(school.id);
       setLectures(data);
+
+      // Auto switch to LIVE tab if there are active live streams
+      const hasLive = data.some(l => l.isLive === true);
+      if (hasLive && activeTab !== "LIVE" && !studentClassId) {
+        // keep user's current tab or default to live if just mounted
+      }
     } catch (e) {
       console.warn("Failed to load lectures:", e);
     } finally {
@@ -112,121 +128,217 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
 
   useEffect(() => {
     loadLectures();
-  }, [school?.id, selectedClassId]);
+  }, [school?.id]);
 
   // Listen for external updates
   useEffect(() => {
     const handler = () => loadLectures();
     window.addEventListener("lectures-updated", handler);
     return () => window.removeEventListener("lectures-updated", handler);
-  }, [school?.id, selectedClassId]);
+  }, [school?.id]);
 
-  // Auto-sync selectedDate to the latest available lecture date if today has no lectures
-  useEffect(() => {
-    if (lectures.length > 0) {
-      const hasSelected = lectures.some(l => l.date === selectedDate);
-      if (!hasSelected) {
-        const latestDate = lectures[0]?.date;
-        if (latestDate) {
-          setSelectedDate(latestDate);
-          setSelectedMonth(latestDate.slice(5, 7));
-        }
-      }
-    }
-  }, [lectures, selectedDate]);
-
-  // Filter lectures for selected month and date
-  const monthLectures = useMemo(() => {
+  // Filter Active Live Streams
+  const liveLectures = useMemo(() => {
     return lectures.filter(l => {
+      if (l.isLive !== true) return false;
+      // If student is logged in, show their class live stream + universal live streams
+      if (studentClassId) {
+        return l.isUniversal === true || l.classId === "all" || l.classId === "universal" || l.classId === studentClassId;
+      }
+      return true;
+    });
+  }, [lectures, studentClassId]);
+
+  // Filter Universal School Archive
+  const universalLectures = useMemo(() => {
+    return lectures.filter(l => {
+      if (l.isLive === true) return false; // Show in live tab when active
+      return l.isUniversal === true || l.classId === "all" || l.classId === "universal";
+    });
+  }, [lectures]);
+
+  // Filter Recorded Class Lectures
+  const classRecordedLectures = useMemo(() => {
+    return lectures.filter(l => {
+      if (l.isLive === true) return false;
+      if (l.isUniversal === true || l.classId === "all" || l.classId === "universal") return false;
+      if (selectedClassId && l.classId !== selectedClassId) return false;
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchesTopic = (l.topic || "").toLowerCase().includes(q);
+        const matchesSub = (l.subjectName || "").toLowerCase().includes(q);
+        const matchesTeacher = (l.teacherName || "").toLowerCase().includes(q);
+        return matchesTopic || matchesSub || matchesTeacher;
+      }
+      return true;
+    });
+  }, [lectures, selectedClassId, searchQuery]);
+
+  // Filter recorded for selected month and date
+  const monthLectures = useMemo(() => {
+    return classRecordedLectures.filter(l => {
       if (!l.date) return false;
       const m = l.date.slice(5, 7);
       return m === selectedMonth;
     });
-  }, [lectures, selectedMonth]);
+  }, [classRecordedLectures, selectedMonth]);
 
-  // Distinct dates in this month that have videos
-  const activeDatesInMonth = useMemo(() => {
-    const set = new Set(monthLectures.map(l => l.date));
-    return Array.from(set).sort((a, b) => b.localeCompare(a));
-  }, [monthLectures]);
-
-  // Filter lectures for selected date with fallback to available month and class lectures
+  // Filter lectures for selected date
   const dateLectures = useMemo(() => {
-    const direct = lectures.filter(l => l.date === selectedDate);
+    const direct = monthLectures.filter(l => l.date === selectedDate);
     if (direct.length > 0) return direct;
     if (monthLectures.length > 0) return monthLectures;
-    if (lectures.length > 0) return lectures.slice(0, 8);
+    if (classRecordedLectures.length > 0) return classRecordedLectures.slice(0, 10);
     return [];
-  }, [lectures, selectedDate, monthLectures]);
+  }, [classRecordedLectures, selectedDate, monthLectures]);
 
-  // Open add modal for a specific period or general
-  const handleOpenAdd = (periodNumber = 1, defaultSub = "") => {
+  // Open add modal for live stream or recorded lecture
+  const handleOpenAdd = (isLiveMode = false, periodNumber = 1, defaultSub = "") => {
     setEditingLecture(null);
+    setFormIsLive(isLiveMode);
+    setFormIsUniversal(false);
+    setFormTargetClassId(selectedClassId || classes[0]?.id || "");
     setFormPeriod(periodNumber);
     setFormSubject(defaultSub || (subjects[0]?.name || "Mathematics"));
     setFormTeacher(isTeacher ? currentTeacherName : (teachers[0]?.name || school?.principalName || "Teacher"));
     setFormTopic("");
     setFormUrl("");
     setFormNotes("");
+    setFormSendPush(true);
     setFormNotice(null);
     setShowAddModal(true);
   };
 
   const handleOpenEdit = (lec: DailyClassLecture) => {
     setEditingLecture(lec);
+    setFormIsLive(lec.isLive === true);
+    setFormIsUniversal(lec.isUniversal === true || lec.classId === "all" || lec.classId === "universal");
+    setFormTargetClassId(lec.classId || selectedClassId || "");
     setFormPeriod(lec.periodNumber || 1);
     setFormSubject(lec.subjectName || "");
     setFormTeacher(lec.teacherName || "");
     setFormTopic(lec.topic || "");
     setFormUrl(lec.youtubeUrl || "");
     setFormNotes(lec.notes || "");
+    setFormSendPush(false);
     setFormNotice(null);
     setShowAddModal(true);
   };
 
+  // End live stream and move to recorded archive
+  const handleEndLiveStream = async (lec: DailyClassLecture) => {
+    if (!confirm(`क्या आप "${lec.topic || lec.subjectName}" का लाइव प्रसारण समाप्त करके इसे रिकॉर्डेड वीडियो में सहेजना चाहते हैं?`)) {
+      return;
+    }
+
+    try {
+      const updated: DailyClassLecture = {
+        ...lec,
+        isLive: false,
+        endedAt: new Date().toISOString(),
+      };
+      await saveClassLecture(updated);
+      await loadLectures();
+      alert("✅ लाइव सेशन समाप्त हुआ! यह वीडियो अब रिकॉर्डेड लेक्चर्स में सुरक्षित हो गया है।");
+    } catch (e: any) {
+      alert("Error: " + (e?.message || "Failed to end live stream"));
+    }
+  };
+
+  // Save / Publish Lecture
   const handleSaveLecture = async () => {
     if (!formUrl.trim()) {
-      setFormNotice("Kripya YouTube video link daalein!");
+      setFormNotice("कृपया YouTube वीडियो या लाइव स्ट्रीम का लिंक डालें!");
       return;
     }
 
     const videoId = extractYouTubeVideoId(formUrl);
     if (!videoId) {
-      setFormNotice("Invalid YouTube Link! Sahi link daalein (e.g. youtu.be/... ya youtube.com/watch?v=...)");
+      setFormNotice("अमान्य लिंक! कृपया सही YouTube लिंक डालें (उदा. youtube.com/live/..., youtu.be/... या watch?v=...)");
       return;
     }
 
-    if (!formSubject.trim()) {
-      setFormNotice("Subject ka naam chunein ya daalein!");
+    if (!formIsUniversal && !formSubject.trim()) {
+      setFormNotice("कृपया विषय (Subject) का नाम चुनें या दर्ज करें!");
       return;
     }
 
     setSaving(true);
     try {
+      const targetClass = classes.find(c => c.id === formTargetClassId) || selectedClass;
+      const finalClassId = formIsUniversal ? "universal" : (targetClass?.id || "class_1");
+      const finalClassName = formIsUniversal ? "Universal / All School" : (targetClass?.name || "Class");
+      const finalSubject = formIsUniversal ? (formSubject.trim() || "General School Broadcast") : formSubject.trim();
+      const finalTopic = formTopic.trim() || (formIsLive ? `Live ${finalSubject} Session` : `${finalSubject} Lecture`);
+
       const lecturePayload: DailyClassLecture = {
         id: editingLecture?.id || generateId("lec"),
         schoolId: school.id,
         sessionId: activeSession?.name || "2026-27",
-        classId: selectedClass?.id || selectedClassId || "class_1",
-        className: selectedClass?.name || "Class",
-        date: selectedDate,
-        month: selectedDate.slice(0, 7),
+        classId: finalClassId,
+        className: finalClassName,
+        date: selectedDate || todayIso,
+        month: (selectedDate || todayIso).slice(0, 7),
         periodNumber: Number(formPeriod) || 1,
-        periodTime: `Period ${formPeriod}`,
-        subjectName: formSubject.trim(),
-        topic: formTopic.trim() || `${formSubject} Lecture`,
+        periodTime: formIsLive ? "🔴 Live Stream" : `Period ${formPeriod}`,
+        subjectName: finalSubject,
+        topic: finalTopic,
         teacherName: formTeacher.trim() || currentTeacherName,
         teacherId: currentTeacherId || undefined,
         youtubeUrl: formUrl.trim(),
         youtubeVideoId: videoId,
+        isLive: formIsLive,
+        isUniversal: formIsUniversal,
+        streamStartedAt: formIsLive ? (editingLecture?.streamStartedAt || new Date().toISOString()) : undefined,
         notes: formNotes.trim(),
-        addedAt: new Date().toISOString(),
+        addedAt: editingLecture?.addedAt || new Date().toISOString(),
         addedBy: isAdmin ? "ADMIN" : "TEACHER",
       };
 
       await saveClassLecture(lecturePayload);
+
+      // Dispatch Mobile Push Notification if enabled
+      if (formSendPush) {
+        try {
+          if (formIsUniversal) {
+            // Broadcast to all students & staff
+            await sendSchoolPushNotification({
+              schoolId: school.id,
+              title: formIsLive ? `🔴 स्कूल लाइव प्रसारण: ${finalTopic}` : `📼 नया स्कूल वीडियो: ${finalTopic}`,
+              body: formIsLive
+                ? `स्कूल का लाइव प्रसारण शुरू हो चुका है! सभी छात्र व शिक्षक तुरंत जुड़ें।`
+                : `स्कूल का नया वीडियो उपलब्ध है: ${finalTopic}`,
+              type: "SCHOOL_NOTICE",
+              url: `/?schoolPortal=1&schoolTab=classroom_videos`,
+              urgent: true,
+            });
+          } else {
+            // Targeted to this class
+            await sendSchoolPushNotification({
+              schoolId: school.id,
+              classId: targetClass?.id,
+              title: formIsLive ? `🔴 ${finalSubject} Live Class: ${finalTopic}` : `📼 ${finalSubject} Video: ${finalTopic}`,
+              body: formIsLive
+                ? `${finalClassName} • ${finalSubject} की लाइव क्लास शुरू हो गई है! जुड़ने के लिए टैप करें।`
+                : `${finalClassName} के लिए ${finalSubject} का नया वीडियो लेक्चर उपलब्ध है।`,
+              type: "SCHOOL_NOTICE",
+              url: `/?schoolPortal=1&schoolTab=classroom_videos`,
+              urgent: true,
+            });
+          }
+        } catch (pushErr) {
+          console.warn("[Video Push Notification Error]", pushErr);
+        }
+      }
+
       setShowAddModal(false);
       await loadLectures();
+
+      if (formIsLive) {
+        setActiveTab("LIVE");
+      } else if (formIsUniversal) {
+        setActiveTab("UNIVERSAL");
+      }
     } catch (e: any) {
       setFormNotice(e?.message || "Failed to save lecture video");
     } finally {
@@ -235,7 +347,7 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
   };
 
   const handleDelete = async (lecId: string) => {
-    if (!confirm("Kya aap is lecture video ko delete karna chahte hain?")) return;
+    if (!confirm("क्या आप इस वीडियो को हटाना चाहते हैं?")) return;
     try {
       await deleteClassLecture(school.id, lecId);
       await loadLectures();
@@ -247,7 +359,7 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
   // DIRECT CUSTOM PLAYER VIEW (NO POPUP MODAL)
   if (playingLecture) {
     const lectureUrl = playingLecture.youtubeUrl || (playingLecture.youtubeVideoId ? `https://youtu.be/${playingLecture.youtubeVideoId}` : "");
-    const videoTitle = `${playingLecture.topic || "Class Lecture"} • ${playingLecture.subjectName || ""}`;
+    const videoTitle = `${playingLecture.isLive ? "🔴 LIVE: " : ""}${playingLecture.topic || "Class Lecture"} • ${playingLecture.subjectName || ""}`;
     const sortedLectures = [...dateLectures].sort((a, b) => (a.periodNumber || 0) - (b.periodNumber || 0));
     const currentIndex = sortedLectures.findIndex(l => l.id === playingLecture.id);
     const nextLec = currentIndex >= 0 && currentIndex < sortedLectures.length - 1 ? sortedLectures[currentIndex + 1] : null;
@@ -263,7 +375,7 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
               brandingLogo={school?.logoUrl}
               onBack={() => setPlayingLecture(null)}
               onNext={nextLec ? () => setPlayingLecture(nextLec) : undefined}
-              nextTitle={nextLec ? `${nextLec.topic || nextLec.subjectName} (Period ${nextLec.periodNumber})` : undefined}
+              nextTitle={nextLec ? `${nextLec.topic || nextLec.subjectName}` : undefined}
               onRotate={async () => {
                 await rotateScreen();
               }}
@@ -288,7 +400,7 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
           <div className="flex-1">
             <h3 className="text-xl font-black text-slate-800 dark:text-white flex items-center gap-2">
               <Crown className="text-amber-500" size={24} />
-              Classroom YouTube Video Lectures
+              Classroom YouTube Live &amp; Video Lectures
             </h3>
             <p className="text-xs text-slate-500 font-medium">{school?.name || "School"} Video Archive Desk</p>
           </div>
@@ -303,35 +415,16 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
               👑 Elite School Plan Required
             </span>
             <h4 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-2">
-              Classroom YouTube Video Lectures Archive
+              YouTube Live Streaming &amp; Video Lectures
             </h4>
             <p className="text-sm text-slate-600 dark:text-slate-300 max-w-xl mx-auto leading-relaxed">
-              Apne school ke students ke liye Class 1 se 12 tak ke daily YouTube lecture links, revision archive aur missed class videos jodne ke liye <strong>School Elite Subscription (2× Price)</strong> activate karein.
+              अपने स्कूल के छात्रों के लिए लाइव क्लासेस, ऑटो-रिकॉर्डेड लेक्चर्स और यूनिवर्सल स्कूल वीडियो हब एक्टिवेट करने के लिए <strong>School Elite Subscription (2× Price)</strong> अनलॉक करें।
             </p>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-xl mx-auto text-left pt-2">
-            <div className="bg-white dark:bg-slate-800 border border-amber-200 dark:border-amber-800 rounded-2xl p-3.5 shadow-sm">
-              <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Basic Elite</p>
-              <p className="text-lg font-black text-slate-800 dark:text-white">₹1,999<span className="text-xs font-normal text-slate-500">/mo</span></p>
-              <p className="text-[10px] text-emerald-600 font-bold mt-1">200 Students + YouTube Lectures</p>
-            </div>
-            <div className="bg-white dark:bg-slate-800 border-2 border-amber-400 rounded-2xl p-3.5 shadow-sm relative">
-              <span className="absolute -top-2 right-2 bg-amber-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full">POPULAR</span>
-              <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Standard Elite</p>
-              <p className="text-lg font-black text-slate-800 dark:text-white">₹3,999<span className="text-xs font-normal text-slate-500">/mo</span></p>
-              <p className="text-[10px] text-emerald-600 font-bold mt-1">500 Students + YouTube Lectures</p>
-            </div>
-            <div className="bg-white dark:bg-slate-800 border border-amber-200 dark:border-amber-800 rounded-2xl p-3.5 shadow-sm">
-              <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Pro Elite</p>
-              <p className="text-lg font-black text-slate-800 dark:text-white">₹7,999<span className="text-xs font-normal text-slate-500">/mo</span></p>
-              <p className="text-[10px] text-emerald-600 font-bold mt-1">2000 Students + Full Video Desk</p>
-            </div>
           </div>
 
           <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
             <a
-              href={`https://wa.me/918227070298?text=${encodeURIComponent(`Hello Super Admin, I want to upgrade school "${school?.name || 'My School'}" (ID: ${school?.id}) to the Elite Plan (2x Price) to unlock Classroom YouTube Video Lectures.`)}`}
+              href={`https://wa.me/918227070298?text=${encodeURIComponent(`Hello Super Admin, I want to upgrade school "${school?.name || 'My School'}" (ID: ${school?.id}) to the Elite Plan to unlock YouTube Live & Video Lectures.`)}`}
               target="_blank"
               rel="noreferrer"
               className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-sm shadow-lg shadow-emerald-600/30 flex items-center gap-2 cursor-pointer"
@@ -354,13 +447,13 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
   }
 
   return (
-    <div className="space-y-4 max-w-5xl mx-auto p-3 sm:p-5 animate-in fade-in duration-150">
-      {/* Top Banner & Header */}
-      <div className="bg-gradient-to-r from-red-900 via-rose-900 to-slate-900 rounded-3xl p-4 sm:p-6 text-white shadow-xl border border-red-700/40 relative overflow-hidden">
+    <div className="space-y-5 max-w-6xl mx-auto p-3 sm:p-5 animate-in fade-in duration-150">
+      {/* ── TOP BANNER & ACTION HEADER ── */}
+      <div className="bg-gradient-to-r from-red-900 via-rose-900 to-slate-900 rounded-3xl p-5 sm:p-6 text-white shadow-2xl border border-red-700/40 relative overflow-hidden">
         <div className="absolute right-0 top-0 bottom-0 w-1/3 bg-radial from-red-500/10 to-transparent pointer-events-none" />
         <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2 mb-1 flex-wrap">
+            <div className="flex items-center gap-2 mb-1.5 flex-wrap">
               {onBack && (
                 <button
                   type="button"
@@ -370,308 +463,546 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
                   <ChevronLeft className="w-4 h-4" />
                 </button>
               )}
-              <div className="w-7 h-7 rounded-lg bg-red-600 flex items-center justify-center shrink-0 shadow-md">
+              <div className="w-8 h-8 rounded-xl bg-red-600 flex items-center justify-center shrink-0 shadow-lg">
                 <Youtube className="w-4 h-4 fill-white text-white" />
               </div>
-              <h2 className="text-lg sm:text-2xl font-black tracking-tight">
-                Classroom YouTube Video Lectures
+              <h2 className="text-xl sm:text-2xl font-black tracking-tight">
+                स्कूल लाइव स्टूडियो व वीडियो हब
               </h2>
-              <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-white/15 text-rose-200 border border-white/20">
-                Revision & Missed Class Archive
-              </span>
+              {liveLectures.length > 0 && (
+                <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-red-500 text-white font-black text-[10px] uppercase tracking-wider animate-pulse shadow-md">
+                  <span className="w-2 h-2 rounded-full bg-white" />
+                  <span>{liveLectures.length} Live Now</span>
+                </span>
+              )}
             </div>
-            <p className="text-xs sm:text-sm text-rose-100/90 max-w-2xl">
-              Daily class me jo padhaya gaya, uska YouTube lecture yahan judta hai taaki agar student class na kar paye toh future me revision kar sake!
+            <p className="text-xs sm:text-sm text-rose-100/90 max-w-2xl leading-relaxed">
+              YouTube Live का लिंक डालें, क्लास में लाइव चलेगा। लाइव खत्म होने पर YouTube अपने आप इसे क्लास आर्काइव या यूनिवर्सल वीडियो में सेव कर देगा!
             </p>
           </div>
 
           {canEdit && (
-            <button
-              type="button"
-              onClick={() => handleOpenAdd(1)}
-              className="px-4 py-2.5 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs sm:text-sm font-black flex items-center gap-2 shadow-lg shadow-red-600/30 active:scale-95 transition cursor-pointer shrink-0"
-            >
-              <Plus className="w-4 h-4" />
-              <span>+ Add Video Lecture</span>
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => handleOpenAdd(true)}
+                className="px-4 py-2.5 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs sm:text-sm font-black flex items-center gap-2 shadow-lg shadow-red-600/30 active:scale-95 transition cursor-pointer"
+              >
+                <Radio className="w-4 h-4 text-white animate-pulse" />
+                <span>+ Go Live (लाइव शुरू करें)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleOpenAdd(false)}
+                className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>+ रिकॉर्डेड वीडियो</span>
+              </button>
+            </div>
           )}
         </div>
       </div>
 
-      {/* Tier 1 & 2: Session & Class Selector Bar */}
-      <div className="bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-slate-200 dark:border-slate-700 space-y-3">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          {/* Class Selector Pills */}
-          <div className="space-y-1.5 flex-1">
-            <span className="text-xs font-bold text-slate-500 flex items-center gap-1.5">
-              <BookOpen className="w-3.5 h-3.5 text-indigo-500" />
-              <span>Class Chunein:</span>
-            </span>
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
-              {classes.map(cls => (
-                <button
-                  key={cls.id}
-                  type="button"
-                  onClick={() => setSelectedClassId(cls.id)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition cursor-pointer border ${
-                    selectedClassId === cls.id
-                      ? "bg-red-600 text-white border-red-600 shadow-sm"
-                      : "bg-slate-50 dark:bg-slate-700 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-600 hover:bg-red-50"
-                  }`}
-                >
-                  {cls.name}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Academic Session Badge */}
-          <div className="shrink-0 flex items-center gap-2">
-            <span className="text-[11px] font-bold text-slate-400">Session:</span>
-            <span className="text-xs font-black px-2.5 py-1 rounded-xl bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-              {activeSession?.name || "2026-27"}
-            </span>
-          </div>
-        </div>
-
-        {/* Tier 3: Month Wise Tabs */}
-        <div className="pt-2 border-t border-slate-100 dark:border-slate-700 space-y-1.5">
-          <span className="text-xs font-bold text-slate-500 flex items-center gap-1.5">
-            <Calendar className="w-3.5 h-3.5 text-red-500" />
-            <span>Month Wise Lectures (Folder View):</span>
+      {/* ── 3 CORE WORKFLOW TABS (LIVE NOW / RECORDED ARCHIVE / UNIVERSAL) ── */}
+      <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-2 overflow-x-auto">
+        <button
+          type="button"
+          onClick={() => setActiveTab("LIVE")}
+          className={`px-4 py-2.5 rounded-2xl font-black text-xs sm:text-sm flex items-center gap-2 transition cursor-pointer shrink-0 border ${
+            activeTab === "LIVE"
+              ? "bg-red-600 text-white border-red-600 shadow-md shadow-red-600/20"
+              : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-red-50"
+          }`}
+        >
+          <span className={`w-2.5 h-2.5 rounded-full ${liveLectures.length > 0 ? "bg-red-400 animate-ping" : "bg-slate-400"}`} />
+          <span>🔴 लाइव क्लासेज (Live Now)</span>
+          <span className="px-2 py-0.5 rounded-full text-[10px] bg-black/20 text-white font-bold">
+            {liveLectures.length}
           </span>
-          <div className="grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-12 gap-1.5">
-            {MONTH_NAMES.map(m => {
-              const isSelected = selectedMonth === m.key;
-              const countInMonth = lectures.filter(l => l.date && l.date.slice(5, 7) === m.key).length;
-              return (
-                <button
-                  key={m.key}
-                  type="button"
-                  onClick={() => {
-                    setSelectedMonth(m.key);
-                    // Select first available date in that month or update month prefix of selectedDate
-                    const matching = lectures.find(l => l.date && l.date.slice(5, 7) === m.key);
-                    if (matching) {
-                      setSelectedDate(matching.date);
-                    } else {
-                      const curYear = new Date().getFullYear();
-                      setSelectedDate(`${curYear}-${m.key}-01`);
-                    }
-                  }}
-                  className={`p-2 rounded-xl text-center border transition cursor-pointer ${
-                    isSelected
-                      ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900 border-slate-900 dark:border-white shadow-sm"
-                      : "bg-slate-50 dark:bg-slate-700/60 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-600 hover:bg-slate-100"
-                  }`}
-                >
-                  <p className="text-xs font-bold truncate">{m.name}</p>
-                  <p className="text-[10px] opacity-75 mt-0.5 font-mono">
-                    {countInMonth > 0 ? `${countInMonth} vids` : "—"}
-                  </p>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab("RECORDED")}
+          className={`px-4 py-2.5 rounded-2xl font-black text-xs sm:text-sm flex items-center gap-2 transition cursor-pointer shrink-0 border ${
+            activeTab === "RECORDED"
+              ? "bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 border-slate-900 dark:border-white shadow-md"
+              : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100"
+          }`}
+        >
+          <Video className="w-4 h-4" />
+          <span>📼 रिकॉर्डेड लेक्चर्स (Class Archive)</span>
+          <span className="px-2 py-0.5 rounded-full text-[10px] bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold">
+            {classRecordedLectures.length}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab("UNIVERSAL")}
+          className={`px-4 py-2.5 rounded-2xl font-black text-xs sm:text-sm flex items-center gap-2 transition cursor-pointer shrink-0 border ${
+            activeTab === "UNIVERSAL"
+              ? "bg-purple-600 text-white border-purple-600 shadow-md shadow-purple-600/20"
+              : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-purple-50"
+          }`}
+        >
+          <Globe className="w-4 h-4 text-purple-400" />
+          <span>🌐 यूनिवर्सल स्कूल वीडियो (All School)</span>
+          <span className="px-2 py-0.5 rounded-full text-[10px] bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200 font-bold">
+            {universalLectures.length}
+          </span>
+        </button>
       </div>
 
-      {/* Tier 4: Date Picker & Active Day Lectures Grid */}
-      <div className="bg-white dark:bg-slate-800 rounded-2xl p-4 sm:p-5 shadow-sm border border-slate-200 dark:border-slate-700 space-y-4">
-        {/* Date Chooser & Quick Day Filter */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-700">
-          <div className="flex items-center gap-2">
-            <Calendar className="w-5 h-5 text-red-600" />
-            <div>
-              <h3 className="text-sm sm:text-base font-black text-slate-900 dark:text-white">
-                Lecture Date: <span className="text-red-600 dark:text-red-400">{selectedDate}</span>
+      {/* ── TAB 1: LIVE NOW VIEW ── */}
+      {activeTab === "LIVE" && (
+        <div className="space-y-4">
+          {liveLectures.length === 0 ? (
+            <div className="bg-white dark:bg-slate-800 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-3xl p-10 text-center space-y-3">
+              <div className="w-16 h-16 rounded-full bg-red-100 dark:bg-red-950/40 text-red-500 flex items-center justify-center mx-auto text-2xl">
+                📡
+              </div>
+              <h3 className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
+                अभी कोई लाइव क्लास नहीं चल रही है
               </h3>
-              <p className="text-xs text-slate-500">
-                {selectedClass?.name || "Class"} • {dateLectures.length} Video Lectures Conducted
+              <p className="text-xs text-slate-500 max-w-md mx-auto">
+                जब शिक्षक या स्कूल एडमिन YouTube Live का लिंक डालेंगे, तब लाइव वीडियो यहाँ तुरंत दिखाई देगा और छात्रों को मोबाइल पर नोटिफिकेशन मिल जाएगा।
               </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <label className="text-xs font-bold text-slate-500">Change Date:</label>
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={e => {
-                const val = e.target.value;
-                setSelectedDate(val);
-                if (val) setSelectedMonth(val.slice(5, 7));
-              }}
-              className="px-3 py-1.5 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-xs font-bold"
-            />
-          </div>
-        </div>
-
-        {/* Existing Dates in Month Pills for Fast 1-Tap Switching */}
-        {activeDatesInMonth.length > 0 && (
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs no-scrollbar">
-            <span className="text-slate-400 shrink-0 font-bold">Videos Available On:</span>
-            {activeDatesInMonth.map(dStr => (
-              <button
-                key={dStr}
-                type="button"
-                onClick={() => setSelectedDate(dStr)}
-                className={`px-2.5 py-1 rounded-lg font-bold border transition cursor-pointer whitespace-nowrap ${
-                  selectedDate === dStr
-                    ? "bg-red-600 text-white border-red-600 shadow-xs"
-                    : "bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-600 hover:bg-slate-200"
-                }`}
-              >
-                {dStr.slice(8, 10)} {MONTH_NAMES.find(m => m.key === dStr.slice(5, 7))?.name} ({lectures.filter(l => l.date === dStr).length})
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Lectures List for This Day */}
-        {dateLectures.length === 0 ? (
-          <div className="py-12 text-center text-slate-400 space-y-3 bg-slate-50 dark:bg-slate-900/50 rounded-2xl border border-dashed border-slate-200 dark:border-slate-700 p-6">
-            <Video className="w-10 h-10 text-slate-300 dark:text-slate-600 mx-auto" />
-            <div>
-              <p className="text-sm font-bold text-slate-700 dark:text-slate-300">
-                Is Date ({selectedDate}) ko abhi koi YouTube Lecture video attached nahi hai
-              </p>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Teacher ya Admin &quot;+ Add Video Lecture&quot; par tap karke YouTube link attach kar sakte hain.
-              </p>
-            </div>
-            {canEdit && (
-              <button
-                type="button"
-                onClick={() => handleOpenAdd(1)}
-                className="inline-flex items-center gap-1.5 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-bold transition cursor-pointer shadow-md"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>+ Is Date Ka Lecture Jodein</span>
-              </button>
-            )}
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-            {dateLectures.map(lec => {
-              const vId = lec.youtubeVideoId || extractYouTubeVideoId(lec.youtubeUrl);
-              const thumbUrl = vId ? `https://img.youtube.com/vi/${vId}/hqdefault.jpg` : "";
-
-              return (
-                <div
-                  key={lec.id}
-                  className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden hover:shadow-md transition flex flex-col"
+              {canEdit && (
+                <button
+                  type="button"
+                  onClick={() => handleOpenAdd(true)}
+                  className="px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white text-xs font-black rounded-xl shadow-lg shadow-red-600/30 cursor-pointer"
                 >
-                  {/* YouTube Thumbnail Preview with Play Overlay */}
+                  + अभी लाइव शुरू करें (Go Live)
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {liveLectures.map(lec => {
+                const thumb = `https://img.youtube.com/vi/${lec.youtubeVideoId}/hqdefault.jpg`;
+                return (
                   <div
-                    onClick={() => setPlayingLecture(lec)}
-                    className="relative aspect-video w-full bg-slate-950 cursor-pointer group overflow-hidden"
+                    key={lec.id}
+                    className="bg-slate-900 border-2 border-red-500/80 rounded-3xl overflow-hidden shadow-2xl relative text-white flex flex-col justify-between"
                   >
-                    {thumbUrl ? (
+                    {/* Top Live Badge Bar */}
+                    <div className="relative aspect-video bg-black overflow-hidden group">
                       <img
-                        src={thumbUrl}
+                        src={thumb}
                         alt={lec.topic}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 opacity-90 group-hover:opacity-100"
+                        className="w-full h-full object-cover opacity-85 group-hover:scale-105 transition-transform duration-300"
+                        onError={(e) => {
+                          (e.target as HTMLElement).style.display = "none";
+                        }}
                       />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center bg-slate-900">
-                        <Youtube className="w-12 h-12 text-red-500/50" />
-                      </div>
-                    )}
+                      <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black/60 pointer-events-none" />
 
-                    {/* Gradient Overlay & Big Play Button */}
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent flex items-center justify-center">
-                      <div className="w-12 h-12 rounded-full bg-red-600/90 group-hover:bg-red-600 text-white flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
-                        <Play className="w-5 h-5 fill-white ml-0.5" />
-                      </div>
-                    </div>
-
-                    {/* Period Badge on Video */}
-                    <div className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-lg bg-black/75 backdrop-blur-md text-white text-[10px] font-black tracking-wide border border-white/20">
-                      Period {lec.periodNumber} • {lec.subjectName}
-                    </div>
-
-                    <div className="absolute bottom-2.5 right-2.5 px-2 py-0.5 rounded-lg bg-red-600 text-white text-[10px] font-black flex items-center gap-1 shadow-md">
-                      <Youtube className="w-3 h-3 fill-white" />
-                      <span>YouTube In-App</span>
-                    </div>
-                  </div>
-
-                  {/* Lecture Details */}
-                  <div className="p-3.5 flex-1 flex flex-col justify-between space-y-2.5">
-                    <div>
-                      <h4 className="font-black text-slate-900 dark:text-white text-sm line-clamp-1">
-                        {lec.topic || `${lec.subjectName} Class`}
-                      </h4>
-                      <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-2">
-                        <span className="font-bold text-indigo-600 dark:text-indigo-400">{lec.subjectName}</span>
-                        <span>•</span>
-                        <span className="flex items-center gap-1">
-                          <User className="w-3 h-3 text-slate-400" />
-                          <span>{lec.teacherName}</span>
+                      {/* Pulsing Live Pill */}
+                      <div className="absolute top-3 left-3 flex items-center gap-2">
+                        <span className="px-3 py-1 rounded-full bg-red-600 text-white font-black text-xs uppercase tracking-wider flex items-center gap-1.5 shadow-lg shadow-red-600/50">
+                          <span className="w-2 h-2 rounded-full bg-white animate-ping" />
+                          <span>LIVE NOW</span>
                         </span>
-                      </p>
-                      {lec.notes && (
-                        <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-2 line-clamp-2 bg-slate-50 dark:bg-slate-800 p-2 rounded-lg">
-                          📝 {lec.notes}
-                        </p>
-                      )}
-                    </div>
+                        {lec.isUniversal ? (
+                          <span className="px-2.5 py-1 rounded-full bg-purple-600 text-white font-bold text-[10px] uppercase">
+                            🌐 Universal
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-1 rounded-full bg-slate-800/90 text-amber-300 font-bold text-[10px]">
+                            {lec.className}
+                          </span>
+                        )}
+                      </div>
 
-                    <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800 text-xs">
+                      {/* Big Center Play Icon */}
                       <button
                         type="button"
                         onClick={() => setPlayingLecture(lec)}
-                        className="px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+                        className="absolute inset-0 flex items-center justify-center cursor-pointer group-hover:scale-110 transition-transform"
                       >
-                        <Play className="w-3.5 h-3.5 fill-white" />
-                        <span>Watch Class Video</span>
+                        <div className="w-16 h-16 rounded-full bg-red-600/90 text-white flex items-center justify-center shadow-2xl ring-4 ring-white/30">
+                          <Play className="w-7 h-7 fill-white ml-1" />
+                        </div>
                       </button>
+                    </div>
 
-                      {canEdit && (
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEdit(lec)}
-                            title="Edit Lecture Link / Topic"
-                            className="p-1.5 text-slate-400 hover:text-blue-600 rounded-lg transition cursor-pointer"
-                          >
-                            <Edit3 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDelete(lec.id)}
-                            title="Delete Lecture"
-                            className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg transition cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                    {/* Live Details Content */}
+                    <div className="p-4 sm:p-5 space-y-3">
+                      <div>
+                        <div className="flex items-center justify-between text-xs text-rose-300 font-bold mb-1">
+                          <span>{lec.subjectName}</span>
+                          <span>{lec.periodTime || "Live Stream"}</span>
+                        </div>
+                        <h4 className="text-base sm:text-lg font-black text-white leading-snug">
+                          {lec.topic}
+                        </h4>
+                        <p className="text-xs text-slate-400 mt-1 flex items-center gap-1.5">
+                          <User className="w-3.5 h-3.5 text-purple-400" />
+                          <span>शिक्षक / होस्ट: <strong className="text-slate-200">{lec.teacherName}</strong></span>
+                        </p>
+                      </div>
+
+                      {lec.notes && (
+                        <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300">
+                          {lec.notes}
                         </div>
                       )}
+
+                      {/* Bottom Action Buttons */}
+                      <div className="flex items-center gap-2 pt-2 border-t border-slate-800">
+                        <button
+                          type="button"
+                          onClick={() => setPlayingLecture(lec)}
+                          className="flex-1 py-3 rounded-xl bg-red-600 hover:bg-red-500 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-red-600/40 cursor-pointer transition active:scale-[0.99]"
+                        >
+                          <Play className="w-4 h-4 fill-white" />
+                          <span>लाइव कक्षा देखें (Watch Live)</span>
+                        </button>
+
+                        {canEdit && (
+                          <button
+                            type="button"
+                            onClick={() => handleEndLiveStream(lec)}
+                            title="लाइव समाप्त करें और रिकॉर्डेड वीडियो में सहेजें"
+                            className="px-3.5 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 hover:text-amber-200 font-bold text-xs border border-slate-700 flex items-center gap-1.5 cursor-pointer shrink-0"
+                          >
+                            <StopCircle className="w-4 h-4 text-amber-400" />
+                            <span className="hidden sm:inline">लाइव समाप्त करें</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
-      {/* Add / Edit Lecture Modal */}
+      {/* ── TAB 2: RECORDED CLASS LECTURES VIEW ── */}
+      {activeTab === "RECORDED" && (
+        <div className="space-y-4">
+          {/* Class & Month Selector Bar */}
+          <div className="bg-white dark:bg-slate-800 rounded-3xl p-4 sm:p-5 shadow-sm border border-slate-200 dark:border-slate-700 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              {/* Class Selector Pills */}
+              <div className="space-y-1.5 flex-1">
+                <span className="text-xs font-bold text-slate-500 flex items-center gap-1.5">
+                  <BookOpen className="w-3.5 h-3.5 text-indigo-500" />
+                  <span>कक्षा चुनें (Select Class):</span>
+                </span>
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+                  {classes.map(cls => (
+                    <button
+                      key={cls.id}
+                      type="button"
+                      onClick={() => setSelectedClassId(cls.id)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition cursor-pointer border ${
+                        selectedClassId === cls.id
+                          ? "bg-slate-900 dark:bg-white text-white dark:text-slate-900 border-slate-900 dark:border-white shadow-sm"
+                          : "bg-slate-50 dark:bg-slate-700 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-600 hover:bg-slate-100"
+                      }`}
+                    >
+                      {cls.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Search Bar */}
+              <div className="relative w-full sm:w-64">
+                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="विषय या टॉपिक खोजें..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-800 dark:text-white"
+                />
+              </div>
+            </div>
+
+            {/* Month-wise Tabs */}
+            <div className="pt-3 border-t border-slate-100 dark:border-slate-700 space-y-1.5">
+              <span className="text-xs font-bold text-slate-500 flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5 text-red-500" />
+                <span>महीना चुनें (Month-wise Archive):</span>
+              </span>
+              <div className="grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-12 gap-1.5">
+                {MONTH_NAMES.map(m => {
+                  const isSelected = selectedMonth === m.key;
+                  const countInMonth = classRecordedLectures.filter(l => l.date && l.date.slice(5, 7) === m.key).length;
+                  return (
+                    <button
+                      key={m.key}
+                      type="button"
+                      onClick={() => setSelectedMonth(m.key)}
+                      className={`py-1.5 px-2 rounded-xl text-xs font-bold transition flex flex-col items-center justify-center border cursor-pointer ${
+                        isSelected
+                          ? "bg-red-600 text-white border-red-600 shadow-sm"
+                          : "bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-red-50"
+                      }`}
+                    >
+                      <span>{m.name.slice(0, 3)}</span>
+                      <span className={`text-[9px] font-mono mt-0.5 ${isSelected ? "text-red-100" : "text-slate-400"}`}>
+                        {countInMonth} vid
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* Recorded Lectures Grid */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-black text-slate-800 dark:text-white flex items-center gap-2">
+                <Video className="w-4 h-4 text-red-500" />
+                <span>{selectedClass?.name || "Class"} - रिकॉर्डेड वीडियो लेक्चर्स ({dateLectures.length})</span>
+              </h3>
+            </div>
+
+            {dateLectures.length === 0 ? (
+              <div className="bg-white dark:bg-slate-800 rounded-3xl p-8 text-center text-slate-500 text-xs border border-dashed border-slate-200 dark:border-slate-700 space-y-2">
+                <p>इस महीने या क्लास में अभी कोई रिकॉर्डेड लेक्चर नहीं है।</p>
+                {canEdit && (
+                  <button
+                    onClick={() => handleOpenAdd(false)}
+                    className="px-4 py-2 bg-red-600 text-white font-bold rounded-xl text-xs cursor-pointer shadow"
+                  >
+                    + रिकॉर्डेड वीडियो जोड़ें
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {dateLectures.map(lec => {
+                  const thumb = `https://img.youtube.com/vi/${lec.youtubeVideoId}/hqdefault.jpg`;
+                  return (
+                    <div
+                      key={lec.id}
+                      className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition flex flex-col justify-between"
+                    >
+                      <div className="relative aspect-video bg-black overflow-hidden group">
+                        <img
+                          src={thumb}
+                          alt={lec.topic}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                          onError={(e) => {
+                            (e.target as HTMLElement).style.display = "none";
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setPlayingLecture(lec)}
+                          className="absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/50 transition cursor-pointer"
+                        >
+                          <div className="w-12 h-12 rounded-full bg-red-600 text-white flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
+                            <Play className="w-5 h-5 fill-white ml-0.5" />
+                          </div>
+                        </button>
+                        <div className="absolute bottom-2 left-2 px-2 py-0.5 rounded bg-black/80 text-white text-[10px] font-bold">
+                          {lec.date}
+                        </div>
+                      </div>
+
+                      <div className="p-3.5 space-y-2">
+                        <div className="flex items-center justify-between text-[11px] font-bold text-slate-500">
+                          <span className="text-red-600 dark:text-red-400">{lec.subjectName}</span>
+                          <span>Period {lec.periodNumber || 1}</span>
+                        </div>
+                        <h4 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white line-clamp-2">
+                          {lec.topic}
+                        </h4>
+                        <p className="text-[11px] text-slate-500 flex items-center gap-1">
+                          <User className="w-3 h-3 text-slate-400" />
+                          <span>{lec.teacherName}</span>
+                        </p>
+
+                        <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-700">
+                          <button
+                            type="button"
+                            onClick={() => setPlayingLecture(lec)}
+                            className="px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs flex items-center gap-1 cursor-pointer"
+                          >
+                            <Play className="w-3 h-3 fill-white" />
+                            <span>Play Video</span>
+                          </button>
+
+                          {canEdit && (
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEdit(lec)}
+                                className="p-1.5 text-slate-400 hover:text-blue-600 rounded-lg cursor-pointer"
+                                title="Edit"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDelete(lec.id)}
+                                className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg cursor-pointer"
+                                title="Delete"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── TAB 3: UNIVERSAL SCHOOL VIDEO ARCHIVE ── */}
+      {activeTab === "UNIVERSAL" && (
+        <div className="space-y-4">
+          <div className="bg-gradient-to-r from-purple-900 via-indigo-900 to-slate-900 rounded-3xl p-5 text-white shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <Globe className="w-5 h-5 text-purple-300" />
+                <h3 className="text-lg font-black text-white">यूनिवर्सल स्कूल वीडियो लाइब्रेरी</h3>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-purple-500/30 text-purple-200 border border-purple-400/30">
+                  Visible to All Students &amp; Staff
+                </span>
+              </div>
+              <p className="text-xs text-purple-100/80 mt-1 max-w-xl">
+                स्कूल असेंबली, वार्षिकोत्सव (Annual Function), विशेष घोषणाएं और मार्गदर्शन वीडियो जो सभी कक्षाओं के बच्चों और शिक्षकों के लिए उपलब्ध हैं।
+              </p>
+            </div>
+
+            {canEdit && (
+              <button
+                type="button"
+                onClick={() => {
+                  handleOpenAdd(false);
+                  setFormIsUniversal(true);
+                }}
+                className="px-4 py-2.5 bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs rounded-xl shadow cursor-pointer shrink-0"
+              >
+                + यूनिवर्सल वीडियो जोड़ें
+              </button>
+            )}
+          </div>
+
+          {universalLectures.length === 0 ? (
+            <div className="bg-white dark:bg-slate-800 rounded-3xl p-8 text-center text-slate-500 text-xs border border-dashed border-slate-200 dark:border-slate-700">
+              अभी कोई यूनिवर्सल वीडियो नहीं है। ऊपर दिए गए बटन से कॉमन स्कूल वीडियो जोड़ें।
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {universalLectures.map(lec => {
+                const thumb = `https://img.youtube.com/vi/${lec.youtubeVideoId}/hqdefault.jpg`;
+                return (
+                  <div
+                    key={lec.id}
+                    className="bg-white dark:bg-slate-800 border border-purple-200 dark:border-purple-900/50 rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition flex flex-col justify-between"
+                  >
+                    <div className="relative aspect-video bg-black overflow-hidden group">
+                      <img
+                        src={thumb}
+                        alt={lec.topic}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                        onError={(e) => {
+                          (e.target as HTMLElement).style.display = "none";
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setPlayingLecture(lec)}
+                        className="absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/50 transition cursor-pointer"
+                      >
+                        <div className="w-12 h-12 rounded-full bg-purple-600 text-white flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
+                          <Play className="w-5 h-5 fill-white ml-0.5" />
+                        </div>
+                      </button>
+                      <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-purple-700 text-white text-[10px] font-black uppercase">
+                        🌐 All School
+                      </div>
+                    </div>
+
+                    <div className="p-3.5 space-y-2">
+                      <h4 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white line-clamp-2">
+                        {lec.topic}
+                      </h4>
+                      <p className="text-[11px] text-slate-500 flex items-center gap-1">
+                        <User className="w-3 h-3 text-purple-400" />
+                        <span>{lec.teacherName} • {lec.date}</span>
+                      </p>
+
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-700">
+                        <button
+                          type="button"
+                          onClick={() => setPlayingLecture(lec)}
+                          className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs flex items-center gap-1 cursor-pointer"
+                        >
+                          <Play className="w-3 h-3 fill-white" />
+                          <span>Watch Video</span>
+                        </button>
+
+                        {canEdit && (
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEdit(lec)}
+                              className="p-1.5 text-slate-400 hover:text-blue-600 rounded-lg cursor-pointer"
+                              title="Edit"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(lec.id)}
+                              className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg cursor-pointer"
+                              title="Delete"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── ADD / EDIT LECTURE & LIVE STREAM MODAL ── */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-150">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-3xl p-5 sm:p-6 max-w-lg w-full shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-3xl p-5 sm:p-6 max-w-lg w-full shadow-2xl space-y-4 max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-xl bg-red-600/10 text-red-600 flex items-center justify-center">
-                  <Youtube className="w-4 h-4 fill-red-600" />
+                <div className={`w-8 h-8 rounded-xl flex items-center justify-center font-bold ${
+                  formIsLive ? "bg-red-500/20 text-red-500" : "bg-purple-500/20 text-purple-500"
+                }`}>
+                  {formIsLive ? <Radio className="w-4 h-4 animate-pulse" /> : <Youtube className="w-4 h-4" />}
                 </div>
                 <div>
                   <h3 className="font-black text-slate-900 dark:text-white text-base">
-                    {editingLecture ? "Edit YouTube Class Lecture" : "+ Add YouTube Class Lecture"}
+                    {editingLecture
+                      ? "वीडियो सम्पादित करें (Edit Video)"
+                      : formIsLive
+                      ? "🔴 YouTube Live क्लास शुरू करें"
+                      : "+ YouTube वीडियो लेक्चर जोड़ें"}
                   </h3>
                   <p className="text-xs text-slate-500">
-                    {selectedClass?.name} • Date: {selectedDate}
+                    {formIsUniversal ? "🌐 Universal School Video" : `${classes.find(c => c.id === formTargetClassId)?.name || "Class"}`}
                   </p>
                 </div>
               </div>
@@ -691,61 +1022,139 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
               </div>
             )}
 
-            <div className="space-y-3 text-xs">
-              {/* Period Number & Subject */}
-              <div className="grid grid-cols-2 gap-2.5">
-                <div>
-                  <label className="font-bold text-slate-600 dark:text-slate-300 mb-1 block">Period Number *</label>
-                  <select
-                    value={formPeriod}
-                    onChange={e => setFormPeriod(Number(e.target.value))}
-                    className="w-full px-3 py-2 border dark:border-slate-700 rounded-xl bg-transparent font-bold text-slate-800 dark:text-white"
-                  >
-                    {[1, 2, 3, 4, 5, 6, 7, 8].map(p => (
-                      <option key={p} value={p}>Period {p}</option>
-                    ))}
-                  </select>
-                </div>
+            <div className="space-y-3.5 text-xs">
+              {/* Stream Mode Toggle: Live vs Recorded */}
+              <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 dark:bg-slate-800 rounded-2xl">
+                <button
+                  type="button"
+                  onClick={() => setFormIsLive(false)}
+                  className={`py-2 px-3 rounded-xl font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                    !formIsLive
+                      ? "bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs"
+                      : "text-slate-500 hover:text-slate-700"
+                  }`}
+                >
+                  <Video className="w-3.5 h-3.5" />
+                  <span>📼 रिकॉर्डेड वीडियो</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFormIsLive(true)}
+                  className={`py-2 px-3 rounded-xl font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                    formIsLive
+                      ? "bg-red-600 text-white shadow-md shadow-red-600/30"
+                      : "text-red-600 hover:bg-red-50"
+                  }`}
+                >
+                  <Radio className="w-3.5 h-3.5 animate-pulse" />
+                  <span>🔴 LIVE NOW (लाइव)</span>
+                </button>
+              </div>
 
+              {/* Scope Selector: Class Specific vs Universal */}
+              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-2">
+                <span className="font-bold text-slate-700 dark:text-slate-300 block">
+                  टारगेट दर्शक / क्लास (Audience Scope):
+                </span>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className={`p-2 rounded-xl border flex items-center gap-2 cursor-pointer transition ${
+                    !formIsUniversal
+                      ? "bg-white dark:bg-slate-900 border-indigo-500 font-bold text-slate-900 dark:text-white"
+                      : "bg-transparent border-slate-200 dark:border-slate-700 text-slate-500"
+                  }`}>
+                    <input
+                      type="radio"
+                      name="scope"
+                      checked={!formIsUniversal}
+                      onChange={() => setFormIsUniversal(false)}
+                      className="text-indigo-600"
+                    />
+                    <span>🏫 कक्षा अनुसार (Class)</span>
+                  </label>
+
+                  <label className={`p-2 rounded-xl border flex items-center gap-2 cursor-pointer transition ${
+                    formIsUniversal
+                      ? "bg-white dark:bg-slate-900 border-purple-500 font-bold text-slate-900 dark:text-white"
+                      : "bg-transparent border-slate-200 dark:border-slate-700 text-slate-500"
+                  }`}>
+                    <input
+                      type="radio"
+                      name="scope"
+                      checked={formIsUniversal}
+                      onChange={() => setFormIsUniversal(true)}
+                      className="text-purple-600"
+                    />
+                    <span>🌐 यूनिवर्सल (All School)</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Class & Subject (If NOT universal) */}
+              {!formIsUniversal ? (
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="font-bold text-slate-600 dark:text-slate-300 mb-1 block">कक्षा (Class) *</label>
+                    <select
+                      value={formTargetClassId}
+                      onChange={e => setFormTargetClassId(e.target.value)}
+                      className="w-full px-3 py-2 border dark:border-slate-700 rounded-xl bg-transparent font-bold text-slate-800 dark:text-white"
+                    >
+                      {classes.map(c => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="font-bold text-slate-600 dark:text-slate-300 mb-1 block">विषय (Subject) *</label>
+                    <input
+                      value={formSubject}
+                      onChange={e => setFormSubject(e.target.value)}
+                      placeholder="उदा. Science, Maths"
+                      className="w-full px-3 py-2 border dark:border-slate-700 rounded-xl bg-transparent font-bold text-slate-800 dark:text-white"
+                    />
+                  </div>
+                </div>
+              ) : (
                 <div>
-                  <label className="font-bold text-slate-600 dark:text-slate-300 mb-1 block">Subject *</label>
+                  <label className="font-bold text-slate-600 dark:text-slate-300 mb-1 block">कैटेगरी / विषय (Category / Event)</label>
                   <input
                     value={formSubject}
                     onChange={e => setFormSubject(e.target.value)}
-                    placeholder="e.g. Mathematics, Science"
+                    placeholder="उदा. Morning Assembly, Exam Tips, Annual Function"
                     className="w-full px-3 py-2 border dark:border-slate-700 rounded-xl bg-transparent font-bold text-slate-800 dark:text-white"
                   />
                 </div>
-              </div>
+              )}
 
               {/* YouTube Video URL */}
               <div>
                 <label className="font-bold text-slate-600 dark:text-slate-300 mb-1 block flex items-center justify-between">
-                  <span>YouTube Video URL (Unlisted / Public) *</span>
-                  <span className="text-[10px] text-red-500 font-normal">youtu.be / watch?v=...</span>
+                  <span>YouTube लिंक (Live / Video URL) *</span>
+                  <span className="text-[10px] text-red-500 font-mono">youtube.com/live/... ya youtu.be/...</span>
                 </label>
                 <input
                   value={formUrl}
                   onChange={e => setFormUrl(e.target.value)}
-                  placeholder="https://youtu.be/xxxxxx ya https://youtube.com/watch?v=..."
+                  placeholder="https://youtube.com/live/xxxxxx ya https://youtu.be/xxxxxx"
                   className="w-full px-3 py-2 border dark:border-slate-700 rounded-xl bg-transparent text-slate-800 dark:text-white font-mono"
                 />
               </div>
 
               {/* Topic / Chapter */}
               <div>
-                <label className="font-bold text-slate-600 dark:text-slate-300 mb-1 block">Chapter / Topic Covered Today *</label>
+                <label className="font-bold text-slate-600 dark:text-slate-300 mb-1 block">टॉपिक / चैप्टर का नाम (Topic Title) *</label>
                 <input
                   value={formTopic}
                   onChange={e => setFormTopic(e.target.value)}
-                  placeholder="e.g. Chapter 4: Carbon and Its Compounds - Part 1"
+                  placeholder="उदा. प्रकाश का परावर्तन - भाग 1"
                   className="w-full px-3 py-2 border dark:border-slate-700 rounded-xl bg-transparent text-slate-800 dark:text-white font-bold"
                 />
               </div>
 
-              {/* Teacher Name */}
+              {/* Teacher / Host Name */}
               <div>
-                <label className="font-bold text-slate-600 dark:text-slate-300 mb-1 block">Teacher Name</label>
+                <label className="font-bold text-slate-600 dark:text-slate-300 mb-1 block">शिक्षक / होस्ट का नाम (Teacher / Host)</label>
                 <input
                   value={formTeacher}
                   onChange={e => setFormTeacher(e.target.value)}
@@ -754,16 +1163,26 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
                 />
               </div>
 
-              {/* Notes */}
-              <div>
-                <label className="font-bold text-slate-600 dark:text-slate-300 mb-1 block">Class Notes / Summary (Optional)</label>
-                <textarea
-                  value={formNotes}
-                  onChange={e => setFormNotes(e.target.value)}
-                  rows={2}
-                  placeholder="Page 45 homework, formula notes..."
-                  className="w-full px-3 py-2 border dark:border-slate-700 rounded-xl bg-transparent text-slate-800 dark:text-white"
+              {/* Mobile Push Notification Checkbox */}
+              <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-2.5">
+                <input
+                  type="checkbox"
+                  id="send_push_toggle"
+                  checked={formSendPush}
+                  onChange={e => setFormSendPush(e.target.checked)}
+                  className="mt-0.5 rounded border-amber-500 text-amber-600"
                 />
+                <label htmlFor="send_push_toggle" className="text-xs text-amber-900 dark:text-amber-200 cursor-pointer">
+                  <span className="font-black flex items-center gap-1">
+                    <Bell className="w-3.5 h-3.5 text-amber-500" />
+                    छात्रों व अभिभावकों को मोबाइल पर पुश नोटिफिकेशन भेजें
+                  </span>
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400 block mt-0.5">
+                    {formIsUniversal
+                      ? "स्कूल के सभी छात्रों व शिक्षकों के मोबाइल पर अलर्ट जाएगा।"
+                      : "सिर्फ चुनी गई कक्षा के छात्रों व अभिभावकों को अलर्ट जाएगा।"}
+                  </span>
+                </label>
               </div>
             </div>
 
@@ -773,22 +1192,23 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
                 onClick={() => setShowAddModal(false)}
                 className="flex-1 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-bold cursor-pointer"
               >
-                Cancel
+                रद्द करें
               </button>
               <button
                 type="button"
                 onClick={handleSaveLecture}
                 disabled={saving}
-                className="flex-1 py-2.5 bg-red-600 hover:bg-red-500 text-white rounded-xl font-bold flex items-center justify-center gap-1.5 shadow-md shadow-red-600/30 cursor-pointer disabled:opacity-60"
+                className={`flex-1 py-2.5 text-white rounded-xl font-bold flex items-center justify-center gap-1.5 shadow-md cursor-pointer disabled:opacity-60 ${
+                  formIsLive ? "bg-red-600 hover:bg-red-500 shadow-red-600/30" : "bg-purple-600 hover:bg-purple-500 shadow-purple-600/30"
+                }`}
               >
                 <Save className="w-4 h-4" />
-                <span>{saving ? "Saving..." : "Save Lecture"}</span>
+                <span>{saving ? "सहेज रहे हैं..." : formIsLive ? "🔴 लाइव शुरू करें" : "वीडियो सहेजें"}</span>
               </button>
             </div>
           </div>
         </div>
       )}
-
     </div>
   );
 };
