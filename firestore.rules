@@ -1,0 +1,230 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isSuperAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.email in [
+          'nsbdhdh70@gmail.com',
+          'nadimanwar794@gmail.com',
+          'nsdimanwar794@gmail.com',
+          'nadiman0636indo@gmail.com',
+          'n44438403@gmail.com',
+          'ghduug6@gmail.com'
+        ] ||
+        request.auth.token.admin == true ||
+        request.auth.token.role == 'SUPERADMIN'
+      );
+    }
+
+    function isUserSelf(userId) {
+      return isAuthenticated() && (request.auth.uid == userId);
+    }
+
+    // ── 1. USERS COLLECTION ───────────────────────────────────────────
+    // User can read and write their own document; Admins can read/manage all.
+    match /users/{userId} {
+      allow read: if true; // Public for leaderboards, profile previews
+      allow create: if true; // Allows signup & initial registration
+      allow update, delete: if isSuperAdmin() || isUserSelf(userId);
+
+      match /{userSubcollections=**} {
+        allow read, write: if isSuperAdmin() || isUserSelf(userId);
+      }
+    }
+
+    // ── 2. SYSTEM SETTINGS & APP SOUL ───────────────────────────────────
+    // Everyone can read settings; only Super Admin can modify
+    match /system_settings/{docId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    // ── 3. CONTENT DATA (NOTES, CHAPTERS, MCQS, SYLLABUS) ──────────────
+    // Public read for fast learning; Admin has full write access
+    match /content_data/{contentId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+
+      match /{subCollection=**} {
+        allow read: if true;
+        allow write: if isSuperAdmin();
+      }
+    }
+
+    match /custom_syllabus/{syllabusId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    match /challenge_20/{challengeId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    match /weekly_tests/{testId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    match /competition_mcqs/{mcqId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    match /daily_gk/{gkId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    // ── 4. SCHOOL ERP ECOSYSTEM ────────────────────────────────────────
+    // Schools metadata: public read so students can search their school
+    match /schools/{schoolId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || isAuthenticated();
+
+      // Nested collections inside each school
+      match /students/{studentId} {
+        allow read: if true; // Required for QR card lookup & Parent portal
+        allow write: if isSuperAdmin() || isAuthenticated();
+      }
+
+      match /teachers/{teacherId} {
+        allow read: if true;
+        allow write: if isSuperAdmin() || isAuthenticated();
+      }
+
+      match /staff/{staffId} {
+        allow read: if true;
+        allow write: if isSuperAdmin() || isAuthenticated();
+      }
+
+      match /classes/{classId} {
+        allow read: if true;
+        allow write: if isSuperAdmin() || isAuthenticated();
+      }
+
+      match /sessions/{sessionId} {
+        allow read: if true;
+        allow write: if isSuperAdmin() || isAuthenticated();
+      }
+
+      match /fees/{feeId} {
+        allow read: if true;
+        allow write: if isSuperAdmin() || isAuthenticated();
+      }
+
+      match /attendance/{attendanceId} {
+        allow read: if true;
+        allow write: if isSuperAdmin() || isAuthenticated();
+      }
+
+      match /homework/{hwId} {
+        allow read: if true;
+        allow write: if isSuperAdmin() || isAuthenticated();
+      }
+
+      match /exams/{examId} {
+        allow read: if true;
+        allow write: if isSuperAdmin() || isAuthenticated();
+      }
+
+      match /notices/{noticeId} {
+        allow read: if true;
+        allow write: if isSuperAdmin() || isAuthenticated();
+      }
+
+      match /holidays/{holidayId} {
+        allow read: if true;
+        allow write: if isSuperAdmin() || isAuthenticated();
+      }
+
+      match /certificates/{certId} {
+        allow read: if true;
+        allow write: if isSuperAdmin() || isAuthenticated();
+      }
+
+      match /admit_cards/{cardId} {
+        allow read: if true;
+        allow write: if isSuperAdmin() || isAuthenticated();
+      }
+
+      match /admissions/{admId} {
+        allow read: if true;
+        allow create: if true; // Any parent/student can apply online
+        allow update, delete: if isSuperAdmin() || isAuthenticated();
+      }
+
+      match /inquiries/{inqId} {
+        allow read, write: if true;
+      }
+
+      match /inventory/{itemId} {
+        allow read: if true;
+        allow write: if isSuperAdmin() || isAuthenticated();
+      }
+
+      match /library/{bookId} {
+        allow read: if true;
+        allow write: if isSuperAdmin() || isAuthenticated();
+      }
+
+      match /{otherSub=**} {
+        allow read: if true;
+        allow write: if isSuperAdmin() || isAuthenticated();
+      }
+    }
+
+    // ── 5. COACHING ECOSYSTEM ──────────────────────────────────────────
+    match /coaching/{coachingId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || isAuthenticated();
+
+      match /{subCol=**} {
+        allow read: if true;
+        allow write: if isSuperAdmin() || isAuthenticated();
+      }
+    }
+
+    // ── 6. FEEDBACKS, BUG REPORTS & SUGGESTIONS ────────────────────────
+    match /app_feedbacks/{feedbackId} {
+      allow read: if isSuperAdmin();
+      allow create: if true;
+      allow update, delete: if isSuperAdmin();
+    }
+
+    match /suggestions/{suggestionId} {
+      allow read: if true;
+      allow create: if true;
+      allow update, delete: if isSuperAdmin() || isAuthenticated();
+    }
+
+    match /activity_logs/{logId} {
+      allow read: if isSuperAdmin();
+      allow create: if true;
+      allow update, delete: if isSuperAdmin();
+    }
+
+    match /error_logs/{logId} {
+      allow read: if isSuperAdmin();
+      allow create: if true;
+      allow update, delete: if isSuperAdmin();
+    }
+
+    match /notifications/{notifId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || isAuthenticated();
+    }
+
+    // ── 7. FALLBACK / DEFAULT RULE ──────────────────────────────────────
+    match /{document=**} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || isAuthenticated();
+    }
+  }
+}

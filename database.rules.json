@@ -1,0 +1,110 @@
+{
+  "rules": {
+    ".read": true,
+    ".write": "auth != null || root.child('admins').child(auth.uid).exists() || auth.token.email === 'nadimanwar794@gmail.com' || auth.token.email === 'nsdimanwar794@gmail.com' || auth.token.email === 'nadiman0636indo@gmail.com'",
+
+    "maintenance": {
+      ".read": true,
+      ".write": "auth.token.email === 'nadimanwar794@gmail.com' || auth.token.email === 'nsdimanwar794@gmail.com' || auth.token.email === 'nadiman0636indo@gmail.com'"
+    },
+
+    "system_settings": {
+      ".read": true,
+      ".write": "auth.token.email === 'nadimanwar794@gmail.com' || auth.token.email === 'nsdimanwar794@gmail.com' || auth.token.email === 'nadiman0636indo@gmail.com'"
+    },
+
+    "fcm_tokens": {
+      ".read": true,
+      ".write": true,
+      ".indexOn": ["userId", "token", "lastUpdated"]
+    },
+
+    "school_webpush_subs": {
+      ".read": true,
+      ".write": true,
+      ".indexOn": ["userId", "schoolId", "createdAt"]
+    },
+
+    "active_sessions": {
+      ".read": true,
+      ".write": true,
+      ".indexOn": ["userId", "lastSeen"]
+    },
+
+    "user_sessions": {
+      ".read": true,
+      ".write": true,
+      ".indexOn": ["userId", "deviceId"]
+    },
+
+    "login_challenges": {
+      ".read": true,
+      ".write": true,
+      ".indexOn": ["userId", "timestamp"]
+    },
+
+    "live_users": {
+      ".read": true,
+      ".write": true,
+      ".indexOn": ["timestamp", "role"]
+    },
+
+    "global_chat": {
+      ".read": true,
+      ".write": true,
+      ".indexOn": ["timestamp", "senderId"]
+    },
+
+    "support_threads": {
+      ".read": true,
+      ".write": true,
+      ".indexOn": ["userId", "lastMessageTime"]
+    },
+
+    "users": {
+      "$userId": {
+        ".read": true,
+        ".write": "auth != null || $userId === auth.uid || auth.token.email === 'nadimanwar794@gmail.com'"
+      }
+    },
+
+    "schools": {
+      ".read": true,
+      ".write": true,
+      "$schoolId": {
+        ".indexOn": ["code", "adminEmail"]
+      }
+    },
+
+    "group_study_rooms": {
+      ".read": true,
+      ".write": true,
+      ".indexOn": ["createdAt", "lastActive", "hostId", "schoolId", "code"]
+    },
+
+    "homework_entries": {
+      ".read": true,
+      ".write": true
+    },
+
+    "lucent_entries": {
+      ".read": true,
+      ".write": true
+    },
+
+    "competition_mcqs": {
+      ".read": true,
+      ".write": true
+    },
+
+    "daily_gk": {
+      ".read": true,
+      ".write": true
+    },
+
+    "__backup__": {
+      ".read": "auth.token.email === 'nadimanwar794@gmail.com' || auth.token.email === 'nsdimanwar794@gmail.com' || auth.token.email === 'nadiman0636indo@gmail.com'",
+      ".write": "auth.token.email === 'nadimanwar794@gmail.com' || auth.token.email === 'nsdimanwar794@gmail.com' || auth.token.email === 'nadiman0636indo@gmail.com'"
+    }
+  }
+}
