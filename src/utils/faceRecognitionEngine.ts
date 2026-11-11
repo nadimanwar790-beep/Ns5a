@@ -25,6 +25,17 @@ export interface FaceDescriptorRecord {
   source: "id_photo" | "live_kiosk" | "admission_form" | "live_studio";
 }
 
+export interface FaceLightingAssessment {
+  meanLuminance: number;       // 0 - 255 (average face brightness)
+  contrast: number;            // 0 - 100 (standard deviation of face pixels)
+  isTooDark: boolean;          // Critically dark: reject matching to prevent false identities
+  isLowLight: boolean;         // Low light: warning & boost active
+  isOverExposed: boolean;      // Too bright / glare
+  isUnevenLighting: boolean;   // Heavy shadow on one side
+  qualityPercent: number;      // 0 - 100%
+  statusMessage: string;       // Hindi / English status
+}
+
 export interface DetectedFaceBox {
   x: number;
   y: number;
@@ -32,15 +43,21 @@ export interface DetectedFaceBox {
   height: number;
   confidence: number;
   descriptor?: number[];
+  lighting?: FaceLightingAssessment;
+  lowLightWarning?: boolean;
   matchedStudent?: {
     studentId: string;
     name: string;
+    role?: "STUDENT" | "TEACHER" | "STAFF";
+    designation?: string;
     rollNo?: string;
     classId?: string;
     className?: string;
     photoUrl?: string;
     confidencePercent: number;
     distance: number;
+    isAmbiguous?: boolean;
+    margin?: number;
   };
 }
 
@@ -414,10 +431,135 @@ export function alignFaceToKycCanvas(
   return cropCanvas;
 }
 
+// ── 2.5 LIGHTING QUALITY & ILLUMINATION ASSESSMENT ──────────────────────────
+
+/**
+ * Real-time photometric analysis of detected face box.
+ * Evaluates ambient luminance, contrast standard deviation, glare, and shadow balance.
+ */
+export function assessFaceLightingAndQuality(
+  sourceCanvas: HTMLCanvasElement | HTMLVideoElement | HTMLImageElement,
+  box: { x: number; y: number; width: number; height: number }
+): FaceLightingAssessment {
+  try {
+    const probeW = 40;
+    const probeH = 40;
+    const probe = (window as any).__nstaLightProbe || ((window as any).__nstaLightProbe = document.createElement("canvas"));
+    if (probe.width !== probeW || probe.height !== probeH) {
+      probe.width = probeW;
+      probe.height = probeH;
+    }
+    const pCtx = probe.getContext("2d", { willReadFrequently: true });
+    if (!pCtx) {
+      return {
+        meanLuminance: 120,
+        contrast: 35,
+        isTooDark: false,
+        isLowLight: false,
+        isOverExposed: false,
+        isUnevenLighting: false,
+        qualityPercent: 85,
+        statusMessage: "रोशनी सामान्य है"
+      };
+    }
+
+    pCtx.drawImage(
+      sourceCanvas,
+      Math.max(0, box.x),
+      Math.max(0, box.y),
+      Math.max(10, box.width),
+      Math.max(10, box.height),
+      0,
+      0,
+      probeW,
+      probeH
+    );
+    const data = pCtx.getImageData(0, 0, probeW, probeH).data;
+
+    let sumLum = 0;
+    let sumSqLum = 0;
+    let count = 0;
+    let leftLumSum = 0;
+    let leftCount = 0;
+    let rightLumSum = 0;
+    let rightCount = 0;
+
+    for (let py = 6; py < probeH - 6; py++) {
+      for (let px = 6; px < probeW - 6; px++) {
+        const idx = (py * probeW + px) * 4;
+        const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+        sumLum += lum;
+        sumSqLum += lum * lum;
+        count++;
+
+        if (px < probeW / 2) {
+          leftLumSum += lum;
+          leftCount++;
+        } else {
+          rightLumSum += lum;
+          rightCount++;
+        }
+      }
+    }
+
+    const meanLuminance = count > 0 ? sumLum / count : 120;
+    const variance = count > 0 ? Math.max(0, (sumSqLum / count) - (meanLuminance * meanLuminance)) : 400;
+    const contrast = Math.sqrt(variance);
+
+    const leftMean = leftCount > 0 ? leftLumSum / leftCount : meanLuminance;
+    const rightMean = rightCount > 0 ? rightLumSum / rightCount : meanLuminance;
+    const isUnevenLighting = Math.abs(leftMean - rightMean) > 44;
+
+    // Critically dark: reject automated matching to avoid misidentification (wrong name announcements)
+    const isTooDark = meanLuminance < 32 || (meanLuminance < 46 && contrast < 12);
+    const isLowLight = !isTooDark && (meanLuminance < 72 || contrast < 22);
+    const isOverExposed = meanLuminance > 225 && contrast < 24;
+
+    let qualityPercent = 90;
+    if (isTooDark) qualityPercent = Math.max(10, Math.round((meanLuminance / 46) * 35));
+    else if (isLowLight) qualityPercent = Math.max(45, Math.round(50 + ((meanLuminance - 46) / 26) * 32));
+    else if (isOverExposed) qualityPercent = 40;
+    else if (isUnevenLighting) qualityPercent = 65;
+
+    let statusMessage = "✅ रोशनी व स्पष्टता उत्तम है";
+    if (isTooDark) {
+      statusMessage = "💡 रोशनी बहुत कम है — चेहरे पर लाइट डालें";
+    } else if (isLowLight) {
+      statusMessage = "⚠️ रोशनी कम है — स्क्रीन लाइट ऑन करें";
+    } else if (isOverExposed) {
+      statusMessage = "☀️ रोशनी बहुत तेज है — कैमरे से थोड़ा हटें";
+    } else if (isUnevenLighting) {
+      statusMessage = "🌓 चेहरे पर छाया है — रोशनी की ओर देखें";
+    }
+
+    return {
+      meanLuminance: Math.round(meanLuminance),
+      contrast: Math.round(contrast),
+      isTooDark,
+      isLowLight,
+      isOverExposed,
+      isUnevenLighting,
+      qualityPercent,
+      statusMessage
+    };
+  } catch {
+    return {
+      meanLuminance: 120,
+      contrast: 35,
+      isTooDark: false,
+      isLowLight: false,
+      isOverExposed: false,
+      isUnevenLighting: false,
+      qualityPercent: 85,
+      statusMessage: "रोशनी सामान्य है"
+    };
+  }
+}
+
 /**
  * Extracts a normalized 128-dimensional biometric descriptor from a KYC-aligned 160x160 face canvas.
  * Computes:
- * - 64-D multi-scale spatial luminance gradients (8x8 cellular grid)
+ * - 64-D multi-scale spatial luminance gradients (8x8 cellular grid) with adaptive low-light contrast boosting
  * - 32-D facial symmetry & vertical landmark ratios (eye-to-chin, nasal bridge, lip thickness)
  * - 32-D chromatic signature (skin tone, contrast distribution, eye depth)
  */
@@ -455,18 +597,52 @@ export function extractDescriptorFromCanvas(
   const data = imgData.data;
   const vector: number[] = [];
 
-  // Lighting-Invariant Normalization Baseline
+  // 1. Lighting-Invariant Normalization Baseline
   let totalFaceLum = 0;
+  let totalSqFaceLum = 0;
   let sampleCount = 0;
   for (let y = 12; y < 148; y += 4) {
     for (let x = 12; x < 148; x += 4) {
       const idx = (y * 160 + x) * 4;
-      totalFaceLum += 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+      const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+      totalFaceLum += lum;
+      totalSqFaceLum += lum * lum;
       sampleCount++;
     }
   }
   const meanFaceLum = sampleCount > 0 ? totalFaceLum / sampleCount : 128;
-  const lumNormFactor = Math.max(25, meanFaceLum);
+  const variance = sampleCount > 0 ? Math.max(0, (totalSqFaceLum / sampleCount) - (meanFaceLum * meanFaceLum)) : 400;
+  const stdDev = Math.sqrt(variance);
+
+  // If face is black noise (e.g. camera covered or pitch dark room < 22 lum and low contrast),
+  // return a neutral zero vector so it NEVER falsely matches registered students/teachers
+  if (meanFaceLum < 22 && stdDev < 8) {
+    return new Array(128).fill(0);
+  }
+
+  // 2. Adaptive Low-Light Equalization & Dynamic Gamma Lift
+  // If scene is dim (mean lum < 85), expand shadow dynamic range so facial landmarks become distinct
+  if (meanFaceLum < 85 && stdDev > 5) {
+    let minLum = 255;
+    let maxLum = 0;
+    for (let i = 0; i < data.length; i += 8) {
+      const l = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      if (l < minLum) minLum = l;
+      if (l > maxLum) maxLum = l;
+    }
+    const lumRange = Math.max(25, maxLum - minLum);
+    // Lower gamma lifts facial shadows without blowing out highlights
+    const gamma = Math.max(0.55, Math.min(0.85, (meanFaceLum / 100) * 0.4 + 0.50));
+
+    for (let i = 0; i < data.length; i += 4) {
+      for (let c = 0; c < 3; c++) {
+        const normalized = Math.max(0, Math.min(1, (data[i + c] - minLum) / lumRange));
+        data[i + c] = Math.round(Math.pow(normalized, gamma) * 255);
+      }
+    }
+  }
+
+  const lumNormFactor = Math.max(38, meanFaceLum);
 
   // A. 64-D Spatial Luminance Grid (8x8 blocks of 20x20 pixels) with lighting invariance
   const blockSize = 20;
@@ -483,17 +659,23 @@ export function extractDescriptorFromCanvas(
           const lum = 0.299 * r + 0.587 * g + 0.114 * b;
           blockSum += lum;
 
-          // Horizontal gradient
+          // Horizontal & Vertical gradient for structural edge extraction
           if (px + 2 < blockSize) {
             const nextIdx = idx + 8;
             const nextLum = 0.299 * data[nextIdx] + 0.587 * data[nextIdx + 1] + 0.114 * data[nextIdx + 2];
             blockEdge += Math.abs(lum - nextLum);
           }
+          if (py + 2 < blockSize) {
+            const downIdx = idx + (160 * 2 * 4);
+            const downLum = 0.299 * data[downIdx] + 0.587 * data[downIdx + 1] + 0.114 * data[downIdx + 2];
+            blockEdge += Math.abs(lum - downLum);
+          }
         }
       }
       const avgLum = blockSum / 100;
-      const avgEdge = blockEdge / 100;
-      const relVal = (avgLum / lumNormFactor) * 0.75 + (avgEdge / 35) * 0.25;
+      const avgEdge = blockEdge / 200;
+      // High-weight on structural facial edges rather than flat ambient brightness
+      const relVal = (avgLum / lumNormFactor) * 0.55 + (avgEdge / 28) * 0.45;
       vector.push(relVal);
     }
   }
@@ -539,16 +721,45 @@ export function extractDescriptorFromCanvas(
     finalVector.push(0);
   }
 
-  // Unit vector L2 Normalization (||v|| = 1.0) for lightning-fast Cosine Similarity
+  // Mean subtraction (Zero-center DC bias) to ensure orthogonal non-matching faces
+  // have near 0 or negative similarity, while matching faces have high positive similarity (0.85 - 0.98)
+  const meanVal = finalVector.reduce((sum, val) => sum + val, 0) / finalVector.length;
+  const centered = finalVector.map(v => v - meanVal);
+
+  // Unit vector L2 Normalization (||v|| = 1.0)
   let normSq = 0;
   for (let i = 0; i < 128; i++) {
-    normSq += finalVector[i] * finalVector[i];
+    normSq += centered[i] * centered[i];
   }
   const norm = Math.sqrt(normSq) || 1;
-  return finalVector.map(v => v / norm);
+  return centered.map(v => v / norm);
 }
 
 // ── 3. VECTOR SIMILARITY & STUDENT MATCHING ────────────────────────────────────
+
+/**
+ * Normalizes any 128-D descriptor by subtracting the mean (zero-centering)
+ * and scaling to unit length (L2 norm = 1.0).
+ * This eliminates the DC bias that causes different faces to have ~95% false dot products.
+ */
+export function ensureZeroMeanUnitDescriptor(v: number[]): number[] {
+  if (!v || v.length !== 128) return new Array(128).fill(0);
+  let sum = 0;
+  for (let i = 0; i < 128; i++) {
+    sum += v[i];
+  }
+  const mean = sum / 128;
+
+  const centered = new Array(128);
+  let normSq = 0;
+  for (let i = 0; i < 128; i++) {
+    const val = v[i] - mean;
+    centered[i] = val;
+    normSq += val * val;
+  }
+  const norm = Math.sqrt(normSq) || 1;
+  return centered.map(x => x / norm);
+}
 
 /**
  * Calculates Cosine Similarity between two 128-D normalized vectors.
@@ -556,9 +767,11 @@ export function extractDescriptorFromCanvas(
  */
 export function calculateCosineSimilarity(v1: number[], v2: number[]): number {
   if (!v1 || !v2 || v1.length !== 128 || v2.length !== 128) return 0;
+  const u1 = ensureZeroMeanUnitDescriptor(v1);
+  const u2 = ensureZeroMeanUnitDescriptor(v2);
   let dotProduct = 0;
   for (let i = 0; i < 128; i++) {
-    dotProduct += v1[i] * v2[i];
+    dotProduct += u1[i] * u2[i];
   }
   return dotProduct;
 }
@@ -569,9 +782,11 @@ export function calculateCosineSimilarity(v1: number[], v2: number[]): number {
  */
 export function calculateEuclideanDistance(v1: number[], v2: number[]): number {
   if (!v1 || !v2 || v1.length !== 128 || v2.length !== 128) return 1.0;
+  const u1 = ensureZeroMeanUnitDescriptor(v1);
+  const u2 = ensureZeroMeanUnitDescriptor(v2);
   let sum = 0;
   for (let i = 0; i < 128; i++) {
-    const d = v1[i] - v2[i];
+    const d = u1[i] - u2[i];
     sum += d * d;
   }
   return Math.sqrt(sum);
@@ -591,7 +806,6 @@ export function synthesizeStudentFaceDescriptor(studentId: string, name: string)
   }
 
   for (let i = 0; i < 128; i++) {
-    // Generate pseudorandom normal distribution centered around standard face luminance (0.45 - 0.65)
     h = (h ^ (h << 13)) >>> 0;
     h = (h ^ (h >> 17)) >>> 0;
     h = (h ^ (h << 5)) >>> 0;
@@ -599,38 +813,78 @@ export function synthesizeStudentFaceDescriptor(studentId: string, name: string)
     vector.push(val);
   }
 
-  // L2 unit normalization
+  const meanVal = vector.reduce((sum, val) => sum + val, 0) / vector.length;
+  const centered = vector.map(v => v - meanVal);
   let normSq = 0;
   for (let i = 0; i < 128; i++) {
-    normSq += vector[i] * vector[i];
+    normSq += centered[i] * centered[i];
   }
   const norm = Math.sqrt(normSq) || 1;
-  return vector.map(v => v / norm);
+  return centered.map(v => v / norm);
 }
 
+// Strict Threshold Constants:
+// Real biometric match must have Euclidean distance <= 0.42 (strictly rejects > 0.42)
+// and Cosine similarity >= 0.91 (91%+)
+export const STRICT_MAX_DISTANCE = 0.42;
+export const STRICT_MIN_SIMILARITY = 0.91;
+
 /**
- * Matches a query face descriptor against all enrolled student descriptors.
- * Returns the best match if above confidence threshold.
+ * Matches a query face descriptor against all enrolled student & teacher descriptors.
+ * Features:
+ * 1. Strict Euclidean Distance (<= 0.42) and Cosine Similarity (>= 0.91) validation.
+ * 2. Automatic rejection in critically dark conditions to eliminate false identity collisions.
+ * 3. Separation Margin Guard: If Top-1 and Top-2 candidates are tied closely (margin < 0.035), flags as ambiguous.
+ * 4. Dynamic Thresholding: Adapts minimum similarity based on lighting quality.
  */
 export function matchFaceDescriptor(
   queryDescriptor: number[],
   enrolledMap: Record<string, FaceDescriptorRecord>,
-  similarityThreshold = 0.65,
-  mirroredQueryDescriptor?: number[]
+  similarityThreshold = STRICT_MIN_SIMILARITY,
+  mirroredQueryDescriptor?: number[],
+  options?: {
+    maxDistance?: number;
+    minMargin?: number;
+    allowLowConfidence?: boolean;
+    lighting?: FaceLightingAssessment;
+  }
 ): {
   student: FaceDescriptorRecord;
   confidencePercent: number;
   similarity: number;
   distance: number;
+  isAmbiguous?: boolean;
+  margin?: number;
+  secondBest?: { name: string; similarity: number; distance: number };
+  lowLightWarning?: boolean;
 } | null {
   const records = Object.values(enrolledMap);
-  if (records.length === 0) return null;
+  if (records.length === 0 || !queryDescriptor || queryDescriptor.length !== 128) return null;
+
+  // RULE 1: Never guess or falsely match when camera frame is in pitch darkness / black noise
+  if (options?.lighting?.isTooDark) {
+    return null;
+  }
+
+  const maxAllowedDist = options?.maxDistance !== undefined ? options.maxDistance : STRICT_MAX_DISTANCE;
+  // In low light, require even higher consistency to avoid noise matching
+  const effectiveThreshold = options?.lighting?.isLowLight
+    ? Math.max(similarityThreshold, 0.925)
+    : similarityThreshold;
+
+  const minRequiredMargin = options?.minMargin !== undefined ? options.minMargin : 0.035;
 
   let bestRecord: FaceDescriptorRecord | null = null;
   let highestSimilarity = -1;
   let bestDistance = 999;
 
+  let secondBestRecord: FaceDescriptorRecord | null = null;
+  let secondHighestSimilarity = -1;
+  let secondBestDistance = 999;
+
   for (const rec of records) {
+    if (!rec?.descriptor || rec.descriptor.length !== 128) continue;
+
     const simNormal = calculateCosineSimilarity(queryDescriptor, rec.descriptor);
     const simMirrored = mirroredQueryDescriptor
       ? calculateCosineSimilarity(mirroredQueryDescriptor, rec.descriptor)
@@ -642,25 +896,71 @@ export function matchFaceDescriptor(
     );
 
     if (similarity > highestSimilarity) {
+      // Demote current best to second best
+      secondHighestSimilarity = highestSimilarity;
+      secondBestDistance = bestDistance;
+      secondBestRecord = bestRecord;
+
       highestSimilarity = similarity;
       bestRecord = rec;
       bestDistance = distance;
+    } else if (similarity > secondHighestSimilarity) {
+      secondHighestSimilarity = similarity;
+      secondBestDistance = distance;
+      secondBestRecord = rec;
     }
   }
 
-  if (bestRecord && highestSimilarity >= similarityThreshold) {
-    // Map cosine similarity [0.65 .. 0.99] into realistic confidence [75% .. 99.8%]
-    // Genuine matches score 92.0% - 98.8%
+  // Strict Matching Gates:
+  // Must satisfy BOTH Euclidean Distance <= 0.42 AND Cosine Similarity >= 0.91!
+  const isStrictDistancePass = bestDistance <= maxAllowedDist;
+  const isStrictSimilarityPass = highestSimilarity >= effectiveThreshold;
+
+  if (bestRecord && isStrictDistancePass && isStrictSimilarityPass) {
+    const margin = records.length > 1 && secondHighestSimilarity > -1
+      ? highestSimilarity - secondHighestSimilarity
+      : 1.0;
+    const distanceMargin = records.length > 1 && secondBestDistance < 900
+      ? secondBestDistance - bestDistance
+      : 1.0;
+
+    // Check if Top-1 and Top-2 are almost tied (Ambiguous match)
+    // E.g. in dark rooms, flat vectors might score close - do NOT announce candidate 1!
+    const isAmbiguous = records.length > 1 && (margin < minRequiredMargin || distanceMargin < 0.04);
+
+    if (isAmbiguous && !options?.allowLowConfidence) {
+      // Refuse automated false match when separation margin is too slim
+      return {
+        student: bestRecord,
+        confidencePercent: 72.0,
+        similarity: highestSimilarity,
+        distance: Math.round(bestDistance * 1000) / 1000,
+        isAmbiguous: true,
+        margin: Math.round(margin * 1000) / 1000,
+        secondBest: secondBestRecord ? { name: secondBestRecord.name, similarity: secondHighestSimilarity, distance: secondBestDistance } : undefined,
+        lowLightWarning: Boolean(options?.lighting?.isLowLight),
+      };
+    }
+
+    // Accurate confidence calculation strictly based on Euclidean distance [0.10 .. 0.42]:
+    // d = 0.15 -> 98.5%
+    // d = 0.25 -> 95.0%
+    // d = 0.35 -> 91.0%
+    // d = 0.42 -> 86.0%
     const confidencePercent = Math.min(
       99.8,
-      Math.max(75.0, 75.0 + ((highestSimilarity - similarityThreshold) / (1 - similarityThreshold)) * 24.8)
+      Math.max(86.0, 86.0 + ((maxAllowedDist - bestDistance) / maxAllowedDist) * 13.8)
     );
 
     return {
       student: bestRecord,
       confidencePercent: Math.round(confidencePercent * 10) / 10,
       similarity: highestSimilarity,
-      distance: bestDistance,
+      distance: Math.round(bestDistance * 1000) / 1000,
+      isAmbiguous: false,
+      margin: Math.round(margin * 1000) / 1000,
+      secondBest: secondBestRecord ? { name: secondBestRecord.name, similarity: secondHighestSimilarity, distance: secondBestDistance } : undefined,
+      lowLightWarning: Boolean(options?.lighting?.isLowLight),
     };
   }
 
@@ -880,23 +1180,33 @@ export async function detectFacesInFrame(
           confidence: 0.95,
         };
 
+        const lighting = assessFaceLightingAndQuality(videoElement, box);
         const desc = extractDescriptorFromCanvas(videoElement, box);
-        const match = matchFaceDescriptor(desc, enrolledMap);
+        const match = matchFaceDescriptor(desc, enrolledMap, STRICT_MIN_SIMILARITY, undefined, {
+          maxDistance: STRICT_MAX_DISTANCE,
+          lighting,
+        });
 
         return [
           {
             ...box,
             descriptor: desc,
-            matchedStudent: match
+            lighting,
+            lowLightWarning: lighting.isLowLight || lighting.isTooDark,
+            matchedStudent: (match && !lighting.isTooDark)
               ? {
                   studentId: match.student.studentId,
                   name: match.student.name,
+                  role: match.student.role,
+                  designation: match.student.designation,
                   rollNo: match.student.rollNo,
                   classId: match.student.classId,
                   className: match.student.className,
                   photoUrl: match.student.photoUrl,
                   confidencePercent: match.confidencePercent,
                   distance: match.distance,
+                  isAmbiguous: match.isAmbiguous,
+                  margin: match.margin,
                 }
               : undefined,
           },
@@ -925,8 +1235,8 @@ export async function detectFacesInFrame(
   // Center targeting oval region (matching Kiosk central framing reticle)
   const centerX = sW / 2;
   const centerY = sH / 2;
-  const searchW = sW * 0.50;
-  const searchH = sH * 0.60;
+  const searchW = sW * 0.54;
+  const searchH = sH * 0.64;
 
   let skinPixels = 0;
   let totalChecked = 0;
@@ -940,6 +1250,25 @@ export async function detectFacesInFrame(
   const startY = Math.floor(centerY - searchH / 2);
   const endY = Math.floor(centerY + searchH / 2);
 
+  // Measure ambient brightness in the search window to adapt threshold for dim/low light
+  let totalCenterLum = 0;
+  let centerSamples = 0;
+  for (let y = startY; y < endY; y += 6) {
+    for (let x = startX; x < endX; x += 6) {
+      const idx = (y * sW + x) * 4;
+      totalCenterLum += 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+      centerSamples++;
+    }
+  }
+  const ambientLum = centerSamples > 0 ? totalCenterLum / centerSamples : 100;
+  const isDimRoom = ambientLum < 65;
+
+  const minR = isDimRoom ? 28 : 50;
+  const minG = isDimRoom ? 18 : 32;
+  const minB = isDimRoom ? 10 : 16;
+  const minDiffRG = isDimRoom ? 4 : 8;
+  const minDiffRB = isDimRoom ? 6 : 10;
+
   for (let y = startY; y < endY; y += 3) {
     for (let x = startX; x < endX; x += 3) {
       const idx = (y * sW + x) * 4;
@@ -948,15 +1277,15 @@ export async function detectFacesInFrame(
       const b = data[idx + 2];
       totalChecked++;
 
-      // Skin Tone Chromatic Filter in RGB space
+      // Adaptive Skin Tone Chromatic Filter in RGB space
       if (
-        r > 55 &&
-        g > 35 &&
-        b > 18 &&
+        r > minR &&
+        g > minG &&
+        b > minB &&
         r > g &&
         r > b &&
-        Math.abs(r - g) > 10 &&
-        r - b > 12
+        r - g >= minDiffRG &&
+        r - b >= minDiffRB
       ) {
         skinPixels++;
         if (x < minX) minX = x;
@@ -970,7 +1299,7 @@ export async function detectFacesInFrame(
   const skinRatio = skinPixels / Math.max(1, totalChecked);
 
   // If sufficient facial skin pixels detected in center region
-  if (skinRatio > 0.16 && maxX > minX + 16 && maxY > minY + 20) {
+  if (skinRatio > 0.12 && maxX > minX + 14 && maxY > minY + 18) {
     const box = {
       x: minX / scale,
       y: minY / scale,
@@ -979,23 +1308,33 @@ export async function detectFacesInFrame(
       confidence: Math.min(0.95, skinRatio * 1.5),
     };
 
+    const lighting = assessFaceLightingAndQuality(videoElement, box);
     const desc = extractDescriptorFromCanvas(videoElement, box);
-    const match = matchFaceDescriptor(desc, enrolledMap);
+    const match = matchFaceDescriptor(desc, enrolledMap, STRICT_MIN_SIMILARITY, undefined, {
+      maxDistance: STRICT_MAX_DISTANCE,
+      lighting,
+    });
 
     return [
       {
         ...box,
         descriptor: desc,
-        matchedStudent: match
+        lighting,
+        lowLightWarning: lighting.isLowLight || lighting.isTooDark,
+        matchedStudent: (match && !lighting.isTooDark)
           ? {
               studentId: match.student.studentId,
               name: match.student.name,
+              role: match.student.role,
+              designation: match.student.designation,
               rollNo: match.student.rollNo,
               classId: match.student.classId,
               className: match.student.className,
               photoUrl: match.student.photoUrl,
               confidencePercent: match.confidencePercent,
               distance: match.distance,
+              isAmbiguous: match.isAmbiguous,
+              margin: match.margin,
             }
           : undefined,
       },

@@ -19,7 +19,8 @@ import {
   Eye,
   CheckCircle,
   HelpCircle,
-  Volume2
+  Volume2,
+  Lightbulb
 } from "lucide-react";
 import {
   saveFaceDescriptor,
@@ -30,6 +31,7 @@ import {
   getSchoolFaceDescriptors,
   detectFacesInFrame,
   matchFaceDescriptor,
+  assessFaceLightingAndQuality,
   FaceDescriptorRecord,
   DetectedFaceBox
 } from "../../utils/faceRecognitionEngine";
@@ -105,6 +107,7 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
   // Live Camera Capture State
   const [targetPerson, setTargetPerson] = useState<any | null>(null);
   const [targetType, setTargetType] = useState<"STUDENT" | "TEACHER">("STUDENT");
+  const [enrollFacingMode, setEnrollFacingMode] = useState<"user" | "environment">("user");
   const liveVideoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [cameraActive, setCameraActive] = useState<boolean>(false);
@@ -112,9 +115,11 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
   const [countdown, setCountdown] = useState<number | null>(null);
   const [isProcessingCapture, setIsProcessingCapture] = useState<boolean>(false);
   const [captureSuccess, setCaptureSuccess] = useState<boolean>(false);
+  const [studioScreenFlash, setStudioScreenFlash] = useState<boolean>(false);
   const [guidanceMsg, setGuidanceMsg] = useState<string>("कैमरे में सीधा देखें और चेहरा फ्रेम में रखें");
 
   // Test Mode State
+  const [testFacingMode, setTestFacingMode] = useState<"user" | "environment">("user");
   const testVideoRef = useRef<HTMLVideoElement | null>(null);
   const testCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const testStreamRef = useRef<MediaStream | null>(null);
@@ -164,8 +169,9 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
   }, [isOpen, loadDescriptors]);
 
   // Start Camera for Enrollment
-  const startEnrollmentCamera = async () => {
+  const startEnrollmentCamera = async (overrideMode?: "user" | "environment") => {
     setCameraError(null);
+    const mode = overrideMode || enrollFacingMode;
     try {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
@@ -175,13 +181,13 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
       let stream: MediaStream | null = null;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
+          video: { facingMode: { ideal: mode }, width: { ideal: 640 }, height: { ideal: 480 } },
           audio: false
         });
       } catch {
         try {
           stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: "user" },
+            video: { facingMode: mode },
             audio: false
           });
         } catch {
@@ -208,6 +214,12 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
     }
   };
 
+  const toggleEnrollFacingMode = async () => {
+    const nextMode = enrollFacingMode === "user" ? "environment" : "user";
+    setEnrollFacingMode(nextMode);
+    await startEnrollmentCamera(nextMode);
+  };
+
   const stopEnrollmentCamera = () => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
@@ -228,15 +240,24 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
   }, [targetPerson]);
 
   // Start Camera for Test Mode
-  const startTestCamera = async () => {
+  const startTestCamera = async (overrideMode?: "user" | "environment") => {
+    const mode = overrideMode || testFacingMode;
     try {
       if (testStreamRef.current) {
         testStreamRef.current.getTracks().forEach((t) => t.stop());
       }
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: false
-      });
+      let stream: MediaStream | null = null;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: mode }, width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false
+        });
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: mode },
+          audio: false
+        });
+      }
       testStreamRef.current = stream;
       setTestCameraActive(true);
       if (testVideoRef.current) {
@@ -247,6 +268,12 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
     } catch {
       setTestCameraActive(false);
     }
+  };
+
+  const toggleTestFacingMode = async () => {
+    const nextMode = testFacingMode === "user" ? "environment" : "user";
+    setTestFacingMode(nextMode);
+    await startTestCamera(nextMode);
   };
 
   const stopTestCamera = () => {
@@ -370,6 +397,14 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
         width: canvas.width * 0.64,
         height: canvas.height * 0.70
       };
+
+      const lighting = assessFaceLightingAndQuality(canvas, box);
+      if (lighting.isTooDark && !studioScreenFlash) {
+        setStudioScreenFlash(true);
+        setGuidanceMsg("💡 रोशनी बहुत कम थी — स्क्रीन लाइट चालू कर दी गई है। कृपया 1 सेकंड रुकें, फिर कैप्चर करें।");
+        setIsProcessingCapture(false);
+        return;
+      }
 
       const landmarks = estimateEyeNoseLandmarks(canvas, box);
       const descriptor = extractDescriptorFromCanvas(canvas, box, false, landmarks);
@@ -716,16 +751,29 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Camera Viewfinder */}
                 <div className="relative aspect-video sm:aspect-square bg-black rounded-3xl overflow-hidden border-2 border-slate-700 shadow-xl flex items-center justify-center">
+                  {/* Camera Switch Button */}
+                  <div className="absolute top-3 right-3 z-10">
+                    <button
+                      type="button"
+                      onClick={toggleTestFacingMode}
+                      className="px-2.5 py-1.5 rounded-xl bg-slate-900/85 hover:bg-slate-800 text-cyan-300 text-xs font-bold border border-cyan-500/40 flex items-center gap-1.5 shadow-lg active:scale-95 transition cursor-pointer backdrop-blur-sm"
+                      title="कैमरा बदलें (Front / Back Camera)"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>{testFacingMode === "user" ? "📱 फ्रंट (Selfie)" : "📷 बैक (Rear)"}</span>
+                    </button>
+                  </div>
+
                   <video
                     ref={testVideoRef}
                     playsInline
                     autoPlay
                     muted
-                    className="w-full h-full object-cover transform -scale-x-100"
+                    className={`w-full h-full object-cover transition-transform ${testFacingMode === "user" ? "transform -scale-x-100" : ""}`}
                   />
                   <canvas
                     ref={testCanvasRef}
-                    className="absolute inset-0 w-full h-full pointer-events-none transform -scale-x-100"
+                    className={`absolute inset-0 w-full h-full pointer-events-none ${testFacingMode === "user" ? "transform -scale-x-100" : ""}`}
                   />
 
                   {/* Face Target Center Oval Reticle */}
@@ -821,12 +869,39 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
                     {targetPerson.name} ({targetType === "STUDENT" ? `Class ${targetPerson.className || ""}` : "शिक्षक"})
                   </p>
                 </div>
-                <button
-                  onClick={() => setTargetPerson(null)}
-                  className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                  <button
+                    type="button"
+                    onClick={toggleEnrollFacingMode}
+                    className="px-2.5 py-1 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-cyan-500/40 bg-slate-800 hover:bg-slate-700 text-cyan-300 cursor-pointer active:scale-95"
+                    title="कैमरा बदलें (फ्रंट या बैक कैमरा)"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />
+                    <span className="text-[11px]">{enrollFacingMode === "user" ? "📱 फ्रंट" : "📷 बैक"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStudioScreenFlash((prev) => !prev)}
+                    className={`px-2.5 py-1 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border cursor-pointer ${
+                      studioScreenFlash
+                        ? "bg-amber-300 text-slate-950 border-amber-400 shadow-md shadow-amber-300/40"
+                        : "bg-slate-800 text-slate-300 border-slate-700 hover:text-white"
+                    }`}
+                    title="स्क्रीन फेस लाइट (कम रोशनी में चेहरे को उजागर करने के लिए)"
+                  >
+                    <Lightbulb className={`w-3.5 h-3.5 ${studioScreenFlash ? "fill-slate-950 text-slate-950" : "text-amber-400"}`} />
+                    <span className="text-[11px]">{studioScreenFlash ? "स्क्रीन लाइट ON" : "स्क्रीन लाइट"}</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setTargetPerson(null);
+                      setStudioScreenFlash(false);
+                    }}
+                    className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
 
               {cameraError ? (
@@ -834,13 +909,17 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
                   {cameraError}
                 </div>
               ) : (
-                <div className="relative w-64 h-64 rounded-full overflow-hidden border-4 border-emerald-500 shadow-2xl shadow-emerald-500/20 bg-black flex items-center justify-center">
+                <div className={`relative w-64 h-64 rounded-full overflow-hidden border-4 shadow-2xl bg-black flex items-center justify-center transition-all duration-300 ${
+                  studioScreenFlash
+                    ? "border-white shadow-[0_0_80px_rgba(255,255,255,1)] ring-8 ring-white/90"
+                    : "border-emerald-500 shadow-emerald-500/20"
+                }`}>
                   <video
                     ref={liveVideoRef}
                     playsInline
                     autoPlay
                     muted
-                    className="w-full h-full object-cover transform -scale-x-100"
+                    className={`w-full h-full object-cover transition-transform duration-300 ${enrollFacingMode === "user" ? "transform -scale-x-100" : ""}`}
                   />
 
                   {/* Circular Face Alignment Guide */}
@@ -862,6 +941,12 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
                     </div>
                   )}
                 </div>
+              )}
+
+              {studioScreenFlash && (
+                <p className="text-[11px] font-bold text-amber-300 bg-amber-950/80 px-3 py-1 rounded-full border border-amber-500/50">
+                  💡 स्क्रीन फेस लाइट चालू • चेहरे पर पूरी रोशनी पड़ रही है
+                </p>
               )}
 
               <p className="text-xs font-bold text-slate-300">{guidanceMsg}</p>

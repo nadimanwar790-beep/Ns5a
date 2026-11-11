@@ -49,6 +49,7 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
 
   // Live Studio Capture State
   const [liveCaptureTarget, setLiveCaptureTarget] = useState<any | null>(null);
+  const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
   const liveVideoRef = useRef<HTMLVideoElement | null>(null);
   const [cameraActive, setCameraActive] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
@@ -56,15 +57,31 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
   const streamRef = useRef<MediaStream | null>(null);
 
   // Start Live Capture Camera
-  const startLiveStudioCamera = async () => {
+  const startLiveStudioCamera = async (overrideMode?: "user" | "environment") => {
+    const mode = overrideMode || facingMode;
     try {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(t => t.stop());
       }
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 640 } },
-        audio: false
-      });
+      let stream: MediaStream | null = null;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: mode }, width: { ideal: 640 }, height: { ideal: 640 } },
+          audio: false
+        });
+      } catch {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: mode },
+            audio: false
+          });
+        } catch {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false
+          });
+        }
+      }
       streamRef.current = stream;
       setCameraActive(true);
       if (liveVideoRef.current) {
@@ -74,6 +91,12 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
     } catch {
       setCameraActive(false);
     }
+  };
+
+  const toggleFacingMode = async () => {
+    const nextMode = facingMode === "user" ? "environment" : "user";
+    setFacingMode(nextMode);
+    await startLiveStudioCamera(nextMode);
   };
 
   const stopLiveStudioCamera = () => {
@@ -423,12 +446,23 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
                 <h3 className="text-sm font-bold text-white">Live Face Enrollment Studio</h3>
                 <p className="text-xs text-slate-400">{liveCaptureTarget.name} (Roll #{liveCaptureTarget.rollNo || "—"})</p>
               </div>
-              <button
-                onClick={() => setLiveCaptureTarget(null)}
-                className="w-8 h-8 rounded-lg bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={toggleFacingMode}
+                  className="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-bold border border-cyan-500/30 flex items-center gap-1.5 cursor-pointer active:scale-95 transition"
+                  title="कैमरा बदलें (Front / Back Camera)"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>{facingMode === "user" ? "📱 फ्रंट" : "📷 बैक"}</span>
+                </button>
+                <button
+                  onClick={() => setLiveCaptureTarget(null)}
+                  className="w-8 h-8 rounded-lg bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
             {/* Video Preview Frame */}
@@ -437,7 +471,7 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
                 ref={liveVideoRef}
                 playsInline
                 muted
-                className="w-full h-full object-cover"
+                className={`w-full h-full object-cover transition-transform duration-300 ${facingMode === "user" ? "transform -scale-x-100" : ""}`}
               />
               {/* Oval Target Reticle */}
               <div className="absolute inset-4 rounded-[50%] border-2 border-dashed border-emerald-400/60 pointer-events-none" />

@@ -18,13 +18,21 @@ import {
   ChevronRight,
   UserPlus,
   Eye,
-  EyeOff
+  EyeOff,
+  Lightbulb,
+  Sun,
+  Moon,
+  Trash2,
+  ShieldAlert
 } from "lucide-react";
 import {
   detectFacesInFrame,
   getSchoolFaceDescriptors,
   saveFaceDescriptor,
+  deleteFaceDescriptor,
+  purgeDummyFaceDescriptors,
   extractDescriptorFromCanvas,
+  assessFaceLightingAndQuality,
   enrollStudentFromPhotoUrl,
   enrollTeacherFromPhotoUrl,
   playAttendanceSuccessChime,
@@ -32,7 +40,8 @@ import {
   EyeBlinkDetector,
   BlinkState,
   FaceDescriptorRecord,
-  DetectedFaceBox
+  DetectedFaceBox,
+  FaceLightingAssessment
 } from "../../utils/faceRecognitionEngine";
 import { markStudentQrAttendance, todayStr, saveNstaMessage, getStaffDailyAttendance, saveStaffDailyAttendance } from "../../school-firebase";
 import type { NstaMessage } from "../../school-types";
@@ -120,11 +129,31 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
   const [activeCooldownInfo, setActiveCooldownInfo] = useState<{ name: string; rollNo?: string; remainingSec: number } | null>(null);
   const blinkDetectorRef = useRef<EyeBlinkDetector>(new EyeBlinkDetector());
 
-  // 15-20s Cooldown Guard tracker: studentId -> timestamp
+  // Screen Fill Light / Flashlight & Ambient Illumination State
+  const [screenFlashActive, setScreenFlashActive] = useState<boolean>(false);
+  const [currentLighting, setCurrentLighting] = useState<FaceLightingAssessment | null>(null);
+  const [isLowLightWarning, setIsLowLightWarning] = useState<boolean>(false);
+  const [isAmbiguousMatchNotice, setIsAmbiguousMatchNotice] = useState<string | null>(null);
+
+  // 25s Cooldown Guard tracker: studentId -> timestamp
   const scanCooldownsRef = useRef<Map<string, number>>(new Map());
+  // 3.5s Global Camera Cooldown Guard: freezes scan loop for 3.5s after any successful punch
+  const globalCooldownUntilRef = useRef<number>(0);
+  const [globalFreezeCountdown, setGlobalFreezeCountdown] = useState<number>(0);
+  const [showEnrolledProfilesModal, setShowEnrolledProfilesModal] = useState<boolean>(false);
+
   const isProcessingRef = useRef<boolean>(false);
   const streamRef = useRef<MediaStream | null>(null);
   const lastLiveDescriptorRef = useRef<number[] | null>(null);
+
+  // Global Camera Freeze countdown ticker (3s -> 2s -> 1s -> 0)
+  useEffect(() => {
+    if (globalFreezeCountdown <= 0) return;
+    const timer = setTimeout(() => {
+      setGlobalFreezeCountdown((prev) => Math.max(0, prev - 1));
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [globalFreezeCountdown]);
 
   // Compute Shift Routine based on school prayer time (Default: 09:00 AM -> 10:00 AM cutoff)
   const computeRoutineShift = useCallback((): "in" | "out" => {
@@ -301,8 +330,8 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
       const now = Date.now();
       const lastScanned = scanCooldownsRef.current.get(match.studentId) || 0;
 
-      // RULE 1: 15-20 Second Cooldown Guard
-      const COOLDOWN_MS = 20000;
+      // RULE 1: 25 Second Cooldown Guard
+      const COOLDOWN_MS = 25000;
       if (now - lastScanned < COOLDOWN_MS) {
         // Quietly maintain locked state without annoying sound or alerts
         const rem = Math.max(1, Math.ceil((COOLDOWN_MS - (now - lastScanned)) / 1000));
@@ -311,6 +340,10 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
       }
 
       scanCooldownsRef.current.set(match.studentId, now);
+      // Trigger 3.5s Global Camera Pause: freeze scanner so no other punches trigger on same face
+      globalCooldownUntilRef.current = now + 3500;
+      setGlobalFreezeCountdown(3);
+
       setActiveCooldownInfo(null);
       setPendingBlinkStudent(null);
       setLowConfidenceCandidate(null);
@@ -396,6 +429,10 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           setLastMatchedAlert(checkInEntry);
           setRecentScans((prev) => [checkInEntry, ...prev.filter((p) => p.studentId !== match.studentId)].slice(0, 8));
 
+          // 3.5s Global Camera Pause
+          globalCooldownUntilRef.current = Date.now() + 3500;
+          setGlobalFreezeCountdown(3);
+
           speakNotification(
             "शिक्षक हाजिरी दर्ज",
             `${match.name} जी, आपकी उपस्थिति दर्ज कर ली गई है।`
@@ -458,6 +495,10 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
         setLastMatchedAlert(checkInEntry);
         setRecentScans((prev) => [checkInEntry, ...prev.filter((p) => p.studentId !== match.studentId)].slice(0, 8));
 
+        // 3.5s Global Camera Pause
+        globalCooldownUntilRef.current = Date.now() + 3500;
+        setGlobalFreezeCountdown(3);
+
         // 2. Dispatch Parent Web Push Arrival / Departure Notification
         const pushTitle = action === "out"
           ? `🏠 विद्यालय प्रस्थान (OUT): ${match.name}`
@@ -514,7 +555,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
         console.warn("Error marking face attendance:", err);
       }
     },
-    [schoolId, classId, className, teacherId, kioskScanMode, currentShiftMode, onAttendanceUpdated]
+    [schoolId, classId, className, teacherId, kioskScanMode, currentShiftMode, onAttendanceUpdated, enrolledMap, teachers, schoolName]
   );
 
   // Manual Attendance Mark + Mandatory Live Face Auto-Enrollment
@@ -563,7 +604,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
     setManualSearchQuery("");
   };
 
-  // Live Camera Detection Animation Loop (RULE 4: Throttled to 380ms for Battery Saver)
+  // Live Camera Detection Animation Loop (Throttled for battery efficiency)
   useEffect(() => {
     if (!isOpen) return;
 
@@ -571,6 +612,12 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
     let lastScanTime = 0;
 
     const renderLoop = async (time: number) => {
+      // RULE 1: Global Camera Cooldown (Freeze scan loop for 3.5s after any successful punch)
+      if (Date.now() < globalCooldownUntilRef.current) {
+        animId = requestAnimationFrame(renderLoop);
+        return;
+      }
+
       // Ultra-Fast Group Scan: 140ms inference interval (~7 FPS) for smooth multi-student scanning
       if (time - lastScanTime >= 140 && videoRef.current && canvasRef.current) {
         lastScanTime = time;
@@ -599,30 +646,51 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
               setPendingBlinkStudent(null);
               setLowConfidenceCandidate(null);
               setActiveCooldownInfo(null);
+              setCurrentLighting(null);
+              setIsLowLightWarning(false);
+              setIsAmbiguousMatchNotice(null);
             } else {
-              // Multi-Face Detection: iterate over all detected faces (supports 5 to 10+ students simultaneously)
+              const primaryFace = detected[0];
+              if (primaryFace?.lighting) {
+                setCurrentLighting(primaryFace.lighting);
+                setIsLowLightWarning(primaryFace.lighting.isLowLight || primaryFace.lighting.isTooDark);
+              }
+
+              // Multi-Face Detection: iterate over all detected faces
               detected.forEach((face: DetectedFaceBox) => {
-                const { x: rawX, y, width, height, matchedStudent } = face;
+                const { x: rawX, y, width, height, matchedStudent, lighting } = face;
                 // Front camera video is mirrored via CSS (-scale-x-100); mirror box X on canvas
                 const x = facingMode === "user" ? Math.max(0, canvas.width - rawX - width) : rawX;
                 const isMatched = Boolean(matchedStudent);
 
-                // RULE 1: Cooldown Guard Check
+                // RULE 2: Per-Student Cooldown Guard Check
                 const lastScanned = matchedStudent ? (scanCooldownsRef.current.get(matchedStudent.studentId) || 0) : 0;
-                const isUnderCooldown = matchedStudent && (Date.now() - lastScanned < 20000);
+                const isUnderCooldown = matchedStudent && (Date.now() - lastScanned < 25000);
 
                 if (isUnderCooldown && matchedStudent) {
-                  const rem = Math.max(1, Math.ceil((20000 - (Date.now() - lastScanned)) / 1000));
+                  const rem = Math.max(1, Math.ceil((25000 - (Date.now() - lastScanned)) / 1000));
                   setActiveCooldownInfo({ name: matchedStudent.name, rollNo: matchedStudent.rollNo, remainingSec: rem });
+                  setPendingBlinkStudent(null);
+                  setLowConfidenceCandidate(null);
+                  // CRITICAL: DO NOT FALLTHROUGH OR ASSIGN ANOTHER PERSON! STOP HERE!
+                  return;
                 } else if (matchedStudent) {
-                  // Fast Auto-Punch for Individual or Multiple Students in Group
-                  if (matchedStudent.confidencePercent >= 82) {
+                  setActiveCooldownInfo(null);
+                  // If candidate is ambiguous (e.g. low light separation margin too slim), do NOT auto-punch!
+                  if (matchedStudent.isAmbiguous || lighting?.isTooDark) {
+                    setIsAmbiguousMatchNotice(`⚠️ रोशनी कम या पहचान संदिग्ध है (${matchedStudent.name}) — गलत नाम से बचने के लिए स्क्रीन लाइट ऑन करें या नीचे नाम पर टैप करें`);
+                    setLowConfidenceCandidate(matchedStudent);
+                  } else if (matchedStudent.confidencePercent >= 85 && (matchedStudent.distance === undefined || matchedStudent.distance <= 0.42)) {
+                    setIsAmbiguousMatchNotice(null);
                     setLowConfidenceCandidate(null);
                     setPendingBlinkStudent(null);
                     void handleMarkAttendanceSuccess(matchedStudent);
-                  } else if (matchedStudent.confidencePercent >= 60) {
+                  } else if (matchedStudent.confidencePercent >= 70) {
                     setLowConfidenceCandidate(matchedStudent);
                   }
+                } else if (lighting?.isTooDark || lighting?.isLowLight) {
+                  // No match and low light
+                  setIsAmbiguousMatchNotice(null);
                 }
 
                 // Corner bracket styling
@@ -631,9 +699,11 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                   ? "#10b981"
                   : pendingBlinkStudent
                   ? "#22d3ee"
+                  : matchedStudent?.isAmbiguous || lighting?.isTooDark
+                  ? "#f59e0b"
                   : isMatched
                   ? "#10b981"
-                  : "#f59e0b";
+                  : "#94a3b8";
 
                 const cornerLen = Math.min(width, height) * 0.22;
 
@@ -826,14 +896,31 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
             <span>{currentTimeStr || "--:--:--"}</span>
           </div>
 
+          {/* Screen Fill Light / Flash Toggle */}
           <button
             type="button"
-            onClick={() => setShowEnrollmentModal(true)}
+            onClick={() => setScreenFlashActive((prev) => !prev)}
+            className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold transition border cursor-pointer ${
+              screenFlashActive
+                ? "bg-amber-300 text-slate-950 border-amber-400 shadow-md shadow-amber-300/40"
+                : isLowLightWarning
+                ? "bg-amber-500/20 text-amber-300 border-amber-500/50 hover:bg-amber-500/30 animate-pulse"
+                : "bg-slate-800/90 text-slate-300 border-slate-700 hover:text-white"
+            }`}
+            title="कम रोशनी में चेहरे को उजागर करने के लिए स्क्रीन फेस लाइट चालू करें"
+          >
+            <Lightbulb className={`w-3.5 h-3.5 ${screenFlashActive ? "fill-slate-950 text-slate-950" : "text-amber-400"}`} />
+            <span className="hidden sm:inline">{screenFlashActive ? "स्क्रीन लाइट ON" : "स्क्रीन लाइट"}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowEnrolledProfilesModal(true)}
             className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-bold transition cursor-pointer shadow-sm shadow-emerald-900/30"
-            title="Open Universal Live Face ID Studio & Match Test"
+            title="एनरोल किए गए चेहरे देखें, सुधारें व साफ़ करें"
           >
             <Camera className="w-3.5 h-3.5 text-amber-300" />
-            <span className="hidden sm:inline">📷 Live Face Studio</span>
+            <span className="hidden sm:inline">📷 Enrolled Profiles</span>
             <span className="text-[11px] text-emerald-100 font-mono">({enrolledCount})</span>
           </button>
 
@@ -866,6 +953,58 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           className="absolute inset-0 w-full h-full object-cover pointer-events-none z-10"
         />
 
+        {/* SCREEN FILL LIGHT / FLASH EFFECT (Casts daylight-white illumination onto user's face from screen) */}
+        {screenFlashActive && (
+          <div className="absolute inset-0 z-20 pointer-events-none border-[36px] sm:border-[64px] border-white/95 shadow-[inset_0_0_120px_rgba(255,255,255,1)] flex items-center justify-center">
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full bg-white text-slate-900 font-black text-xs shadow-xl flex items-center gap-2 border border-slate-300">
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping" />
+              <span>💡 स्क्रीन फेस लाइट चालू • चेहरे पर पूरी रोशनी पड़ रही है</span>
+            </div>
+          </div>
+        )}
+
+        {/* Floating Low Light Warning Banner */}
+        {isLowLightWarning && !screenFlashActive && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-25 max-w-md w-[92%] px-4 py-2.5 rounded-2xl bg-amber-950/90 border border-amber-500/70 text-amber-200 text-xs backdrop-blur-md shadow-2xl flex items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+              <div className="min-w-0">
+                <p className="font-bold text-amber-100 truncate">
+                  {currentLighting?.isTooDark ? "💡 रोशनी बहुत कम है (Dark)" : "⚠️ रोशनी कम है (Low Light)"}
+                </p>
+                <p className="text-[11px] text-amber-300/80 truncate">
+                  सही पहचान के लिए स्क्रीन लाइट ऑन करें या सामने रोशनी लाएं
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setScreenFlashActive(true)}
+              className="px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs shrink-0 cursor-pointer shadow flex items-center gap-1"
+            >
+              <Lightbulb className="w-3.5 h-3.5 fill-slate-950" />
+              <span>लाइट ऑन</span>
+            </button>
+          </div>
+        )}
+
+        {/* Ambiguous Match Notice */}
+        {isAmbiguousMatchNotice && (
+          <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-25 max-w-lg w-[92%] px-4 py-2.5 rounded-2xl bg-slate-900/95 border border-amber-500/80 text-amber-200 text-xs backdrop-blur-md shadow-2xl flex items-center justify-between gap-3 animate-in fade-in slide-in-from-bottom-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+              <p className="font-semibold text-white truncate text-xs">{isAmbiguousMatchNotice}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowManualSearch(true)}
+              className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shrink-0 cursor-pointer"
+            >
+              हाजिरी चुनें
+            </button>
+          </div>
+        )}
+
         {/* Camera Error Display */}
         {cameraError && (
           <div className="absolute inset-0 bg-slate-950/95 flex flex-col items-center justify-center p-6 text-center z-30">
@@ -880,6 +1019,36 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
             >
               Retry Camera
             </button>
+          </div>
+        )}
+
+        {/* GLOBAL CAMERA COOLDOWN FREEZE OVERLAY (3.5s Pause with Large Green Tick) */}
+        {globalFreezeCountdown > 0 && lastMatchedAlert && (
+          <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-slate-950/85 backdrop-blur-md p-6 text-center animate-in fade-in duration-200">
+            <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center shadow-[0_0_60px_rgba(16,185,129,0.95)] mb-4 animate-bounce">
+              <Check className="w-14 h-14 sm:w-16 sm:h-16 stroke-[3.5]" />
+            </div>
+            <div className="bg-slate-900/95 border-2 border-emerald-500/70 rounded-3xl p-5 shadow-2xl max-w-sm w-full mx-auto">
+              <div className="flex items-center justify-center gap-2 mb-2">
+                <span className={`px-2.5 py-0.5 rounded-full text-xs font-black uppercase ${
+                  lastMatchedAlert.action === "out" ? "bg-rose-500 text-white" : "bg-emerald-500 text-slate-950"
+                }`}>
+                  {lastMatchedAlert.action === "out" ? "🔴 OUT दर्ज (प्रस्थान)" : `🟢 IN दर्ज (${lastMatchedAlert.status})`}
+                </span>
+                <span className="text-xs font-mono text-emerald-300 font-bold">{lastMatchedAlert.time}</span>
+              </div>
+              <h3 className="text-xl font-black text-white truncate">{lastMatchedAlert.name}</h3>
+              <p className="text-xs text-slate-300 mt-1">
+                {lastMatchedAlert.className || "Class"} • Roll #{lastMatchedAlert.rollNo || "—"} ({lastMatchedAlert.confidence}% Match)
+              </p>
+              
+              <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+                <span className="text-xs font-bold text-emerald-300">
+                  कैमरा पॉज़: {globalFreezeCountdown}s (अगले व्यक्ति के लिए रुकें)
+                </span>
+              </div>
+            </div>
           </div>
         )}
 
@@ -921,11 +1090,16 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
 
             {/* Bottom Oval Pill / Shift Indicator */}
             <div className="pointer-events-auto flex flex-col items-center gap-1">
-              <span className="text-[11px] font-bold text-emerald-400/90 bg-black/60 px-2.5 py-0.5 rounded-full backdrop-blur-xs flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setShowEnrolledProfilesModal(true)}
+                className="text-[11px] font-bold text-emerald-400/90 bg-black/60 hover:bg-black/85 px-2.5 py-0.5 rounded-full backdrop-blur-xs flex items-center gap-1 border border-emerald-500/30 transition cursor-pointer"
+                title="एनरोल किए गए चेहरे देखें व साफ़ करें"
+              >
                 <span>{(kioskScanMode === "auto" ? currentShiftMode : kioskScanMode) === "in" ? "🟢 IN Mode (आगमन)" : "🔴 OUT Mode (प्रस्थान)"}</span>
                 <span>•</span>
-                <span>{enrolledCount > 0 ? `${enrolledCount} Enrolled` : "0 Enrolled"}</span>
-              </span>
+                <span>{enrolledCount > 0 ? `${enrolledCount} Enrolled (जाँचें)` : "0 Enrolled"}</span>
+              </button>
             </div>
           </div>
         </div>
@@ -1088,7 +1262,10 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                 </div>
               </div>
               <div className="flex items-center gap-1.5 overflow-x-auto py-0.5 max-w-full sm:max-w-md">
-                {students.slice(0, 5).map((st) => {
+                {[
+                  ...(teachers || []).map(t => ({ ...t, isTeacher: true })),
+                  ...(students || [])
+                ].slice(0, 7).map((st) => {
                   const isEnrolled = Boolean(enrolledMap[st.id]);
                   return (
                     <button
@@ -1102,19 +1279,17 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                       }`}
                       title={isEnrolled ? `${st.name} (चेहरा सेव है)` : `${st.name} का चेहरा सेव करें व हाजिरी लगाएं`}
                     >
-                      <span>{isEnrolled ? "✓📷" : "+📸"} {st.name.split(" ")[0]} (#{st.rollNo})</span>
+                      <span>{isEnrolled ? "✓📷" : "+📸"} {st.name.split(" ")[0]} {st.rollNo ? `(#${st.rollNo})` : "(Staff)"}</span>
                     </button>
                   );
                 })}
-                {students.length > 5 && (
-                  <button
-                    type="button"
-                    onClick={() => setShowManualSearch(true)}
-                    className="px-2 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-[11px] shrink-0"
-                  >
-                    +{students.length - 5}
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => setShowManualSearch(true)}
+                  className="px-2 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-[11px] shrink-0"
+                >
+                  खोजें...
+                </button>
               </div>
             </div>
           </div>
@@ -1275,6 +1450,157 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                     </button>
                   </div>
                 ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── ENROLLED PROFILES & BIOMETRIC HEALTH MODAL ── */}
+      {showEnrolledProfilesModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-2xl p-4 sm:p-6 shadow-2xl flex flex-col max-h-[90vh] text-white">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 flex items-center justify-center font-bold">
+                  <UserCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base sm:text-lg font-black text-white flex items-center gap-2">
+                    <span>पंजीकृत चेहरे (Enrolled Profiles)</span>
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-mono text-xs border border-emerald-500/30">
+                      {Object.keys(enrolledMap).length} Active
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    AI फेस डेटाबेस में सुरक्षित 128-D वेक्टर्स। गलत पहचान से बचने के लिए धुंधले चेहरे हटाएँ या री-एनरोल करें।
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowEnrolledProfilesModal(false)}
+                className="w-9 h-9 rounded-xl bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center cursor-pointer transition border border-slate-700"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Quick Actions Bar */}
+            <div className="mt-3 flex items-center justify-between gap-2 flex-wrap bg-slate-950/60 p-2.5 rounded-2xl border border-slate-800">
+              <div className="flex items-center gap-2 text-xs text-slate-300">
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                <span className="font-semibold">जीरो-मीन नॉर्मलाइज्ड वेक्टर (Strict Distance ≤ 0.42)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const validIds = [...students.map(s => s.id), ...teachers.map(t => t.id)];
+                    await purgeDummyFaceDescriptors(schoolId, validIds);
+                    await loadDescriptors();
+                    setCooldownToast("✨ अमान्य / डमी वेक्टर्स सफलतापूर्वक साफ़ कर दिए गए!");
+                    setTimeout(() => setCooldownToast(null), 3000);
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+                  title="डमी / अमान्य वेक्टर्स हटाएँ"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                  <span>डमी वेक्टर्स साफ़ करें</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowEnrolledProfilesModal(false);
+                    setShowEnrollmentModal(true);
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1.5 transition cursor-pointer shadow-sm shadow-emerald-700/30"
+                >
+                  <Camera className="w-3.5 h-3.5 text-amber-300" />
+                  <span>नया चेहरा एनरोल करें</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Profiles List */}
+            <div className="flex-1 overflow-y-auto mt-3 divide-y divide-slate-800/80 pr-1 space-y-2">
+              {Object.keys(enrolledMap).length === 0 ? (
+                <div className="py-12 text-center text-slate-500">
+                  <UserCheck className="w-12 h-12 mx-auto text-slate-600 mb-2" />
+                  <p className="font-bold">अभी कोई चेहरा एनरोल नहीं है</p>
+                  <p className="text-xs text-slate-500 mt-1">नीचे 'नया चेहरा एनरोल करें' पर क्लिक करके फोटो लें।</p>
+                </div>
+              ) : (
+                Object.values(enrolledMap).map((rec) => {
+                  const isTeacher = rec.role === "TEACHER" || (teachers && teachers.some(t => t.id === rec.studentId));
+                  return (
+                    <div
+                      key={rec.studentId}
+                      className="pt-2.5 pb-2 px-2 flex items-center justify-between gap-3 hover:bg-slate-800/50 rounded-2xl transition"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-12 h-12 rounded-2xl bg-slate-800 overflow-hidden shrink-0 border border-slate-700 flex items-center justify-center font-bold text-sm text-slate-300">
+                          {rec.photoUrl ? (
+                            <img src={rec.photoUrl} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            <span>{rec.name?.slice(0, 2).toUpperCase()}</span>
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h4 className="text-sm font-black text-white truncate">{rec.name}</h4>
+                            <span className={`px-2 py-0.2 rounded-full text-[10px] font-black uppercase ${
+                              isTeacher ? "bg-purple-500/20 text-purple-300 border border-purple-500/40" : "bg-blue-500/20 text-blue-300 border border-blue-500/40"
+                            }`}>
+                              {isTeacher ? "शिक्षक (Faculty)" : (rec.className || "छात्र")}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-400 mt-0.5 truncate font-mono">
+                            {rec.rollNo ? `Roll #${rec.rollNo} • ` : ""}{rec.designation ? `${rec.designation} • ` : ""}ID: {rec.studentId}
+                          </p>
+                          <div className="flex items-center gap-2 mt-1 text-[11px] text-emerald-400">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                            <span>128-D Zero-Mean Active</span>
+                            <span className="text-slate-500">•</span>
+                            <span className="text-slate-400 font-mono text-[10px]">
+                              {rec.enrolledAt ? new Date(rec.enrolledAt).toLocaleDateString("en-IN") : "Enrolled"}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowEnrolledProfilesModal(false);
+                            setShowEnrollmentModal(true);
+                          }}
+                          className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 font-bold text-xs flex items-center gap-1 transition cursor-pointer"
+                          title="इस व्यक्ति का नया साफ़ फ्रंट फेस फोटो लें"
+                        >
+                          <Camera className="w-3.5 h-3.5 text-amber-400" />
+                          <span className="hidden sm:inline">री-एनरोल</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (window.confirm(`क्या आप ${rec.name} का चेहरा बायोमेट्रिक डेटाबेस से हटाना चाहते हैं?`)) {
+                              await deleteFaceDescriptor(rec.studentId, schoolId);
+                              await loadDescriptors();
+                              setCooldownToast(`🗑️ ${rec.name} का बायोमेट्रिक वेक्टर हटा दिया गया`);
+                              setTimeout(() => setCooldownToast(null), 3000);
+                            }
+                          }}
+                          className="w-8 h-8 rounded-xl bg-rose-500/10 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 flex items-center justify-center transition cursor-pointer"
+                          title="चेहरा वेक्टर डिलीट करें (खराब या धुंधला होने पर)"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
               )}
             </div>
           </div>
