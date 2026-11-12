@@ -15,6 +15,7 @@ import {
 import {
   saveFaceDescriptor,
   extractDescriptorFromCanvas,
+  extractNeuralDescriptor,
   estimateEyeNoseLandmarks,
   playAttendanceSuccessChime,
   FaceDescriptorRecord,
@@ -147,7 +148,17 @@ export const StudentFaceIdModal: React.FC<Props> = ({
       };
 
       const landmarks = estimateEyeNoseLandmarks(canvas, box);
-      const descriptor = extractDescriptorFromCanvas(canvas, box, false, landmarks);
+      const neural = await extractNeuralDescriptor(canvas);
+      const is512 = Boolean(neural?.descriptor && neural.descriptor.length === 512);
+      const is128 = Boolean(neural?.descriptor && neural.descriptor.length === 128);
+      const descriptor = (is512 || is128)
+        ? neural!.descriptor
+        : extractDescriptorFromCanvas(canvas, box, false, landmarks);
+      const source = is512
+        ? "arcface_512d"
+        : is128
+        ? "face_api_neural"
+        : "student_self_update";
 
       const nowIso = new Date().toISOString();
       const stId = student?.id || student?.studentId || "student";
@@ -161,8 +172,9 @@ export const StudentFaceIdModal: React.FC<Props> = ({
         className: student?.className || "",
         photoUrl: photoDataUrl,
         descriptor,
+        arcfaceDescriptor: is512 ? descriptor : undefined,
         enrolledAt: nowIso,
-        source: "student_self_update",
+        source
       };
 
       // 1. Save biometric 128-D descriptor in IndexedDB + LocalStorage

@@ -1098,6 +1098,21 @@ async function startServer() {
     void runMonthlyAutoFeeNotifier();
   }, 15 * 60 * 1000);
 
+  // Serve ONNX WebAssembly & JS runtime files directly from node_modules with proper MIME headers
+  // This bypasses Vite's /public directory dynamic import restriction entirely
+  app.use(
+    "/onnx-wasm",
+    express.static(path.join(ROOT_DIR, "node_modules/onnxruntime-web/dist"), {
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith(".wasm")) {
+          res.setHeader("Content-Type", "application/wasm");
+        } else if (filePath.endsWith(".mjs") || filePath.endsWith(".js")) {
+          res.setHeader("Content-Type", "text/javascript");
+        }
+      },
+    })
+  );
+
   if (!isProduction) {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({

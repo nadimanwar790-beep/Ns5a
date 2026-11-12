@@ -72,7 +72,7 @@ export default defineConfig(async ({ command }) => {
           ],
         },
         injectManifest: {
-          globIgnores: ['**/*.map', 'assets/aistudio/**'],
+          globIgnores: ['**/*.map', '**/*.wasm', 'assets/aistudio/**', 'onnx-wasm/**', 'models/**'],
           maximumFileSizeToCacheInBytes: 20 * 1024 * 1024,
         },
       })

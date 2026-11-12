@@ -47,6 +47,7 @@ import {
   Plus,
   Building2,
   Briefcase,
+  LogOut,
 } from "lucide-react";
 
 // Resilient dynamic import helper with automatic retry & fallback

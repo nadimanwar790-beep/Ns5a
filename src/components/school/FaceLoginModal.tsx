@@ -25,6 +25,8 @@ import {
   EyeBlinkDetector,
   BlinkState,
   FaceDescriptorRecord,
+  enrollStudentFromPhotoUrl,
+  getDeletedFaceIds,
 } from "../../utils/faceRecognitionEngine";
 import { getLocalStudents } from "../../school-firebase";
 import { speakNotification } from "../../utils/voiceNotifyEngine";
@@ -94,47 +96,24 @@ export const FaceLoginModal: React.FC<Props> = ({
         cleanMap[stId] = rec;
       });
 
-      // 4. If any real students have photoUrl but not yet enrolled in descriptors, auto-generate descriptors
+      // 4. If any real students have photoUrl but not yet enrolled in descriptors, auto-generate descriptors (skipping deleted)
+      const deletedFaceIds = getDeletedFaceIds(schoolId || "default");
       const pendingEnroll = realStudents.filter(
-        (s: any) => s && s.photoUrl && !cleanMap[s.id]
+        (s: any) => s && s.photoUrl && !cleanMap[s.id] && !deletedFaceIds.has(s.id)
       );
 
       for (const st of pendingEnroll.slice(0, 10)) {
         try {
-          const img = new Image();
-          img.crossOrigin = "anonymous";
-          await new Promise((res, rej) => {
-            img.onload = res;
-            img.onerror = rej;
-            img.src = st.photoUrl;
+          const rec = await enrollStudentFromPhotoUrl({
+            id: st.id,
+            schoolId: st.schoolId || schoolId,
+            name: st.name,
+            rollNo: st.rollNo,
+            classId: st.classId,
+            className: st.className,
+            photoUrl: st.photoUrl,
           });
-
-          const c = document.createElement("canvas");
-          c.width = img.naturalWidth || 200;
-          c.height = img.naturalHeight || 200;
-          const ctx = c.getContext("2d", { willReadFrequently: true });
-          if (ctx) {
-            ctx.drawImage(img, 0, 0);
-            const box = {
-              x: c.width * 0.15,
-              y: c.height * 0.08,
-              width: c.width * 0.7,
-              height: c.height * 0.75,
-            };
-            const descriptor = extractDescriptorFromCanvas(c, box);
-            const rec: FaceDescriptorRecord = {
-              studentId: st.id,
-              schoolId: st.schoolId || schoolId,
-              name: st.name,
-              rollNo: st.rollNo,
-              classId: st.classId,
-              className: st.className,
-              photoUrl: st.photoUrl,
-              descriptor,
-              enrolledAt: new Date().toISOString(),
-              source: "id_photo",
-            };
-            await saveFaceDescriptor(rec);
+          if (rec) {
             cleanMap[st.id] = rec;
           }
         } catch {}

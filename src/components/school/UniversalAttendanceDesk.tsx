@@ -28,6 +28,7 @@ interface Props {
   teachers?: SchoolTeacher[];
   staff?: StaffEmployee[];
   onOpenScanner?: () => void;
+  onOpenFaceTest?: () => void;
   onOpenLocationModal?: () => void;
   onViewClassAttendance?: (classId: string) => void;
 }
@@ -41,6 +42,7 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
   teachers = [],
   staff = [],
   onOpenScanner,
+  onOpenFaceTest,
   onOpenLocationModal,
   onViewClassAttendance,
 }) => {
@@ -476,6 +478,18 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
               className="px-3 py-1.5 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-black text-xs flex items-center gap-1.5 shadow-md shadow-purple-600/30 transition active:scale-95 cursor-pointer"
             >
               <span>📷 QR / Face Scan</span>
+            </button>
+          )}
+
+          {/* Face Test Playground Quick Launcher */}
+          {onOpenFaceTest && (
+            <button
+              type="button"
+              onClick={onOpenFaceTest}
+              className="px-3 py-1.5 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/30 ring-1 ring-amber-300 transition active:scale-95 cursor-pointer"
+              title="टेस्ट मोड: अटेंडेंस नहीं लगेगी, सिर्फ कैमरा में चेहरा मैच करके वॉयस से नाम बोलेगा"
+            >
+              <span>🧪 फेस टेस्ट मोड</span>
             </button>
           )}
         </div>

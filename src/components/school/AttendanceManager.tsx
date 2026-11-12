@@ -9,7 +9,7 @@ import {
   CheckCircle, XCircle, Download, Calendar, Users, ChevronLeft, ChevronRight,
   Camera, QrCode, Phone, PhoneCall, Bell, Send, AlertTriangle, AlertCircle,
   CheckCircle2, MessageCircle, ShieldAlert, Sparkles, PhoneOutgoing, Loader2,
-  Cake, Gift, Heart, Wifi, WifiOff, Cloud, CloudOff, RefreshCw
+  Cake, Gift, Heart, Wifi, WifiOff, Cloud, CloudOff, RefreshCw, Volume2, Clock
 } from "lucide-react";
 import { speakNotification } from "../../utils/voiceNotifyEngine";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
@@ -56,6 +56,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
   const [selectedMonth, setSelectedMonth] = useState(currentMonthStr());
   const [loading, setLoading] = useState(true);
   const [showFaceKiosk, setShowFaceKiosk] = useState(false);
+  const [faceKioskTestMode, setFaceKioskTestMode] = useState(false);
   const [showFaceStudio, setShowFaceStudio] = useState(false);
   const [showQrScanner, setShowQrScanner] = useState(false);
   const [selectedStudentForModal, setSelectedStudentForModal] = useState<SchoolStudent | null>(null);
@@ -698,24 +699,39 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
             </div>
           )}
 
-          {/* Smart Attendance Actions: AI Face Kiosk, Live Face Studio, Camera QR, and Class QR */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {/* Smart Attendance Actions: AI Face Kiosk, Face Match Test, Live Face Studio, Camera QR, and Class QR */}
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
             <button
               type="button"
-              onClick={() => setShowFaceKiosk(true)}
-              className="py-2.5 px-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-95 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/20 transition cursor-pointer"
+              onClick={() => {
+                setFaceKioskTestMode(false);
+                setShowFaceKiosk(true);
+              }}
+              className="py-2.5 px-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-95 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1 shadow-md shadow-emerald-600/20 transition cursor-pointer"
             >
               <Sparkles size={14} className="text-amber-300" />
               <span>AI Face Kiosk</span>
             </button>
             <button
               type="button"
+              onClick={() => {
+                setFaceKioskTestMode(true);
+                setShowFaceKiosk(true);
+              }}
+              className="py-2.5 px-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 active:scale-95 text-slate-950 rounded-xl text-xs font-black flex items-center justify-center gap-1 shadow-md shadow-amber-500/30 ring-1 ring-amber-300 transition cursor-pointer"
+              title="टेस्ट मोड: अटेंडेंस नहीं लगेगी, सिर्फ कैमरा में चेहरा मैच करके वॉयस से नाम बोलेगा"
+            >
+              <Volume2 size={14} className="text-slate-950" />
+              <span>🧪 फेस टेस्ट</span>
+            </button>
+            <button
+              type="button"
               onClick={() => setShowFaceStudio(true)}
-              className="py-2.5 px-2.5 bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-500 hover:to-cyan-500 active:scale-95 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow-md shadow-teal-600/20 transition cursor-pointer"
+              className="py-2.5 px-2 bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-500 hover:to-cyan-500 active:scale-95 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1 shadow-md shadow-teal-600/20 transition cursor-pointer"
               title="लाइव कैमरे से छात्र का चेहरा रजिस्टर व टेस्ट करें"
             >
               <Camera size={14} className="text-amber-200" />
-              <span>📷 लाइव फेस आईडी</span>
+              <span>📷 फेस आईडी</span>
             </button>
             <button
               type="button"
@@ -1476,7 +1492,11 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
       {/* AI Face Attendance Kiosk Modal */}
       <FaceAttendanceKioskModal
         isOpen={showFaceKiosk}
-        onClose={() => setShowFaceKiosk(false)}
+        onClose={() => {
+          setShowFaceKiosk(false);
+          setFaceKioskTestMode(false);
+        }}
+        initialTestMode={faceKioskTestMode}
         schoolId={schoolId}
         schoolName={className ? `${className} Face Attendance` : "School Campus"}
         classId={classId}

@@ -24,6 +24,7 @@ import {
 } from "./demoDataStore";
 import { HolidayManager } from "./HolidayManager";
 import { StaffHRMManager } from "./StaffHRMManager";
+import { NoticeBoardManager } from "./NoticeBoardManager";
 import { getSchool } from "../../school-firebase";
 import { getSavedSchoolLogo, isAppLogo } from "./feeReceiptUtils";
 

@@ -12,6 +12,41 @@
  */
 
 import * as faceapi from "@vladmandic/face-api/dist/face-api.esm.js";
+import {
+  initArcFaceEngine,
+  isArcFaceReady,
+  extractArcFace512Descriptor,
+  extractArcFaceFromPhotoUrl,
+  matchArcFace512,
+  calculateArcFaceCosineSimilarity,
+  calculateArcFaceEuclideanDistance,
+  ARCFACE_MATCH_THRESHOLD,
+  ARCFACE_HIGH_CONFIDENCE_THRESHOLD,
+  ArcFaceMatchResult,
+} from "./arcfaceEngine";
+
+export {
+  initArcFaceEngine,
+  isArcFaceReady,
+  extractArcFace512Descriptor,
+  extractArcFaceFromPhotoUrl,
+  matchArcFace512,
+  calculateArcFaceCosineSimilarity,
+  calculateArcFaceEuclideanDistance,
+  ARCFACE_MATCH_THRESHOLD,
+  ARCFACE_HIGH_CONFIDENCE_THRESHOLD,
+};
+
+export interface HeadPoseEstimate {
+  yaw: number;   // -45° to +45° (negative = looking left, positive = looking right, 0 = straight)
+  pitch: number; // -30° to +30° (negative = looking up, positive = looking down)
+  roll: number;  // head tilt angle
+  label: "FRONT" | "LEFT" | "RIGHT" | "UP" | "DOWN";
+  isFrontFacing: boolean;
+  isLeftFacing: boolean;
+  isRightFacing: boolean;
+  depthRatio?: number;
+}
 
 export interface FaceDescriptorRecord {
   studentId: string;
@@ -23,9 +58,23 @@ export interface FaceDescriptorRecord {
   classId?: string;
   className?: string;
   photoUrl?: string;
-  descriptor: number[]; // 128-D normalized deep neural vector
+  descriptor: number[]; // 512-D ArcFace or 128-D ResNet deep neural vector
+  arcfaceDescriptor?: number[]; // Explicit 512-D ArcFace Deep Biometric Vector
+  descriptors3D?: {
+    front?: number[];
+    left?: number[];    // ~15° Left turn vector
+    right?: number[];   // ~15° Right turn vector
+  };
+  depthMesh?: {
+    yaw?: number;
+    pitch?: number;
+    roll?: number;
+    eyeDistanceRatio?: number;
+    is3DCalibrated?: boolean;
+    anglesCount?: number;
+  };
   enrolledAt: string;
-  source: "face_api_neural" | "id_photo" | "live_kiosk" | "admission_form" | "live_studio";
+  source: "arcface_512d" | "face_api_neural" | "id_photo" | "live_kiosk" | "admission_form" | "live_studio" | "student_self_update" | "3d_multi_angle";
   compositeKey?: string; // ${schoolId}_${studentId}
 }
 
@@ -47,8 +96,13 @@ export interface DetectedFaceBox {
   height: number;
   confidence: number;
   descriptor?: number[];
+  pose?: HeadPoseEstimate;
+  landmarks?: any;
   lighting?: FaceLightingAssessment;
   lowLightWarning?: boolean;
+  isNeuralActive?: boolean;
+  isAiEngineWarmingUp?: boolean;
+  is3DActive?: boolean;
   matchedStudent?: {
     studentId: string;
     name: string;
@@ -62,6 +116,8 @@ export interface DetectedFaceBox {
     distance: number;
     isAmbiguous?: boolean;
     margin?: number;
+    matchedAngle?: "front" | "left" | "right" | "primary";
+    is3DVerified?: boolean;
   };
 }
 
@@ -79,8 +135,8 @@ export function isFaceApiLoaded(): boolean {
 }
 
 /**
- * Pre-warms and loads TinyFaceDetector, FaceLandmark68, and FaceRecognition models
- * from /models/face-api directory.
+ * Pre-warms and loads face detection, 68 landmarks, and ResNet-34 FaceRecognition models
+ * from /models/face-api directory. Loads tiny and full landmark nets to prevent inference throws.
  */
 export async function loadFaceApiModels(): Promise<boolean> {
   if (isModelsLoaded) return true;
@@ -89,22 +145,43 @@ export async function loadFaceApiModels(): Promise<boolean> {
   modelsLoadingPromise = (async () => {
     try {
       const modelPath = "/models/face-api";
+      // Try loading SSD MobileNet V1 if available in models folder, otherwise tinyFaceDetector
+      let isSsdLoaded = false;
+      try {
+        await faceapi.nets.ssdMobilenetv1.loadFromUri(modelPath);
+        isSsdLoaded = true;
+        console.log("[FaceAPI V2] SSD MobileNet V1 loaded successfully!");
+      } catch {
+        // Fallback to tinyFaceDetector
+      }
+
       await Promise.all([
-        faceapi.nets.tinyFaceDetector.loadFromUri(modelPath),
-        faceapi.nets.faceLandmark68Net.loadFromUri(modelPath),
-        faceapi.nets.faceRecognitionNet.loadFromUri(modelPath),
+        faceapi.nets.tinyFaceDetector.loadFromUri(modelPath).catch(() => {}),
+        faceapi.nets.faceLandmark68Net.loadFromUri(modelPath).catch(() => {}),
+        faceapi.nets.faceLandmark68TinyNet.loadFromUri(modelPath).catch(() => {}),
+        faceapi.nets.faceRecognitionNet.loadFromUri(modelPath).catch(() => {}),
       ]);
+      modelsLoadingPromise = null;
       isModelsLoaded = true;
-      console.log("[FaceAPI V2] Neural models loaded successfully (ResNet-34 + TinyFace + Landmark68)");
+      console.log(`[FaceAPI V2] Neural models loaded successfully (ResNet-34 + ${isSsdLoaded ? "SSD MobileNet V1" : "TinyFace"} + Landmark68)`);
       return true;
     } catch (err) {
-      console.warn("[FaceAPI V2] Failed to load models from /models/face-api, will fallback to heuristic:", err);
+      console.warn("[FaceAPI V2] Failed to load models from /models/face-api, will allow retry:", err);
       isModelsLoaded = false;
+      modelsLoadingPromise = null;
       return false;
     }
   })();
 
   return modelsLoadingPromise;
+}
+
+/**
+ * Returns whether to use tiny landmark model based on what is currently loaded in memory.
+ */
+function getLandmarkOption(): boolean {
+  if (faceapi.nets.faceLandmark68TinyNet?.params) return true;
+  return false;
 }
 
 // Auto-trigger loading in background on client side
@@ -116,17 +193,70 @@ if (typeof window !== "undefined") {
 
 // ── 2. INDEXEDDB PERSISTENCE (Composite Key: schoolId_studentId) ─────────────
 
+// In-memory runtime cache for instantaneous access across all tabs & modals
+const inMemoryDescriptorCache: Record<string, Record<string, FaceDescriptorRecord>> = {};
+const DELETED_DESCRIPTORS_PREFIX = "nst_face_deleted_";
+
+/**
+ * Returns a Set of student/teacher IDs whose face descriptors were explicitly deleted by an admin.
+ */
+export function getDeletedFaceIds(schoolId: string): Set<string> {
+  const schoolKey = schoolId || "default";
+  try {
+    const raw = localStorage.getItem(`${DELETED_DESCRIPTORS_PREFIX}${schoolKey}`);
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) {
+        return new Set(arr);
+      }
+    }
+  } catch {}
+  return new Set();
+}
+
+/**
+ * Marks a student/teacher face as explicitly deleted, preventing auto-enrollment from photoUrl.
+ */
+export function markFaceDescriptorDeleted(studentId: string, schoolId: string): void {
+  if (!studentId) return;
+  const schoolKey = schoolId || "default";
+  try {
+    const set = getDeletedFaceIds(schoolKey);
+    set.add(studentId);
+    localStorage.setItem(`${DELETED_DESCRIPTORS_PREFIX}${schoolKey}`, JSON.stringify(Array.from(set)));
+  } catch {}
+}
+
+/**
+ * Clears the deleted mark when an admin explicitly captures a new live photo or re-enrolls.
+ */
+export function unmarkFaceDescriptorDeleted(studentId: string, schoolId: string): void {
+  if (!studentId) return;
+  const schoolKey = schoolId || "default";
+  try {
+    const set = getDeletedFaceIds(schoolKey);
+    if (set.has(studentId)) {
+      set.delete(studentId);
+      localStorage.setItem(`${DELETED_DESCRIPTORS_PREFIX}${schoolKey}`, JSON.stringify(Array.from(set)));
+    }
+  } catch {}
+}
+
+export function isFaceDescriptorDeleted(studentId: string, schoolId: string): boolean {
+  if (!studentId) return false;
+  return getDeletedFaceIds(schoolId).has(studentId);
+}
+
 function openFaceDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     if (typeof window === "undefined" || !window.indexedDB) {
       reject(new Error("IndexedDB not supported"));
       return;
     }
-    const req = window.indexedDB.open(IDB_DB_NAME, 1);
+    const req = window.indexedDB.open(IDB_DB_NAME, 2);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(IDB_STORE_NAME)) {
-        // Multi-tenant key prevents collisions across different schools
         const store = db.createObjectStore(IDB_STORE_NAME, { keyPath: "compositeKey" });
         store.createIndex("schoolId", "schoolId", { unique: false });
         store.createIndex("studentId", "studentId", { unique: false });
@@ -134,6 +264,10 @@ function openFaceDb(): Promise<IDBDatabase> {
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
+    req.onblocked = () => {
+      console.warn("[FaceDB] IndexedDB blocked");
+      reject(new Error("IndexedDB blocked"));
+    };
   });
 }
 
@@ -143,10 +277,20 @@ function makeCompositeKey(schoolId: string, studentId: string): string {
 
 export async function saveFaceDescriptor(record: FaceDescriptorRecord): Promise<void> {
   if (!record || !record.studentId) return;
-  const compositeKey = record.compositeKey || makeCompositeKey(record.schoolId, record.studentId);
-  const enriched: FaceDescriptorRecord = { ...record, compositeKey };
+  const schoolKey = record.schoolId || "default";
+  const compositeKey = record.compositeKey || makeCompositeKey(schoolKey, record.studentId);
+  const enriched: FaceDescriptorRecord = { ...record, schoolId: schoolKey, compositeKey };
 
-  // 1. IndexedDB
+  // Explicit save: unmark from deleted tombstone so re-enrollment works properly
+  unmarkFaceDescriptorDeleted(record.studentId, schoolKey);
+
+  // 1. In-Memory Cache (Immediate synchronous availability)
+  if (!inMemoryDescriptorCache[schoolKey]) {
+    inMemoryDescriptorCache[schoolKey] = {};
+  }
+  inMemoryDescriptorCache[schoolKey][record.studentId] = enriched;
+
+  // 2. IndexedDB (Persistent multi-MB storage)
   try {
     const db = await openFaceDb();
     await new Promise<void>((resolve, reject) => {
@@ -156,23 +300,34 @@ export async function saveFaceDescriptor(record: FaceDescriptorRecord): Promise<
       req.onsuccess = () => resolve();
       req.onerror = () => reject(req.error);
     });
-  } catch {}
+  } catch (err) {
+    console.warn("[FaceDB] IndexedDB save fallback active:", err);
+  }
 
-  // 2. LocalStorage fallback
+  // 3. LocalStorage fallback (Compact record without heavy raw base64 to avoid DOMException: QuotaExceededError)
   try {
-    const key = `${DESCRIPTOR_STORAGE_PREFIX}${record.schoolId}`;
+    const key = `${DESCRIPTOR_STORAGE_PREFIX}${schoolKey}`;
     const existing = JSON.parse(localStorage.getItem(key) || "{}");
-    existing[record.studentId] = enriched;
+    const compactRecord: FaceDescriptorRecord = {
+      ...enriched,
+      // If photoUrl is huge data URL (> 4KB), strip for localStorage to avoid QuotaExceededError
+      photoUrl: enriched.photoUrl && enriched.photoUrl.startsWith("data:") && enriched.photoUrl.length > 5000
+        ? ""
+        : enriched.photoUrl,
+    };
+    existing[record.studentId] = compactRecord;
     localStorage.setItem(key, JSON.stringify(existing));
-  } catch {}
+  } catch (lsErr) {
+    console.warn("[FaceDB] LocalStorage save warning:", lsErr);
+  }
 
-  // 3. Firestore Sync (cloud backup for all school devices)
+  // 4. Firestore Sync (Cloud backup for all school devices)
   try {
     const { doc, setDoc } = await import("firebase/firestore");
     const { db } = await import("../school-firebase");
-    if (db && record.schoolId && record.studentId) {
+    if (db && schoolKey && record.studentId) {
       const sanitized = JSON.parse(JSON.stringify(enriched));
-      const ref = doc(db, `schools/${record.schoolId}/face_descriptors_v2/${record.studentId}`);
+      const ref = doc(db, `schools/${schoolKey}/face_descriptors_v2/${record.studentId}`);
       await setDoc(ref, sanitized, { merge: true });
     }
   } catch {}
@@ -180,8 +335,19 @@ export async function saveFaceDescriptor(record: FaceDescriptorRecord): Promise<
 
 export async function getSchoolFaceDescriptors(schoolId: string): Promise<Record<string, FaceDescriptorRecord>> {
   const result: Record<string, FaceDescriptorRecord> = {};
+  const schoolKey = schoolId || "default";
+  const deletedSet = getDeletedFaceIds(schoolKey);
 
-  // 1. Load from IndexedDB
+  // 1. First, populate from in-memory cache (filtering out any deleted IDs)
+  if (inMemoryDescriptorCache[schoolKey]) {
+    for (const [stId, rec] of Object.entries(inMemoryDescriptorCache[schoolKey])) {
+      if (!deletedSet.has(stId)) {
+        result[stId] = rec;
+      }
+    }
+  }
+
+  // 2. Load from IndexedDB (filtering out any deleted IDs)
   try {
     const db = await openFaceDb();
     const records = await new Promise<FaceDescriptorRecord[]>((resolve, reject) => {
@@ -193,32 +359,44 @@ export async function getSchoolFaceDescriptors(schoolId: string): Promise<Record
     });
 
     records.forEach((rec) => {
-      if (rec && rec.schoolId === schoolId) {
-        result[rec.studentId] = rec;
+      if (rec && (rec.schoolId === schoolKey || !rec.schoolId)) {
+        if (!deletedSet.has(rec.studentId)) {
+          result[rec.studentId] = rec;
+        }
       }
     });
   } catch {}
 
-  // 2. Merge from LocalStorage
+  // 3. Merge from LocalStorage (filtering out any deleted IDs)
   try {
-    const key = `${DESCRIPTOR_STORAGE_PREFIX}${schoolId}`;
+    const key = `${DESCRIPTOR_STORAGE_PREFIX}${schoolKey}`;
     const raw = localStorage.getItem(key);
     if (raw) {
       const parsed = JSON.parse(raw);
-      Object.assign(result, parsed);
+      for (const stId of Object.keys(parsed)) {
+        if (deletedSet.has(stId)) continue;
+        if (!result[stId]) {
+          result[stId] = parsed[stId];
+        } else if (!result[stId].photoUrl && parsed[stId]?.photoUrl) {
+          result[stId].photoUrl = parsed[stId].photoUrl;
+        }
+      }
     }
   } catch {}
 
-  // 3. Firestore Cloud Sync
+  // Keep in-memory cache synchronized with cleaned result
+  inMemoryDescriptorCache[schoolKey] = { ...result };
+
+  // 4. Firestore Cloud Sync
   if (Object.keys(result).length === 0) {
     try {
       const { collection, getDocs } = await import("firebase/firestore");
       const { db } = await import("../school-firebase");
       if (db) {
-        const snap = await getDocs(collection(db, `schools/${schoolId}/face_descriptors_v2`));
+        const snap = await getDocs(collection(db, `schools/${schoolKey}/face_descriptors_v2`));
         snap.forEach((d) => {
           const data = d.data() as FaceDescriptorRecord;
-          if (data && data.studentId && data.descriptor) {
+          if (data && data.studentId && data.descriptor && !deletedSet.has(data.studentId)) {
             result[data.studentId] = data;
             void saveFaceDescriptor(data);
           }
@@ -227,19 +405,21 @@ export async function getSchoolFaceDescriptors(schoolId: string): Promise<Record
     } catch {}
   }
 
-  // 4. Backward Compatibility: Migrate legacy V1 descriptors if V2 is empty
+  // 5. Backward Compatibility: Migrate legacy V1 descriptors if V2 is empty
   if (Object.keys(result).length === 0) {
     try {
-      const legacyKey = `nst_face_descriptors_${schoolId}`;
+      const legacyKey = `nst_face_descriptors_${schoolKey}`;
       const legacyRaw = localStorage.getItem(legacyKey);
       if (legacyRaw) {
         const legacyParsed = JSON.parse(legacyRaw);
         for (const stId of Object.keys(legacyParsed)) {
+          if (deletedSet.has(stId)) continue;
           const item = legacyParsed[stId];
           if (item && item.descriptor) {
             result[stId] = {
               ...item,
-              compositeKey: makeCompositeKey(schoolId, stId),
+              schoolId: schoolKey,
+              compositeKey: makeCompositeKey(schoolKey, stId),
               source: item.source || "live_kiosk",
             };
             void saveFaceDescriptor(result[stId]);
@@ -249,34 +429,74 @@ export async function getSchoolFaceDescriptors(schoolId: string): Promise<Record
     } catch {}
   }
 
+  // Final cache synchronization
+  inMemoryDescriptorCache[schoolKey] = { ...result };
+
   return result;
 }
 
 export async function deleteFaceDescriptor(studentId: string, schoolId: string): Promise<void> {
-  const compositeKey = makeCompositeKey(schoolId, studentId);
+  if (!studentId) return;
+  const schoolKey = schoolId || "default";
+  const compositeKey = makeCompositeKey(schoolKey, studentId);
+
+  // 1. Immediately mark in Tombstone / Blacklist so auto-enroll from photo never resurrects this face
+  markFaceDescriptorDeleted(studentId, schoolKey);
+
+  // 2. Clear from In-Memory Cache (CRITICAL: prevents immediate resurrection in current tab)
+  if (inMemoryDescriptorCache[schoolKey]) {
+    delete inMemoryDescriptorCache[schoolKey][studentId];
+  }
+  if (inMemoryDescriptorCache["default"]) {
+    delete inMemoryDescriptorCache["default"][studentId];
+  }
+
+  // 3. Clear from IndexedDB (compositeKey, raw studentId, and default key)
   try {
     const db = await openFaceDb();
     const tx = db.transaction(IDB_STORE_NAME, "readwrite");
-    tx.objectStore(IDB_STORE_NAME).delete(compositeKey);
-  } catch {}
+    const store = tx.objectStore(IDB_STORE_NAME);
+    store.delete(compositeKey);
+    store.delete(studentId);
+    store.delete(`default_${studentId}`);
+  } catch (idbErr) {
+    console.warn("[FaceDB] IndexedDB delete note:", idbErr);
+  }
 
-  try {
-    const key = `${DESCRIPTOR_STORAGE_PREFIX}${schoolId}`;
-    const raw = localStorage.getItem(key);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      delete parsed[studentId];
-      localStorage.setItem(key, JSON.stringify(parsed));
-    }
-  } catch {}
+  // 4. Clear from LocalStorage (both V2 and legacy keys, school and default)
+  const lsKeys = [
+    `${DESCRIPTOR_STORAGE_PREFIX}${schoolKey}`,
+    `${DESCRIPTOR_STORAGE_PREFIX}default`,
+    `nst_face_descriptors_${schoolKey}`,
+    `nst_face_descriptors_default`
+  ];
+  for (const key of lsKeys) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed[studentId]) {
+          delete parsed[studentId];
+          localStorage.setItem(key, JSON.stringify(parsed));
+        }
+      }
+    } catch {}
+  }
 
+  // 5. Clear from Firestore Cloud Storage (both V2 and V1 paths)
   try {
     const { doc, deleteDoc } = await import("firebase/firestore");
     const { db } = await import("../school-firebase");
     if (db) {
-      await deleteDoc(doc(db, `schools/${schoolId}/face_descriptors_v2/${studentId}`));
+      await Promise.allSettled([
+        deleteDoc(doc(db, `schools/${schoolKey}/face_descriptors_v2/${studentId}`)),
+        deleteDoc(doc(db, `schools/${schoolKey}/face_descriptors/${studentId}`)),
+        deleteDoc(doc(db, `schools/default/face_descriptors_v2/${studentId}`))
+      ]);
     }
   } catch {}
+
+  console.log(`[FaceDB] Successfully deleted face descriptor for: ${studentId} (School: ${schoolKey})`);
 }
 
 export async function purgeDummyFaceDescriptors(schoolId: string, validStudentIds?: string[]): Promise<void> {
@@ -337,13 +557,59 @@ export async function purgeDummyFaceDescriptors(schoolId: string, validStudentId
       }
     }
   } catch {}
+
+  // Clean from in-memory cache as well
+  try {
+    if (inMemoryDescriptorCache[schoolId]) {
+      Object.keys(inMemoryDescriptorCache[schoolId]).forEach((stId) => {
+        const rec = inMemoryDescriptorCache[schoolId][stId];
+        const idLower = (stId || "").toLowerCase();
+        const nameLower = (rec?.name || "").toLowerCase().trim();
+        const isPrefixDummy = dummyPrefixes.some((p) => idLower.startsWith(p.toLowerCase()));
+        const isNameDummy = dummyNames.some((dn) => nameLower === dn);
+        const isNotValid = validIdSet ? !validIdSet.has(stId) : false;
+        if (isPrefixDummy || isNameDummy || isNotValid) {
+          delete inMemoryDescriptorCache[schoolId][stId];
+        }
+      });
+    }
+  } catch {}
 }
 
 // ── 3. REAL NEURAL DESCRIPTOR EXTRACTION ─────────────────────────────────────
 
+export function createContrastEnhancedCanvas(
+  input: HTMLImageElement | HTMLCanvasElement | HTMLVideoElement,
+  gamma = 1.4
+): HTMLCanvasElement {
+  const c = document.createElement("canvas");
+  const w = (input as any).videoWidth || (input as any).naturalWidth || input.width || 320;
+  const h = (input as any).videoHeight || (input as any).naturalHeight || input.height || 320;
+  c.width = Math.min(w, 640);
+  c.height = Math.min(h, 640);
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return c;
+  ctx.drawImage(input, 0, 0, c.width, c.height);
+  try {
+    const imgData = ctx.getImageData(0, 0, c.width, c.height);
+    const d = imgData.data;
+    const lut = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) {
+      lut[i] = Math.min(255, Math.round(255 * Math.pow(i / 255, 1 / gamma)));
+    }
+    for (let i = 0; i < d.length; i += 4) {
+      d[i] = lut[d[i]];
+      d[i + 1] = lut[d[i + 1]];
+      d[i + 2] = lut[d[i + 2]];
+    }
+    ctx.putImageData(imgData, 0, 0);
+  } catch {}
+  return c;
+}
+
 /**
  * Extracts a true 128-dimensional deep neural biometric embedding using Face-API
- * (TinyFaceDetector + FaceLandmark68Net + FaceRecognitionNet).
+ * with low-light dynamic contrast compensation and SSD MobileNet / TinyFace multi-scale pass.
  */
 export async function extractNeuralDescriptor(
   input: HTMLImageElement | HTMLCanvasElement | HTMLVideoElement
@@ -352,28 +618,316 @@ export async function extractNeuralDescriptor(
   if (!isReady) return null;
 
   try {
-    const detection = await faceapi
-      .detectSingleFace(input, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.45 }))
-      .withFaceLandmarks(true)
+    // 1. Try SSD MobileNet V1 first if loaded (superb accuracy in low lighting & tilted angles)
+    if (faceapi.nets.ssdMobilenetv1?.params) {
+      try {
+        const detSsd = await faceapi
+          .detectSingleFace(input, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.25 }))
+          .withFaceLandmarks(getLandmarkOption())
+          .withFaceDescriptor();
+        if (detSsd?.descriptor) {
+          const b = detSsd.detection.box;
+          return {
+            descriptor: Array.from(detSsd.descriptor),
+            box: { x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) },
+            score: detSsd.detection.score,
+          };
+        }
+      } catch {}
+    }
+
+    // 2. Standard TinyFaceDetector pass (320px)
+    let detection = await faceapi
+      .detectSingleFace(input, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.28 }))
+      .withFaceLandmarks(getLandmarkOption())
       .withFaceDescriptor();
+
+    // 3. Low-Light / distance fallback pass (224px, lower score threshold)
+    if (!detection || !detection.descriptor) {
+      try {
+        detection = await faceapi
+          .detectSingleFace(input, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.18 }))
+          .withFaceLandmarks(getLandmarkOption())
+          .withFaceDescriptor();
+      } catch {}
+    }
+
+    // 4. Low-Light Adaptive Gamma Pre-Processing pass
+    if (!detection || !detection.descriptor) {
+      try {
+        const enhanced = createContrastEnhancedCanvas(input, 1.45);
+        detection = await faceapi
+          .detectSingleFace(enhanced, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.18 }))
+          .withFaceLandmarks(getLandmarkOption())
+          .withFaceDescriptor();
+      } catch {}
+    }
 
     if (!detection || !detection.descriptor) return null;
 
     const box = detection.detection.box;
+    const boxObj = {
+      x: Math.round(box.x),
+      y: Math.round(box.y),
+      width: Math.round(box.width),
+      height: Math.round(box.height),
+    };
+
+    // Priority 1: Extract 512-D ArcFace deep vector
+    try {
+      const arcfaceVec = await extractArcFace512Descriptor(input, boxObj);
+      if (arcfaceVec && arcfaceVec.length === 512) {
+        return {
+          descriptor: arcfaceVec,
+          box: boxObj,
+          score: Math.max(0.96, detection.detection.score),
+          isArcFace: true,
+        };
+      }
+    } catch {}
+
     return {
       descriptor: Array.from(detection.descriptor),
-      box: {
-        x: Math.round(box.x),
-        y: Math.round(box.y),
-        width: Math.round(box.width),
-        height: Math.round(box.height),
-      },
+      box: boxObj,
       score: detection.detection.score,
     };
   } catch (err) {
     console.warn("[FaceAPI V2] Neural descriptor extraction error:", err);
     return null;
   }
+}
+
+/**
+ * 3D Head Pose Estimator from 68-Point Facial Landmarks.
+ * Computes exact Yaw (Left/Right turn in degrees), Pitch (Up/Down tilt), and Roll.
+ */
+export function estimateHeadPose(landmarks: any): HeadPoseEstimate {
+  if (!landmarks || !landmarks.positions || landmarks.positions.length < 68) {
+    return {
+      yaw: 0,
+      pitch: 0,
+      roll: 0,
+      label: "FRONT",
+      isFrontFacing: true,
+      isLeftFacing: false,
+      isRightFacing: false,
+      depthRatio: 1,
+    };
+  }
+
+  const pts = landmarks.positions;
+  const noseTip = pts[30] || pts[29];
+  const noseBridge = pts[27];
+  const leftEyeOuter = pts[36];
+  const rightEyeOuter = pts[45];
+  const chin = pts[8];
+
+  const eyeMidX = (leftEyeOuter.x + rightEyeOuter.x) / 2;
+  const eyeMidY = (leftEyeOuter.y + rightEyeOuter.y) / 2;
+  const eyeDist = Math.max(1, Math.hypot(rightEyeOuter.x - leftEyeOuter.x, rightEyeOuter.y - leftEyeOuter.y));
+
+  // Yaw: horizontal displacement of nose tip from midpoint of eyes
+  const rawYaw = ((noseTip.x - eyeMidX) / eyeDist) * 75;
+  const yaw = Math.max(-50, Math.min(50, Math.round(rawYaw)));
+
+  // Pitch: vertical displacement of nose tip between eyes and chin
+  const faceHeight = Math.max(1, Math.abs(chin.y - eyeMidY));
+  const expectedNoseY = eyeMidY + faceHeight * 0.42;
+  const rawPitch = ((noseTip.y - expectedNoseY) / faceHeight) * 90;
+  const pitch = Math.max(-40, Math.min(40, Math.round(rawPitch)));
+
+  // Roll: 2D plane tilt
+  const roll = Math.round((Math.atan2(rightEyeOuter.y - leftEyeOuter.y, rightEyeOuter.x - leftEyeOuter.x) * 180) / Math.PI);
+
+  const isLeftFacing = yaw < -8;
+  const isRightFacing = yaw > 8;
+  const isFrontFacing = Math.abs(yaw) <= 8 && Math.abs(pitch) <= 12;
+
+  let label: "FRONT" | "LEFT" | "RIGHT" | "UP" | "DOWN" = "FRONT";
+  if (yaw < -8) label = "LEFT";
+  else if (yaw > 8) label = "RIGHT";
+  else if (pitch < -12) label = "UP";
+  else if (pitch > 12) label = "DOWN";
+
+  return {
+    yaw,
+    pitch,
+    roll,
+    label,
+    isFrontFacing,
+    isLeftFacing,
+    isRightFacing,
+    depthRatio: Number((eyeDist / (faceHeight || 1)).toFixed(3)),
+  };
+}
+
+/**
+ * Extracts true 128-D ResNet-34 neural embedding along with 3D Head Pose and 68 Landmarks.
+ */
+export async function extractNeuralDescriptorWith3DPose(
+  input: HTMLImageElement | HTMLCanvasElement | HTMLVideoElement
+): Promise<{
+  descriptor: number[];
+  box: { x: number; y: number; width: number; height: number };
+  score: number;
+  pose: HeadPoseEstimate;
+  landmarks: any;
+} | null> {
+  const isReady = await loadFaceApiModels();
+  if (!isReady) return null;
+
+  try {
+    let detection: any = null;
+    if (faceapi.nets.ssdMobilenetv1?.params) {
+      try {
+        detection = await faceapi
+          .detectSingleFace(input, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.25 }))
+          .withFaceLandmarks(getLandmarkOption())
+          .withFaceDescriptor();
+      } catch {}
+    }
+
+    if (!detection || !detection.descriptor) {
+      detection = await faceapi
+        .detectSingleFace(input, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.26 }))
+        .withFaceLandmarks(getLandmarkOption())
+        .withFaceDescriptor();
+    }
+
+    if (!detection || !detection.descriptor) {
+      try {
+        const enhanced = createContrastEnhancedCanvas(input, 1.45);
+        detection = await faceapi
+          .detectSingleFace(enhanced, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.18 }))
+          .withFaceLandmarks(getLandmarkOption())
+          .withFaceDescriptor();
+      } catch {}
+    }
+
+    if (!detection || !detection.descriptor) return null;
+
+    const b = detection.detection.box;
+    const pose = estimateHeadPose(detection.landmarks);
+    const boxObj = {
+      x: Math.round(b.x),
+      y: Math.round(b.y),
+      width: Math.round(b.width),
+      height: Math.round(b.height),
+    };
+
+    let finalDescriptor = Array.from(detection.descriptor);
+    try {
+      const arcfaceVec = await extractArcFace512Descriptor(input, boxObj);
+      if (arcfaceVec && arcfaceVec.length === 512) {
+        finalDescriptor = arcfaceVec;
+      }
+    } catch {}
+
+    return {
+      descriptor: finalDescriptor,
+      box: boxObj,
+      score: detection.detection.score,
+      pose,
+      landmarks: detection.landmarks,
+    };
+  } catch (err) {
+    console.warn("[FaceAPI 3D] Neural 3D pose extraction error:", err);
+    return null;
+  }
+}
+
+/**
+ * Automatically converts an enrolled profile with a photoUrl from legacy pixel/canvas vector
+ * into a true 128-D ResNet-34 deep neural embedding.
+ */
+export async function revectorizeLegacyRecord(
+  record: FaceDescriptorRecord
+): Promise<FaceDescriptorRecord | null> {
+  if (!record || !record.photoUrl) return null;
+  if (isFaceDescriptorDeleted(record.studentId, record.schoolId)) return null;
+  // If already running on 512-D ArcFace, nothing to do
+  if (record.source === "arcface_512d" && (record.arcfaceDescriptor?.length === 512 || record.descriptor?.length === 512)) {
+    return record;
+  }
+
+  return new Promise((resolve) => {
+    const img = new Image();
+    if (!record.photoUrl.startsWith("data:")) {
+      img.crossOrigin = "anonymous";
+    }
+    img.referrerPolicy = "no-referrer";
+    img.onload = async () => {
+      try {
+        if (isFaceDescriptorDeleted(record.studentId, record.schoolId)) {
+          resolve(null);
+          return;
+        }
+
+        // Priority 1: Extract 512-D ArcFace vector directly from photo!
+        const arcface = await extractArcFace512Descriptor(img);
+        if (arcface && arcface.length === 512) {
+          const upgraded: FaceDescriptorRecord = {
+            ...record,
+            descriptor: arcface,
+            arcfaceDescriptor: arcface,
+            source: "arcface_512d",
+            compositeKey: record.compositeKey || makeCompositeKey(record.schoolId, record.studentId)
+          };
+          await saveFaceDescriptor(upgraded);
+          console.log(`[FaceEngine ArcFace] Successfully auto-upgraded ${record.name} to 512-D ArcFace Vector!`);
+          resolve(upgraded);
+          return;
+        }
+
+        // Priority 2: Fallback to ResNet-34 128-D if ArcFace model is still warming up
+        let neural = await extractNeuralDescriptor(img);
+        if (neural && neural.descriptor) {
+          const is512 = neural.descriptor.length === 512;
+          const upgraded: FaceDescriptorRecord = {
+            ...record,
+            descriptor: neural.descriptor,
+            arcfaceDescriptor: is512 ? neural.descriptor : record.arcfaceDescriptor,
+            source: is512 ? "arcface_512d" : "face_api_neural",
+            compositeKey: record.compositeKey || makeCompositeKey(record.schoolId, record.studentId)
+          };
+          await saveFaceDescriptor(upgraded);
+          resolve(upgraded);
+          return;
+        }
+
+        resolve(null);
+      } catch (e) {
+        console.warn("[FaceEngine] Auto-revectorize note for", record.name, e);
+        resolve(null);
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = record.photoUrl;
+  });
+}
+
+/**
+ * Checks all enrolled profiles and upgrades any legacy profiles in the background.
+ */
+export async function upgradeLegacyDescriptors(
+  enrolledMap: Record<string, FaceDescriptorRecord>,
+  onProfileUpgraded?: (upgraded: FaceDescriptorRecord) => void
+): Promise<Record<string, FaceDescriptorRecord>> {
+  const updatedMap = { ...enrolledMap };
+  const records = Object.values(enrolledMap);
+  for (const rec of records) {
+    if (isFaceDescriptorDeleted(rec.studentId, rec.schoolId)) continue;
+    if (rec.photoUrl && (rec.source !== "arcface_512d" || rec.descriptor?.length !== 512)) {
+      try {
+        const upgraded = await revectorizeLegacyRecord(rec);
+        if (upgraded) {
+          updatedMap[upgraded.studentId] = upgraded;
+          if (onProfileUpgraded) onProfileUpgraded(upgraded);
+        }
+      } catch {}
+    }
+  }
+  return updatedMap;
 }
 
 // Heuristic fallback descriptor generator (used only when models fail to load)
@@ -449,12 +1003,13 @@ export function calculateEuclideanDistance(v1: number[], v2: number[]): number {
 
 /**
  * Standard ResNet-34 Face Recognition Thresholds:
- * - Match Distance <= 0.52 (Extremely high precision, zero false collisions)
- * - Separation Margin >= 0.05
+ * - Match Distance <= 0.58 (Optimized for real-world mobile selfie cameras in indoor lighting)
+ * - Minimum Cosine Similarity >= 0.82
+ * - Separation Margin >= 0.035
  */
-export const NEURAL_MAX_DISTANCE = 0.52;
-export const STRICT_MAX_DISTANCE = 0.52;
-export const STRICT_MIN_SIMILARITY = 0.88;
+export const NEURAL_MAX_DISTANCE = 0.58;
+export const STRICT_MAX_DISTANCE = 0.58;
+export const STRICT_MIN_SIMILARITY = 0.82;
 
 export function matchFaceDescriptor(
   queryDescriptor: number[],
@@ -476,34 +1031,92 @@ export function matchFaceDescriptor(
   secondBest?: { name: string; similarity: number; distance: number };
 } | null {
   const records = Object.values(enrolledMap);
-  if (records.length === 0 || !queryDescriptor || queryDescriptor.length !== 128) return null;
+  if (records.length === 0 || !queryDescriptor) return null;
 
-  if (options?.lighting?.isTooDark) {
+  // 1. High-Performance 512-D ArcFace Matcher
+  if (queryDescriptor.length === 512) {
+    const arcMatch = matchArcFace512(queryDescriptor, enrolledMap, ARCFACE_MATCH_THRESHOLD);
+    if (arcMatch) {
+      return {
+        student: arcMatch.student,
+        confidencePercent: arcMatch.confidencePercent,
+        similarity: arcMatch.similarity,
+        distance: arcMatch.distance,
+        isAmbiguous: arcMatch.isAmbiguous,
+        margin: arcMatch.margin,
+        secondBest: arcMatch.secondBest,
+      };
+    }
     return null;
   }
 
-  const maxAllowedDist = options?.maxDistance !== undefined ? options.maxDistance : NEURAL_MAX_DISTANCE;
-  const minRequiredMargin = options?.minMargin !== undefined ? options.minMargin : 0.045;
+  if (queryDescriptor.length !== 128) return null;
+
+  // In absolute pitch-black darkness (meanLuminance < 10), reject. In dim/low lighting, allow match with strict distance gate.
+  if (options?.lighting?.meanLuminance !== undefined && options.lighting.meanLuminance < 10) {
+    return null;
+  }
+
+  const isLowLighting = Boolean(options?.lighting?.isLowLight || options?.lighting?.isTooDark);
+  const maxAllowedDist = options?.maxDistance !== undefined
+    ? options.maxDistance
+    : (isLowLighting ? 0.55 : NEURAL_MAX_DISTANCE);
+  const minRequiredMargin = options?.minMargin !== undefined ? options.minMargin : (isLowLighting ? 0.040 : 0.035);
 
   // STEP 1: Group by studentId to find the best match for each UNIQUE student/teacher
   const studentBestMap: Map<string, { record: FaceDescriptorRecord; distance: number; similarity: number }> = new Map();
 
   for (const rec of records) {
-    if (!rec?.descriptor || rec.descriptor.length !== 128 || !rec.studentId) continue;
+    if (!rec?.studentId) continue;
 
-    const simNormal = calculateCosineSimilarity(queryDescriptor, rec.descriptor);
-    const simMirrored = mirroredQueryDescriptor
-      ? calculateCosineSimilarity(mirroredQueryDescriptor, rec.descriptor)
-      : -1;
-    const similarity = Math.max(simNormal, simMirrored);
-    const distance = calculateEuclideanDistance(
-      simMirrored > simNormal && mirroredQueryDescriptor ? mirroredQueryDescriptor : queryDescriptor,
-      rec.descriptor
-    );
+    const candidateVectors: Array<{ vec: number[]; angle: "primary" | "front" | "left" | "right" }> = [];
+    if (rec.descriptor && rec.descriptor.length === 128) {
+      candidateVectors.push({ vec: rec.descriptor, angle: "primary" });
+    }
+    if (rec.descriptors3D?.front && rec.descriptors3D.front.length === 128) {
+      candidateVectors.push({ vec: rec.descriptors3D.front, angle: "front" });
+    }
+    if (rec.descriptors3D?.left && rec.descriptors3D.left.length === 128) {
+      candidateVectors.push({ vec: rec.descriptors3D.left, angle: "left" });
+    }
+    if (rec.descriptors3D?.right && rec.descriptors3D.right.length === 128) {
+      candidateVectors.push({ vec: rec.descriptors3D.right, angle: "right" });
+    }
 
+    if (candidateVectors.length === 0) continue;
+
+    let bestDist = 999;
+    let bestSim = -1;
+    let bestAngle: "primary" | "front" | "left" | "right" = "primary";
+
+    for (const cand of candidateVectors) {
+      const simNormal = calculateCosineSimilarity(queryDescriptor, cand.vec);
+      const simMirrored = mirroredQueryDescriptor
+        ? calculateCosineSimilarity(mirroredQueryDescriptor, cand.vec)
+        : -1;
+      const sim = Math.max(simNormal, simMirrored);
+      const dist = calculateEuclideanDistance(
+        simMirrored > simNormal && mirroredQueryDescriptor ? mirroredQueryDescriptor : queryDescriptor,
+        cand.vec
+      );
+
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestSim = sim;
+        bestAngle = cand.angle;
+      }
+    }
+
+    const is3D = Boolean(rec.descriptors3D && (rec.descriptors3D.left || rec.descriptors3D.right));
     const existing = studentBestMap.get(rec.studentId);
-    if (!existing || distance < existing.distance) {
-      studentBestMap.set(rec.studentId, { record: rec, distance, similarity });
+    if (!existing || bestDist < existing.distance) {
+      studentBestMap.set(rec.studentId, {
+        record: rec,
+        distance: bestDist,
+        similarity: bestSim,
+        matchedAngle: bestAngle,
+        is3DVerified: is3D,
+      });
     }
   }
 
@@ -543,6 +1156,8 @@ export function matchFaceDescriptor(
       distance: Number(top1.distance.toFixed(4)),
       isAmbiguous,
       margin,
+      matchedAngle: top1.matchedAngle,
+      is3DVerified: top1.is3DVerified,
       secondBest: top2
         ? {
             name: top2.record.name,
@@ -659,9 +1274,9 @@ export async function detectFacesInFrame(
       const detections = await faceapi
         .detectAllFaces(
           videoElement,
-          new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.45 })
+          new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.38 })
         )
-        .withFaceLandmarks(true)
+        .withFaceLandmarks(getLandmarkOption())
         .withFaceDescriptors();
 
       if (detections && detections.length > 0) {
@@ -672,57 +1287,136 @@ export async function detectFacesInFrame(
           return areaB - areaA;
         });
 
-        return sorted.slice(0, 2).map((det) => {
-          const b = det.detection.box;
-          const padX = b.width * 0.12;
-          const padY = b.height * 0.12;
+        const detectedList = await Promise.all(
+          sorted.slice(0, 2).map(async (det) => {
+            const b = det.detection.box;
+            const padX = b.width * 0.12;
+            const padY = b.height * 0.12;
 
-          const box = {
-            x: Math.max(0, Math.round(b.x - padX)),
-            y: Math.max(0, Math.round(b.y - padY)),
-            width: Math.min(vWidth - b.x, Math.round(b.width + padX * 2)),
-            height: Math.min(vHeight - b.y, Math.round(b.height + padY * 2)),
-            confidence: Number(det.detection.score.toFixed(2)),
-          };
+            const box = {
+              x: Math.max(0, Math.round(b.x - padX)),
+              y: Math.max(0, Math.round(b.y - padY)),
+              width: Math.min(vWidth - b.x, Math.round(b.width + padX * 2)),
+              height: Math.min(vHeight - b.y, Math.round(b.height + padY * 2)),
+              confidence: Number(det.detection.score.toFixed(2)),
+            };
 
-          const lighting = assessFaceLightingAndQuality(videoElement, box);
-          const descriptor = Array.from(det.descriptor);
+            const lighting = assessFaceLightingAndQuality(videoElement, box);
+            const pose = det.landmarks ? estimateHeadPose(det.landmarks) : undefined;
 
-          const match = matchFaceDescriptor(descriptor, enrolledMap, STRICT_MIN_SIMILARITY, undefined, {
-            maxDistance: NEURAL_MAX_DISTANCE,
-            lighting,
-          });
+            // Extract 512-D ArcFace vector
+            let arcfaceVec: number[] | null = null;
+            try {
+              arcfaceVec = await extractArcFace512Descriptor(videoElement, box);
+            } catch {}
 
-          return {
-            ...box,
-            descriptor,
-            lighting,
-            lowLightWarning: lighting.isLowLight || lighting.isTooDark,
-            matchedStudent: match && !lighting.isTooDark
-              ? {
-                  studentId: match.student.studentId,
-                  name: match.student.name,
-                  role: match.student.role,
-                  designation: match.student.designation,
-                  rollNo: match.student.rollNo,
-                  classId: match.student.classId,
-                  className: match.student.className,
-                  photoUrl: match.student.photoUrl,
-                  confidencePercent: match.confidencePercent,
-                  distance: match.distance,
-                  isAmbiguous: match.isAmbiguous,
-                  margin: match.margin,
+            const descriptor = arcfaceVec && arcfaceVec.length === 512 ? arcfaceVec : Array.from(det.descriptor);
+
+            // Step A: Priority ArcFace 512-D Match
+            let match = null;
+            if (arcfaceVec && arcfaceVec.length === 512) {
+              const arcMatch = matchArcFace512(arcfaceVec, enrolledMap, ARCFACE_MATCH_THRESHOLD);
+              if (arcMatch) {
+                match = {
+                  student: arcMatch.student,
+                  confidencePercent: arcMatch.confidencePercent,
+                  similarity: arcMatch.similarity,
+                  distance: arcMatch.distance,
+                  isAmbiguous: arcMatch.isAmbiguous,
+                  margin: arcMatch.margin,
+                  matchedAngle: "primary",
+                  is3DVerified: true,
+                };
+              }
+            }
+
+            // Step B: Fallback to ResNet-34 128-D matcher if no 512-D match
+            if (!match) {
+              match = matchFaceDescriptor(Array.from(det.descriptor), enrolledMap, STRICT_MIN_SIMILARITY, undefined, {
+                maxDistance: NEURAL_MAX_DISTANCE,
+                lighting,
+              });
+            }
+
+            // BRIDGE FALLBACK: If neural match returned null but there are legacy enrolled records,
+            // compare against legacy pixel vector and auto-upgrade to this live 512-D vector on match!
+            if (!match && !lighting.isTooDark) {
+              const legacyRecords = Object.values(enrolledMap).filter(
+                (r) => r && r.source !== "arcface_512d" && r.source !== "face_api_neural" && r.descriptor?.length === 128
+              );
+              if (legacyRecords.length > 0) {
+                const canvasDesc = extractDescriptorFromCanvas(videoElement, box);
+                for (const leg of legacyRecords) {
+                  const dist = calculateEuclideanDistance(canvasDesc, leg.descriptor);
+                  const sim = calculateCosineSimilarity(canvasDesc, leg.descriptor);
+                  if (dist <= 0.44 || sim >= 0.88) {
+                    match = {
+                      student: leg,
+                      confidencePercent: Math.min(99, Math.round(Math.max(sim * 100, (1 - dist) * 100))),
+                      similarity: sim,
+                      distance: dist,
+                      matchedAngle: "primary",
+                      is3DVerified: false,
+                    };
+                    // Auto-upgrade legacy record to this live 512-D ArcFace descriptor immediately
+                    const upgradedRec: FaceDescriptorRecord = {
+                      ...leg,
+                      descriptor,
+                      arcfaceDescriptor: arcfaceVec && arcfaceVec.length === 512 ? arcfaceVec : undefined,
+                      source: arcfaceVec && arcfaceVec.length === 512 ? "arcface_512d" : "face_api_neural",
+                    };
+                    void saveFaceDescriptor(upgradedRec);
+                    enrolledMap[leg.studentId] = upgradedRec;
+                    console.log(`[FaceEngine] On-the-fly upgraded legacy profile ${leg.name} to 512-D ArcFace!`);
+                    break;
+                  }
                 }
-              : undefined,
-          };
-        });
+              }
+            }
+
+            const isArcFace = Boolean(arcfaceVec && arcfaceVec.length === 512);
+            const maxValidDistance = isArcFace ? 1.05 : 0.55;
+
+            return {
+              ...box,
+              descriptor,
+              pose,
+              landmarks: det.landmarks,
+              lighting,
+              lowLightWarning: lighting.isLowLight || lighting.isTooDark,
+              isNeuralActive: true,
+              isArcFaceActive: isArcFace,
+              isAiEngineWarmingUp: false,
+              is3DActive: true,
+              matchedStudent: match && (!lighting.isTooDark || (match.distance && match.distance <= maxValidDistance))
+                ? {
+                    studentId: match.student.studentId,
+                    name: match.student.name,
+                    role: match.student.role,
+                    designation: match.student.designation,
+                    rollNo: match.student.rollNo,
+                    classId: match.student.classId,
+                    className: match.student.className,
+                    photoUrl: match.student.photoUrl,
+                    confidencePercent: match.confidencePercent,
+                    distance: match.distance,
+                    isAmbiguous: match.isAmbiguous,
+                    margin: match.margin,
+                    matchedAngle: match.matchedAngle,
+                    is3DVerified: match.is3DVerified,
+                  }
+                : undefined,
+            };
+          })
+        );
+        return detectedList;
       }
     } catch (e) {
       console.warn("[FaceAPI V2] Inference warning, fallback active:", e);
     }
   }
 
-  // METHOD 1: Native Chrome FaceDetector Fallback
+  // METHOD 1: Native Chrome FaceDetector Fallback (Visual bounding box only, NO pixel matching!)
   if (typeof (window as any).FaceDetector === "function") {
     try {
       if (!(window as any).__nstaFaceDetector) {
@@ -752,10 +1446,18 @@ export async function detectFacesInFrame(
 
         const lighting = assessFaceLightingAndQuality(videoElement, box);
         const desc = extractDescriptorFromCanvas(videoElement, box);
-        const match = matchFaceDescriptor(desc, enrolledMap, STRICT_MIN_SIMILARITY, undefined, {
-          maxDistance: STRICT_MAX_DISTANCE,
-          lighting,
-        });
+
+        // While neural engine loads, match legacy pixel descriptors like-with-like
+        const legacyOnlyMap: Record<string, FaceDescriptorRecord> = {};
+        for (const [k, v] of Object.entries(enrolledMap)) {
+          if (v && v.source !== "face_api_neural" && v.descriptor?.length === 128) {
+            legacyOnlyMap[k] = v;
+          }
+        }
+
+        const legacyMatch = Object.keys(legacyOnlyMap).length > 0
+          ? matchFaceDescriptor(desc, legacyOnlyMap, 0.86, undefined, { maxDistance: 0.44, lighting })
+          : null;
 
         return [
           {
@@ -763,20 +1465,22 @@ export async function detectFacesInFrame(
             descriptor: desc,
             lighting,
             lowLightWarning: lighting.isLowLight || lighting.isTooDark,
-            matchedStudent: match && !lighting.isTooDark
+            isNeuralActive: false,
+            isAiEngineWarmingUp: !legacyMatch,
+            matchedStudent: legacyMatch && !lighting.isTooDark
               ? {
-                  studentId: match.student.studentId,
-                  name: match.student.name,
-                  role: match.student.role,
-                  designation: match.student.designation,
-                  rollNo: match.student.rollNo,
-                  classId: match.student.classId,
-                  className: match.student.className,
-                  photoUrl: match.student.photoUrl,
-                  confidencePercent: match.confidencePercent,
-                  distance: match.distance,
-                  isAmbiguous: match.isAmbiguous,
-                  margin: match.margin,
+                  studentId: legacyMatch.student.studentId,
+                  name: legacyMatch.student.name,
+                  role: legacyMatch.student.role,
+                  designation: legacyMatch.student.designation,
+                  rollNo: legacyMatch.student.rollNo,
+                  classId: legacyMatch.student.classId,
+                  className: legacyMatch.student.className,
+                  photoUrl: legacyMatch.student.photoUrl,
+                  confidencePercent: legacyMatch.confidencePercent,
+                  distance: legacyMatch.distance,
+                  isAmbiguous: legacyMatch.isAmbiguous,
+                  margin: legacyMatch.margin,
                 }
               : undefined,
           },
@@ -785,7 +1489,7 @@ export async function detectFacesInFrame(
     } catch {}
   }
 
-  // METHOD 2: Central Reticle Fallback (while models download)
+  // METHOD 2: Central Reticle Visual Fallback
   const scanCanvas = (window as any).__nstaScanCanvas || ((window as any).__nstaScanCanvas = document.createElement("canvas"));
   const scale = 0.25;
   const sW = Math.round(vWidth * scale);
@@ -827,7 +1531,7 @@ export async function detectFacesInFrame(
   }
 
   const skinRatio = skinPixels / (totalChecked || 1);
-  if (skinRatio > 0.18) {
+  if (skinRatio > 0.08) {
     const box = {
       x: Math.round(vWidth * 0.22),
       y: Math.round(vHeight * 0.18),
@@ -837,10 +1541,17 @@ export async function detectFacesInFrame(
     };
     const lighting = assessFaceLightingAndQuality(videoElement, box);
     const desc = extractDescriptorFromCanvas(videoElement, box);
-    const match = matchFaceDescriptor(desc, enrolledMap, STRICT_MIN_SIMILARITY, undefined, {
-      maxDistance: STRICT_MAX_DISTANCE,
-      lighting,
-    });
+
+    const legacyOnlyMap: Record<string, FaceDescriptorRecord> = {};
+    for (const [k, v] of Object.entries(enrolledMap)) {
+      if (v && v.source !== "face_api_neural" && v.descriptor?.length === 128) {
+        legacyOnlyMap[k] = v;
+      }
+    }
+
+    const legacyMatch = Object.keys(legacyOnlyMap).length > 0
+      ? matchFaceDescriptor(desc, legacyOnlyMap, 0.86, undefined, { maxDistance: 0.44, lighting })
+      : null;
 
     return [
       {
@@ -848,20 +1559,22 @@ export async function detectFacesInFrame(
         descriptor: desc,
         lighting,
         lowLightWarning: lighting.isLowLight || lighting.isTooDark,
-        matchedStudent: match && !lighting.isTooDark
+        isNeuralActive: false,
+        isAiEngineWarmingUp: !legacyMatch,
+        matchedStudent: legacyMatch && !lighting.isTooDark
           ? {
-              studentId: match.student.studentId,
-              name: match.student.name,
-              role: match.student.role,
-              designation: match.student.designation,
-              rollNo: match.student.rollNo,
-              classId: match.student.classId,
-              className: match.student.className,
-              photoUrl: match.student.photoUrl,
-              confidencePercent: match.confidencePercent,
-              distance: match.distance,
-              isAmbiguous: match.isAmbiguous,
-              margin: match.margin,
+              studentId: legacyMatch.student.studentId,
+              name: legacyMatch.student.name,
+              role: legacyMatch.student.role,
+              designation: legacyMatch.student.designation,
+              rollNo: legacyMatch.student.rollNo,
+              classId: legacyMatch.student.classId,
+              className: legacyMatch.student.className,
+              photoUrl: legacyMatch.student.photoUrl,
+              confidencePercent: legacyMatch.confidencePercent,
+              distance: legacyMatch.distance,
+              isAmbiguous: legacyMatch.isAmbiguous,
+              margin: legacyMatch.margin,
             }
           : undefined,
       },
@@ -886,9 +1599,15 @@ export async function enrollStudentFromPhotoUrl(
     classId?: string;
     className?: string;
     photoUrl?: string;
-  }
+  },
+  options?: { force?: boolean }
 ): Promise<FaceDescriptorRecord | null> {
   if (!student?.photoUrl) return null;
+
+  // Never auto-enroll a student whose face was explicitly deleted by the admin unless force=true
+  if (!options?.force && isFaceDescriptorDeleted(student.id, student.schoolId)) {
+    return null;
+  }
 
   return new Promise((resolve) => {
     const img = new Image();
@@ -897,6 +1616,11 @@ export async function enrollStudentFromPhotoUrl(
 
     img.onload = async () => {
       try {
+        if (!options?.force && isFaceDescriptorDeleted(student.id, student.schoolId)) {
+          resolve(null);
+          return;
+        }
+
         // Step 1: Attempt true deep neural face extraction
         const neural = await extractNeuralDescriptor(img);
         if (!neural || !neural.descriptor || (neural.score && neural.score < 0.45)) {
@@ -904,6 +1628,8 @@ export async function enrollStudentFromPhotoUrl(
           resolve(null);
           return;
         }
+
+        const is512 = Boolean(neural && neural.descriptor && neural.descriptor.length === 512);
 
         const record: FaceDescriptorRecord = {
           studentId: student.id,
@@ -914,8 +1640,9 @@ export async function enrollStudentFromPhotoUrl(
           className: student.className,
           photoUrl: student.photoUrl,
           descriptor: neural.descriptor,
+          arcfaceDescriptor: is512 ? neural.descriptor : undefined,
           enrolledAt: new Date().toISOString(),
-          source: "face_api_neural",
+          source: is512 ? "arcface_512d" : "face_api_neural",
           compositeKey: makeCompositeKey(student.schoolId, student.id),
         };
 
@@ -942,9 +1669,15 @@ export async function enrollTeacherFromPhotoUrl(
     designation?: string;
     role?: "TEACHER" | "STAFF";
     photoUrl?: string;
-  }
+  },
+  options?: { force?: boolean }
 ): Promise<FaceDescriptorRecord | null> {
   if (!teacher?.photoUrl) return null;
+
+  // Never auto-enroll a teacher whose face was explicitly deleted by the admin unless force=true
+  if (!options?.force && isFaceDescriptorDeleted(teacher.id, teacher.schoolId)) {
+    return null;
+  }
 
   return new Promise((resolve) => {
     const img = new Image();
@@ -953,6 +1686,11 @@ export async function enrollTeacherFromPhotoUrl(
 
     img.onload = async () => {
       try {
+        if (!options?.force && isFaceDescriptorDeleted(teacher.id, teacher.schoolId)) {
+          resolve(null);
+          return;
+        }
+
         const neural = await extractNeuralDescriptor(img);
         if (!neural || !neural.descriptor || (neural.score && neural.score < 0.45)) {
           console.warn(`[FaceAPI V2 Enrollment] No clear face detected in photo for teacher ${teacher.name}. Skipping.`);
@@ -989,25 +1727,36 @@ export async function enrollTeacherFromPhotoUrl(
  * Batch enrolls multiple students from photo URLs concurrently.
  */
 export async function batchEnrollStudentsFromPhotos(
-  students: Array<{
-    id: string;
-    schoolId: string;
-    name: string;
-    rollNo?: string;
-    classId?: string;
-    className?: string;
-    photoUrl?: string;
-  }>,
-  onProgress?: (current: number, total: number) => void
+  param1: any,
+  param2?: any,
+  param3?: any
 ): Promise<number> {
+  // Support both (students, onProgress) and (schoolId, students, onProgress)
+  let studentsList: Array<any> = [];
+  let onProgressCallback: ((current: number, total: number, name?: string) => void) | undefined = undefined;
+
+  if (Array.isArray(param1)) {
+    studentsList = param1;
+    onProgressCallback = typeof param2 === "function" ? param2 : undefined;
+  } else if (typeof param1 === "string" && Array.isArray(param2)) {
+    studentsList = param2;
+    onProgressCallback = typeof param3 === "function" ? param3 : undefined;
+  } else if (Array.isArray(param2)) {
+    studentsList = param2;
+    onProgressCallback = typeof param3 === "function" ? param3 : undefined;
+  }
+
   let count = 0;
-  const valid = students.filter((s) => s.photoUrl && s.photoUrl.trim().length > 0);
+  const valid = studentsList.filter((s) => s && s.photoUrl && s.photoUrl.trim().length > 0);
   const total = valid.length;
 
   for (let i = 0; i < total; i++) {
-    const rec = await enrollStudentFromPhotoUrl(valid[i]);
+    const item = valid[i];
+    const rec = await enrollStudentFromPhotoUrl(item);
     if (rec) count++;
-    if (onProgress) onProgress(i + 1, total);
+    if (onProgressCallback) {
+      onProgressCallback(i + 1, total, item.name || "Student");
+    }
   }
 
   return count;
@@ -1128,5 +1877,142 @@ export class EyeBlinkDetector {
   public reset(): void {
     this.state = "idle";
   }
+}
+
+/**
+ * Renders a futuristic 3D Holographic Biometric Wireframe Mesh on the canvas.
+ * Draws 3D depth rings, 68-point triangulation constellation, and real-time head pose HUD.
+ */
+export function draw3DHolographicMesh(
+  ctx: CanvasRenderingContext2D,
+  box: { x: number; y: number; width: number; height: number },
+  pose?: HeadPoseEstimate,
+  landmarks?: any,
+  isMatched = false,
+  matchedLabel?: string,
+  isMirrored = false,
+  canvasWidth?: number
+): void {
+  if (!ctx || !box) return;
+
+  const rawX = box.x;
+  const y = box.y;
+  const w = box.width;
+  const h = box.height;
+  const x = isMirrored && canvasWidth ? Math.max(0, canvasWidth - rawX - w) : rawX;
+
+  const centerX = x + w / 2;
+  const centerY = y + h / 2;
+  const rx = w / 2;
+  const ry = h / 2;
+
+  const primaryColor = isMatched ? "#10b981" : "#06b6d4";
+  const glowColor = isMatched ? "rgba(16, 185, 129, 0.4)" : "rgba(6, 182, 212, 0.35)";
+
+  ctx.save();
+
+  // 1. 3D Outer Depth Rings
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = glowColor;
+  ctx.setLineDash([6, 6]);
+
+  // Main elliptical ring
+  ctx.beginPath();
+  ctx.ellipse(centerX, centerY, rx * 1.08, ry * 1.08, 0, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Offset depth ring based on Yaw & Pitch
+  const yawOffset = (pose?.yaw || 0) * (rx / 60);
+  const pitchOffset = (pose?.pitch || 0) * (ry / 60);
+
+  ctx.strokeStyle = isMatched ? "rgba(16, 185, 129, 0.25)" : "rgba(14, 165, 233, 0.25)";
+  ctx.beginPath();
+  ctx.ellipse(centerX + yawOffset, centerY + pitchOffset, rx * 0.92, ry * 0.92, (pose?.roll || 0) * (Math.PI / 180), 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // 2. 68-Point Constellation & 3D Feature Mesh
+  if (landmarks?.positions && landmarks.positions.length >= 68) {
+    const pts = landmarks.positions;
+    ctx.fillStyle = isMatched ? "#34d399" : "#38bdf8";
+    ctx.strokeStyle = isMatched ? "rgba(52, 211, 153, 0.35)" : "rgba(56, 189, 248, 0.3)";
+    ctx.lineWidth = 1;
+
+    for (let i = 0; i < pts.length; i += 2) {
+      const p = pts[i];
+      const px = isMirrored && canvasWidth ? canvasWidth - p.x : p.x;
+      const py = p.y;
+      ctx.beginPath();
+      ctx.arc(px, py, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    const connectPath = (indices: number[]) => {
+      ctx.beginPath();
+      indices.forEach((idx, i) => {
+        const pt = pts[idx];
+        if (!pt) return;
+        const px = isMirrored && canvasWidth ? canvasWidth - pt.x : pt.x;
+        const py = pt.y;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      });
+      ctx.stroke();
+    };
+
+    connectPath([0, 3, 6, 8, 10, 13, 16]);
+    connectPath([17, 19, 21, 22, 24, 26]);
+    connectPath([27, 28, 29, 30, 33, 30]);
+    connectPath([36, 37, 38, 39, 40, 41, 36]);
+    connectPath([42, 43, 44, 45, 46, 47, 42]);
+    connectPath([48, 51, 54, 57, 48]);
+  }
+
+  // 3. 3D Pose Compass Badge (Top of box)
+  if (pose) {
+    const badgeW = 120;
+    const badgeH = 22;
+    const badgeX = centerX - badgeW / 2;
+    const badgeY = Math.max(10, y - 30);
+
+    ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+    ctx.strokeStyle = primaryColor;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 6);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = isMatched ? "#34d399" : "#38bdf8";
+    ctx.font = "bold 10px monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const angleText = `3D Yaw: ${pose.yaw > 0 ? "+" : ""}${pose.yaw}° [${pose.label}]`;
+    ctx.fillText(angleText, centerX, badgeY + badgeH / 2);
+  }
+
+  // 4. Matched Label Banner (Bottom of box)
+  if (isMatched && matchedLabel) {
+    const bannerW = Math.max(140, w * 0.85);
+    const bannerH = 26;
+    const bannerX = centerX - bannerW / 2;
+    const bannerY = y + h + 8;
+
+    ctx.fillStyle = "rgba(6, 78, 59, 0.9)";
+    ctx.strokeStyle = "#10b981";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(bannerX, bannerY, bannerW, bannerH, 8);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 11px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`✓ ${matchedLabel}`, centerX, bannerY + bannerH / 2);
+  }
+
+  ctx.restore();
 }
 

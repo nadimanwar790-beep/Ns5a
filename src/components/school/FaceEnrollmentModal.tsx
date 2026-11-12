@@ -22,6 +22,7 @@ import {
   saveFaceDescriptor,
   deleteFaceDescriptor,
   extractDescriptorFromCanvas,
+  extractNeuralDescriptor,
   FaceDescriptorRecord
 } from "../../utils/faceRecognitionEngine";
 
@@ -145,7 +146,18 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
       height: canvas.height * 0.70
     };
 
-    const descriptor = extractDescriptorFromCanvas(canvas, box);
+    const neural = await extractNeuralDescriptor(canvas);
+    const is512 = Boolean(neural?.descriptor && neural.descriptor.length === 512);
+    const is128 = Boolean(neural?.descriptor && neural.descriptor.length === 128);
+    const descriptor = (is512 || is128)
+      ? neural!.descriptor
+      : extractDescriptorFromCanvas(canvas, box);
+    const source = is512
+      ? "arcface_512d"
+      : is128
+      ? "face_api_neural"
+      : "live_kiosk";
+
     const record: FaceDescriptorRecord = {
       studentId: liveCaptureTarget.id,
       schoolId,
@@ -155,8 +167,9 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
       className: liveCaptureTarget.className,
       photoUrl: photoDataUrl,
       descriptor,
+      arcfaceDescriptor: is512 ? descriptor : undefined,
       enrolledAt: new Date().toISOString(),
-      source: "live_kiosk"
+      source
     };
 
     await saveFaceDescriptor(record);
@@ -389,7 +402,9 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
                         <span>ID: {st.admissionNo || "—"}</span>
                         <span>•</span>
                         <span className={enrolled ? "text-emerald-400 font-bold" : "text-amber-400 font-medium"}>
-                          {enrolled ? "✅ Biometrics Enrolled" : st.photoUrl ? "📷 Ready to Vectorize" : "⚠️ Photo Missing"}
+                          {enrolled
+                            ? (enrolled.source === "3d_multi_angle" || enrolled.descriptors3D ? "🌐 3D Biometrics Enrolled" : "✅ Biometrics Enrolled")
+                            : st.photoUrl ? "📷 Ready to Vectorize" : "⚠️ Photo Missing"}
                         </span>
                       </div>
                     </div>

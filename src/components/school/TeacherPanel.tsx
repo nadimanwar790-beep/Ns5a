@@ -52,6 +52,7 @@ import { GroupStudyModal } from "../GroupStudyModal";
 import { ParentLeaveManager } from "./ParentLeaveManager";
 import { PtmSchedulerModal } from "./PtmSchedulerModal";
 import { UniversalFaceIdStudioModal } from "./UniversalFaceIdStudioModal";
+import { QuestionPaperBuilder } from "./QuestionPaperBuilder";
 import { rotateToLandscape, rotateToPortrait, setDesktopMode, useDeviceOrientation } from "../../utils/displayPrefs";
 
 interface Props {

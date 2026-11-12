@@ -27,6 +27,7 @@ import { ContentManager } from "./ContentManager";
 import { SmartClass } from "./SmartClass";
 import { AttendanceManager } from "./AttendanceManager";
 import { FaceAttendanceKioskModal } from "./FaceAttendanceKioskModal";
+import { UniversalFaceIdStudioModal } from "./UniversalFaceIdStudioModal";
 import { FeeManager } from "./FeeManager";
 import { ReportCard } from "./ReportCard";
 import { MarksManager } from "./MarksManager";
@@ -66,7 +67,7 @@ import {
   Lock, Eye, EyeOff, Shield, ArrowLeft, ShoppingBag, AlertTriangle, Crown,
   CreditCard, Megaphone, TrendingUp, Briefcase, FileSpreadsheet,
   ClipboardList, Globe, UserPlus, QrCode, GraduationCap, CheckCircle2,
-  Printer, Search, Sparkles, Mail, PenTool, Loader2, AlertCircle, LogOut,
+  Printer, Search, Sparkles, Mail, PenTool, Loader2, AlertCircle, LogOut, LogIn,
   Home, Image as ImageIcon, Clock, Book, Package, MessageSquare, Bell, ArrowRight,
   Youtube, Check, Menu, BarChart3, PieChart, Camera, Share2, Film, CheckCheck, RefreshCw, Upload, ExternalLink, Filter, Send, RotateCw, RotateCcw, Bus, Sliders,
   Sun, Moon, Palette,
@@ -595,6 +596,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const [showUniversalScannerModal, setShowUniversalScannerModal] = useState(false);
   const [showSchoolLocationModal, setShowSchoolLocationModal] = useState(false);
   const [showFaceKioskModal, setShowFaceKioskModal] = useState(false);
+  const [faceKioskInitialTestMode, setFaceKioskInitialTestMode] = useState(false);
   const [enrolledFaceIds, setEnrolledFaceIds] = useState<Record<string, boolean>>({});
   const [duesCardTab, setDuesCardTab] = useState<"admission" | "advance">("admission");
   const [showPunchDeskExpanded, setShowPunchDeskExpanded] = useState<boolean>(false);
@@ -3652,7 +3654,14 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               students={displayedStudents}
               teachers={displayedTeachers}
               staff={staffList}
-              onOpenScanner={() => setShowUniversalScannerModal(true)}
+              onOpenScanner={() => {
+                setFaceKioskInitialTestMode(false);
+                setShowUniversalScannerModal(true);
+              }}
+              onOpenFaceTest={() => {
+                setFaceKioskInitialTestMode(true);
+                setShowFaceKioskModal(true);
+              }}
               onOpenLocationModal={() => setShowSchoolLocationModal(true)}
               onViewClassAttendance={(clsId) => {
                 const found = displayedClasses.find((c) => c.id === clsId);
@@ -4729,7 +4738,11 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         {school && showFaceKioskModal && (
           <FaceAttendanceKioskModal
             isOpen={showFaceKioskModal}
-            onClose={() => setShowFaceKioskModal(false)}
+            onClose={() => {
+              setShowFaceKioskModal(false);
+              setFaceKioskInitialTestMode(false);
+            }}
+            initialTestMode={faceKioskInitialTestMode}
             schoolId={school.id}
             schoolName={school.name}
             classes={displayedClasses}
