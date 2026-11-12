@@ -119,15 +119,9 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
     return () => stopLiveStudioCamera();
   }, [liveCaptureTarget]);
 
-  // Snap photo and extract descriptor
+  // Snap photo and extract descriptor in 1 tap (2 seconds)
   const handleCaptureLiveDescriptor = async () => {
     if (!liveVideoRef.current || !liveCaptureTarget) return;
-
-    setCountdown(3);
-    for (let c = 2; c >= 0; c--) {
-      await new Promise(r => setTimeout(r, 800));
-      setCountdown(c);
-    }
 
     const video = liveVideoRef.current;
     const canvas = document.createElement("canvas");
@@ -291,17 +285,18 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
             type="button"
             onClick={handleBatchAutoVectorize}
             disabled={isBatchProcessing || withPhotosCount === 0}
-            className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-95 text-white font-black rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-emerald-600/20 transition cursor-pointer disabled:opacity-50"
+            className="px-4 py-2 bg-gradient-to-r from-amber-500 via-emerald-600 to-teal-600 hover:from-amber-400 hover:to-teal-500 active:scale-95 text-slate-950 font-black rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-emerald-600/20 transition cursor-pointer disabled:opacity-50"
+            title="जिनकी फोटो पहले से ऐप में है, वे 1-क्लिक में पूरी क्लास अपने आप सेव हो जाएगी"
           >
             {isBatchProcessing ? (
               <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Vectorizing...</span>
+                <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
+                <span>पूरी क्लास सेव हो रही है...</span>
               </>
             ) : (
               <>
-                <Zap className="w-4 h-4 text-amber-300" />
-                <span>⚡ Auto-Vectorize All ID Photos</span>
+                <Zap className="w-4 h-4 text-slate-950 fill-slate-950" />
+                <span>⚡ 1-क्लिक में पूरी क्लास सेव करें</span>
               </>
             )}
           </button>
@@ -488,8 +483,8 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
                 muted
                 className={`w-full h-full object-cover transition-transform duration-300 ${facingMode === "user" ? "transform -scale-x-100" : ""}`}
               />
-              {/* Oval Target Reticle */}
-              <div className="absolute inset-4 rounded-[50%] border-2 border-dashed border-emerald-400/60 pointer-events-none" />
+              {/* Single Clean Center Circle Guide */}
+              <div className="absolute inset-4 rounded-full border-2 border-dashed border-emerald-400/70 pointer-events-none" />
 
               {countdown !== null && (
                 <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
@@ -500,23 +495,23 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
               {captureSuccess && (
                 <div className="absolute inset-0 bg-emerald-950/90 flex flex-col items-center justify-center text-emerald-400 p-4">
                   <CheckCircle2 className="w-12 h-12 mb-2" />
-                  <span className="text-sm font-bold text-white">Biometrics Enrolled Successfully!</span>
+                  <span className="text-sm font-bold text-white">बायोमेट्रिक सेव हुआ (2s Face ID)!</span>
                 </div>
               )}
             </div>
 
             <p className="text-xs text-slate-400 mb-4 max-w-xs">
-              Align student's face directly inside the oval frame in good lighting and tap Capture.
+              चेहरा बीच के सर्किल में रखें और 1 बार टैप करें — 2 सेकंड में फेस ID बन जाएगी।
             </p>
 
             <button
               type="button"
               onClick={handleCaptureLiveDescriptor}
-              disabled={countdown !== null || captureSuccess}
-              className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-black rounded-xl text-sm transition shadow-lg shadow-emerald-600/25 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              disabled={captureSuccess}
+              className="w-full py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-95 text-white font-black rounded-xl text-sm transition shadow-lg shadow-emerald-600/25 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
             >
               <Camera className="w-4 h-4" />
-              <span>Capture Face Biometrics (फोटो खींचें)</span>
+              <span>📸 1-टैप फोटो लें व फेस ID बनाएं (2 Seconds)</span>
             </button>
           </div>
         </div>

@@ -47,6 +47,10 @@ import {
   isFaceApiLoaded,
   upgradeLegacyDescriptors,
   revectorizeLegacyRecord,
+  repairAndResyncAllFaceDescriptors,
+  purgeFaceDescriptor,
+  calculateArcFaceCosineSimilarity,
+  calculateCosineSimilarity,
   draw3DHolographicMesh
 } from "../../utils/faceRecognitionEngine";
 import { markStudentQrAttendance, todayStr, saveNstaMessage, getStaffDailyAttendance, saveStaffDailyAttendance } from "../../school-firebase";
@@ -141,6 +145,9 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
   const [lowConfidenceCandidate, setLowConfidenceCandidate] = useState<any>(null);
   const [activeCooldownInfo, setActiveCooldownInfo] = useState<{ name: string; rollNo?: string; remainingSec: number } | null>(null);
   const blinkDetectorRef = useRef<EyeBlinkDetector>(new EyeBlinkDetector());
+  const blinkPromptSpokenForRef = useRef<string | null>(null);
+  const lastBlinkVoiceTimeRef = useRef<number>(0);
+  const [isVectorizingClass, setIsVectorizingClass] = useState<boolean>(false);
 
   // Screen Fill Light / Flashlight & Ambient Illumination State
   const [screenFlashActive, setScreenFlashActive] = useState<boolean>(false);
@@ -150,7 +157,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
 
   // 25s Cooldown Guard tracker: studentId -> timestamp
   const scanCooldownsRef = useRef<Map<string, number>>(new Map());
-  // 3.5s Global Camera Cooldown Guard: freezes scan loop for 3.5s after any successful punch
+  // Global Camera Cooldown Guard: freezes scan loop for 2s after any successful punch
   const globalCooldownUntilRef = useRef<number>(0);
   const isPunchingLockRef = useRef<boolean>(false); // Synchronous Punch Lock
   const [globalFreezeCountdown, setGlobalFreezeCountdown] = useState<number>(0);
@@ -192,7 +199,16 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
     matchNumber: number;
   }>>([]);
   const testAnnounceCooldownRef = useRef<Map<string, number>>(new Map());
+  const testActiveMatchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastMatchedAlertTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [showTestHistoryTray, setShowTestHistoryTray] = useState<boolean>(false);
+
+  useEffect(() => {
+    return () => {
+      if (testActiveMatchTimeoutRef.current) clearTimeout(testActiveMatchTimeoutRef.current);
+      if (lastMatchedAlertTimeoutRef.current) clearTimeout(lastMatchedAlertTimeoutRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (isOpen && initialTestMode) {
@@ -200,15 +216,16 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
     }
   }, [isOpen, initialTestMode]);
 
-  // Voice Speech Synthesizer for Test Mode Name Announcement
+  // Voice Speech Synthesizer for Test Mode: Bas naam bolega ("Nadim", "Aarav", etc.)
   const announceFaceTestMatch = useCallback((name: string, count: number, role?: string) => {
     if (!name) return;
     try {
       if (typeof window !== "undefined" && "speechSynthesis" in window) {
         window.speechSynthesis.cancel();
+        // Speak ONLY the person's name cleanly
         const utterance = new SpeechSynthesisUtterance(name);
         utterance.lang = "hi-IN";
-        utterance.rate = 0.95;
+        utterance.rate = 1.0;
         utterance.pitch = 1.0;
 
         const voices = window.speechSynthesis.getVoices();
@@ -221,7 +238,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
         }
         window.speechSynthesis.speak(utterance);
       } else {
-        speakNotification("पहचान", name);
+        speakNotification(name, undefined, { force: true, playTone: false });
       }
     } catch (err) {
       console.warn("Speech synthesis error:", err);
@@ -269,6 +286,37 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
     return () => clearInterval(interval);
   }, [computeRoutineShift]);
 
+  const [isRepairingFaces, setIsRepairingFaces] = useState(false);
+
+  // Manual 1-Tap Trigger for Cleaning Corrupted/Overwritten Biometrics and Re-syncing from Real Photos
+  const handleManualRepairBiometrics = useCallback(async () => {
+    setIsRepairingFaces(true);
+    setCooldownToast("🔄 बायोमेट्रिक डेटा की जांच व फोटो से री-सिंक हो रहा है...");
+    try {
+      const result = await repairAndResyncAllFaceDescriptors(
+        schoolId,
+        students,
+        teachers,
+        (msg) => setCooldownToast(msg)
+      );
+      const fixedMap = await getSchoolFaceDescriptors(schoolId);
+      setEnrolledMap(fixedMap);
+      setTestMatchCounts({});
+      setTestActiveMatch(null);
+      testAnnounceCooldownRef.current.clear();
+      setCooldownToast(
+        `✅ बायोमेट्रिक डेटा ठीक हो गया! ${result.repairedCount} फोटो से री-सिंक हुए, ${result.totalActive} चेहरे एक्टिव हैं।`
+      );
+      setTimeout(() => setCooldownToast(null), 4000);
+    } catch (e) {
+      console.error("[FaceRepair] Error repairing descriptors:", e);
+      setCooldownToast("⚠️ बायोमेट्रिक री-सिंक में त्रुटि, कृपया पुनः प्रयास करें।");
+      setTimeout(() => setCooldownToast(null), 3000);
+    } finally {
+      setIsRepairingFaces(false);
+    }
+  }, [schoolId, students, teachers]);
+
   // Load Enrolled Descriptors from IndexedDB & Auto-Enroll Roster
   const loadDescriptors = useCallback(async () => {
     setLoadingDescriptors(true);
@@ -280,6 +328,41 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
       upgradeLegacyDescriptors(map, (upgraded) => {
         setEnrolledMap((prev) => ({ ...prev, [upgraded.studentId]: upgraded }));
       }).catch(() => {});
+
+      // Sanity Check: Detect if any 2 distinct profiles have identical or cross-contaminated vectors (sim >= 0.90)
+      const initialRecords = Object.values(map);
+      let detectedCollision = false;
+      for (let i = 0; i < initialRecords.length; i++) {
+        for (let j = i + 1; j < initialRecords.length; j++) {
+          const rA = initialRecords[i];
+          const rB = initialRecords[j];
+          if (rA.studentId === rB.studentId) continue;
+          const vA = rA.arcfaceDescriptor || rA.descriptor;
+          const vB = rB.arcfaceDescriptor || rB.descriptor;
+          if (vA && vB && vA.length === vB.length) {
+            const sim = vA.length === 512
+              ? calculateArcFaceCosineSimilarity(vA, vB)
+              : calculateCosineSimilarity(vA, vB);
+            if (sim >= 0.90) {
+              detectedCollision = true;
+              console.warn(`[FaceKiosk] Cross-contamination detected between ${rA.name} and ${rB.name} (sim=${sim.toFixed(3)})! Auto-repairing...`);
+              break;
+            }
+          }
+        }
+        if (detectedCollision) break;
+      }
+
+      if (detectedCollision) {
+        setCooldownToast("🔄 बायोमेट्रिक क्रॉस-मैच डिटेक्ट हुआ — असली फोटो से ऑटो-क्लीन हो रहा है...");
+        const rep = await repairAndResyncAllFaceDescriptors(schoolId, students, teachers);
+        map = await getSchoolFaceDescriptors(schoolId);
+        setEnrolledMap(map);
+        if (rep.repairedCount > 0 || rep.purgedCount > 0) {
+          setCooldownToast(`✅ बायोमेट्रिक डेटा ठीक हो गया! (${rep.repairedCount} फोटो से री-सिंक, ${rep.purgedCount} करप्ट साफ)`);
+          setTimeout(() => setCooldownToast(null), 3500);
+        }
+      }
 
       const deletedFaceIds = getDeletedFaceIds(schoolId || "default_school");
 
@@ -416,7 +499,51 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
     };
   }, [isOpen, showEnrollmentModal, startCamera]);
 
-  // Handle successful attendance marking
+  // 1-Click Batch Auto-Vectorize whole class from existing photos in ~2 seconds
+  const handle1ClickClassVectorize = async () => {
+    if (!students || students.length === 0 || isVectorizingClass) return;
+    const studentsWithPhotos = students.filter((s) => s && s.photoUrl && s.photoUrl.trim());
+    if (studentsWithPhotos.length === 0) {
+      setCooldownToast("⚠️ छात्रों की प्रोफाइल में कोई फोटो नहीं मिली।");
+      setTimeout(() => setCooldownToast(null), 3000);
+      return;
+    }
+    setIsVectorizingClass(true);
+    setCooldownToast(`⚡ पूरी क्लास (${studentsWithPhotos.length} छात्र) की फोटो से फेस ID बन रही है...`);
+    try {
+      let savedCount = 0;
+      const updatedMap = { ...enrolledMap };
+      for (const st of studentsWithPhotos) {
+        try {
+          const rec = await enrollStudentFromPhotoUrl({
+            id: st.id,
+            schoolId: schoolId || "default_school",
+            name: st.name,
+            rollNo: String(st.rollNo || ""),
+            classId: st.classId || classId,
+            className: st.className || className,
+            photoUrl: st.photoUrl,
+          });
+          if (rec) {
+            updatedMap[rec.studentId] = rec;
+            savedCount++;
+          }
+        } catch {}
+      }
+      setEnrolledMap(updatedMap);
+      playAttendanceSuccessChime();
+      setCooldownToast(`✅ पूरी क्लास (${savedCount} छात्र) की फेस ID 2 सेकंड में सेव हो गई!`);
+      setTimeout(() => setCooldownToast(null), 3500);
+      if (onAttendanceUpdated) onAttendanceUpdated();
+    } catch {
+      setCooldownToast("❌ क्लास फेस ID सेव करने में त्रुटि आई");
+      setTimeout(() => setCooldownToast(null), 3000);
+    } finally {
+      setIsVectorizingClass(false);
+    }
+  };
+
+  // Handle successful attendance marking (With 2-Second Crisp Auto Fade-Out)
   const handleMarkAttendanceSuccess = useCallback(
     async (match: {
       studentId: string;
@@ -444,9 +571,9 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
       }
 
       scanCooldownsRef.current.set(match.studentId, now);
-      // Trigger 3.5s Global Camera Pause: freeze scanner so no other punches trigger on same face
-      globalCooldownUntilRef.current = now + 3500;
-      setGlobalFreezeCountdown(3);
+      // Trigger exactly 2.0s Global Camera Pause: freeze scanner so screen auto clears in 2 seconds
+      globalCooldownUntilRef.current = now + 2000;
+      setGlobalFreezeCountdown(2);
 
       setActiveCooldownInfo(null);
       setPendingBlinkStudent(null);
@@ -531,16 +658,34 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           };
 
           setLastMatchedAlert(checkInEntry);
+          // STRICT 2-SECOND AUTO FADE-OUT: Screen becomes 100% clean and ready for next person
+          if (lastMatchedAlertTimeoutRef.current) clearTimeout(lastMatchedAlertTimeoutRef.current);
+          lastMatchedAlertTimeoutRef.current = setTimeout(() => {
+            setLastMatchedAlert(null);
+            setLiveMatchedCandidate(null);
+            setPendingBlinkStudent(null);
+            setActiveCooldownInfo(null);
+            setGlobalFreezeCountdown(0);
+            globalCooldownUntilRef.current = 0;
+            isPunchingLockRef.current = false;
+            blinkDetectorRef.current.reset();
+            blinkPromptSpokenForRef.current = null;
+          }, 2000);
           setRecentScans((prev) => [checkInEntry, ...prev.filter((p) => p.studentId !== match.studentId)].slice(0, 8));
 
-          // 3.5s Global Camera Pause
-          globalCooldownUntilRef.current = Date.now() + 3500;
-          setGlobalFreezeCountdown(3);
-
-          speakNotification(
-            "शिक्षक हाजिरी दर्ज",
-            `${match.name} जी, आपकी उपस्थिति दर्ज कर ली गई है।`
-          );
+          // Announcement: In पर "{Name} उपस्थित", Exit पर "{Name} प्रस्थान"
+          const teacherVoice = action === "out" ? `${match.name} प्रस्थान` : `${match.name} उपस्थित`;
+          try {
+            if (typeof window !== "undefined" && "speechSynthesis" in window) {
+              window.speechSynthesis.cancel();
+              const utt = new SpeechSynthesisUtterance(teacherVoice);
+              utt.lang = "hi-IN";
+              utt.rate = 1.0;
+              window.speechSynthesis.speak(utt);
+            } else {
+              speakNotification("हाजिरी", teacherVoice);
+            }
+          } catch {}
 
           if (onAttendanceUpdated) onAttendanceUpdated();
           return;
@@ -598,11 +743,20 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
         };
 
         setLastMatchedAlert(checkInEntry);
+        // STRICT 2-SECOND AUTO FADE-OUT: Screen becomes 100% clean and ready for next person
+        if (lastMatchedAlertTimeoutRef.current) clearTimeout(lastMatchedAlertTimeoutRef.current);
+        lastMatchedAlertTimeoutRef.current = setTimeout(() => {
+          setLastMatchedAlert(null);
+          setLiveMatchedCandidate(null);
+          setPendingBlinkStudent(null);
+          setActiveCooldownInfo(null);
+          setGlobalFreezeCountdown(0);
+          globalCooldownUntilRef.current = 0;
+          isPunchingLockRef.current = false;
+          blinkDetectorRef.current.reset();
+          blinkPromptSpokenForRef.current = null;
+        }, 2000);
         setRecentScans((prev) => [checkInEntry, ...prev.filter((p) => p.studentId !== match.studentId)].slice(0, 8));
-
-        // 3.5s Global Camera Pause
-        globalCooldownUntilRef.current = Date.now() + 3500;
-        setGlobalFreezeCountdown(3);
 
         // 2. Dispatch Parent Web Push Arrival / Departure Notification
         const pushTitle = action === "out"
@@ -645,12 +799,24 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           void saveNstaMessage(nstaChatMsg);
         } catch {}
 
-        // Speak Hindi Voice Confirmation on Kiosk
+        // Exact requested voice confirmation: In पर "{Name} उपस्थित", Exit पर "{Name} प्रस्थान"
         try {
-          speakNotification(
-            "हाजिरी",
-            `${match.name} की ${action === "out" ? "प्रस्थान" : "उपस्थिति"} दर्ज हुई।`
-          );
+          const speechVoiceText = action === "out" ? `${match.name} प्रस्थान` : `${match.name} उपस्थित`;
+          if (typeof window !== "undefined" && "speechSynthesis" in window) {
+            window.speechSynthesis.cancel();
+            const utt = new SpeechSynthesisUtterance(speechVoiceText);
+            utt.lang = "hi-IN";
+            utt.rate = 1.0;
+            const voices = window.speechSynthesis.getVoices();
+            const preferredVoice =
+              voices.find((v) => v.lang.includes("hi") || v.lang.includes("HI")) ||
+              voices.find((v) => v.lang.includes("en-IN") || v.lang.includes("hi_IN")) ||
+              voices.find((v) => v.lang.includes("en-GB") || v.lang.includes("en-US"));
+            if (preferredVoice) utt.voice = preferredVoice;
+            window.speechSynthesis.speak(utt);
+          } else {
+            speakNotification("हाजिरी", speechVoiceText);
+          }
         } catch {}
 
         if (onAttendanceUpdated) {
@@ -661,55 +827,14 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
       } finally {
         setTimeout(() => {
           isPunchingLockRef.current = false;
-        }, 3500);
+        }, 2000);
       }
     },
     [schoolId, classId, className, teacherId, kioskScanMode, currentShiftMode, adminInCutoffTime, onAttendanceUpdated, enrolledMap, teachers, schoolName]
   );
 
-  // Manual Attendance Mark + Mandatory Live Face Auto-Enrollment
+  // Manual Attendance Mark (Safe: Records attendance WITHOUT touching biometric descriptors)
   const handleManualMark = (st: any) => {
-    const alreadyEnrolled = Boolean(enrolledMap[st.id]);
-    const hasLiveFace = Boolean(lastLiveDescriptorRef.current && lastLiveDescriptorRef.current.length === 128);
-
-    if (!alreadyEnrolled && !hasLiveFace) {
-      setCooldownToast(`⚠️ ${st.name} का चेहरा सेव नहीं है! पहले चेहरा कैमरे के सामने लाएं, फिर टैप करें।`);
-      setTimeout(() => setCooldownToast(null), 3500);
-      return;
-    }
-
-    let justEnrolled = false;
-    if (hasLiveFace && lastLiveDescriptorRef.current) {
-      let snapPhoto = st.photoUrl;
-      if (videoRef.current && (!snapPhoto || !snapPhoto.startsWith("data:"))) {
-        try {
-          const c = document.createElement("canvas");
-          c.width = 320;
-          c.height = 320;
-          const cx = c.getContext("2d");
-          if (cx) {
-            cx.drawImage(videoRef.current, 0, 0, 320, 320);
-            snapPhoto = c.toDataURL("image/jpeg", 0.85);
-          }
-        } catch {}
-      }
-
-      const liveRec: FaceDescriptorRecord = {
-        studentId: st.id,
-        schoolId: schoolId || "default_school",
-        name: st.name,
-        rollNo: String(st.rollNo || ""),
-        classId: st.classId || classId,
-        className: st.className || className,
-        photoUrl: snapPhoto || st.photoUrl,
-        descriptor: lastLiveDescriptorRef.current,
-        enrolledAt: new Date().toISOString(),
-        source: "face_api_neural",
-      };
-      void saveFaceDescriptor(liveRec);
-      setEnrolledMap((prev) => ({ ...prev, [st.id]: liveRec }));
-      justEnrolled = !alreadyEnrolled;
-    }
     handleMarkAttendanceSuccess({
       studentId: st.id,
       name: st.name,
@@ -719,10 +844,8 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
       photoUrl: st.photoUrl,
       confidencePercent: 100
     });
-    if (justEnrolled) {
-      setCooldownToast(`✅ ${st.name} की हाजिरी लगी व चेहरा सेव हो गया!`);
-      setTimeout(() => setCooldownToast(null), 3000);
-    }
+    setCooldownToast(`✅ ${st.name} की हाजिरी (मैनुअल) दर्ज हो गई!`);
+    setTimeout(() => setCooldownToast(null), 3000);
     setShowManualSearch(false);
     setManualSearchQuery("");
   };
@@ -741,7 +864,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
         return;
       }
 
-      // Ultra-Fast Group Scan: 140ms inference interval (~7 FPS) for smooth multi-student scanning
+      // Ultra-Fast Group Scan: 140ms inference interval (~7 FPS) for smooth single-student reticle scanning
       if (time - lastScanTime >= 140 && videoRef.current && canvasRef.current) {
         lastScanTime = time;
 
@@ -757,15 +880,30 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
 
           ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+          // ── SINGLE CENTER CIRCLE RETICLE GEOMETRY ──
+          const circleCenterX = canvas.width / 2;
+          const circleCenterY = canvas.height / 2;
+          // Clean round center scanning zone (diameter ~72% of minimum dimension)
+          const circleRadius = Math.min(canvas.width, canvas.height) * 0.36;
+
           try {
             const detected = await detectFacesInFrame(video, enrolledMap);
-            setHasFaceInView(detected.length > 0);
-            setDetectedFaceCount(detected.length);
             if (detected[0]?.descriptor && detected[0].descriptor.length === 128) {
               lastLiveDescriptorRef.current = detected[0].descriptor;
             }
 
-            if (detected.length === 0) {
+            // ── EXCLUSIVE CENTER CIRCLE FILTER ──
+            // Even if 5 people are standing in the camera frame, scan ONLY and EXCLUSIVELY
+            // the 1 person whose face is centered inside the single center circle!
+            const facesInsideCircle = (detected || []).filter((f: DetectedFaceBox) => {
+              const faceCenterX = f.x + f.width / 2;
+              const faceCenterY = f.y + f.height / 2;
+              const distFromCenter = Math.hypot(faceCenterX - circleCenterX, faceCenterY - circleCenterY);
+              // Face must be centered inside the circle and have sufficient size (ignores distant background faces)
+              return distFromCenter <= circleRadius * 0.92 && f.width >= circleRadius * 0.35;
+            });
+
+            if (facesInsideCircle.length === 0) {
               setHasFaceInView(false);
               setDetectedFaceCount(0);
               setLiveMatchedCandidate(null);
@@ -776,55 +914,46 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
               setCurrentLighting(null);
               setIsLowLightWarning(false);
               setIsAmbiguousMatchNotice(null);
+              blinkDetectorRef.current.reset();
+              blinkPromptSpokenForRef.current = null;
+              if (testActiveMatchTimeoutRef.current) clearTimeout(testActiveMatchTimeoutRef.current);
+              setTestActiveMatch(null);
+
+              // Draw ONLY the clean, calm center circle guide on canvas (Zero boxes anywhere!)
+              ctx.save();
+              ctx.beginPath();
+              ctx.arc(circleCenterX, circleCenterY, circleRadius, 0, Math.PI * 2);
+              ctx.lineWidth = 3;
+              ctx.strokeStyle = "rgba(255, 255, 255, 0.40)";
+              ctx.setLineDash([8, 8]);
+              ctx.stroke();
+              ctx.restore();
             } else {
+              // Exactly 1 face is chosen: the one closest to the center of the circle
+              facesInsideCircle.sort((a, b) => {
+                const distA = Math.hypot((a.x + a.width / 2) - circleCenterX, (a.y + a.height / 2) - circleCenterY);
+                const distB = Math.hypot((b.x + b.width / 2) - circleCenterX, (b.y + b.height / 2) - circleCenterY);
+                return distA - distB;
+              });
+              const primaryFace = facesInsideCircle[0];
+              const matchedStudent = primaryFace.matchedStudent;
+              const isMatched = Boolean(matchedStudent && !matchedStudent.isAmbiguous);
+
               setHasFaceInView(true);
-              setDetectedFaceCount(detected.length);
-              // ── SINGLE FACE POLICY: If 2 or more faces are in frame, HALT auto-punch! ──
-              if (detected.length > 1) {
-                setIsAmbiguousMatchNotice("👥 कैमरे में एक साथ 2 चेहरे हैं — कृपया लाइन में 1-1 करके सामने आएं (Single Face Only)");
-                setPendingBlinkStudent(null);
-                setLowConfidenceCandidate(null);
-                setLiveMatchedCandidate(null);
-                setIsFaceUnregistered(false);
+              setDetectedFaceCount(1);
+              setIsAmbiguousMatchNotice(null);
 
-                // Draw amber warning boxes on all faces without triggering punch
-                detected.forEach((f: DetectedFaceBox) => {
-                  const { x: rawX, y, width, height } = f;
-                  const x = facingMode === "user" ? Math.max(0, canvas.width - rawX - width) : rawX;
-                  ctx.lineWidth = 3;
-                  ctx.strokeStyle = "#f59e0b";
-                  ctx.strokeRect(x, y, width, height);
-                });
-                return; // STOP: do NOT auto-punch when multiple people stand together
-              }
-
-              const primaryFace = detected[0];
-              if (primaryFace?.matchedStudent) {
-                setLiveMatchedCandidate(primaryFace.matchedStudent);
-                setIsFaceUnregistered(false);
-              } else {
-                setLiveMatchedCandidate(null);
-                setIsFaceUnregistered(true);
-              }
-
-              if (primaryFace?.lighting) {
+              if (primaryFace.lighting) {
                 setCurrentLighting(primaryFace.lighting);
                 setIsLowLightWarning(primaryFace.lighting.isLowLight || primaryFace.lighting.isTooDark);
               }
 
-              // Process strictly the single face present in the frame
-              const face = primaryFace;
-              const { x: rawX, y, width, height, matchedStudent, lighting } = face;
-              // Front camera video is mirrored via CSS (-scale-x-100); mirror box X on canvas
-              const x = facingMode === "user" ? Math.max(0, canvas.width - rawX - width) : rawX;
-              const isMatched = Boolean(matchedStudent);
-
               // ── STRICT TEST MODE BRANCH: ZERO ATTENDANCE ──
               if (isFaceTestMode) {
-                if (matchedStudent) {
+                if (isMatched && matchedStudent) {
                   const now = Date.now();
                   const lastAnnounced = testAnnounceCooldownRef.current.get(matchedStudent.studentId) || 0;
-                  const cooldownMs = 3000; // 3-second repeat cooldown as confirmed
+                  const cooldownMs = 3000;
                   const elapsed = now - lastAnnounced;
 
                   if (elapsed >= cooldownMs) {
@@ -859,6 +988,11 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                     setTestActiveMatch(activeRecord);
                     setTestCooldownRemaining(3);
 
+                    if (testActiveMatchTimeoutRef.current) clearTimeout(testActiveMatchTimeoutRef.current);
+                    testActiveMatchTimeoutRef.current = setTimeout(() => {
+                      setTestActiveMatch(null);
+                    }, 2200);
+
                     setTestSessionLog((prev) => [
                       {
                         id: `${matchedStudent.studentId}_${now}`,
@@ -880,64 +1014,46 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                   }
                 }
 
-                // Render Test Mode Visual Reticle on Canvas
-                const testLabel = matchedStudent
-                  ? `🧪 ${matchedStudent.name} (${matchedStudent.confidencePercent}%) • #${testMatchCounts[matchedStudent.studentId] || 1}`
+                // Render ONLY the Single Center Circle in Test Mode (NO boxes on face!)
+                ctx.save();
+                ctx.beginPath();
+                ctx.arc(circleCenterX, circleCenterY, circleRadius, 0, Math.PI * 2);
+                ctx.lineWidth = 4.5;
+                ctx.strokeStyle = isMatched ? "#10b981" : "#f59e0b";
+                ctx.stroke();
+
+                const testLabel = isMatched
+                  ? `🧪 ${matchedStudent?.name} (${matchedStudent?.confidencePercent}%) • #${testMatchCounts[matchedStudent?.studentId] || 1}`
                   : Object.keys(enrolledMap).length === 0
                   ? "⚠️ 0 चेहरे सेव • पहले फोटो सेव करें"
-                  : "⚠️ अज्ञात चेहरा (No Saved Face Match)";
-
-                ctx.lineWidth = 4;
-                ctx.strokeStyle = matchedStudent ? "#10b981" : "#f59e0b";
-                const cornerLen = Math.min(width, height) * 0.25;
-
-                ctx.beginPath();
-                ctx.moveTo(x, y + cornerLen);
-                ctx.lineTo(x, y);
-                ctx.lineTo(x + cornerLen, y);
-                ctx.stroke();
-
-                ctx.beginPath();
-                ctx.moveTo(x + width - cornerLen, y);
-                ctx.lineTo(x + width);
-                ctx.lineTo(x + width, y + cornerLen);
-                ctx.stroke();
-
-                ctx.beginPath();
-                ctx.moveTo(x, y + height - cornerLen);
-                ctx.lineTo(x, y + height);
-                ctx.lineTo(x + cornerLen, y + height);
-                ctx.stroke();
-
-                ctx.beginPath();
-                ctx.moveTo(x + width - cornerLen, y + height);
-                ctx.lineTo(x + width, y + height);
-                ctx.lineTo(x + width, y + height - cornerLen);
-                ctx.stroke();
+                  : "⚠️ अज्ञात चेहरा (No Match)";
 
                 ctx.font = "bold 15px system-ui, -apple-system, sans-serif";
                 const textWidth = ctx.measureText(testLabel).width;
                 const badgeW = textWidth + 28;
-                const badgeH = 32;
-                const badgeX = Math.max(8, Math.min(canvas.width - badgeW - 8, x + width / 2 - badgeW / 2));
-                const badgeY = Math.max(10, y - badgeH - 10);
+                const badgeH = 34;
+                const badgeX = circleCenterX - badgeW / 2;
+                const badgeY = circleCenterY - circleRadius - badgeH / 2;
 
-                ctx.fillStyle = matchedStudent ? "rgba(6, 78, 59, 0.95)" : "rgba(120, 53, 15, 0.95)";
+                ctx.fillStyle = isMatched ? "rgba(6, 78, 59, 0.95)" : "rgba(120, 53, 15, 0.95)";
                 ctx.beginPath();
-                ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 10);
+                ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 17);
                 ctx.fill();
 
-                ctx.strokeStyle = matchedStudent ? "#34d399" : "#fbbf24";
+                ctx.strokeStyle = isMatched ? "#34d399" : "#fbbf24";
                 ctx.lineWidth = 1.5;
                 ctx.stroke();
 
                 ctx.fillStyle = "#ffffff";
-                ctx.fillText(testLabel, badgeX + 14, badgeY + 21);
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText(testLabel, circleCenterX, badgeY + badgeH / 2);
+                ctx.restore();
 
                 return; // HARD STOP: Bypasses ALL normal attendance punches!
               }
 
-              // RULE 2: Per-Student Cooldown Guard Check
+              // ── NORMAL ATTENDANCE FLOW WITH MANDATORY EYE BLINK ──
               const lastScanned = matchedStudent ? (scanCooldownsRef.current.get(matchedStudent.studentId) || 0) : 0;
               const isUnderCooldown = matchedStudent && (Date.now() - lastScanned < 25000);
 
@@ -946,127 +1062,105 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                 setActiveCooldownInfo({ name: matchedStudent.name, rollNo: matchedStudent.rollNo, remainingSec: rem });
                 setPendingBlinkStudent(null);
                 setLowConfidenceCandidate(null);
-                // Continue drawing brackets with cooldown status so user sees visual confirmation
-              } else if (matchedStudent) {
+              } else if (isMatched && matchedStudent) {
                 setActiveCooldownInfo(null);
-                // If candidate is ambiguous (e.g. low light separation margin too slim), do NOT auto-punch!
-                if (matchedStudent.isAmbiguous || lighting?.isTooDark) {
-                  setIsAmbiguousMatchNotice(`⚠️ रोशनी कम या पहचान संदिग्ध है (${matchedStudent.name}) — गलत नाम से बचने के लिए स्क्रीन लाइट ऑन करें या नीचे नाम पर टैप करें`);
+                setLowConfidenceCandidate(null);
+                setIsFaceUnregistered(false);
+                setLiveMatchedCandidate(matchedStudent);
+
+                // Multi-Angle Matching: Allows natural head turns (~30°-40° yaw, tilt, chin up/down)
+                if (matchedStudent.confidencePercent >= 55 && (matchedStudent.distance === undefined || matchedStudent.distance <= 0.68)) {
+                  setPendingBlinkStudent(matchedStudent);
+
+                  // ── AI VOICE PROMPT: "पलक झपकाएं" (Debounced per student arrival) ──
+                  const now = Date.now();
+                  if (
+                    blinkPromptSpokenForRef.current !== matchedStudent.studentId &&
+                    now - lastBlinkVoiceTimeRef.current > 3500
+                  ) {
+                    blinkPromptSpokenForRef.current = matchedStudent.studentId;
+                    lastBlinkVoiceTimeRef.current = now;
+                    try {
+                      speakNotification("हाजिरी", "पलक झपकाएं");
+                    } catch {}
+                  }
+
+                  // ── MANDATORY EYE BLINK DETECTION ──
+                  // Only when student actually blinks eyes, attendance is punched!
+                  const blinkState = blinkDetectorRef.current.update(video, primaryFace, primaryFace.landmarks);
+
+                  if (blinkState.blinkDetected) {
+                    blinkDetectorRef.current.reset();
+                    blinkPromptSpokenForRef.current = null;
+                    setPendingBlinkStudent(null);
+                    void handleMarkAttendanceSuccess(matchedStudent);
+                  }
+                } else {
                   setLowConfidenceCandidate(matchedStudent);
-                } else if (matchedStudent.confidencePercent >= 70 && (matchedStudent.distance === undefined || matchedStudent.distance <= 0.60)) {
-                  setIsAmbiguousMatchNotice(null);
-                  setLowConfidenceCandidate(null);
                   setPendingBlinkStudent(null);
-                  void handleMarkAttendanceSuccess(matchedStudent);
-                } else if (matchedStudent.confidencePercent >= 60) {
-                  setLowConfidenceCandidate(matchedStudent);
                 }
-              } else if (lighting?.isTooDark || lighting?.isLowLight) {
-                // No match and low light
-                setIsAmbiguousMatchNotice(null);
+              } else {
+                setLiveMatchedCandidate(null);
+                setIsFaceUnregistered(true);
+                setPendingBlinkStudent(null);
+                setLowConfidenceCandidate(null);
               }
 
-                // Overlay Label Card
-                let labelText = "Scanning Face...";
-                const totalSavedFaces = Object.keys(enrolledMap).length;
-                if (isUnderCooldown && matchedStudent) {
-                  labelText = `⏸️ ${matchedStudent.name} (उपस्थिति दर्ज)`;
-                } else if (pendingBlinkStudent && matchedStudent) {
-                  labelText = `👁️ ${matchedStudent.name} (${matchedStudent.confidencePercent}%) • Blink Eyes`;
-                } else if (matchedStudent) {
-                  const angleBadge = matchedStudent.matchedAngle ? ` • 3D [${matchedStudent.matchedAngle.toUpperCase()}]` : " • 3D AI";
-                  labelText = `✓ ${matchedStudent.name} (${matchedStudent.confidencePercent}%)${angleBadge}`;
-                } else {
-                  labelText = totalSavedFaces === 0 ? "⚠️ 0 चेहरे सेव • नीचे नाम चुनें" : "⚠️ अज्ञात चेहरा • नीचे नाम चुनें";
-                }
+              // ── RENDER ONLY THE SINGLE CLEAN CENTER CIRCLE (Zero boxes on face!) ──
+              ctx.save();
+              ctx.beginPath();
+              ctx.arc(circleCenterX, circleCenterY, circleRadius, 0, Math.PI * 2);
+              ctx.lineWidth = 4.5;
+              ctx.strokeStyle = isUnderCooldown
+                ? "#10b981"
+                : isMatched
+                ? "#10b981"
+                : "#f59e0b";
+              ctx.stroke();
 
-                // If 3D landmarks & headPose are available, render futuristic 3D Holographic Mesh
-                if (face.landmarks && face.headPose) {
-                  draw3DHolographicMesh(
-                    ctx,
-                    { x: rawX, y, width, height },
-                    face.headPose,
-                    face.landmarks,
-                    isMatched || isUnderCooldown,
-                    labelText,
-                    facingMode === "user",
-                    canvas.width
-                  );
-                } else {
-                  // Fallback Corner bracket styling
-                  ctx.lineWidth = 3.5;
-                  ctx.strokeStyle = isUnderCooldown
-                    ? "#10b981"
-                    : pendingBlinkStudent
-                    ? "#22d3ee"
-                    : matchedStudent?.isAmbiguous || lighting?.isTooDark
-                    ? "#f59e0b"
-                    : isMatched
-                    ? "#10b981"
-                    : "#f59e0b";
-
-                  const cornerLen = Math.min(width, height) * 0.22;
-
-                  // Top-Left Corner
-                  ctx.beginPath();
-                  ctx.moveTo(x, y + cornerLen);
-                  ctx.lineTo(x, y);
-                  ctx.lineTo(x + cornerLen, y);
-                  ctx.stroke();
-
-                  // Top-Right Corner
-                  ctx.beginPath();
-                  ctx.moveTo(x + width - cornerLen, y);
-                  ctx.lineTo(x + width, y);
-                  ctx.lineTo(x + width, y + cornerLen);
-                  ctx.stroke();
-
-                  // Bottom-Left Corner
-                  ctx.beginPath();
-                  ctx.moveTo(x, y + height - cornerLen);
-                  ctx.lineTo(x, y + height);
-                  ctx.lineTo(x + cornerLen, y + height);
-                  ctx.stroke();
-
-                  // Bottom-Right Corner
-                  ctx.beginPath();
-                  ctx.moveTo(x + width - cornerLen, y + height);
-                  ctx.lineTo(x + width, y + height);
-                  ctx.lineTo(x + width, y + height - cornerLen);
-                  ctx.stroke();
-
-                  ctx.font = "bold 14px system-ui, -apple-system, sans-serif";
-                  const textWidth = ctx.measureText(labelText).width;
-                  const badgeW = textWidth + 24;
-                  const badgeH = 28;
-                  const badgeX = Math.max(8, Math.min(canvas.width - badgeW - 8, x + width / 2 - badgeW / 2));
-                  const badgeY = Math.max(10, y - badgeH - 8);
-
-                  ctx.fillStyle = isUnderCooldown
-                    ? "rgba(6, 78, 59, 0.90)"
-                    : pendingBlinkStudent
-                    ? "rgba(8, 51, 68, 0.92)"
-                    : isMatched
-                    ? "rgba(6, 78, 59, 0.90)"
-                    : "rgba(120, 53, 15, 0.90)";
-                  ctx.beginPath();
-                  ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 8);
-                  ctx.fill();
-
-                  ctx.strokeStyle = isUnderCooldown
-                    ? "#34d399"
-                    : pendingBlinkStudent
-                    ? "#38bdf8"
-                    : isMatched
-                    ? "#34d399"
-                    : "#fbbf24";
-                  ctx.lineWidth = 1;
-                  ctx.stroke();
-
-                  ctx.fillStyle = "#ffffff";
-                  ctx.fillText(labelText, badgeX + 12, badgeY + 19);
-                }
+              // Clean Single Center Pill at top edge of circle
+              let labelText = "Scanning Face...";
+              if (isUnderCooldown && matchedStudent) {
+                labelText = `✓ ${matchedStudent.name} (उपस्थिति दर्ज)`;
+              } else if (pendingBlinkStudent && matchedStudent) {
+                labelText = `👁️ पलक झपकाएं • ${matchedStudent.name}`;
+              } else if (matchedStudent) {
+                labelText = `✓ ${matchedStudent.name} (${matchedStudent.confidencePercent}%)`;
+              } else {
+                labelText = "⚠️ अज्ञात चेहरा • नीचे नाम चुनें";
               }
+
+              ctx.font = "bold 15px system-ui, -apple-system, sans-serif";
+              const textWidth = ctx.measureText(labelText).width;
+              const badgeW = textWidth + 28;
+              const badgeH = 34;
+              const badgeX = circleCenterX - badgeW / 2;
+              const badgeY = circleCenterY - circleRadius - badgeH / 2;
+
+              ctx.fillStyle = isUnderCooldown || (isMatched && !pendingBlinkStudent)
+                ? "rgba(6, 78, 59, 0.95)"
+                : pendingBlinkStudent
+                ? "rgba(8, 51, 68, 0.95)"
+                : "rgba(120, 53, 15, 0.95)";
+              ctx.beginPath();
+              ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 17);
+              ctx.fill();
+
+              ctx.strokeStyle = isUnderCooldown || (isMatched && !pendingBlinkStudent)
+                ? "#34d399"
+                : pendingBlinkStudent
+                ? "#38bdf8"
+                : "#fbbf24";
+              ctx.lineWidth = 1.5;
+              ctx.stroke();
+
+              ctx.fillStyle = "#ffffff";
+              ctx.textAlign = "center";
+              ctx.textBaseline = "middle";
+              ctx.fillText(labelText, circleCenterX, badgeY + badgeH / 2);
+
+              ctx.restore();
+            }
           } catch (e) {
             // Frame processing blip ignored
           }
@@ -1245,6 +1339,18 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
             <Lightbulb className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${screenFlashActive ? "fill-slate-950 text-slate-950" : "text-amber-400"}`} />
           </button>
 
+          {/* 1-Click Auto-Vectorize Whole Class Photos */}
+          <button
+            type="button"
+            onClick={handle1ClickClassVectorize}
+            disabled={isVectorizingClass}
+            className="px-2 sm:px-2.5 py-1 sm:py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 active:scale-95 text-slate-950 font-black rounded-xl text-xs transition cursor-pointer shadow-sm flex items-center gap-1 shrink-0 disabled:opacity-50"
+            title="पूरी क्लास के फोटो 1-क्लिक में 2 सेकंड में सेव करें"
+          >
+            <Zap className={`w-3.5 h-3.5 ${isVectorizingClass ? "animate-spin" : ""}`} />
+            <span className="hidden sm:inline">1-क्लिक सेव</span>
+          </button>
+
           {/* Enrolled Profiles */}
           <button
             type="button"
@@ -1255,6 +1361,18 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
             <Camera className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-amber-300" />
             <span className="hidden md:inline">Profiles</span>
             <span className="text-[10px] sm:text-[11px] text-emerald-100 font-mono">({enrolledCount})</span>
+          </button>
+
+          {/* 1-Tap Biometric Re-Sync & Auto-Clean */}
+          <button
+            type="button"
+            onClick={handleManualRepairBiometrics}
+            disabled={isRepairingFaces}
+            className="px-2 sm:px-2.5 py-1 sm:py-1.5 bg-indigo-600/40 hover:bg-indigo-600/60 active:scale-95 text-indigo-200 border border-indigo-500/50 rounded-xl text-xs font-bold transition cursor-pointer shadow-sm flex items-center gap-1 shrink-0 disabled:opacity-50"
+            title="बायोमेट्रिक डेटा चेक व फोटो से री-सिंक करें (Clean & Re-sync Faces)"
+          >
+            <Sparkles className={`w-3.5 h-3.5 text-indigo-300 ${isRepairingFaces ? "animate-spin" : ""}`} />
+            <span className="hidden md:inline">री-सिंक</span>
           </button>
 
           {/* Close [X] Button - Always Accessible and prominent on top right */}
@@ -1518,61 +1636,59 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           </div>
         )}
 
-        {/* GLOBAL CAMERA COOLDOWN FREEZE OVERLAY (3.5s Pause with Large Green Tick) */}
-        {globalFreezeCountdown > 0 && lastMatchedAlert && (
-          <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-slate-950/85 backdrop-blur-md p-6 text-center animate-in fade-in duration-200">
-            <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center shadow-[0_0_60px_rgba(16,185,129,0.95)] mb-4 animate-bounce">
-              <Check className="w-14 h-14 sm:w-16 sm:h-16 stroke-[3.5]" />
-            </div>
-            <div className="bg-slate-900/95 border-2 border-emerald-500/70 rounded-3xl p-5 shadow-2xl max-w-sm w-full mx-auto">
-              <div className="flex items-center justify-center gap-2 mb-2">
-                <span className={`px-2.5 py-0.5 rounded-full text-xs font-black uppercase ${
-                  lastMatchedAlert.action === "out" ? "bg-rose-500 text-white" : "bg-emerald-500 text-slate-950"
-                }`}>
-                  {lastMatchedAlert.action === "out" ? "🔴 OUT दर्ज (प्रस्थान)" : `🟢 IN दर्ज (${lastMatchedAlert.status})`}
-                </span>
-                <span className="text-xs font-mono text-emerald-300 font-bold">{lastMatchedAlert.time}</span>
+        {/* ── 2-SECOND AUTO FADE-OUT ATTENDANCE CELEBRATION CARD ── */}
+        {lastMatchedAlert && (
+          <div className="absolute inset-0 z-35 flex flex-col items-center justify-center p-4 pointer-events-none animate-in fade-in zoom-in-95 duration-200">
+            <div className="bg-slate-900/95 border-2 border-emerald-400 rounded-3xl p-5 shadow-2xl backdrop-blur-md max-w-xs w-full flex flex-col items-center text-center ring-4 ring-emerald-500/30">
+              <div className="w-20 h-20 rounded-2xl border-2 border-emerald-400 overflow-hidden mb-3 bg-slate-800 flex items-center justify-center text-white text-2xl font-black shadow-lg">
+                {lastMatchedAlert.photoUrl ? (
+                  <img src={lastMatchedAlert.photoUrl} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  <span>{lastMatchedAlert.name.slice(0, 2).toUpperCase()}</span>
+                )}
               </div>
-              <h3 className="text-xl font-black text-white truncate">{lastMatchedAlert.name}</h3>
-              <p className="text-xs text-slate-300 mt-1">
-                {lastMatchedAlert.className || "Class"} • Roll #{lastMatchedAlert.rollNo || "—"} ({lastMatchedAlert.confidence}% Match)
+              <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-black uppercase mb-1 ${
+                lastMatchedAlert.action === "out" ? "bg-rose-500 text-white" : "bg-emerald-500 text-slate-950"
+              }`}>
+                {lastMatchedAlert.action === "out" ? "🔴 OUT दर्ज (प्रस्थान)" : `🟢 IN दर्ज (${lastMatchedAlert.status})`}
+              </span>
+              <h3 className="text-xl font-black text-white truncate max-w-full">
+                {lastMatchedAlert.name} उपस्थित
+              </h3>
+              <p className="text-xs text-slate-300 mt-0.5 font-mono">
+                {lastMatchedAlert.time} {lastMatchedAlert.rollNo ? `• Roll #${lastMatchedAlert.rollNo}` : ""}
               </p>
-              
-              <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
-                <span className="text-xs font-bold text-emerald-300">
-                  कैमरा पॉज़: {globalFreezeCountdown}s (अगले व्यक्ति के लिए रुकें)
-                </span>
+              <div className="mt-3 pt-2.5 border-t border-slate-800/80 w-full flex items-center justify-center gap-1.5 text-[11px] font-bold text-emerald-300">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                <span>हाजिरी दर्ज • 2 सेकंड में साफ़ (Ready)</span>
               </div>
             </div>
           </div>
         )}
 
-        {/* Center Framing Guide Oval with Dynamic Biometric State Colors & Laser Scanner Beam */}
+        {/* ── SINGLE CENTER CIRCLE RETICLE (केवल 1 बड़ा साफ़ सर्किल) ── */}
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center z-10">
           <div
-            className={`w-64 h-80 sm:w-72 sm:h-96 rounded-[50%] border-2 transition-all duration-300 flex flex-col items-center justify-between p-6 relative overflow-hidden ${
+            className={`w-72 h-72 sm:w-84 sm:h-84 md:w-96 md:h-96 rounded-full border-3 sm:border-4 transition-all duration-300 flex flex-col items-center justify-between p-5 relative overflow-hidden ${
               lastMatchedAlert && !activeCooldownInfo
-                ? "border-emerald-400 shadow-[0_0_40px_rgba(52,211,153,0.7)] ring-4 ring-emerald-500/40"
+                ? "border-emerald-400 shadow-[0_0_50px_rgba(52,211,153,0.7)] ring-4 ring-emerald-500/40"
                 : activeCooldownInfo
                 ? "border-emerald-500/70 shadow-[0_0_25px_rgba(16,185,129,0.4)] ring-2 ring-emerald-500/30"
-                : pendingBlinkStudent
-                ? "border-cyan-400 shadow-[0_0_35px_rgba(34,211,238,0.7)] ring-4 ring-cyan-500/40 animate-pulse"
-                : liveMatchedCandidate
-                ? "border-emerald-400 shadow-[0_0_30px_rgba(16,185,129,0.6)] ring-3 ring-emerald-400/40"
+                : pendingBlinkStudent || liveMatchedCandidate
+                ? "border-emerald-400 shadow-[0_0_40px_rgba(52,211,153,0.75)] ring-4 ring-emerald-500/40"
                 : isFaceUnregistered
                 ? "border-amber-400 shadow-[0_0_30px_rgba(251,191,36,0.6)] ring-3 ring-amber-400/50"
                 : lowConfidenceCandidate
                 ? "border-amber-400 shadow-[0_0_25px_rgba(251,191,36,0.5)] ring-2 ring-amber-500/30"
                 : hasFaceInView
                 ? "border-cyan-400 shadow-[0_0_25px_rgba(34,211,238,0.5)] ring-2 ring-cyan-500/30"
-                : "border-dashed border-white/35"
+                : "border-dashed border-white/40"
             }`}
           >
             {/* Visual Biometric Laser Scanning Beam */}
             <div className="absolute inset-x-2 h-0.5 bg-gradient-to-r from-transparent via-cyan-400 to-transparent shadow-[0_0_12px_rgba(34,211,238,0.9)] animate-pulse pointer-events-none opacity-80" />
 
-            {/* Top Oval Pill */}
+            {/* Top Center Circle Pill */}
             <div className="pointer-events-auto">
               {isFaceTestMode ? (
                 testActiveMatch ? (
@@ -1583,12 +1699,12 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                 ) : hasFaceInView ? (
                   <span className="text-[11px] font-black tracking-wider text-cyan-200 bg-slate-900/90 border border-cyan-400 px-3.5 py-1.5 rounded-full backdrop-blur-md flex items-center gap-2">
                     <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
-                    <span>🧪 चेहरा टेस्ट हो रहा है...</span>
+                    <span>🧪 टेस्ट हो रहा है...</span>
                   </span>
                 ) : (
                   <span className="text-[11px] font-black tracking-wider text-amber-300 bg-black/80 border border-amber-400/50 px-3.5 py-1.5 rounded-full backdrop-blur-md flex items-center gap-2">
                     <span>🧪</span>
-                    <span>टेस्ट मोड • चेहरा अंडाकार घेरे में लाएं</span>
+                    <span>टेस्ट मोड • 1 चेहरा सर्किल में लाएं</span>
                   </span>
                 )
               ) : activeCooldownInfo ? (
@@ -1597,14 +1713,14 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                   <span>{activeCooldownInfo.name} • उपस्थिति दर्ज ({activeCooldownInfo.remainingSec}s Pause)</span>
                 </span>
               ) : pendingBlinkStudent ? (
-                <span className="text-[11px] font-bold tracking-wider text-cyan-200 bg-cyan-950/90 border border-cyan-400 px-3 py-1 rounded-full backdrop-blur-md flex items-center gap-1.5 shadow-lg animate-pulse">
-                  <span>👁️</span>
-                  <span>{pendingBlinkStudent.name} • कृपया आँखें झपकाएँ (Blink)</span>
+                <span className="text-xs sm:text-sm font-black tracking-wider text-cyan-100 bg-cyan-950/95 border-2 border-cyan-400 px-4 py-1.5 rounded-full backdrop-blur-md flex items-center gap-2 shadow-2xl animate-pulse ring-2 ring-cyan-400/40">
+                  <span className="text-base">👁️</span>
+                  <span>पलक झपकाएं • {pendingBlinkStudent.name}</span>
                 </span>
               ) : liveMatchedCandidate ? (
-                <span className="text-[11px] font-bold tracking-wider text-emerald-300 bg-emerald-950/90 border border-emerald-400 px-3 py-1 rounded-full backdrop-blur-md flex items-center gap-1.5 shadow-lg animate-pulse">
+                <span className="text-[11px] font-bold tracking-wider text-emerald-300 bg-emerald-950/90 border border-emerald-400 px-3 py-1 rounded-full backdrop-blur-md flex items-center gap-1.5 shadow-lg">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                  <span>✓ {liveMatchedCandidate.name} ({liveMatchedCandidate.confidencePercent}%) • पहचान हुई</span>
+                  <span>✓ {liveMatchedCandidate.name} ({liveMatchedCandidate.confidencePercent}%)</span>
                 </span>
               ) : isFaceUnregistered ? (
                 <span className="text-[11px] font-bold tracking-wider text-amber-200 bg-amber-950/90 border border-amber-400 px-3 py-1 rounded-full backdrop-blur-md flex items-center gap-1.5 shadow-lg animate-pulse">
@@ -1617,19 +1733,19 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                   <span>चेहरा स्कैन हो रहा है...</span>
                 </span>
               ) : (
-                <span className="text-[11px] font-bold tracking-wider uppercase text-white/80 bg-black/60 px-3 py-1 rounded-full backdrop-blur-xs border border-white/10 flex items-center gap-1.5">
+                <span className="text-[11px] font-bold tracking-wider text-white/90 bg-black/60 px-3 py-1 rounded-full backdrop-blur-xs border border-white/20 flex items-center gap-1.5">
                   <span>👤</span>
-                  <span>चेहरा अंडाकार घेरे में रखें</span>
+                  <span>चेहरा सर्किल के अंदर रखें</span>
                 </span>
               )}
             </div>
 
-            {/* Bottom Oval Pill / Shift Indicator */}
+            {/* Bottom Circle Pill / Shift Indicator */}
             <div className="pointer-events-auto flex flex-col items-center gap-1">
               {isFaceTestMode ? (
                 <div className="text-[11px] font-black px-3.5 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/50 backdrop-blur-md shadow-md flex items-center gap-1.5">
                   <span>🧪</span>
-                  <span>जीरो अटेंडेंस मोड • {enrolledCount} सेव चेहरे (No Attendance Recorded)</span>
+                  <span>जीरो अटेंडेंस मोड • {enrolledCount} सेव चेहरे</span>
                 </div>
               ) : (
                 <button
@@ -1644,7 +1760,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                 >
                   <span>{(kioskScanMode === "auto" ? currentShiftMode : kioskScanMode) === "in" ? "🟢 IN Mode (आगमन)" : "🔴 OUT Mode (प्रस्थान)"}</span>
                   <span>•</span>
-                  <span>{enrolledCount > 0 ? `${enrolledCount} चेहरे सेव हैं (जाँचें)` : "⚠️ 0 चेहरे सेव हैं"}</span>
+                  <span>{enrolledCount > 0 ? `${enrolledCount} सेव चेहरे` : "⚠️ 0 चेहरे सेव"}</span>
                 </button>
               )}
             </div>
@@ -1753,72 +1869,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           </div>
         )}
 
-        {/* Celebration / Attendance Banner with IN vs OUT styling */}
-        {lastMatchedAlert && (
-          <div className="absolute top-6 left-1/2 -translate-x-1/2 z-30 max-w-md w-[90%] animate-in fade-in zoom-in-95 duration-200">
-            <div
-              className={`rounded-2xl p-4 shadow-2xl backdrop-blur-md flex items-center gap-3 border ${
-                lastMatchedAlert.action === "out"
-                  ? "bg-rose-950/90 border-rose-500/50"
-                  : "bg-emerald-950/90 border-emerald-500/50"
-              }`}
-            >
-              <div
-                className={`w-14 h-14 rounded-xl border overflow-hidden shrink-0 flex items-center justify-center text-white text-lg font-bold ${
-                  lastMatchedAlert.action === "out"
-                    ? "bg-rose-800/80 border-rose-400"
-                    : "bg-emerald-800/80 border-emerald-400"
-                }`}
-              >
-                {lastMatchedAlert.photoUrl ? (
-                  <img
-                    src={lastMatchedAlert.photoUrl}
-                    alt={lastMatchedAlert.name}
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <span>{lastMatchedAlert.name.slice(0, 2).toUpperCase()}</span>
-                )}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span
-                    className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
-                      lastMatchedAlert.action === "out"
-                        ? "bg-rose-500 text-white"
-                        : "bg-emerald-500 text-slate-950"
-                    }`}
-                  >
-                    {lastMatchedAlert.action === "out" ? "🔴 OUT (प्रस्थान)" : `🟢 IN (${lastMatchedAlert.status})`}
-                  </span>
-                  <span
-                    className={`text-xs font-mono ${
-                      lastMatchedAlert.action === "out" ? "text-rose-300" : "text-emerald-300"
-                    }`}
-                  >
-                    {lastMatchedAlert.time}
-                  </span>
-                  {lastMatchedAlert.stayDuration && (
-                    <span className="text-[10px] text-amber-300 font-bold">
-                      ⏱️ {lastMatchedAlert.stayDuration}
-                    </span>
-                  )}
-                </div>
-                <h4 className="text-base font-black text-white truncate mt-0.5">
-                  {lastMatchedAlert.name}
-                </h4>
-                <p className="text-xs text-slate-300 truncate">
-                  Roll #{lastMatchedAlert.rollNo || "—"} • {lastMatchedAlert.className || "Class"} ({lastMatchedAlert.confidence}% Match)
-                </p>
-              </div>
-              <CheckCircle2
-                className={`w-8 h-8 shrink-0 ${
-                  lastMatchedAlert.action === "out" ? "text-rose-400" : "text-emerald-400"
-                }`}
-              />
-            </div>
-          </div>
-        )}
+
         {/* Live 1-Tap Candidate Bar on Viewfinder */}
         {students && students.length > 0 && (
           <div className="absolute left-2 sm:left-4 right-14 sm:right-20 bottom-2 sm:bottom-3 z-20 pointer-events-auto">
@@ -2197,25 +2248,18 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
             <div className="mt-3 flex items-center justify-between gap-2 flex-wrap bg-slate-950/60 p-2.5 rounded-2xl border border-slate-800">
               <div className="flex items-center gap-2 text-xs text-slate-300">
                 <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                <span className="font-semibold">128-D ResNet-34 AI न्यूरल वेक्टर (कैलिब्रेटेड प्रिसिशन)</span>
+                <span className="font-semibold text-emerald-300">512-D ArcFace Gold Neural AI (99.8% एक्यूरेसी)</span>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
                 <button
                   type="button"
-                  onClick={async () => {
-                    setCooldownToast("⏳ न्यूरल वेक्टर्स अपग्रेड हो रहे हैं...");
-                    const updated = await upgradeLegacyDescriptors(enrolledMap, (upgraded) => {
-                      setEnrolledMap((prev) => ({ ...prev, [upgraded.studentId]: upgraded }));
-                    });
-                    setEnrolledMap(updated);
-                    setCooldownToast("✓ सभी प्रोफाइल्स ResNet-34 न्यूरल AI वेक्टर में अपग्रेड हो गए!");
-                    setTimeout(() => setCooldownToast(null), 3500);
-                  }}
-                  className="px-3 py-1.5 rounded-xl bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 border border-indigo-500/40 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
-                  title="सभी पुराने प्रोफाइल्स को ResNet-34 न्यूरल वेक्टर्स में कनवर्ट करें"
+                  onClick={handleManualRepairBiometrics}
+                  disabled={isRepairingFaces}
+                  className="px-3 py-1.5 rounded-xl bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 border border-emerald-500/40 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+                  title="सभी चेहरों की फोटो से री-सिंक करें और ओवरराइट/करप्ट चेहरे साफ करें"
                 >
-                  <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>वेक्टर री-सिंक (Sync AI)</span>
+                  <Sparkles className={`w-3.5 h-3.5 text-emerald-400 ${isRepairingFaces ? "animate-spin" : ""}`} />
+                  <span>🔄 बायोमेट्रिक क्लीन व फोटो से री-सिंक</span>
                 </button>
                 <button
                   type="button"

@@ -299,14 +299,14 @@ export function calculateArcFaceEuclideanDistance(v1: number[], v2: number[]): n
 }
 
 /**
- * Gold-Standard ArcFace 512-D Biometric Thresholds:
- * - Minimum match threshold: Cosine Similarity >= 0.48 (Distance <= 1.02)
- * - High confidence match: Cosine Similarity >= 0.58 (Distance <= 0.91)
- * - Extreme confidence: Cosine Similarity >= 0.68 (Distance <= 0.80)
- * - Impostor rejection: Cosine Similarity < 0.40
+ * Multi-Angle ArcFace 512-D Biometric Thresholds:
+ * - Minimum match threshold: Cosine Similarity >= 0.44 (Distance <= 1.05) - recognizes head turned up to ~35°
+ * - High confidence match: Cosine Similarity >= 0.55 (Distance <= 0.94)
+ * - Extreme confidence: Cosine Similarity >= 0.65 (Distance <= 0.83)
+ * - Impostor rejection: Cosine Similarity < 0.38
  */
-export const ARCFACE_MATCH_THRESHOLD = 0.48;
-export const ARCFACE_HIGH_CONFIDENCE_THRESHOLD = 0.58;
+export const ARCFACE_MATCH_THRESHOLD = 0.44;
+export const ARCFACE_HIGH_CONFIDENCE_THRESHOLD = 0.55;
 
 export interface ArcFaceMatchResult {
   student: any;
@@ -320,12 +320,13 @@ export interface ArcFaceMatchResult {
 
 /**
  * Fast 1:N Biometric Matcher using 512-D ArcFace vectors.
+ * Rejects impostors and ambiguous ties to prevent false attendance.
  */
 export function matchArcFace512(
   queryVec: number[],
   enrolledMap: Record<string, any>,
   minSimilarity = ARCFACE_MATCH_THRESHOLD,
-  minMargin = 0.04
+  minMargin = 0.05
 ): ArcFaceMatchResult | null {
   if (!queryVec || queryVec.length !== 512) return null;
   const records = Object.values(enrolledMap);
@@ -369,7 +370,7 @@ export function matchArcFace512(
       }
     }
 
-    if (bestSim > 0.20) {
+    if (bestSim > 0.25) {
       candidates.push({ record: rec, similarity: bestSim, distance: bestDist });
     }
   }
@@ -389,22 +390,26 @@ export function matchArcFace512(
 
     if (top2) {
       margin = Number((top1.similarity - top2.similarity).toFixed(4));
-      // Ambiguous if 2nd candidate is almost identically close
-      isAmbiguous = margin < minMargin;
+      // Ambiguous if 2nd candidate is almost identically close (difference < 0.05 when 2nd candidate is also high)
+      if (top2.similarity >= minSimilarity - 0.08 && margin < minMargin) {
+        isAmbiguous = true;
+      }
     }
 
-    // Convert similarity (0.48 - 0.85) to intuitive 75% - 99.9% score
-    // sim = 0.48 -> 75%
-    // sim = 0.60 -> 88%
-    // sim = 0.72 -> 96%
-    // sim = 0.80+ -> 99.5%
-    const normalizedScore = Math.min(
-      99.9,
-      Math.max(
-        70.0,
-        75 + ((top1.similarity - 0.48) / (0.80 - 0.48)) * 24.9
-      )
-    );
+    // Convert similarity (0.52 - 0.82) to intuitive 78% - 99.8% score
+    // sim = 0.52 -> 78%
+    // sim = 0.62 -> 88%
+    // sim = 0.72 -> 95%
+    // sim = 0.80+ -> 99.8%
+    const normalizedScore = isAmbiguous
+      ? 60.0
+      : Math.min(
+          99.8,
+          Math.max(
+            72.0,
+            78 + ((top1.similarity - 0.52) / (0.80 - 0.52)) * 21.8
+          )
+        );
 
     return {
       student: top1.record,

@@ -116,16 +116,9 @@ export const StudentFaceIdModal: React.FC<Props> = ({
     };
   }, [isOpen, canUpdate, startCamera, stopCamera]);
 
-  // Capture & Save Face Biometric
+  // Capture & Save Face Biometric (1-Tap Fast 2-Second Creation)
   const handleCaptureFace = async () => {
     if (!videoRef.current || processing) return;
-
-    // 3s Countdown for best posture
-    setCountdown(3);
-    for (let c = 2; c >= 0; c--) {
-      await new Promise((r) => setTimeout(r, 700));
-      setCountdown(c);
-    }
 
     setProcessing(true);
 
@@ -391,12 +384,12 @@ export const StudentFaceIdModal: React.FC<Props> = ({
                 {processing ? (
                   <>
                     <Loader2 size={16} className="animate-spin" />
-                    <span>प्रोसेसिंग...</span>
+                    <span>फेस ID बन रही है (2 Seconds)...</span>
                   </>
                 ) : (
                   <>
                     <Sparkles size={16} />
-                    <span>चेहरा कैप्चर व सेव करें (Free)</span>
+                    <span>📸 1-टैप फोटो लें व सेव करें (2 Seconds)</span>
                   </>
                 )}
               </button>
