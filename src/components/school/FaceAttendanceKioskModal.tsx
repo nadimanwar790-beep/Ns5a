@@ -329,41 +329,6 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
         setEnrolledMap((prev) => ({ ...prev, [upgraded.studentId]: upgraded }));
       }).catch(() => {});
 
-      // Sanity Check: Detect if any 2 distinct profiles have identical or cross-contaminated vectors (sim >= 0.90)
-      const initialRecords = Object.values(map);
-      let detectedCollision = false;
-      for (let i = 0; i < initialRecords.length; i++) {
-        for (let j = i + 1; j < initialRecords.length; j++) {
-          const rA = initialRecords[i];
-          const rB = initialRecords[j];
-          if (rA.studentId === rB.studentId) continue;
-          const vA = rA.arcfaceDescriptor || rA.descriptor;
-          const vB = rB.arcfaceDescriptor || rB.descriptor;
-          if (vA && vB && vA.length === vB.length) {
-            const sim = vA.length === 512
-              ? calculateArcFaceCosineSimilarity(vA, vB)
-              : calculateCosineSimilarity(vA, vB);
-            if (sim >= 0.90) {
-              detectedCollision = true;
-              console.warn(`[FaceKiosk] Cross-contamination detected between ${rA.name} and ${rB.name} (sim=${sim.toFixed(3)})! Auto-repairing...`);
-              break;
-            }
-          }
-        }
-        if (detectedCollision) break;
-      }
-
-      if (detectedCollision) {
-        setCooldownToast("🔄 बायोमेट्रिक क्रॉस-मैच डिटेक्ट हुआ — असली फोटो से ऑटो-क्लीन हो रहा है...");
-        const rep = await repairAndResyncAllFaceDescriptors(schoolId, students, teachers);
-        map = await getSchoolFaceDescriptors(schoolId);
-        setEnrolledMap(map);
-        if (rep.repairedCount > 0 || rep.purgedCount > 0) {
-          setCooldownToast(`✅ बायोमेट्रिक डेटा ठीक हो गया! (${rep.repairedCount} फोटो से री-सिंक, ${rep.purgedCount} करप्ट साफ)`);
-          setTimeout(() => setCooldownToast(null), 3500);
-        }
-      }
-
       const deletedFaceIds = getDeletedFaceIds(schoolId || "default_school");
 
       // Auto-enroll students who have real ID/admission photos in background smoothly (skipping deleted profiles)
@@ -1067,37 +1032,13 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                 setLowConfidenceCandidate(null);
                 setIsFaceUnregistered(false);
                 setLiveMatchedCandidate(matchedStudent);
+                setPendingBlinkStudent(null);
 
-                // Multi-Angle Matching: Allows natural head turns (~30°-40° yaw, tilt, chin up/down)
-                if (matchedStudent.confidencePercent >= 55 && (matchedStudent.distance === undefined || matchedStudent.distance <= 0.68)) {
-                  setPendingBlinkStudent(matchedStudent);
-
-                  // ── AI VOICE PROMPT: "पलक झपकाएं" (Debounced per student arrival) ──
-                  const now = Date.now();
-                  if (
-                    blinkPromptSpokenForRef.current !== matchedStudent.studentId &&
-                    now - lastBlinkVoiceTimeRef.current > 3500
-                  ) {
-                    blinkPromptSpokenForRef.current = matchedStudent.studentId;
-                    lastBlinkVoiceTimeRef.current = now;
-                    try {
-                      speakNotification("हाजिरी", "पलक झपकाएं");
-                    } catch {}
-                  }
-
-                  // ── MANDATORY EYE BLINK DETECTION ──
-                  // Only when student actually blinks eyes, attendance is punched!
-                  const blinkState = blinkDetectorRef.current.update(video, primaryFace, primaryFace.landmarks);
-
-                  if (blinkState.blinkDetected) {
-                    blinkDetectorRef.current.reset();
-                    blinkPromptSpokenForRef.current = null;
-                    setPendingBlinkStudent(null);
-                    void handleMarkAttendanceSuccess(matchedStudent);
-                  }
+                // Multi-Angle Matching: Instant attendance without waiting for eye-blink!
+                if (matchedStudent.confidencePercent >= 52 && (matchedStudent.distance === undefined || matchedStudent.distance <= 0.70)) {
+                  void handleMarkAttendanceSuccess(matchedStudent);
                 } else {
                   setLowConfidenceCandidate(matchedStudent);
-                  setPendingBlinkStudent(null);
                 }
               } else {
                 setLiveMatchedCandidate(null);
@@ -1122,8 +1063,6 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
               let labelText = "Scanning Face...";
               if (isUnderCooldown && matchedStudent) {
                 labelText = `✓ ${matchedStudent.name} (उपस्थिति दर्ज)`;
-              } else if (pendingBlinkStudent && matchedStudent) {
-                labelText = `👁️ पलक झपकाएं • ${matchedStudent.name}`;
               } else if (matchedStudent) {
                 labelText = `✓ ${matchedStudent.name} (${matchedStudent.confidencePercent}%)`;
               } else {
@@ -1137,19 +1076,15 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
               const badgeX = circleCenterX - badgeW / 2;
               const badgeY = circleCenterY - circleRadius - badgeH / 2;
 
-              ctx.fillStyle = isUnderCooldown || (isMatched && !pendingBlinkStudent)
+              ctx.fillStyle = isUnderCooldown || isMatched
                 ? "rgba(6, 78, 59, 0.95)"
-                : pendingBlinkStudent
-                ? "rgba(8, 51, 68, 0.95)"
                 : "rgba(120, 53, 15, 0.95)";
               ctx.beginPath();
               ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 17);
               ctx.fill();
 
-              ctx.strokeStyle = isUnderCooldown || (isMatched && !pendingBlinkStudent)
+              ctx.strokeStyle = isUnderCooldown || isMatched
                 ? "#34d399"
-                : pendingBlinkStudent
-                ? "#38bdf8"
                 : "#fbbf24";
               ctx.lineWidth = 1.5;
               ctx.stroke();
@@ -1712,11 +1647,6 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
                   <span>{activeCooldownInfo.name} • उपस्थिति दर्ज ({activeCooldownInfo.remainingSec}s Pause)</span>
                 </span>
-              ) : pendingBlinkStudent ? (
-                <span className="text-xs sm:text-sm font-black tracking-wider text-cyan-100 bg-cyan-950/95 border-2 border-cyan-400 px-4 py-1.5 rounded-full backdrop-blur-md flex items-center gap-2 shadow-2xl animate-pulse ring-2 ring-cyan-400/40">
-                  <span className="text-base">👁️</span>
-                  <span>पलक झपकाएं • {pendingBlinkStudent.name}</span>
-                </span>
               ) : liveMatchedCandidate ? (
                 <span className="text-[11px] font-bold tracking-wider text-emerald-300 bg-emerald-950/90 border border-emerald-400 px-3 py-1 rounded-full backdrop-blur-md flex items-center gap-1.5 shadow-lg">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
@@ -1795,36 +1725,8 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           </div>
         )}
 
-        {/* 1-Tap Eye Blink Confirmation Button (when waiting for blink) */}
-        {pendingBlinkStudent && !activeCooldownInfo && (
-          <div className="absolute top-20 left-1/2 -translate-x-1/2 z-30 max-w-sm w-[90%] pointer-events-auto animate-in fade-in slide-in-from-top-3 duration-200">
-            <div className="bg-cyan-950/90 border border-cyan-400 rounded-2xl p-3 shadow-2xl backdrop-blur-md flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-xs font-bold text-white truncate flex items-center gap-1.5">
-                  <span>👁️</span>
-                  <span>{pendingBlinkStudent.name} ({pendingBlinkStudent.confidencePercent}%)</span>
-                </p>
-                <p className="text-[10px] text-cyan-300">
-                  कृपया 1 बार आँखें झपकाएँ या पुष्टि के लिए बटन दबाएँ
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  blinkDetectorRef.current.simulateBlink();
-                  void handleMarkAttendanceSuccess(pendingBlinkStudent);
-                }}
-                className="px-3 py-1.5 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-black text-xs shrink-0 active:scale-95 transition shadow-lg shadow-cyan-400/30 cursor-pointer flex items-center gap-1"
-              >
-                <Eye className="w-3.5 h-3.5" />
-                <span>पलक झपकी (Tap)</span>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* 1-Tap Low-Confidence Assisted Attendance Help (when 60% - 87% match in low light/angle) */}
-        {lowConfidenceCandidate && !activeCooldownInfo && !pendingBlinkStudent && (
+        {/* 1-Tap Low-Confidence Assisted Attendance Help (when 52% - 87% match in low light/angle) */}
+        {lowConfidenceCandidate && !activeCooldownInfo && (
           <div className="absolute top-20 left-1/2 -translate-x-1/2 z-30 max-w-sm w-[90%] pointer-events-auto animate-in fade-in slide-in-from-top-3 duration-200">
             <div className="bg-amber-950/90 border border-amber-400/80 rounded-2xl p-3 shadow-2xl backdrop-blur-md flex items-center justify-between gap-3">
               <div className="min-w-0 flex items-center gap-2">
