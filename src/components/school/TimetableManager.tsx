@@ -19,8 +19,10 @@ import {
   subscribeToSubjects,
   getSubjects,
   saveSubject,
-  saveClass
+  saveClass,
+  shouldUseDemoForSchool
 } from "../../school-firebase";
+import { loadSchoolSettingBlob, saveSchoolSettingBlob } from "../../utils/schoolCloudSync";
 import { YouTubeLectureModal } from "./YouTubeLectureModal";
 import { ClassroomVideoArchive } from "./ClassroomVideoArchive";
 import { getDemoSchoolDataset } from "./demoDataStore";
@@ -96,21 +98,24 @@ export const TimetableManager: React.FC<Props> = ({
   const [filterTeacherId, setFilterTeacherId] = useState<string>(currentTeacherId || "");
   const [confirmDeletePeriodNum, setConfirmDeletePeriodNum] = useState<number | null>(null);
 
-  // ── 2. Section Management & Persistence ──
+  const isCloudHydratedRef = React.useRef(false);
+
+  // ── 2. Section Management & Persistence (Local + Cloud) ──
   const sectionsStorageKey = useMemo(() => `nst_school_sections_${school?.id || "default"}`, [school?.id]);
   const [customSections, setCustomSections] = useState<Record<string, string[]>>(() => {
     try {
       const saved = localStorage.getItem(sectionsStorageKey);
       if (saved) return JSON.parse(saved);
-    } catch {}
+    } catch (err) {
+      console.warn("[TimetableManager] Failed reading sections:", err);
+    }
     return {};
   });
 
   useEffect(() => {
-    try {
-      localStorage.setItem(sectionsStorageKey, JSON.stringify(customSections));
-    } catch {}
-  }, [customSections, sectionsStorageKey]);
+    if (!isCloudHydratedRef.current) return;
+    saveSchoolSettingBlob(school?.id, "timetable_sections", sectionsStorageKey, customSections);
+  }, [customSections, sectionsStorageKey, school?.id]);
 
   const [showAddSectionModal, setShowAddSectionModal] = useState(false);
   const [newSectionName, setNewSectionName] = useState("");
@@ -124,15 +129,16 @@ export const TimetableManager: React.FC<Props> = ({
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
-    } catch {}
+    } catch (err) {
+      console.warn("[TimetableManager] Failed reading period slots:", err);
+    }
     return DEFAULT_PERIOD_TIMES;
   });
 
   useEffect(() => {
-    try {
-      localStorage.setItem(periodSlotsKey, JSON.stringify(periodSlots));
-    } catch {}
-  }, [periodSlots, periodSlotsKey]);
+    if (!isCloudHydratedRef.current) return;
+    saveSchoolSettingBlob(school?.id, "timetable_period_slots", periodSlotsKey, periodSlots);
+  }, [periodSlots, periodSlotsKey, school?.id]);
 
   const [showPeriodManagerModal, setShowPeriodManagerModal] = useState(false);
 
@@ -171,20 +177,46 @@ export const TimetableManager: React.FC<Props> = ({
         const parsed = JSON.parse(saved);
         if (parsed && Object.keys(parsed).length > 0) return parsed;
       }
-    } catch {}
-    const demo = getDemoSchoolDataset();
-    if (demo && demo.timetables && Object.keys(demo.timetables).length > 0) {
-      return demo.timetables;
+    } catch (err) {
+      console.warn("[TimetableManager] Failed reading local timetables:", err);
+    }
+    if (shouldUseDemoForSchool(school?.id)) {
+      const demo = getDemoSchoolDataset();
+      if (demo && demo.timetables && Object.keys(demo.timetables).length > 0) {
+        return demo.timetables;
+      }
     }
     return {};
   });
 
-  // Save to local storage on change
+  // Load latest cloud timetable settings & schedules on school change
   useEffect(() => {
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(allTimetables));
-    } catch {}
-  }, [allTimetables, storageKey]);
+    let active = true;
+    const sid = school?.id;
+    isCloudHydratedRef.current = false;
+    if (!sid) return;
+    Promise.all([
+      loadSchoolSettingBlob<Record<string, string[]>>(sid, "timetable_sections", sectionsStorageKey, {}),
+      loadSchoolSettingBlob<PeriodSlotConfig[]>(sid, "timetable_period_slots", periodSlotsKey, DEFAULT_PERIOD_TIMES),
+      loadSchoolSettingBlob<Record<string, Record<string, TimetablePeriod[]>>>(sid, "timetable_schedules", storageKey, {}),
+    ]).then(([secs, slots, schedules]) => {
+      if (!active) return;
+      if (secs && Object.keys(secs).length > 0) setCustomSections(secs);
+      if (Array.isArray(slots) && slots.length > 0) setPeriodSlots(slots);
+      if (schedules && Object.keys(schedules).length > 0) setAllTimetables(schedules);
+      isCloudHydratedRef.current = true;
+    }).catch((err) => {
+      console.warn("[TimetableManager] Cloud hydration error:", err);
+      isCloudHydratedRef.current = true;
+    });
+    return () => { active = false; };
+  }, [school?.id, sectionsStorageKey, periodSlotsKey, storageKey]);
+
+  // Save to local storage + Firestore cloud on change
+  useEffect(() => {
+    if (!isCloudHydratedRef.current) return;
+    saveSchoolSettingBlob(school?.id, "timetable_schedules", storageKey, allTimetables);
+  }, [allTimetables, storageKey, school?.id]);
 
   // Current class resolution
   const selectedClass = useMemo(() => classes.find(c => c.id === selectedClassId) || classes[0], [classes, selectedClassId]);
@@ -256,16 +288,18 @@ export const TimetableManager: React.FC<Props> = ({
     const localMatch = lookupSchedule(allTimetables);
     if (localMatch) return localMatch;
 
-    // 2. Check demo dataset timetables
-    const demo = getDemoSchoolDataset();
-    if (demo && demo.timetables) {
-      const demoMatch = lookupSchedule(demo.timetables);
-      if (demoMatch) return demoMatch;
-      const anySchedule = Object.values(demo.timetables)[0];
-      if (anySchedule && Object.keys(anySchedule).length > 0) return anySchedule;
+    // 2. Demo dataset timetables ONLY when explicitly in a demo school
+    if (shouldUseDemoForSchool(school?.id)) {
+      const demo = getDemoSchoolDataset();
+      if (demo && demo.timetables) {
+        const demoMatch = lookupSchedule(demo.timetables);
+        if (demoMatch) return demoMatch;
+        const anySchedule = Object.values(demo.timetables)[0];
+        if (anySchedule && Object.keys(anySchedule).length > 0) return anySchedule;
+      }
     }
     return {};
-  }, [allTimetables, selectedClass, activeScheduleKey, selectedSection]);
+  }, [allTimetables, selectedClass, activeScheduleKey, selectedSection, school?.id]);
 
   // ── 3. Live Class Subjects (कक्षा में जोड़े गए वास्तविक विषय - No Dummy List) ──
   const [liveClassSubjects, setLiveClassSubjects] = useState<SchoolSubject[]>([]);

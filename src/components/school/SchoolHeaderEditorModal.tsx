@@ -62,7 +62,7 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
   title = "School Details & Template Customizer",
   subtitle = "Apne school ka naam, logo, address aur principal details yahan se likhein aur customize karein"
 }) => {
-  const resolvedSchoolId = schoolId || school?.id || "dps_gurgaon_sector45";
+  const resolvedSchoolId = schoolId || school?.id || "";
   const createDefaultData = (): SchoolHeaderDetails => {
     const rawLogo = currentDetails?.logoUrl || initialDetails?.logoUrl || school?.logoUrl;
     const resolvedLogo = getSavedSchoolLogo(rawLogo, resolvedSchoolId);

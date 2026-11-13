@@ -17,6 +17,7 @@ import {
 import { School, SchoolSession, SchoolStudent } from "../../school-types";
 import { loadSchoolSubcollection, syncSchoolSubcollection } from "../../utils/schoolCloudSync";
 import { printElementInIframe } from "./AdmissionFormPrintModal";
+import { shouldUseDemoForSchool } from "../../school-firebase";
 
 export interface PtmSlot {
   id: string;
@@ -60,14 +61,18 @@ export const PtmSchedulerModal: React.FC<Props> = ({
   onClose
 }) => {
   const schoolId = school?.id || "SCH-001";
+  const isDemo = shouldUseDemoForSchool(schoolId);
   const ptmStorageKey = `school_ptm_events_${schoolId}`;
 
   const [events, setEvents] = useState<PtmEvent[]>(() => {
     try {
       const raw = localStorage.getItem(ptmStorageKey);
       if (raw) return JSON.parse(raw);
-    } catch {}
-    // Seed sample PTM Event
+    } catch (err) {
+      console.warn("[PtmSchedulerModal] Failed reading cached PTM events:", err);
+    }
+    if (!isDemo) return [];
+    // Seed sample PTM Event (demo school only)
     const today = new Date().toISOString().slice(0, 10);
     return [
       {
@@ -108,9 +113,13 @@ export const PtmSchedulerModal: React.FC<Props> = ({
         setSelectedEventId((prev) => cloudEvents.some((e) => e.id === prev) ? prev : cloudEvents[0].id);
         try {
           localStorage.setItem(ptmStorageKey, JSON.stringify(cloudEvents));
-        } catch {}
+        } catch (err) {
+          console.warn("[PtmSchedulerModal] Failed caching PTM events:", err);
+        }
       }
-    }).catch(() => {});
+    }).catch((err) => {
+      console.warn("[PtmSchedulerModal] Failed loading cloud PTM events:", err);
+    });
     return () => { active = false; };
   }, [isOpen, school?.id, ptmStorageKey]);
 

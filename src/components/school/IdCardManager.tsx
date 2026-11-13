@@ -65,9 +65,9 @@ export const IdCardManager: React.FC<Props> = ({
     const adminStaffMember: StaffEmployee = {
       id: "admin_principal_head",
       schoolId: school?.id || "",
-      name: school?.principalName || "Dr. Arvind Swaminathan (School Admin)",
-      email: school?.email || school?.adminEmail || "admin@dps.edu.in",
-      phone: school?.phone || school?.mobile || "9811023450",
+      name: school?.principalName || "Principal / School Admin",
+      email: school?.email || school?.adminEmail || "",
+      phone: school?.phone || school?.mobile || "",
       designation: "👑 School Administrator & Principal",
       department: "Administration & Institutional Head",
       joinDate: new Date().toISOString().split("T")[0],

@@ -748,9 +748,15 @@ export interface MonthlyFee {
   arrearsAmount?: number;
   arrearsMonths?: string[];
   paid: boolean;
+  status?: string;
   paidDate?: string;
   paidBy?: string; // admin UID
   receiptNo?: string;
+  razorpayOrderId?: string;
+  razorpayPaymentId?: string;
+  verifiedViaWebhook?: boolean;
+  cancelled?: boolean;
+  updatedAt?: string;
   note?: string;
   paidAmount?: number;
   lastReceiptPaidAmount?: number;
@@ -1545,9 +1551,14 @@ export interface StoreSaleRecord {
     subtotal: number;
   }[];
   totalAmount: number;
-  paymentMode: 'cash' | 'online_upi' | 'card';
+  paymentMode: 'cash' | 'online_upi' | 'card' | 'nsta_online';
   date: string;
   soldBy: string;
+  razorpayOrderId?: string;
+  razorpayPaymentId?: string;
+  verifiedViaWebhook?: boolean;
+  reservationId?: string;
+  updatedAt?: string;
 }
 
 export interface StoreReservationBooking {
@@ -1573,6 +1584,12 @@ export interface StoreReservationBooking {
   status: 'reserved' | 'collected' | 'expired' | 'cancelled';
   collectedAt?: string;
   collectedBy?: string;
+  paymentMode?: 'cash' | 'online_upi' | 'nsta_online';
+  razorpayOrderId?: string;
+  razorpayPaymentId?: string;
+  verifiedViaWebhook?: boolean;
+  paidAt?: string;
+  receiptNo?: string;
   notes?: string;
 }
 

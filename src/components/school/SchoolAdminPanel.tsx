@@ -7,11 +7,13 @@ import {
   updateSchool, updateSession, updateClass, updateTeacher,
   generateId, getSchool, getSessions, setSchoolLockCode,
   assignSchoolSubAdminByEmail, getSchoolAdmins, removeSchoolUserByUid,
-  getAllMonthlyFees, currentMonthStr, saveFee, markFeePaid, isStudentInClass, isDemoRecord,
+  getAllMonthlyFees, getSchoolFeeHistory, currentMonthStr, saveFee, markFeePaid, isStudentInClass, isDemoRecord,
   shouldUseDemoForSchool, getLocalAttendance, getLocalFees,
   isStudentBirthdayToday, dispatchOfficialSchoolBirthdayWish, checkAndDispatchTodaysBirthdays,
   getStaffDailyAttendance, saveStaffDailyAttendance, todayStr
 } from "../../school-firebase";
+import { loadMergedStoreSales } from "../../utils/schoolCloudSync";
+import { computePaymentBreakdown } from "../../utils/paymentBreakdown";
 import { COMMON_BOOK_PRESETS, PRESET_BOOK_BUNDLES } from "./TeacherPanel";
 import type { SchoolUserProfile } from "../../school-types";
 import type {
@@ -44,7 +46,7 @@ import { SchoolReportsHub } from "./SchoolReportsHub";
 import { PublicSchoolWebsite } from "./PublicSchoolWebsite";
 import { OnlineAdmissionManager } from "./OnlineAdmissionManager";
 import { getStaffEmployees, saveStaffEmployee } from "../../school-firebase";
-import type { MonthlyFee, StaffEmployee } from "../../school-types";
+import type { MonthlyFee, StaffEmployee, StoreSaleRecord } from "../../school-types";
 import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeaderEditorModal";
 import { DigitalSignatureModal } from "./DigitalSignatureModal";
 import { getSavedSchoolLogo, isAppLogo, cleanLogoUrl } from "./feeReceiptUtils";
@@ -94,6 +96,7 @@ import { getCombinedDiscountLedger, DISPLAY_DISCOUNT_LABEL } from "../../utils/s
 import { SchoolBackupManager } from "./SchoolBackupManager";
 import { SchoolExpenseManager } from "./SchoolExpenseManager";
 import { ReceiptCancellationModal } from "./ReceiptCancellationModal";
+import { RazorpaySettingsModal } from "./RazorpaySettingsModal";
 import { ParentLeaveManager } from "./ParentLeaveManager";
 import { PtmSchedulerModal } from "./PtmSchedulerModal";
 import { StaffPayrollManager } from "./StaffPayrollManager";
@@ -108,6 +111,9 @@ import { VisitorGateSecurityManager } from "./VisitorGateSecurityManager";
 import { DocumentVerificationView } from "./DocumentVerificationView";
 import { ShieldCheck, Receipt } from "lucide-react";
 import { rotateToLandscape, rotateToPortrait, isDesktopModeOn, setDesktopMode, useDeviceOrientation } from "../../utils/displayPrefs";
+import { toast } from "sonner";
+import { ADMIN_WHATSAPP_NUMBER } from "../../constants";
+import { safeOpenExternalUrl, getDynamicAcademicSessionLabel } from "../../utils/safeBrowserActions";
 
 interface Props {
   schoolId: string;
@@ -150,7 +156,9 @@ type AdminView =
   | "syllabus_pacing"
   | "bus_logbook"
   | "visitor_security"
-  | "doc_verify";
+  | "doc_verify"
+  | "admission_receipt"
+  | "razorpay_setup";
 
 
 export const SchoolAdminPanel: React.FC<Props> = ({
@@ -172,7 +180,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     try {
       localStorage.setItem("nst_app_view_mode", "STUDENT");
       window.dispatchEvent(new CustomEvent("nst_open_student_dashboard"));
-    } catch {}
+    } catch (e) {
+      console.warn("Failed to switch app view mode:", e);
+    }
     if (onOpenPlatformContent) {
       onOpenPlatformContent();
     } else if (onBack) {
@@ -232,14 +242,21 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     mode: "Cash" | "UPI" | "Bank";
     saving: boolean;
   } | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    onConfirm: () => void | Promise<void>;
+  } | null>(null);
 
   // School info card
   const [schoolCardExpanded, setSchoolCardExpanded] = useState(false);
   const [activeBranchName, setActiveBranchName] = useState<string>(() => {
     try {
-      return localStorage.getItem(`active_branch_name_${schoolId}`) || "DPS Senior Campus";
-    } catch {
-      return "DPS Senior Campus";
+      return localStorage.getItem(`active_branch_name_${schoolId}`) || "Main Campus";
+    } catch (e) {
+      console.warn("Failed to read active branch name:", e);
+      return "Main Campus";
     }
   });
   const [editingSchoolInfo, setEditingSchoolInfo] = useState(false);
@@ -293,7 +310,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     try {
       const saved = (localStorage.getItem("nst_app_theme") || localStorage.getItem("nst_student_theme")) as any;
       if (saved === "white" || saved === "black" || saved === "current") return saved;
-    } catch {}
+    } catch (e) {
+      console.warn("Failed to read saved theme:", e);
+    }
     return "current";
   });
 
@@ -323,7 +342,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         }
       }
       window.dispatchEvent(new Event("nst-dark-theme-change"));
-    } catch {}
+    } catch (e) {
+      console.warn("Failed to apply admin theme:", e);
+    }
   };
 
   useEffect(() => {
@@ -340,7 +361,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         document.head.appendChild(metaTheme);
       }
       metaTheme.setAttribute("content", "#020617");
-    } catch {}
+    } catch (e) {
+      console.warn("Failed to set theme-color meta tag:", e);
+    }
 
     // Global touch gesture listeners: Swipe Left anywhere to hide menu (1% visible), Swipe Right anywhere to reveal
     let touchStartX = 0;
@@ -368,7 +391,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           setIsSidebarHidden(true);
           try {
             localStorage.setItem("school_erp_sidebar_hidden", "true");
-          } catch {}
+          } catch (err) {
+            console.warn("Failed to save sidebar state:", err);
+          }
         } else if (diffX > 0) {
           // SWIPED RIGHT -> Show menu ONLY if touch started within the left 20% edge of screen
           const maxLeftEdge = typeof window !== "undefined" ? window.innerWidth * 0.20 : 80;
@@ -377,7 +402,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             setIsSidebarHidden(false);
             try {
               localStorage.setItem("school_erp_sidebar_hidden", "false");
-            } catch {}
+            } catch (err) {
+              console.warn("Failed to save sidebar state:", err);
+            }
           }
         }
       }
@@ -397,7 +424,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     setIsDesktopMode(next);
     try {
       localStorage.setItem("school_erp_desktop_mode", next ? "true" : "false");
-    } catch {}
+    } catch (e) {
+      console.warn("Failed to persist desktop mode:", e);
+    }
 
     if (next) {
       await rotateToLandscape();
@@ -424,7 +453,12 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     try {
       const stored = localStorage.getItem(`school_memories_${schoolId}`);
       if (stored) return JSON.parse(stored);
-    } catch {}
+    } catch (e) {
+      console.warn("Failed to parse saved school memories:", e);
+    }
+    if (!shouldUseDemoForSchool(schoolId)) {
+      return [];
+    }
     return [
       {
         id: "mem_sports_2026",
@@ -511,7 +545,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         localStorage.removeItem('nsta_cached_user');
         localStorage.setItem('nst_logged_out', 'true');
         window.location.reload();
-      } catch {}
+      } catch (e) {
+        console.warn("Failed to perform logout cleanup:", e);
+      }
     }
   };
 
@@ -631,7 +667,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         });
         setEnrolledFaceIds(next);
       })
-      .catch(() => {});
+      .catch((err) => {
+        console.warn("Failed to fetch face descriptors:", err);
+      });
     return () => {
       cancelled = true;
     };
@@ -640,7 +678,27 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   // Fee summary state
   const [feeMonth, setFeeMonth] = useState(currentMonthStr());
   const [allFees, setAllFees] = useState<MonthlyFee[]>([]);
+  const [dashboardFeeHistory, setDashboardFeeHistory] = useState<MonthlyFee[]>([]);
+  const [dashboardStoreSales, setDashboardStoreSales] = useState<StoreSaleRecord[]>([]);
   const [feeSummaryLoading, setFeeSummaryLoading] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    if (!schoolId) return;
+    getSchoolFeeHistory(schoolId, activeSession?.id)
+      .then((fees) => {
+        if (active && Array.isArray(fees)) setDashboardFeeHistory(fees);
+      })
+      .catch(() => {});
+    loadMergedStoreSales<StoreSaleRecord>(schoolId)
+      .then((sales) => {
+        if (active && Array.isArray(sales)) setDashboardStoreSales(sales);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [schoolId, activeSession?.id]);
   const [feeClassSelected, setFeeClassSelected] = useState<SchoolClass | null>(null);
   const [demoGenerating, setDemoGenerating] = useState(false);
   const [demoMessage, setDemoMessage] = useState("");
@@ -755,7 +813,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       setBirthdayWishToast(`🎉 ${student.name} को जन्मदिन की आधिकारिक बधाई व आशीर्वाद पत्र सफलतापूर्वक भेजा गया!`);
       setTimeout(() => setBirthdayWishToast(null), 4000);
     } catch (e: any) {
-      alert("Birthday wish bhejne me samasya aayi: " + (e?.message || "Error"));
+      toast.error("Birthday wish bhejne me samasya aayi: " + (e?.message || "Error"));
     } finally {
       setBirthdayWishSending(null);
     }
@@ -787,7 +845,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const [admissionAlerts, setAdmissionAlerts] = useState<any[]>(() => {
     try {
       return JSON.parse(localStorage.getItem(`school_admission_alerts_${schoolId}`) || "[]");
-    } catch {
+    } catch (e) {
+      console.warn("Failed to parse admission alerts:", e);
       return [];
     }
   });
@@ -797,7 +856,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       try {
         const list = JSON.parse(localStorage.getItem(`school_admission_alerts_${schoolId}`) || "[]");
         setAdmissionAlerts(list);
-      } catch {}
+      } catch (e) {
+        console.warn("Failed to refresh admission alerts:", e);
+      }
     };
     window.addEventListener("school-admission-alert", handleNewAdmission);
     return () => window.removeEventListener("school-admission-alert", handleNewAdmission);
@@ -1036,7 +1097,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       const existingNames = new Set(subjects.map(s => (s.name || "").trim().toLowerCase()));
       const toAdd = multiBookQueue.filter(name => !existingNames.has(name.trim().toLowerCase()));
       if (toAdd.length === 0) {
-        alert("Ye sabhi books pehle se is class me add hain!");
+        toast.info("Ye sabhi books pehle se is class me add hain!");
         setSavingMultiBooks(false);
         return;
       }
@@ -1055,7 +1116,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       setCustomMultiBooksText("");
       setShowForm(null);
     } catch (err: any) {
-      alert("Error adding books: " + (err?.message || "Please try again"));
+      toast.error("Error adding books: " + (err?.message || "Please try again"));
     } finally {
       setSavingMultiBooks(false);
     }
@@ -1066,7 +1127,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     const maxTeachers = getSchoolMaxTeachers(school);
     if (teachers.length >= maxTeachers) {
       const tierName = TIER_CONFIG[school?.subscription?.tier || 'starter_200']?.name || 'Starter Plan';
-      alert(`⚠️ Faculty / Teacher Limit Reached (${teachers.length}/${maxTeachers})!\n\nAapka subscription plan (${tierName}) अधिकतम ${maxTeachers} faculty members tak seemit hai.\nNaye teachers add karne ke liye kripya Super Admin se agla plan upgrade karwayen.`);
+      toast.error(`Faculty Limit Reached (${teachers.length}/${maxTeachers})! Plan (${tierName}) upgrade karwayen.`);
       return;
     }
     setSaving(true);
@@ -1139,7 +1200,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     const maxStudents = getSchoolMaxStudents(school);
     if (students.length >= maxStudents) {
       const tierName = TIER_CONFIG[school?.subscription?.tier || 'starter_200']?.name || 'Starter Plan';
-      alert(`⚠️ Student Capacity Limit Reached (${students.length}/${maxStudents})!\n\nAapka vartaman subscription plan (${tierName}) अधिकतम ${maxStudents} students tak seemit hai.\nNaye bacchon ko add karne ke liye kripya Super Admin se agla tier upgrade karwayen.`);
+      toast.error(`Student Limit Reached (${students.length}/${maxStudents})! Plan (${tierName}) upgrade karwayen.`);
       return;
     }
     setSaving(true);
@@ -1219,7 +1280,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       if (typeof localStorage !== "undefined") {
         localStorage.setItem(`nst_active_session_${schoolId}`, session.id);
       }
-    } catch {}
+    } catch (e) {
+      console.warn("Failed to persist active session:", e);
+    }
     setActiveSession({ ...session, active: true });
     await Promise.all(displayedSessions.map(item =>
       updateSession(schoolId, item.id, { active: item.id === session.id })
@@ -1256,13 +1319,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     }
   };
 
-  const handleGenerateDemoData = async () => {
+  const executeGenerateDemoData = async () => {
     if (demoGenerating) return;
-    const isRefresh = sessions.some(session => session.id === DEMO_SESSION_ID);
-    const confirmation = isRefresh
-      ? "Demo session ke 13 classes (Nursery to 10), 70 students per class (Sections A & B), 1:35 teacher ratio, 6 exams (PA1-4 40M, Half/Final 100M), 1-year fee receipts with 3-12 month dues, month-wise notices aur festival holidays refresh honge. Continue?"
-      : "Full 1-Year CBSE Demo Setup create hoga: 13 Classes (Nursery to 10), har class me 70 students (Sec A: 35, Sec B: 35), 1:35 teacher ratio (Salaries ₹5K-₹15K, Principal ₹25K, 3-day late cut), 6 exams (2-month cycle, PA 40M, Half/Final 100M), 1-year fee receipts with 3-12 month dues, month-wise notices aur festival holidays. Continue?";
-    if (!window.confirm(confirmation)) return;
     setDemoGenerating(true);
     setDemoMessage("");
     try {
@@ -1279,6 +1337,20 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     } finally {
       setDemoGenerating(false);
     }
+  };
+
+  const handleGenerateDemoData = () => {
+    if (demoGenerating) return;
+    const isRefresh = sessions.some(session => session.id === DEMO_SESSION_ID);
+    const confirmation = isRefresh
+      ? "Demo session ke 13 classes (Nursery to 10), 70 students per class (Sections A & B), 1:35 teacher ratio, 6 exams, 1-year fee receipts aur holidays refresh honge. Continue?"
+      : "Full 1-Year CBSE Demo Setup create hoga (Demo Session me). Continue?";
+    setConfirmAction({
+      title: isRefresh ? "Demo Data Refresh Karein?" : "Demo Session Setup Karein?",
+      message: confirmation,
+      confirmLabel: "Haan, Continue Karein",
+      onConfirm: executeGenerateDemoData,
+    });
   };
 
   const saveEditTeacher = async () => {
@@ -1461,11 +1533,16 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   // Both lite and full need an active (non-expired) subscription for data management
   const canManageStudents = subscriptionActive;
 
-  // ── 7-DAY ATTENDANCE CALCULATION ───────────────────────────────────────
+  // ── 7-DAY ATTENDANCE CALCULATION (100% REAL DATA) ───────────────────────
   const sevenDayAttendanceData = React.useMemo(() => {
-    const totalCount = Math.max(displayedStudents.length, 1);
     const days = [];
-    const baseRates = [93, 96, 91, 95, 94, 98, 92];
+    let localRecords: any[] = [];
+    try {
+      localRecords = getLocalAttendance(schoolId);
+    } catch (e) {
+      console.warn("Failed to read attendance logs:", e);
+    }
+
     for (let i = 6; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
@@ -1479,36 +1556,29 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       let presentCount = 0;
       let absentCount = 0;
       let hasData = false;
-      try {
-        const localRecords = getLocalAttendance(schoolId);
-        const dayRecords = localRecords.filter((r: any) => r.date === dateStr);
-        if (dayRecords.length > 0) {
-          dayRecords.forEach((dr: any) => {
-            if (Array.isArray(dr.records)) {
-              dr.records.forEach((rec: any) => {
-                if (rec.status === "PRESENT") presentCount++;
-                else if (rec.status === "ABSENT") absentCount++;
-              });
-            }
-          });
-          if (presentCount + absentCount > 0) hasData = true;
-        }
-      } catch {}
-
-      if (!hasData) {
-        const rate = baseRates[i % baseRates.length];
-        presentCount = Math.max(1, Math.round((totalCount * rate) / 100));
-        absentCount = Math.max(0, totalCount - presentCount);
+      const dayRecords = localRecords.filter((r: any) => r.date === dateStr);
+      if (dayRecords.length > 0) {
+        dayRecords.forEach((dr: any) => {
+          if (Array.isArray(dr.records)) {
+            dr.records.forEach((rec: any) => {
+              const st = String(rec.status || "").toUpperCase();
+              if (st === "PRESENT" || st === "LATE") presentCount++;
+              else if (st === "ABSENT") absentCount++;
+            });
+          }
+        });
+        if (presentCount + absentCount > 0) hasData = true;
       }
 
-      const totalRecorded = Math.max(presentCount + absentCount, 1);
-      const presentPct = Math.round((presentCount / totalRecorded) * 100);
+      const totalRecorded = presentCount + absentCount;
+      const presentPct = hasData && totalRecorded > 0 ? Math.round((presentCount / totalRecorded) * 100) : 0;
 
       days.push({
         dateStr,
         dayLabel,
         displayDate,
         isToday: i === 0,
+        hasData,
         presentPct,
         presentCount,
         absentCount,
@@ -1518,14 +1588,35 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     return days;
   }, [displayedStudents, schoolId]);
 
-  const avgAttendancePct = Math.round(
-    sevenDayAttendanceData.reduce((acc, curr) => acc + curr.presentPct, 0) / sevenDayAttendanceData.length
-  );
+  const recordedAttDays = sevenDayAttendanceData.filter((d) => d.hasData);
+  const avgAttendancePct = recordedAttDays.length > 0
+    ? Math.round(recordedAttDays.reduce((acc, curr) => acc + curr.presentPct, 0) / recordedAttDays.length)
+    : 0;
 
-  // ── 7-DAY FEE COLLECTION CALCULATION ──────────────────────────────────
+  // ── 7-DAY & MONTHLY COLLECTION CALCULATION (FEES + STORE SALES) ────────
+  const mergedRealFees = React.useMemo(() => {
+    const byKey = new Map<string, any>();
+    const addFee = (f: any) => {
+      if (!f || isDemoRecord(f)) return;
+      const key = f.id || (f.studentId && f.month ? `${f.studentId}_${f.month}` : f.receiptNo);
+      if (!key) return;
+      const prev = byKey.get(key);
+      if (!prev || f.paid || f.razorpayPaymentId || (f.updatedAt && (!prev.updatedAt || f.updatedAt > prev.updatedAt))) {
+        byKey.set(key, f);
+      }
+    };
+    try {
+      getLocalFees(schoolId).forEach(addFee);
+    } catch (e) {
+      console.warn("Failed to read local fees:", e);
+    }
+    (dashboardFeeHistory || []).forEach(addFee);
+    (allFees || []).forEach(addFee);
+    return Array.from(byKey.values());
+  }, [schoolId, dashboardFeeHistory, allFees]);
+
   const sevenDayFeeData = React.useMemo(() => {
     const days = [];
-    const baseAmounts = [14500, 22000, 18400, 31200, 16000, 28500, 21400];
     for (let i = 6; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
@@ -1536,94 +1627,152 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       const dayLabel = d.toLocaleDateString("hi-IN", { weekday: "short" }) || d.toLocaleDateString("en-IN", { weekday: "short" });
       const displayDate = `${dd}/${mm}`;
 
-      let amountCollected = 0;
-      try {
-        const localFees = getLocalFees(schoolId);
-        localFees.forEach((f: any) => {
-          if (f.paidDate && f.paidDate.startsWith(dateStr) && f.status === "PAID") {
-            amountCollected += Number(f.paidAmount || f.totalAmount || 0);
-          }
-        });
-      } catch {}
-
-      if (amountCollected === 0) {
-        amountCollected = baseAmounts[i % baseAmounts.length];
-      }
+      const dayBd = computePaymentBreakdown({
+        fees: mergedRealFees,
+        storeSales: dashboardStoreSales,
+        datePrefix: dateStr,
+      });
 
       days.push({
         dateStr,
         dayLabel,
         displayDate,
         isToday: i === 0,
-        amount: amountCollected,
+        amount: dayBd.total,
       });
     }
     return days;
-  }, [schoolId]);
+  }, [mergedRealFees, dashboardStoreSales]);
 
-  const totalFeeCollected7Days = sevenDayFeeData.reduce((acc, curr) => acc + curr.amount, 0);
-  const monthlyTarget = 350000;
-  const currentMonthCollection = Math.round(totalFeeCollected7Days * 3.4);
-  const monthlyProgressPct = Math.min(100, Math.round((currentMonthCollection / monthlyTarget) * 100));
+  const currentMonthPrefix = new Date().toISOString().slice(0, 7);
+  const currentMonthBreakdown = React.useMemo(() => {
+    return computePaymentBreakdown({
+      fees: mergedRealFees,
+      storeSales: dashboardStoreSales,
+      datePrefix: currentMonthPrefix,
+    });
+  }, [mergedRealFees, dashboardStoreSales, currentMonthPrefix]);
+  const currentMonthCollection = currentMonthBreakdown.total;
 
-  // ── ABSENTEE ACTION SUMMARY (1-Day & 2-Day+ Tracker) ───────────────────
+  const monthlyExpectedTarget = React.useMemo(() => {
+    const sumFees = displayedStudents.reduce((sum, st) => sum + Math.max(0, Number(st.monthlyFee || 0)), 0);
+    return sumFees;
+  }, [displayedStudents]);
+  const monthlyProgressPct = monthlyExpectedTarget > 0
+    ? Math.min(100, Math.round((currentMonthCollection / monthlyExpectedTarget) * 100))
+    : 0;
+
+  // ── ABSENTEE ACTION SUMMARY (1-Day & Consecutive Tracker — 100% REAL DATA) ──
   const absenteeTrackerData = React.useMemo(() => {
     const todayData = sevenDayAttendanceData[sevenDayAttendanceData.length - 1];
-    const oneDayAbsentCount = todayData ? todayData.absentCount : 4;
+    const oneDayAbsentCount = todayData ? todayData.absentCount : 0;
 
-    const consecutiveAbsentees = displayedStudents.slice(0, 4).map((st, idx) => {
-      const daysAbsent = [2, 3, 4, 2][idx % 4];
-      const cls = displayedClasses.find(c => c.id === st.classId);
-      return {
-        id: st.id,
-        name: st.name,
-        rollNo: st.rollNo || (idx + 1),
-        className: cls?.name || st.className || "Class 8th-A",
-        daysAbsent,
-        fatherName: st.fatherName || "Guardian",
-        phone: st.phone || st.fatherPhone || "9876543210",
-      };
+    let localRecords: any[] = [];
+    try {
+      localRecords = getLocalAttendance(schoolId);
+    } catch (e) {
+      console.warn("Failed to compute absentee tracker:", e);
+    }
+
+    // Check recent 7 days in reverse chronological order (today back to 6 days ago)
+    const absentCountByStudent = new Map<string, number>();
+    const todayAbsentIds = new Set<string>();
+    const last7Dates: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      last7Dates.push(d.toISOString().slice(0, 10));
+    }
+
+    last7Dates.forEach((dateKey, dayIdx) => {
+      const dayAtt = localRecords.filter((r: any) => r.date === dateKey);
+      dayAtt.forEach((dr: any) => {
+        if (Array.isArray(dr.records)) {
+          dr.records.forEach((rec: any) => {
+            if (String(rec.status || "").toUpperCase() === "ABSENT" && rec.studentId) {
+              absentCountByStudent.set(rec.studentId, (absentCountByStudent.get(rec.studentId) || 0) + 1);
+              if (dayIdx === 0) todayAbsentIds.add(rec.studentId);
+            }
+          });
+        }
+      });
     });
+
+    const consecutiveAbsentees = displayedStudents
+      .filter((st) => (absentCountByStudent.get(st.id) || 0) >= 2 || todayAbsentIds.has(st.id))
+      .map((st, idx) => {
+        const cls = displayedClasses.find(c => c.id === st.classId);
+        return {
+          id: st.id,
+          name: st.name,
+          rollNo: st.rollNo || (idx + 1),
+          className: cls?.name || (st as any).className || "Class",
+          daysAbsent: absentCountByStudent.get(st.id) || 1,
+          fatherName: st.fatherName || "Guardian",
+          phone: st.phone || (st as any).fatherPhone || st.parentPhone || "",
+        };
+      })
+      .sort((a, b) => b.daysAbsent - a.daysAbsent)
+      .slice(0, 20);
 
     return {
       oneDayAbsentCount,
       consecutiveAbsentees,
     };
-  }, [sevenDayAttendanceData, displayedStudents, displayedClasses]);
+  }, [sevenDayAttendanceData, displayedStudents, displayedClasses, schoolId]);
 
-  // ── FEE DUE LIST CALCULATION ──────────────────────────────────────────
+  // ── FEE DUE LIST CALCULATION (100% REAL UNPAID / ADMISSION / ADVANCE DUES) ──
   const feeDueList = React.useMemo(() => {
-    const dues = displayedStudents.map((st, idx) => {
-      const cls = displayedClasses.find(c => c.id === st.classId);
-      const overdueAmounts = [1400, 2800, 1100, 3600, 1900, 2400, 950, 4200];
-      const overdueAmount = overdueAmounts[idx % overdueAmounts.length];
-      const dueMonthsList = [
-        "Jan, Feb 2026",
-        "Jan, Feb, Mar 2026",
-        "Feb 2026",
-        "Dec 2025, Jan, Feb 2026",
-      ];
-      const dueMonths = dueMonthsList[idx % dueMonthsList.length];
-
-      return {
-        id: st.id,
-        name: st.name,
-        rollNo: st.rollNo || (idx + 1),
-        classId: st.classId,
-        className: cls?.name || st.className || "Class 5th",
-        fatherName: st.fatherName || "Guardian",
-        phone: st.phone || st.fatherPhone || "9876543210",
-        dueAmount: overdueAmount,
-        dueMonths,
-      };
+    const unpaidByStudent = new Map<string, { amount: number; months: Set<string> }>();
+    mergedRealFees.forEach((f: any) => {
+      const stStatus = String(f.status || "").toUpperCase();
+      if (stStatus === "DUE" || stStatus === "UNPAID" || stStatus === "PARTIAL") {
+        const total = Number(f.totalAmount || 0);
+        const paid = Number(f.paidAmount || 0);
+        const bal = Math.max(0, total - paid);
+        if (bal > 0 && f.studentId) {
+          const entry = unpaidByStudent.get(f.studentId) || { amount: 0, months: new Set<string>() };
+          entry.amount += bal;
+          if (f.month) entry.months.add(f.month);
+          unpaidByStudent.set(f.studentId, entry);
+        }
+      }
     });
+
+    const dues = displayedStudents
+      .map((st, idx) => {
+        const cls = displayedClasses.find(c => c.id === st.classId);
+        const feeEntry = unpaidByStudent.get(st.id);
+        const admDue = Number(st.admissionDueBalance || 0);
+        const advDue = st.advanceMonthlyFeePaid === false ? Number(st.advanceMonthlyFeeDue || st.monthlyFee || 0) : 0;
+        const overdueAmount = (feeEntry?.amount || 0) + admDue + advDue;
+        if (overdueAmount <= 0) return null;
+
+        const labels: string[] = [];
+        if (feeEntry && feeEntry.months.size > 0) labels.push(...Array.from(feeEntry.months));
+        if (admDue > 0) labels.push("Admission Due");
+        if (advDue > 0) labels.push("Advance Fee");
+
+        return {
+          id: st.id,
+          name: st.name,
+          rollNo: st.rollNo || (idx + 1),
+          classId: st.classId,
+          className: cls?.name || (st as any).className || "Class",
+          fatherName: st.fatherName || "Guardian",
+          phone: st.phone || (st as any).fatherPhone || st.parentPhone || "",
+          dueAmount: overdueAmount,
+          dueMonths: labels.join(", ") || currentMonthStr(),
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => Boolean(x));
 
     return dues.filter(item => {
       if (dueClassFilter !== "ALL" && item.classId !== dueClassFilter) return false;
       if (dueMinAmount > 0 && item.dueAmount < dueMinAmount) return false;
       return true;
     });
-  }, [displayedStudents, displayedClasses, dueClassFilter, dueMinAmount]);
+  }, [displayedStudents, displayedClasses, mergedRealFees, dueClassFilter, dueMinAmount]);
 
   const totalDuesAmount = React.useMemo(() => {
     return feeDueList.reduce((acc, curr) => acc + curr.dueAmount, 0);
@@ -1631,17 +1780,25 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
   // WhatsApp reminder actions
   const handleSendWhatsAppFeeDemand = (dueItem: any) => {
-    const text = `*${school?.name || "Life Maker Public School"} - फीस मांग सूचना*\n\nआदरणीय अभिभावक,\nछात्र/छात्रा: *${dueItem.name}* (कक्षा: *${dueItem.className}*, रोल नंबर: *#${dueItem.rollNo}*)\nकुल बकाया शुल्क: *₹${dueItem.dueAmount.toLocaleString("en-IN")}*\nबकाया माह: *${dueItem.dueMonths}*\n\nकृपया बच्चे की पढ़ाई में रुकावट न आने दें और समय पर स्कूल काउंटर या ऑनलाइन पोर्टल द्वारा शुल्क जमा करें।\n\nसधन्यवाद,\n*प्रधानाचार्य / लेखा विभाग*\n${school?.name || "School Office"}`;
     const cleanPhone = (dueItem.phone || "").replace(/[^0-9]/g, "");
     const targetPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
-    window.open(`https://wa.me/${targetPhone}?text=${encodeURIComponent(text)}`, "_blank");
+    if (!targetPhone) {
+      toast.error("Is student ke guardian ka phone number darj nahi hai.");
+      return;
+    }
+    const text = `*${school?.name || "School"} - फीस मांग सूचना*\n\nआदरणीय अभिभावक,\nछात्र/छात्रा: *${dueItem.name}* (कक्षा: *${dueItem.className}*, रोल नंबर: *#${dueItem.rollNo}*)\nकुल बकाया शुल्क: *₹${dueItem.dueAmount.toLocaleString("en-IN")}*\nबकाया मद: *${dueItem.dueMonths}*\n\nकृपया समय पर स्कूल काउंटर या ऑनलाइन पोर्टल द्वारा शुल्क जमा करें।\n\nसधन्यवाद,\n*प्रधानाचार्य / लेखा विभाग*\n${school?.name || "School Office"}`;
+    safeOpenExternalUrl(`https://wa.me/${targetPhone}?text=${encodeURIComponent(text)}`);
   };
 
   const handleSendWhatsAppAbsentAlert = (item: any) => {
-    const text = `*${school?.name || "Life Maker Public School"} - गैरहाजिरी सूचना (Absence Notice)*\n\nआदरणीय अभिभावक,\nछात्र/छात्रा: *${item.name}* (कक्षा: *${item.className}*, रोल नंबर: *#${item.rollNo}*)\n\nआपका बच्चा पिछले *${item.daysAbsent} दिनों से लगातार स्कूल में अनुपस्थित* है।\nकृपया तुरंत अनुपस्थिति का कारण दर्ज कराएं अथवा स्कूल कार्यालय में संपर्क करें।\n\nसधन्यवाद,\n*प्रधानाचार्य*\n${school?.name || "School Office"}`;
     const cleanPhone = (item.phone || "").replace(/[^0-9]/g, "");
     const targetPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
-    window.open(`https://wa.me/${targetPhone}?text=${encodeURIComponent(text)}`, "_blank");
+    if (!targetPhone) {
+      toast.error("Is student ke guardian ka phone number darj nahi hai.");
+      return;
+    }
+    const text = `*${school?.name || "School"} - गैरहाजिरी सूचना (Absence Notice)*\n\nआदरणीय अभिभावक,\nछात्र/छात्रा: *${item.name}* (कक्षा: *${item.className}*, रोल नंबर: *#${item.rollNo}*)\n\nआपका बच्चा पिछले *${item.daysAbsent} दिन से अनुपस्थित* है।\nकृपया तुरंत अनुपस्थिति का कारण दर्ज कराएं अथवा स्कूल कार्यालय में संपर्क करें।\n\nसधन्यवाद,\n*प्रधानाचार्य*\n${school?.name || "School Office"}`;
+    safeOpenExternalUrl(`https://wa.me/${targetPhone}?text=${encodeURIComponent(text)}`);
   };
 
   const handleSend1DayPushAlerts = () => {
@@ -1658,17 +1815,19 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       category: newMemoryForm.category,
       date: newMemoryForm.date || new Date().toISOString().split("T")[0],
       type: newMemoryForm.type,
-      url: newMemoryForm.url.trim() || (newMemoryForm.type === "IMAGE" ? "https://images.unsplash.com/photo-1577495508048-b635879837f1?auto=format&fit=crop&w=1200&q=80" : ""),
+      url: newMemoryForm.url.trim(),
       videoUrl: newMemoryForm.videoUrl.trim(),
       description: newMemoryForm.description.trim() || "School event celebration memory.",
       tags: newMemoryForm.tags ? newMemoryForm.tags.split(",").map(t => t.trim()).filter(Boolean) : ["School Memory"],
-      likes: Math.floor(Math.random() * 40) + 12,
+      likes: 0,
     };
     const updated = [item, ...memoriesList];
     setMemoriesList(updated);
     try {
       localStorage.setItem(`school_memories_${schoolId}`, JSON.stringify(updated));
-    } catch {}
+    } catch (err) {
+      console.warn("Failed to save school memory:", err);
+    }
     setShowAddMemoryModal(false);
     setNewMemoryForm({
       title: "",
@@ -1683,12 +1842,21 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   };
 
   const handleDeleteMemory = (id: string) => {
-    if (!window.confirm("Kya aap sach me is memory ko delete karna chahte hain?")) return;
-    const updated = memoriesList.filter(m => m.id !== id);
-    setMemoriesList(updated);
-    try {
-      localStorage.setItem(`school_memories_${schoolId}`, JSON.stringify(updated));
-    } catch {}
+    setConfirmAction({
+      title: "Memory Delete Karein?",
+      message: "Kya aap sach me is memory ko delete karna chahte hain?",
+      confirmLabel: "Delete Karein",
+      onConfirm: () => {
+        const updated = memoriesList.filter(m => m.id !== id);
+        setMemoriesList(updated);
+        try {
+          localStorage.setItem(`school_memories_${schoolId}`, JSON.stringify(updated));
+        } catch (err) {
+          console.warn("Failed to update school memories:", err);
+        }
+        toast.success("Memory delete ho gayi.");
+      },
+    });
   };
 
   // ── UNIFIED ERP NAVIGATION CATEGORIES (CATEGORIZED INTO 9 INTUITIVE HUBS) ──
@@ -1780,7 +1948,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         { id: "receipt_cancellation" as AdminView, label: "Receipt Cancellation & Refund", icon: RotateCcw, desc: "रसीद निरस्तीकरण व रिफंड वाउचर ऑडिट" },
         { id: "qr_pay" as AdminView, label: "Scan QR to Pay (फास्ट पे)", icon: QrCode, desc: "स्मार्ट आईडी कार्ड क्यूआर स्कैनर से फीस" },
         { id: "online_admission_fee" as AdminView, label: "Online Admission & Fee", icon: Sliders, desc: "कक्षा-वार प्रवेश शुल्क व एक्टिव हेड सेट-अप" },
+        { id: "admission_receipt" as AdminView, label: "New Admission Receipt (+ प्रवेश शुल्क)", icon: Receipt, desc: "प्रवेश शुल्क (Admission Fee) भरें और 3-इंच / A6 रसीद बनाएं" },
         { id: "receipt_header" as AdminView, label: "Receipt Header & Letterhead", icon: Building2, desc: "स्कूल लेटरहेड व रसीद प्रिंट सेटिंग्स" },
+        { id: "razorpay_setup" as AdminView, label: "Razorpay Auto-Webhook Setup", icon: CreditCard, desc: "ऑनलाइन फीस गेटवे व ऑटो-रसीद वेबहुक सेट करें" },
       ]
     },
     {
@@ -1880,7 +2050,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         <aside
           onClick={() => {
             setIsSidebarHidden(false);
-            try { localStorage.setItem("school_erp_sidebar_hidden", "false"); } catch {}
+            try { localStorage.setItem("school_erp_sidebar_hidden", "false"); } catch (e) { console.warn("Failed to save sidebar state:", e); }
           }}
           className={`${isSidebarDefault ? "flex" : "hidden md:flex"} print:hidden flex-col items-center justify-between w-2.5 sm:w-3 hover:w-6 bg-slate-900 border-r border-slate-800/80 shrink-0 h-screen sticky top-0 cursor-pointer transition-all duration-300 z-30 select-none shadow-lg group hover:bg-slate-850`}
           title="Swipe Right या क्लिक करके मेनू खोलें (1% Visible)"
@@ -1908,7 +2078,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               </h2>
               <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
                 <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-500/20 text-blue-300 border border-blue-400/30 whitespace-nowrap shrink-0">
-                  {activeSession?.name ? activeSession.name.replace(/Academic Session |Session /i, "") : "2026-27"}
+                  {activeSession?.name ? activeSession.name.replace(/Academic Session |Session /i, "") : getDynamicAcademicSessionLabel().replace(/Academic Session |Session /i, "")}
                 </span>
                 <span className="text-[9.5px] text-slate-400 truncate min-w-0">
                   ID: {school?.code || school?.id?.slice(0, 6)}
@@ -1920,7 +2090,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             type="button"
             onClick={() => {
               setIsSidebarHidden(true);
-              try { localStorage.setItem("school_erp_sidebar_hidden", "true"); } catch {}
+              try { localStorage.setItem("school_erp_sidebar_hidden", "true"); } catch (e) { console.warn("Failed to save sidebar state:", e); }
             }}
             className="p-1 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition cursor-pointer shrink-0"
             title="मेनू को बाएँ छुपाएं (Swipe Left)"
@@ -2104,7 +2274,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                   title="सत्र बदलें / Switch Session"
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
-                  <span className="truncate">{activeSession?.name ? activeSession.name.replace(/Academic Session |Session /i, "") : "2026-27"}</span>
+                  <span className="truncate">{activeSession?.name ? activeSession.name.replace(/Academic Session |Session /i, "") : getDynamicAcademicSessionLabel().replace(/Academic Session |Session /i, "")}</span>
                   <ChevronDown className="w-2.5 h-2.5 opacity-80 shrink-0" />
                 </button>
               </div>
@@ -2293,7 +2463,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               <Calendar className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
               <span className="tabular-nums font-mono text-[11px] sm:text-xs">
-                सत्र: {activeSession?.name ? activeSession.name.replace(/Academic Session |Session /i, "") : "2026-27"}
+                सत्र: {activeSession?.name ? activeSession.name.replace(/Academic Session |Session /i, "") : getDynamicAcademicSessionLabel().replace(/Academic Session |Session /i, "")}
               </span>
               <ChevronDown className="w-3 h-3 text-emerald-700 dark:text-emerald-300 opacity-80 shrink-0" />
             </button>
@@ -2968,13 +3138,33 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     );
     const enrolledFaceCount = displayedStudents.length - pendingFaceStudents.length;
 
-    // Live Bus Fleet Summary from localStorage
-    const defaultBuses = [
-      { id: "bus-01", busNumber: "Bus #01 (DL-1PC-4590)", route: "Route 1" },
-      { id: "bus-02", busNumber: "Bus #02 (DL-1PC-8821)", route: "Route 2" },
-      { id: "bus-03", busNumber: "Bus #03 (DL-1PC-3312)", route: "Route 3" },
-    ];
-    const liveBuses = defaultBuses.map((b) => {
+    // Live Bus Fleet Summary from real vehicle records (or demo fleet ONLY when demo session is active)
+    let configuredBuses: any[] = [];
+    if (shouldUseDemoForSchool(schoolId)) {
+      configuredBuses = [
+        { id: "bus-01", busNumber: "Bus #01", route: "Route 1" },
+        { id: "bus-02", busNumber: "Bus #02", route: "Route 2" },
+        { id: "bus-03", busNumber: "Bus #03", route: "Route 3" },
+      ];
+    } else {
+      try {
+        const savedFitness = localStorage.getItem(`bus_fitness_${schoolId || "demo"}`);
+        if (savedFitness) {
+          const parsedFleet = JSON.parse(savedFitness);
+          if (Array.isArray(parsedFleet)) {
+            configuredBuses = parsedFleet.map((v: any, idx: number) => ({
+              id: v.id || `bus-${idx + 1}`,
+              busNumber: v.vehicleNumber || `Vehicle #${idx + 1}`,
+              route: v.route || v.model || "Campus Route",
+            }));
+          }
+        }
+      } catch (e) {
+        console.warn("Failed to read bus fleet configuration:", e);
+      }
+    }
+
+    const liveBuses = configuredBuses.map((b) => {
       let status: "started" | "idle" = "idle";
       let tripType = "";
       let speed = 0;
@@ -2985,10 +3175,12 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           if (parsed?.tripStatus === "started") {
             status = "started";
             tripType = parsed.tripType === "afternoon_drop" ? "Drop" : "Pickup";
-            speed = Number(parsed.speed || 28);
+            speed = Number(parsed.speed || 0);
           }
         }
-      } catch {}
+      } catch (e) {
+        console.warn("Failed to read live bus status:", e);
+      }
       return { ...b, status, tripType, speed };
     });
     const activeBusCount = liveBuses.filter((b) => b.status === "started").length;
@@ -3013,61 +3205,60 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     );
     const totalDuesAmount = totalAdmissionDue + totalAdvanceDue;
 
-    // Today's Date and Fees Breakdown
+    // Today's Date and 3-Channel Collection Breakdown (Fees + School Store Sales)
     const todayIso = new Date().toISOString().slice(0, 10);
-    let todayCashAmt = 0;
-    let todayUpiAmt = 0;
-    let todayReceiptsCount = 0;
-    try {
-      const lFees = getLocalFees(schoolId);
-      lFees.forEach((f: any) => {
-        if (f.paidDate && f.paidDate.startsWith(todayIso) && f.status === "PAID") {
-          const amt = Number(f.paidAmount || f.totalAmount || 0);
-          todayReceiptsCount++;
-          const mode = (f.paymentMode || "").toLowerCase();
-          if (mode.includes("upi") || mode.includes("online") || mode.includes("qr") || mode.includes("bank")) {
-            todayUpiAmt += amt;
-          } else {
-            todayCashAmt += amt;
-          }
-        }
-      });
-    } catch {}
-    if (todayCashAmt + todayUpiAmt === 0 && sevenDayFeeData[6]?.amount) {
-      todayCashAmt = Math.round(sevenDayFeeData[6].amount * 0.65);
-      todayUpiAmt = sevenDayFeeData[6].amount - todayCashAmt;
-      todayReceiptsCount = Math.max(1, Math.round(sevenDayFeeData[6].amount / 1200));
-    }
-    const todayTotalFeeCollected = todayCashAmt + todayUpiAmt;
+    const todayBreakdown = computePaymentBreakdown({
+      fees: mergedRealFees,
+      storeSales: dashboardStoreSales,
+      datePrefix: todayIso,
+    });
+    const todayCashAmt = todayBreakdown.cash;
+    const todayOnlineQrAmt = todayBreakdown.onlineQr;
+    const todayNstaOnlineAmt = todayBreakdown.nstaOnline;
+    const todayUpiAmt = todayOnlineQrAmt + todayNstaOnlineAmt;
+    const todayReceiptsCount = todayBreakdown.feeCount + todayBreakdown.storeCount;
+    const todayTotalFeeCollected = todayBreakdown.total;
 
-    // Staff Attendance Today
-    const totalStaffCount = teachers.length;
+    // Staff Attendance Today (100% REAL DATA ONLY)
+    const totalStaffCount = displayedTeachers.length;
     const staffRecords = teacherAttRecords?.records || {};
     let staffPresentCount = 0;
     let staffLeaveCount = 0;
     Object.values(staffRecords).forEach((rec: any) => {
-      if (rec.status === "PRESENT") staffPresentCount++;
-      else if (rec.status === "LEAVE" || rec.status === "ABSENT") staffLeaveCount++;
+      const st = String(rec.status || "").toUpperCase();
+      if (st === "PRESENT" || rec.present === true) staffPresentCount++;
+      else if (st === "LEAVE" || st === "ABSENT") staffLeaveCount++;
     });
-    if (staffPresentCount === 0 && totalStaffCount > 0) {
-      staffPresentCount = totalStaffCount;
-    }
 
-    // Class-Wise Attendance Breakdown
+    // Class-Wise Attendance Breakdown (100% REAL DATA ONLY)
+    let todayClassAttLogs: any[] = [];
+    try {
+      todayClassAttLogs = getLocalAttendance(schoolId).filter((r: any) => r.date === todayIso);
+    } catch (e) {
+      console.warn("Failed to read today's class attendance:", e);
+    }
     const classAttendanceStats = displayedClasses.map((cls) => {
       const classSts = displayedStudents.filter((s) => s.classId === cls.id);
       const total = classSts.length;
-      const basePct = sevenDayAttendanceData[6]?.presentPct || 92;
-      const classOffset = ((cls.name.charCodeAt(0) || 0) % 7) - 3;
-      const pct = Math.min(100, Math.max(70, basePct + classOffset));
-      const present = Math.min(total, Math.round((total * pct) / 100));
-      const absent = Math.max(0, total - present);
+      const clsLogs = todayClassAttLogs.filter((r: any) => r.classId === cls.id);
+      let present = 0;
+      let absent = 0;
+      clsLogs.forEach((dr: any) => {
+        if (Array.isArray(dr.records)) {
+          dr.records.forEach((rec: any) => {
+            const st = String(rec.status || "").toUpperCase();
+            if (st === "PRESENT" || st === "LATE") present++;
+            else if (st === "ABSENT") absent++;
+          });
+        }
+      });
+      const recorded = present + absent;
       return {
         ...cls,
         total,
         present,
         absent,
-        pct: total > 0 ? Math.round((present / total) * 100) : 100,
+        pct: recorded > 0 ? Math.round((present / recorded) * 100) : 0,
       };
     });
 
@@ -3084,7 +3275,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       const url = targetPhone
         ? `https://wa.me/${targetPhone}?text=${msg}`
         : `https://wa.me/?text=${msg}`;
-      window.open(url, "_blank", "noopener,noreferrer");
+      safeOpenExternalUrl(url);
     };
 
     const handleSettleDue = async () => {
@@ -3175,7 +3366,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                   <span className="text-[10px] font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400">आज की छात्र हाजिरी</span>
                   <div className="flex items-baseline gap-1.5">
                     <p className="text-2xl font-black text-slate-900 dark:text-white tabular-nums">
-                      {sevenDayAttendanceData[6]?.presentPct ?? 96}%
+                      {sevenDayAttendanceData[6]?.presentPct ?? 0}%
                     </p>
                     <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400">उपस्थित</span>
                   </div>
@@ -3190,7 +3381,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               <div>
                 <span className="text-[9.5px] text-slate-400 block font-semibold">उपस्थित</span>
                 <span className="font-black text-emerald-600 dark:text-emerald-400 tabular-nums">
-                  {sevenDayAttendanceData[6]?.presentCount ?? displayedStudents.length}
+                  {sevenDayAttendanceData[6]?.presentCount ?? 0}
                 </span>
               </div>
               <div className="border-x border-slate-200 dark:border-slate-800">
@@ -3234,8 +3425,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                   <IndianRupee className="w-5 h-5" />
                 </div>
                 <div>
-                  <span className="text-[10px] font-black uppercase tracking-wider text-amber-600 dark:text-amber-400">आज की फीस वसूली</span>
-                  <div className="flex items-baseline gap-1">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-amber-600 dark:text-amber-400">आज की फीस व स्टोर वसूली</span>
+                  <div className="flex items-baseline gap-1.5">
                     <p className="text-2xl font-black text-slate-900 dark:text-white tabular-nums">
                       ₹{todayTotalFeeCollected.toLocaleString("en-IN")}
                     </p>
@@ -3247,17 +3438,23 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               </span>
             </div>
 
-            <div className="grid grid-cols-2 gap-1 bg-slate-50 dark:bg-slate-900/60 p-2 rounded-xl text-center border border-slate-200/60 dark:border-slate-700/60 text-[11px]">
+            <div className="grid grid-cols-3 gap-1 bg-slate-50 dark:bg-slate-900/60 p-2 rounded-xl text-center border border-slate-200/60 dark:border-slate-700/60 text-[10px]">
               <div>
-                <span className="text-[9.5px] text-slate-400 block font-semibold">नगद (Cash)</span>
-                <span className="font-black text-slate-800 dark:text-white tabular-nums">
-                  ₹{todayCashAmt.toLocaleString("en-IN")}
+                <span className="text-[9px] text-slate-400 block font-semibold">Online QR Code</span>
+                <span className="font-black text-cyan-600 dark:text-cyan-400 tabular-nums">
+                  ₹{todayOnlineQrAmt.toLocaleString("en-IN")}
                 </span>
               </div>
               <div className="border-l border-slate-200 dark:border-slate-800">
-                <span className="text-[9.5px] text-slate-400 block font-semibold">ऑनलाइन / UPI</span>
-                <span className="font-black text-emerald-600 dark:text-emerald-400 tabular-nums">
-                  ₹{todayUpiAmt.toLocaleString("en-IN")}
+                <span className="text-[9px] text-slate-400 block font-semibold">NSTA Online</span>
+                <span className="font-black text-indigo-600 dark:text-indigo-400 tabular-nums">
+                  ₹{todayNstaOnlineAmt.toLocaleString("en-IN")}
+                </span>
+              </div>
+              <div className="border-l border-slate-200 dark:border-slate-800">
+                <span className="text-[9px] text-slate-400 block font-semibold">नकद (Cash)</span>
+                <span className="font-black text-slate-800 dark:text-white tabular-nums">
+                  ₹{todayCashAmt.toLocaleString("en-IN")}
                 </span>
               </div>
             </div>
@@ -3292,7 +3489,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                   <span className="text-[10px] font-black uppercase tracking-wider text-violet-600 dark:text-violet-400">शिक्षक व स्टाफ उपस्थिति</span>
                   <div className="flex items-baseline gap-1.5">
                     <p className="text-2xl font-black text-slate-900 dark:text-white tabular-nums">
-                      {staffPresentCount} <span className="text-sm font-bold text-slate-400">/ {totalStaffCount || 5}</span>
+                      {staffPresentCount} <span className="text-sm font-bold text-slate-400">/ {totalStaffCount}</span>
                     </p>
                     <span className="text-[11px] font-bold text-violet-600 dark:text-violet-400">ऑन ड्यूटी</span>
                   </div>
@@ -3348,7 +3545,11 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                   <span className="text-[10px] font-black uppercase tracking-wider text-sky-600 dark:text-sky-400">स्कूल बस जीपीएस रडार</span>
                   <div className="flex items-baseline gap-1.5">
                     <p className="text-xl font-black text-slate-900 dark:text-white tabular-nums">
-                      {activeBusCount > 0 ? `${activeBusCount} बसें ऑन-रोड` : "3 बसें स्टैंडबाय"}
+                      {activeBusCount > 0
+                        ? `${activeBusCount} बसें ऑन-रोड`
+                        : liveBuses.length > 0
+                        ? `${liveBuses.length} बसें स्टैंडबाय`
+                        : "कोई बस दर्ज नहीं"}
                     </p>
                   </div>
                 </div>
@@ -4194,7 +4395,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
             <div className="mt-2.5 grid grid-cols-7 gap-1 items-end h-24 border-b border-slate-100 dark:border-slate-700/60 pb-1">
               {sevenDayAttendanceData.map((d, idx) => {
-                const barHeightPct = Math.max(15, Math.min(100, d.presentPct));
+                const barHeightPct = d.presentPct > 0 ? Math.max(8, Math.min(100, d.presentPct)) : 0;
                 const isHigh = d.presentPct >= 90;
                 return (
                   <div key={`att-${d.dateStr}-${idx}`} className="flex flex-col items-center h-full justify-end group relative">
@@ -4249,8 +4450,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
             <div className="mt-2.5 grid grid-cols-7 gap-1 items-end h-24 border-b border-slate-100 dark:border-slate-700/60 pb-1">
               {sevenDayFeeData.map((f, idx) => {
-                const maxAmt = Math.max(...sevenDayFeeData.map((x) => x.amount), 35000);
-                const barHeightPct = Math.max(15, Math.min(100, Math.round((f.amount / maxAmt) * 100)));
+                const maxAmt = Math.max(...sevenDayFeeData.map((x) => x.amount), 1);
+                const barHeightPct = f.amount > 0 ? Math.max(8, Math.min(100, Math.round((f.amount / maxAmt) * 100))) : 0;
                 return (
                   <div key={`fee-${f.dateStr}-${idx}`} className="flex flex-col items-center h-full justify-end group relative">
                     <span className="text-[9px] font-bold text-slate-600 dark:text-slate-300 mb-0.5 tabular-nums">
@@ -4270,10 +4471,21 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               })}
             </div>
 
-            <div className="mt-2 flex items-center justify-between text-[11px]">
-              <span className="text-slate-500 text-[10px]">
-                माह कुल: <strong className="text-emerald-600">₹{currentMonthCollection.toLocaleString("en-IN")}</strong>
-              </span>
+            <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-700/60 flex items-center justify-between flex-wrap gap-1.5 text-[10px]">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-slate-500">
+                  माह कुल: <strong className="text-emerald-600">₹{currentMonthCollection.toLocaleString("en-IN")}</strong>
+                </span>
+                <span className="text-cyan-600 dark:text-cyan-400 font-bold">
+                  QR: ₹{currentMonthBreakdown.onlineQr.toLocaleString("en-IN")}
+                </span>
+                <span className="text-indigo-600 dark:text-indigo-400 font-bold">
+                  NSTA Online: ₹{currentMonthBreakdown.nstaOnline.toLocaleString("en-IN")}
+                </span>
+                <span className="text-slate-600 dark:text-slate-300 font-bold">
+                  Cash: ₹{currentMonthBreakdown.cash.toLocaleString("en-IN")}
+                </span>
+              </div>
               <button
                 type="button"
                 onClick={() => setView("fees")}
@@ -4863,7 +5075,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               {/* Action row */}
               <div className="p-4 pt-2 border-t border-slate-100 dark:border-slate-700/60 flex items-center justify-between text-xs">
                 <span className="text-[11px] text-slate-400 flex items-center gap-1">
-                  ❤️ {mem.likes || 42} Student Likes
+                  ❤️ {mem.likes ?? 0} Student Likes
                 </span>
                 <button
                   type="button"
@@ -5379,7 +5591,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                     </span>
                   </div>
                   <h4 className="text-sm sm:text-base font-black text-slate-900 dark:text-white mt-0.5 truncate">
-                    {activeSession?.name || "Academic Session 2026-27"}
+                    {activeSession?.name || getDynamicAcademicSessionLabel()}
                   </h4>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono mt-0.5">
                     {activeSession?.startDate || "2026-04-01"} → {activeSession?.endDate || "2027-03-31"}
@@ -5873,7 +6085,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             classes={displayedClasses}
             currentSession={activeSession}
             onSuccess={() => {
-              try { loadAll(); } catch {}
+              try { loadAll(); } catch (e) { console.warn("Failed to reload after rollover:", e); }
             }}
           />
         )}
@@ -5892,7 +6104,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             initialTargetPerson={faceStudioTargetPerson}
             initialTargetType={faceStudioTargetType}
             onEnrollmentUpdated={() => {
-              try { loadAll(); } catch {}
+              try { loadAll(); } catch (e) { console.warn("Failed to reload after enrollment:", e); }
               if (schoolId) {
                 getSchoolFaceDescriptors(schoolId).then((map) => {
                   const next: Record<string, boolean> = {};
@@ -5900,10 +6112,45 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                     next[id] = true;
                   });
                   setEnrolledFaceIds(next);
-                }).catch(() => {});
+                }).catch((e) => console.warn("Failed to refresh face descriptors:", e));
               }
             }}
           />
+        )}
+        {confirmAction && (
+          <div className="fixed inset-0 z-[9999] bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="w-full max-w-sm rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 p-5 shadow-2xl space-y-4">
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-rose-100 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <h4 className="text-sm font-black text-slate-900 dark:text-white">{confirmAction.title}</h4>
+                  <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">{confirmAction.message}</p>
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setConfirmAction(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 cursor-pointer"
+                >
+                  रद्द करें (Cancel)
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const fn = confirmAction.onConfirm;
+                    setConfirmAction(null);
+                    await fn();
+                  }}
+                  className="px-4 py-2 rounded-xl text-xs font-black bg-rose-600 hover:bg-rose-500 text-white cursor-pointer"
+                >
+                  {confirmAction.confirmLabel || "Confirm"}
+                </button>
+              </div>
+            </div>
+          </div>
         )}
         {renderAdminBottomNav()}
       </>
@@ -6102,15 +6349,18 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               <span>Open Store & Plans</span>
             </button>
 
-            <a
-              href={`https://wa.me/918227070298?text=${encodeURIComponent(`Hello Super Admin, hamare school (${school?.name || "School"}, ID: ${school?.id || schoolId}) ka subscription expire ho gaya hai. Kripya hamara plan turant renew karwayen.`)}`}
-              target="_blank"
-              rel="noreferrer"
+            <button
+              type="button"
+              onClick={() =>
+                safeOpenExternalUrl(
+                  `https://wa.me/${ADMIN_WHATSAPP_NUMBER}?text=${encodeURIComponent(`Hello Super Admin, hamare school (${school?.name || "School"}, ID: ${school?.id || schoolId}) ka subscription expire ho gaya hai. Kripya hamara plan turant renew karwayen.`)}`
+                )
+              }
               className="w-full py-2.5 px-4 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-300 font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
             >
               <MessageSquare className="w-4 h-4" />
               <span>Contact Super Admin on WhatsApp</span>
-            </a>
+            </button>
 
             <button
               type="button"
@@ -6211,7 +6461,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             const hrs = Math.floor(diffMs / (1000 * 60 * 60));
             const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
             stayDuration = `${hrs}h ${mins}m`;
-          } catch {}
+          } catch (e) {
+            console.warn("Failed to compute stayDuration:", e);
+          }
         }
 
         currentRecords[teacher.id] = {
@@ -6739,6 +6991,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   if (view === "qr_pay") {
     return renderErpShell(
       <FeeManager
+        key={view}
         schoolId={schoolId}
         className="All Classes"
         schoolName={school?.name}
@@ -6754,6 +7007,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   if (view === "fee_alerts") {
     return renderErpShell(
       <FeeManager
+        key={view}
         schoolId={schoolId}
         className="All Classes"
         schoolName={school?.name}
@@ -6769,6 +7023,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   if (view === "receipt_header") {
     return renderErpShell(
       <FeeManager
+        key={view}
         schoolId={schoolId}
         className="All Classes"
         schoolName={school?.name}
@@ -6777,6 +7032,37 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         adminId={adminUid}
         initialTool="header"
         onBack={() => setView("fees")}
+      />
+    );
+  }
+
+  if (view === "admission_receipt") {
+    return renderErpShell(
+      <FeeManager
+        key={view}
+        schoolId={schoolId}
+        className="All Classes"
+        schoolName={school?.name}
+        school={school || undefined}
+        sessionId={activeSession?.id || ""}
+        adminId={adminUid}
+        initialTool="admission_receipt"
+        onBack={() => setView("fees")}
+      />
+    );
+  }
+
+  if (view === "razorpay_setup") {
+    return renderErpShell(
+      <RazorpaySettingsModal
+        isOpen={true}
+        onClose={() => setView("fees")}
+        schoolId={schoolId}
+        schoolName={school?.name}
+        adminUid={adminUid}
+        onSaved={() => {
+          toast.success("Razorpay Online Fee & Auto-Webhook settings saved!");
+        }}
       />
     );
   }
@@ -7368,11 +7654,19 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         currentSchoolId={schoolId}
         onSwitchBranch={(branchId, branchSchoolId) => {
           try {
-            const bName = branchId === "branch_main" ? "DPS Senior Campus" : branchId === "branch_rural" ? "DPS Rural Campus" : "DPS Primary Wing";
+            let bName = `${school?.name || "Main"} Branch`;
+            const savedBranchesRaw = localStorage.getItem(`school_branches_${schoolId}`);
+            if (savedBranchesRaw) {
+              const savedBranches = JSON.parse(savedBranchesRaw);
+              const matched = Array.isArray(savedBranches) ? savedBranches.find((b: any) => b.id === branchId || b.schoolId === branchSchoolId) : null;
+              if (matched?.name) bName = matched.name;
+            }
             setActiveBranchName(bName);
             localStorage.setItem(`active_branch_name_${schoolId}`, bName);
             localStorage.setItem("nst_active_school_id", branchSchoolId);
-          } catch {}
+          } catch (err) {
+            console.warn("[SchoolAdminPanel] Branch switch storage warning:", err);
+          }
           setView("dashboard");
         }}
         onClose={() => setView("dashboard")}
@@ -7525,7 +7819,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                 <h3 className="text-lg font-black text-white">{school?.name || "School Ecosystem"}</h3>
                 <p className="text-xs text-indigo-200 mt-0.5">
                   {school?.code ? `Code: ${school.code} • ` : ""}
-                  सत्र: {activeSession?.name || "2026-27"}
+                  सत्र: {activeSession?.name || getDynamicAcademicSessionLabel()}
                 </p>
                 <div className="flex flex-wrap items-center justify-center sm:justify-start gap-1.5 mt-2">
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold">
@@ -7829,7 +8123,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                 </span>
               </div>
               <h3 className="text-base sm:text-lg font-black text-slate-900 dark:text-white mt-1">
-                {activeSession?.name || "Academic Session 2026-27"}
+                {activeSession?.name || getDynamicAcademicSessionLabel()}
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 font-mono mt-0.5">
                 अवधि: {activeSession?.startDate || "2026-04-01"} → {activeSession?.endDate || "2027-03-31"} • {displayedClasses.length} कक्षाएं • {displayedStudents.length} छात्र
@@ -8560,9 +8854,12 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                               <button
                                 type="button"
                                 onClick={() => {
-                                  if (confirm(`Kya aap "${cls.name}" ko sachme delete karna chahte hain? Is class ke sabhi records par asar pad sakta hai.`)) {
-                                    deleteClass(schoolId, cls.id);
-                                  }
+                                  setConfirmAction({
+                                    title: "Class Delete Karein?",
+                                    message: `Kya aap "${cls.name}" ko sachme delete karna chahte hain? Is class ke sabhi records par asar pad sakta hai.`,
+                                    confirmLabel: "Delete Class",
+                                    onConfirm: () => deleteClass(schoolId, cls.id),
+                                  });
                                 }}
                                 title="Delete Class"
                                 className="p-2 rounded-xl text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 border border-slate-200 dark:border-slate-700 transition cursor-pointer"
@@ -9074,9 +9371,12 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      if (confirm(`Kya aap "${sub.name}" subject ko delete karna chahte hain?`)) {
-                        deleteSubject(schoolId, sub.id);
-                      }
+                      setConfirmAction({
+                        title: "Subject Delete Karein?",
+                        message: `Kya aap "${sub.name}" subject ko delete karna chahte hain?`,
+                        confirmLabel: "Delete Subject",
+                        onConfirm: () => deleteSubject(schoolId, sub.id),
+                      });
                     }}
                     className="p-2 rounded-xl text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 transition cursor-pointer"
                     title="Delete Subject"
@@ -9207,7 +9507,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                   <input
                     value={teacherForm.name}
                     onChange={e => setTeacherForm(p => ({ ...p, name: e.target.value }))}
-                    placeholder="e.g. Dr. Arvind Swaminathan"
+                    placeholder="e.g. Rajesh Kumar Sharma"
                     className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
                   />
                 </div>
@@ -9687,9 +9987,12 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                         <button
                           type="button"
                           onClick={() => {
-                            if (window.confirm(`Kya aap sach me "${t.name}" ko remove karna chahte hain?`)) {
-                              deleteTeacher(schoolId, t.id);
-                            }
+                            setConfirmAction({
+                              title: "Teacher Remove Karein?",
+                              message: `Kya aap sach me "${t.name}" ko remove karna chahte hain?`,
+                              confirmLabel: "Remove Teacher",
+                              onConfirm: () => deleteTeacher(schoolId, t.id),
+                            });
                           }}
                           className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 dark:text-rose-400 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
                         >

@@ -14,7 +14,7 @@
  * 5. Strict Non-Finite, Zero-Vector, and Landmark-Alignment Rejection Guards.
  */
 
-import * as ort from "onnxruntime-web";
+import * as ort from "onnxruntime-web/wasm";
 
 // Ensure single-thread wasm execution to avoid COOP/COEP SharedArrayBuffer restrictions in iframe/browser
 try {
@@ -22,6 +22,7 @@ try {
     ort.env.wasm.numThreads = 1;
     ort.env.wasm.wasmPaths = "/onnx-wasm/";
     ort.env.wasm.simd = true;
+    (ort.env.wasm as any).proxy = false;
   }
 } catch (e) {
   console.warn("[ArcFace] Error configuring ort wasm environment:", e);
@@ -33,6 +34,11 @@ let arcfaceSession: ort.InferenceSession | null = null;
 let isInitializing = false;
 let initPromise: Promise<boolean> | null = null;
 let inferenceMutex: Promise<any> = Promise.resolve();
+let lastArcFaceError: string | null = null;
+
+export function getArcFaceError(): string | null {
+  return lastArcFaceError;
+}
 
 /**
  * Serializes ONNX runtime inferences so that multiple concurrent async calls
@@ -61,31 +67,36 @@ export async function initArcFaceEngine(): Promise<boolean> {
     try {
       console.log("[ArcFace 512D] Loading MobileFaceNet ONNX model from:", ARCFACE_MODEL_PATH);
 
-      // Attempt loading session (WASM / WebGL)
-      const sessionOptions: ort.InferenceSession.SessionOptions = {
-        executionProviders: ["webgl", "wasm"],
-        graphOptimizationLevel: "all",
-      };
-
+      lastArcFaceError = null;
+      // Fetch ONNX model bytes directly once for ultra-reliable WASM loading across mobile/WebView
+      let modelSource: string | Uint8Array = ARCFACE_MODEL_PATH;
       try {
-        arcfaceSession = await ort.InferenceSession.create(ARCFACE_MODEL_PATH, sessionOptions);
-      } catch (gpuErr) {
-        console.warn("[ArcFace 512D] WebGL EP failed, trying local WASM:", gpuErr);
+        const res = await fetch(ARCFACE_MODEL_PATH);
+        if (res.ok) {
+          modelSource = new Uint8Array(await res.arrayBuffer());
+        }
+      } catch {}
+
+      // Attempt loading session via pure WASM (universal across desktop, Android Chrome, and iframes)
+      try {
+        ort.env.wasm.numThreads = 1;
+        (ort.env.wasm as any).proxy = false;
+        ort.env.wasm.wasmPaths = "/onnx-wasm/";
+        arcfaceSession = await ort.InferenceSession.create(modelSource as any, {
+          executionProviders: ["wasm"],
+          graphOptimizationLevel: "all",
+        });
+      } catch (wasmErr: any) {
+        console.warn("[ArcFace 512D] Local WASM failed, trying CDN WASM fallback:", wasmErr);
         try {
-          arcfaceSession = await ort.InferenceSession.create(ARCFACE_MODEL_PATH, {
+          ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/";
+          arcfaceSession = await ort.InferenceSession.create(modelSource as any, {
             executionProviders: ["wasm"],
           });
-        } catch (wasmErr) {
-          console.warn("[ArcFace 512D] Local WASM failed, trying CDN WASM fallback:", wasmErr);
-          try {
-            ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/";
-            arcfaceSession = await ort.InferenceSession.create(ARCFACE_MODEL_PATH, {
-              executionProviders: ["wasm"],
-            });
-          } catch (cdnErr) {
-            console.warn("[ArcFace 512D] All ONNX backends unavailable:", cdnErr);
-            arcfaceSession = null;
-          }
+        } catch (cdnErr: any) {
+          lastArcFaceError = cdnErr?.message || wasmErr?.message || "ONNX WASM failed to initialize";
+          console.error("[ArcFace 512D] ONNX WASM unavailable:", lastArcFaceError);
+          arcfaceSession = null;
         }
       }
 
@@ -553,8 +564,8 @@ export function matchArcFace512(
     return null;
   }
 
-  // 2. Fail-closed lighting gate enforced inside matcher
-  if (options?.isLowLight || options?.isTooDark) {
+  // 2. Fail-closed lighting gate only for pitch-dark frames (allow normal indoor lighting)
+  if (options?.isTooDark) {
     return null;
   }
 

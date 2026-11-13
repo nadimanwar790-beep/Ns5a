@@ -5,7 +5,7 @@ import {
 } from "../../school-firebase";
 import type { SchoolStudent, SchoolClass, MonthlyFee, School, SchoolDocumentPrintFields } from "../../school-types";
 import { schoolPrintFieldEnabled } from "../../school-types";
-import { CheckCircle, Clock, Download, ChevronLeft, ChevronRight, ChevronDown, IndianRupee, Users, TrendingUp, AlertCircle, Printer, MessageCircle, ReceiptText, Building2, Sparkles, X, Check, RotateCcw, CheckCircle2, ShieldCheck, ToggleLeft, ToggleRight, Bus, QrCode, Search, Filter, Loader2, Bell, FileSpreadsheet, FileText, Plus, Trash2 } from "lucide-react";
+import { CheckCircle, Clock, Download, ChevronLeft, ChevronRight, ChevronDown, IndianRupee, Users, TrendingUp, AlertCircle, Printer, MessageCircle, ReceiptText, Building2, Sparkles, X, Check, RotateCcw, CheckCircle2, ShieldCheck, ToggleLeft, ToggleRight, Bus, QrCode, Search, Filter, Loader2, Bell, FileSpreadsheet, FileText, Plus, Trash2, CreditCard } from "lucide-react";
 import { downloadFeeDocument, shareFeeReceiptOnWhatsApp, generateFeeDocumentPdfBlob, buildWhatsAppReceiptMessage } from "./feeDocument";
 import { WhatsAppShareModal } from "./WhatsAppShareModal";
 
@@ -19,6 +19,7 @@ import { BusTransportModal } from "./BusTransportModal";
 import { AdmissionFormPrintModal, type AdmissionPrintMode } from "./AdmissionFormPrintModal";
 import { ClassFeeAlertBroadcastModal } from "./ClassFeeAlertBroadcastModal";
 import { ReceiptCancellationModal } from "./ReceiptCancellationModal";
+import { RazorpaySettingsModal } from "./RazorpaySettingsModal";
 import {
   generateDpsReceiptHtml,
   generateSingleA6SlipHtml,
@@ -52,6 +53,7 @@ import {
   recordDiscountEntry,
   DISPLAY_DISCOUNT_LABEL,
 } from "../../utils/schoolDiscountAndPayment";
+import { computePaymentBreakdown } from "../../utils/paymentBreakdown";
 
 interface Props {
   schoolId: string;
@@ -64,7 +66,7 @@ interface Props {
   userRole?: string;
   actorName?: string;
   onBack?: () => void;
-  initialTool?: "qr_scanner" | "bus" | "admission_receipt" | "class_rates" | "fee_alert" | "header";
+  initialTool?: "qr_scanner" | "bus" | "admission_receipt" | "class_rates" | "fee_alert" | "header" | "razorpay" | "cancel_receipt";
 }
 
 export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, schoolName, school, sessionId, adminId, userRole = "SCHOOL_ADMIN", actorName = "Admin / Accountant", onBack, initialTool }) => {
@@ -80,7 +82,6 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
   const [saving, setSaving] = useState<string | null>(null);
   const [selectedReceiptIds, setSelectedReceiptIds] = useState<string[]>([]);
   const [selectedDueSlipIds, setSelectedDueSlipIds] = useState<string[]>([]);
-  const [showToolsDropdown, setShowToolsDropdown] = useState(false);
   const [showSchoolHeaderModal, setShowSchoolHeaderModal] = useState(false);
   const [showClassFeeModal, setShowClassFeeModal] = useState(false);
   const [showQrScannerModal, setShowQrScannerModal] = useState(false);
@@ -105,8 +106,8 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     student?: SchoolStudent;
     isDueDemand: boolean;
   } | null>(null);
-  const [sendingMonthlyPush, setSendingMonthlyPush] = useState<boolean>(false);
   const [showClassFeeAlertModal, setShowClassFeeAlertModal] = useState<boolean>(false);
+  const [showRazorpaySettingsModal, setShowRazorpaySettingsModal] = useState<boolean>(false);
 
   const [pushBannerMsg, setPushBannerMsg] = useState<string | null>(null);
 
@@ -190,6 +191,8 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     else if (initialTool === "class_rates") setShowClassFeeModal(true);
     else if (initialTool === "fee_alert") setShowClassFeeAlertModal(true);
     else if (initialTool === "header") setShowSchoolHeaderModal(true);
+    else if (initialTool === "razorpay") setShowRazorpaySettingsModal(true);
+    else if (initialTool === "cancel_receipt") setShowReceiptCancellationModal(true);
 
     const handleOpenTool = (e: any) => {
       const tool = e?.detail?.tool;
@@ -199,10 +202,18 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
       else if (tool === "class_rates") setShowClassFeeModal(true);
       else if (tool === "fee_alert") setShowClassFeeAlertModal(true);
       else if (tool === "header") setShowSchoolHeaderModal(true);
+      else if (tool === "razorpay") setShowRazorpaySettingsModal(true);
+      else if (tool === "cancel_receipt") setShowReceiptCancellationModal(true);
     };
     window.addEventListener("open-fee-tool", handleOpenTool);
     return () => window.removeEventListener("open-fee-tool", handleOpenTool);
   }, [initialTool]);
+
+  useEffect(() => {
+    if (showAdmissionModal && !admSelectedStudentId && students.length > 0) {
+      openAdmissionModalForStudent(students[0]);
+    }
+  }, [showAdmissionModal, admSelectedStudentId, students.length]);
 
   useEffect(() => {
     if (!school) return;
@@ -1171,54 +1182,7 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
     }
   };
 
-  const handleBroadcastMonthlyFeePush = async () => {
-    if (sendingMonthlyPush) return;
-    setSendingMonthlyPush(true);
-    setPushBannerMsg(null);
-    try {
-      const mLabel = formatMonthLabel(month);
-      const duesList = fees
-        .map((f) => {
-          const st = students.find((s) => s.id === f.studentId);
-          const curBal = f.balanceDue !== undefined ? Number(f.balanceDue) : (f.paid ? 0 : Number(f.amount || 0));
-          const arrBal = f.paid ? 0 : Number(f.arrearsAmount || 0);
-          const totalPending = Math.max(0, curBal + arrBal);
-          return {
-            studentId: f.studentId,
-            schoolId,
-            schoolName: schoolDetails.schoolName || schoolName || "School",
-            studentName: f.studentName || st?.name || "Student",
-            classId: f.classId || st?.classId || "",
-            className: classNames[f.classId] || (st as any)?.className || "",
-            rollNo: f.rollNo || st?.rollNo || "",
-            pendingDues: totalPending,
-            monthlyFee: Number(f.monthlyAmount || st?.monthlyFee || 0),
-          };
-        })
-        .filter((d) => d.pendingDues > 0);
 
-      if (duesList.length === 0) {
-        setPushBannerMsg("Sabhi chhatron ki fee jama hai — kisi par koi बकाया nahi hai!");
-        return;
-      }
-
-      const res = await triggerMonthlySchoolFeePush({
-        schoolId,
-        schoolName: schoolDetails.schoolName || schoolName || "School",
-        monthLabel: mLabel,
-        duesList,
-      });
-
-      setPushBannerMsg(
-        res.delivered > 0
-          ? `🔔 ${res.delivered} subscribed parent devices par ${mLabel} ka exact बकाया Lock Screen Push bhej diya gaya!`
-          : `✅ ${duesList.length} chhatron ka बकाया sync ho gaya! Jaise hi parent Student Portal me 'Enable Alerts' ON karenge, unke phone par Lock Screen notification jayega.`
-      );
-    } finally {
-      setSendingMonthlyPush(false);
-      setTimeout(() => setPushBannerMsg(null), 8000);
-    }
-  };
 
   const handleInitAllFees = async () => {
     setSaving("all");
@@ -1251,6 +1215,7 @@ export const FeeManager: React.FC<Props> = ({ schoolId, classId, className, scho
   const totalAmount = fees.reduce((sum, f) => sum + (f.amount || 0), 0);
   const collectedAmount = fees.reduce((sum, f) => sum + (f.paidAmount !== undefined ? Number(f.paidAmount) : (f.paid ? Number(f.amount || 0) : 0)), 0);
   const pendingAmount = Math.max(0, totalAmount - collectedAmount);
+  const feeChannelBreakdown = React.useMemo(() => computePaymentBreakdown({ fees }), [fees]);
 
   const filteredFees = fees.filter(f => {
     if (searchQuery.trim()) {
@@ -1926,229 +1891,6 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
           >
             <FileSpreadsheet className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
           </button>
-
-          {/* Sleek ⚡ Fee Tools Dropdown */}
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setShowToolsDropdown(!showToolsDropdown)}
-              className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 hover:from-indigo-500 hover:to-blue-500 active:scale-95 text-white px-3.5 py-2 text-xs font-black shadow-md shadow-indigo-700/25 transition cursor-pointer select-none"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
-              <span>⚡ Fee Tools</span>
-              <span className="w-4 h-4 rounded-full bg-white/20 text-[10px] flex items-center justify-center font-bold">
-                7
-              </span>
-              <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${showToolsDropdown ? 'rotate-180' : ''}`} />
-            </button>
-
-            {/* Dropdown Menu Modal / Popover */}
-            {showToolsDropdown && (
-              <>
-                <div
-                  className="fixed inset-0 z-40"
-                  onClick={() => setShowToolsDropdown(false)}
-                />
-                <div className="absolute right-0 top-full mt-2 w-72 sm:w-80 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 py-2 z-50 text-slate-800 dark:text-slate-100 animate-in fade-in zoom-in-95 duration-150">
-                  <div className="px-3.5 py-2 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
-                    <div>
-                      <p className="text-xs font-black text-slate-800 dark:text-white flex items-center gap-1.5">
-                        <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                        <span>Fee Management Actions</span>
-                      </p>
-                      <p className="text-[10px] text-slate-400">7 Quick tools for fee operations</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setShowToolsDropdown(false)}
-                      className="text-slate-400 hover:text-slate-600 dark:hover:text-white text-xs p-1"
-                    >
-                      ✕
-                    </button>
-                  </div>
-
-                  <div className="p-1.5 space-y-0.5 max-h-[75vh] overflow-y-auto">
-                    {/* Tool 1: Admission Fee Receipt */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowToolsDropdown(false);
-                        openAdmissionModalForStudent();
-                      }}
-                      className="w-full px-3 py-2 rounded-xl text-left hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition flex items-center gap-2.5 group cursor-pointer"
-                    >
-                      <div className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                        <ReceiptText className="w-4 h-4" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs font-bold text-slate-800 dark:text-white group-hover:text-emerald-600 dark:group-hover:text-emerald-300">
-                          + New Admission Receipt (+ प्रवेश शुल्क)
-                        </p>
-                        <p className="text-[10px] text-slate-400 truncate">
-                          प्रवेश शुल्क (Admission Fee) भरें और 3-इंच / A6 रसीद बनाएं
-                        </p>
-                      </div>
-                    </button>
-
-                    {/* Tool 2: Scan QR to Pay */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowToolsDropdown(false);
-                        setShowQrScannerModal(true);
-                      }}
-                      className="w-full px-3 py-2 rounded-xl text-left hover:bg-amber-50 dark:hover:bg-amber-950/40 transition flex items-center gap-2.5 group cursor-pointer"
-                    >
-                      <div className="w-8 h-8 rounded-lg bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                        <QrCode className="w-4 h-4" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs font-bold text-slate-800 dark:text-white group-hover:text-amber-600 dark:group-hover:text-amber-300">
-                          Scan ID Card QR (फास्ट पे)
-                        </p>
-                        <p className="text-[10px] text-slate-400 truncate">
-                          आईडी कार्ड क्यूआर स्कैन करके तुरंत फीस जमा करें
-                        </p>
-                      </div>
-                    </button>
-
-                    {/* Tool 3: Push Monthly Alert */}
-                    <button
-                      type="button"
-                      disabled={sendingMonthlyPush}
-                      onClick={() => {
-                        setShowToolsDropdown(false);
-                        handleBroadcastMonthlyFeePush();
-                      }}
-                      className="w-full px-3 py-2 rounded-xl text-left hover:bg-indigo-50 dark:hover:bg-indigo-950/40 transition flex items-center gap-2.5 group cursor-pointer disabled:opacity-50"
-                    >
-                      <div className="w-8 h-8 rounded-lg bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                        <Bell className="w-4 h-4" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs font-bold text-slate-800 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-300">
-                          Push Monthly Alert (लॉक स्क्रीन पुश)
-                        </p>
-                        <p className="text-[10px] text-slate-400 truncate">
-                          सभी बकाया छात्रों के अभिभावकों को वेब पुश भेजें
-                        </p>
-                      </div>
-                    </button>
-
-                    {/* Tool 4: Class Fee Alert (NSTA Messenger) */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowToolsDropdown(false);
-                        setShowClassFeeAlertModal(true);
-                      }}
-                      className="w-full px-3 py-2 rounded-xl text-left hover:bg-purple-50 dark:hover:bg-purple-950/40 transition flex items-center gap-2.5 group cursor-pointer"
-                    >
-                      <div className="w-8 h-8 rounded-lg bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                        <Bell className="w-4 h-4 animate-pulse" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs font-bold text-slate-800 dark:text-white group-hover:text-purple-600 dark:group-hover:text-purple-300">
-                          Class Fee Alert (NSTA Messenger)
-                        </p>
-                        <p className="text-[10px] text-slate-400 truncate">
-                          A6 डिमांड स्लिप व मैसेज क्लास ग्रुप में भेजें
-                        </p>
-                      </div>
-                    </button>
-
-                    {/* Tool 5: Bus Service Manager */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowToolsDropdown(false);
-                        setShowBusModal(true);
-                      }}
-                      className="w-full px-3 py-2 rounded-xl text-left hover:bg-teal-50 dark:hover:bg-teal-950/40 transition flex items-center gap-2.5 group cursor-pointer"
-                    >
-                      <div className="w-8 h-8 rounded-lg bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                        <Bus className="w-4 h-4" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs font-bold text-slate-800 dark:text-white group-hover:text-teal-600 dark:group-hover:text-teal-300">
-                          Bus Service &amp; Routes ({busFees.length} Users)
-                        </p>
-                        <p className="text-[10px] text-slate-400 truncate">
-                          बस रूट, स्टॉप व वाहन शुल्क आवंटन प्रबंधित करें
-                        </p>
-                      </div>
-                    </button>
-
-                    {/* Tool 6: Class Fee Rates & Structure */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowToolsDropdown(false);
-                        setShowClassFeeModal(true);
-                      }}
-                      className="w-full px-3 py-2 rounded-xl text-left hover:bg-blue-50 dark:hover:bg-blue-950/40 transition flex items-center gap-2.5 group cursor-pointer"
-                    >
-                      <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                        <Sparkles className="w-4 h-4" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs font-bold text-slate-800 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-300">
-                          Class Fee Rates &amp; Structure (क्लास दरें)
-                        </p>
-                        <p className="text-[10px] text-slate-400 truncate">
-                          ट्यूशन, एडमिशन, कॉशन मनी व वार्षिक शुल्क सेट करें
-                        </p>
-                      </div>
-                    </button>
-
-                    {/* Tool 7: Receipt Header & Print Settings */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowToolsDropdown(false);
-                        setShowSchoolHeaderModal(true);
-                      }}
-                      className="w-full px-3 py-2 rounded-xl text-left hover:bg-slate-100 dark:hover:bg-slate-700 transition flex items-center gap-2.5 group cursor-pointer"
-                    >
-                      <div className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                        <Building2 className="w-4 h-4" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs font-bold text-slate-800 dark:text-white group-hover:text-slate-900 dark:group-hover:text-slate-100">
-                          Receipt Header &amp; Print Settings (लेटरहेड)
-                        </p>
-                        <p className="text-[10px] text-slate-400 truncate">
-                          स्कूल लोगो, पता, संबद्धता व डिजिटल हस्ताक्षर सेटिंग्स
-                        </p>
-                      </div>
-                    </button>
-
-                    {/* Tool 8: Receipt Cancellation & Refund */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowToolsDropdown(false);
-                        setShowReceiptCancellationModal(true);
-                      }}
-                      className="w-full px-3 py-2 rounded-xl text-left hover:bg-rose-50 dark:hover:bg-rose-950/40 transition flex items-center gap-2.5 group cursor-pointer"
-                    >
-                      <div className="w-8 h-8 rounded-lg bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                        <RotateCcw className="w-4 h-4 text-rose-600 dark:text-rose-400" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs font-bold text-rose-700 dark:text-rose-300">
-                          रसीद निरस्तीकरण व रिफंड (Cancel Receipt)
-                        </p>
-                        <p className="text-[10px] text-slate-400 truncate">
-                          गलत रसीद रद्द करें व आधिकारिक रिफंड वाउचर जारी करें
-                        </p>
-                      </div>
-                    </button>
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
         </div>
       </div>
 
@@ -2178,6 +1920,20 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
             </div>
             <p className="text-xl font-bold text-green-600">₹{collectedAmount.toLocaleString()}</p>
             <p className="text-xs text-slate-400">{paidFees.length} students paid</p>
+            <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-700 grid grid-cols-3 gap-1 text-[10px]">
+              <div>
+                <span className="text-slate-400 block">Online QR</span>
+                <span className="font-bold text-blue-600 dark:text-blue-400">₹{feeChannelBreakdown.onlineQr.toLocaleString("en-IN")}</span>
+              </div>
+              <div className="border-l border-slate-100 dark:border-slate-700 pl-1">
+                <span className="text-slate-400 block">NSTA Online</span>
+                <span className="font-bold text-indigo-600 dark:text-indigo-400">₹{feeChannelBreakdown.nstaOnline.toLocaleString("en-IN")}</span>
+              </div>
+              <div className="border-l border-slate-100 dark:border-slate-700 pl-1">
+                <span className="text-slate-400 block">Cash</span>
+                <span className="font-bold text-slate-700 dark:text-slate-200">₹{feeChannelBreakdown.cash.toLocaleString("en-IN")}</span>
+              </div>
+            </div>
           </div>
           <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm">
             <div className="flex items-center gap-2 mb-1">
@@ -3960,6 +3716,20 @@ td{padding:8px 10px;border-bottom:1px solid #e2e8f0}</style></head>
             onClose={() => setShowReceiptCancellationModal(false)}
             onReceiptCancelled={() => {
               loadFees();
+            }}
+          />
+        )}
+
+        {/* ── PER-SCHOOL RAZORPAY ONLINE FEE & AUTO-WEBHOOK SETTINGS ── */}
+        {showRazorpaySettingsModal && (
+          <RazorpaySettingsModal
+            isOpen={showRazorpaySettingsModal}
+            onClose={() => setShowRazorpaySettingsModal(false)}
+            schoolId={schoolId}
+            schoolName={schoolName || school?.name}
+            adminUid={adminId}
+            onSaved={() => {
+              setPushBannerMsg("✅ Razorpay Online Fee & Auto-Webhook settings update ho gayi!");
             }}
           />
         )}

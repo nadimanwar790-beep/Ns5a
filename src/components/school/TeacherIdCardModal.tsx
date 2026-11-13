@@ -9,6 +9,7 @@ import {
 import type { School, SchoolTeacher, StaffEmployee } from "../../school-types";
 import { getSavedSchoolLogo, cleanLogoUrl, formatAcademicSession } from "./feeReceiptUtils";
 import { printElementInIframe } from "./AdmissionFormPrintModal";
+import { safeOpenExternalUrl } from "../../utils/safeBrowserActions";
 
 interface Props {
   isOpen: boolean;
@@ -35,7 +36,7 @@ export const TeacherIdCardModal: React.FC<Props> = ({
   const schoolLogo = getSavedSchoolLogo(school?.logoUrl, school?.id);
   const affiliation = school?.affiliation || school?.tagline || "Affiliated Educational Center";
   const sessionLabel = formatAcademicSession(school?.session || "2026-27");
-  const principalName = school?.principalName || "Dr. Arvind Swaminathan";
+  const principalName = school?.principalName || "Principal / Head of Institution";
   const principalTitle = school?.principalTitle || "Principal / Head of Institution";
   const signatureUrl = school?.principalSignatureUrl;
 
@@ -58,7 +59,7 @@ export const TeacherIdCardModal: React.FC<Props> = ({
   // Generate standardized Teacher Login & Attendance QR Code
   // Format: NSTA-SCHOOL-STAFF:schoolId:id:rollOrEmp:classOrDept:name:admNo:phone:father:mother:blood:dob:address:fee:title:schoolName
   const qrVerifyUrl = `NSTA-SCHOOL-STAFF:${[
-    encodeURIComponent(school?.id || "dps_gurgaon_sector45"),
+    encodeURIComponent(school?.id || ""),
     encodeURIComponent(teacherId),
     encodeURIComponent(empId),
     encodeURIComponent(department),
@@ -100,7 +101,7 @@ export const TeacherIdCardModal: React.FC<Props> = ({
 
     const encoded = encodeURIComponent(text);
     const waUrl = phone ? `https://wa.me/91${phone.replace(/\D/g, "").slice(-10)}?text=${encoded}` : `https://wa.me/?text=${encoded}`;
-    window.open(waUrl, "_blank");
+    safeOpenExternalUrl(waUrl);
   };
 
   return (

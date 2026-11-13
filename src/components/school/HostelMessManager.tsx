@@ -231,10 +231,10 @@ export const HostelMessManager: React.FC<Props> = ({
   // Add Allocation Modal State
   const [showAllocateModal, setShowAllocateModal] = useState(false);
   const [allocStudentName, setAllocStudentName] = useState("");
-  const [allocClassName, setAllocClassName] = useState("Class 10-A");
+  const [allocClassName, setAllocClassName] = useState(classes[0]?.name || "");
   const [allocRoomId, setAllocRoomId] = useState(rooms[0]?.id || "");
   const [allocBedNo, setAllocBedNo] = useState("Bed #1");
-  const [allocPhone, setAllocPhone] = useState("+91 98765 00000");
+  const [allocPhone, setAllocPhone] = useState("");
   const [allocRent, setAllocRent] = useState(4500);
 
   const saveRooms = (updated: HostelRoom[]) => {
@@ -335,9 +335,9 @@ export const HostelMessManager: React.FC<Props> = ({
   const monthlyHostelRevenue = allocations.reduce((sum, a) => sum + a.monthlyFee, 0);
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-6 text-white shadow-2xl space-y-6">
+    <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-6 text-white shadow-2xl space-y-6 print:bg-white print:text-slate-900 print:border-0 print:shadow-none print:p-0">
       {/* Top Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-800 print:hidden">
         <div className="flex items-center gap-3">
           <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center text-slate-950 font-black shadow-lg shadow-orange-500/20">
             <Home className="w-6 h-6" />
@@ -357,7 +357,7 @@ export const HostelMessManager: React.FC<Props> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 print:hidden">
           {activeTab === "rooms" && (
             <button
               type="button"
@@ -393,7 +393,7 @@ export const HostelMessManager: React.FC<Props> = ({
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 print:hidden">
         <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 text-center">
           <span className="text-[10px] font-bold text-slate-400 uppercase block">Total Bed Capacity</span>
           <span className="text-xl sm:text-2xl font-black text-white">{totalBedsCapacity} Beds</span>
@@ -415,7 +415,7 @@ export const HostelMessManager: React.FC<Props> = ({
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-2 border-b border-slate-800 pb-2 overflow-x-auto">
+      <div className="flex items-center gap-2 border-b border-slate-800 pb-2 overflow-x-auto print:hidden">
         <button
           type="button"
           onClick={() => setActiveTab("rooms")}
@@ -602,7 +602,7 @@ export const HostelMessManager: React.FC<Props> = ({
                   );
                 }
               }}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold cursor-pointer shadow"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold cursor-pointer shadow print:hidden"
             >
               <Printer className="w-3.5 h-3.5" />
               <span>Print Mess Menu</span>

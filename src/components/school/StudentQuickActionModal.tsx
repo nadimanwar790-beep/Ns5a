@@ -656,7 +656,7 @@ export const StudentQuickActionModal: React.FC<Props> = ({
     const grade = numPct >= 90 ? "A+" : numPct >= 80 ? "A" : numPct >= 70 ? "B" : numPct >= 60 ? "C" : numPct >= 40 ? "D" : "E";
 
     const rowsHtml = markedExams.length === 0
-      ? `<tr><td colspan="7" style="text-align:center;padding:16px;color:#888;">No exam evaluation records published yet for Session 2026-27.</td></tr>`
+      ? `<tr><td colspan="7" style="text-align:center;padding:16px;color:#888;">No exam evaluation records published yet for ${escapeHtml((cur as any).sessionName || (cur as any).sessionId || "Active Session")}.</td></tr>`
       : markedExams.map((ex, i) => {
           const rec = ex.studentMarks[studentId];
           const m = rec?.marks ?? 0;
@@ -1239,7 +1239,7 @@ export const StudentQuickActionModal: React.FC<Props> = ({
                   <div className="p-3 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
                     <span className="text-[10px] font-bold text-slate-400 uppercase block mb-1">स्थायी व स्थानीय पता (Address)</span>
                     <p className="font-bold text-slate-800 dark:text-white leading-relaxed">
-                      {cur.address || "ग्राम + पोस्ट: अफौर नगरा, सारण, बिहार - 841422"}
+                      {cur.address || "पता दर्ज नहीं है (Address not updated)"}
                     </p>
                   </div>
 
@@ -1879,7 +1879,7 @@ export const StudentQuickActionModal: React.FC<Props> = ({
                     value={transportForm.busRoute}
                     onChange={e => setTransportForm({ ...transportForm, busRoute: e.target.value })}
                     className="w-full px-3 py-2 border rounded-xl bg-white dark:bg-slate-700 dark:border-slate-600 font-medium"
-                    placeholder="e.g. Route 2: अफौर - नगरा मोड़"
+                    placeholder="e.g. Route 2: Main Market - School Campus"
                   />
                 </div>
 

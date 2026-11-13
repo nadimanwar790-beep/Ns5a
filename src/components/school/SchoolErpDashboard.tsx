@@ -27,6 +27,7 @@ import { StaffHRMManager } from "./StaffHRMManager";
 import { NoticeBoardManager } from "./NoticeBoardManager";
 import { getSchool } from "../../school-firebase";
 import { getSavedSchoolLogo, isAppLogo } from "./feeReceiptUtils";
+import { getDynamicAcademicSessionLabel } from "../../utils/safeBrowserActions";
 
 type MainTab =
   | "dashboard"
@@ -45,33 +46,66 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
   const [resetSuccessToast, setResetSuccessToast] = useState<boolean>(false);
   const [activeSchool, setActiveSchool] = useState<any>(() => {
     try {
+      const preferredId = localStorage.getItem("nst_active_school_id");
       const cached = localStorage.getItem("nst_schools_local_cache");
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed[0];
-        if (parsed && typeof parsed === "object") return Object.values(parsed)[0];
+        const list = Array.isArray(parsed)
+          ? parsed
+          : parsed && typeof parsed === "object"
+          ? Object.values(parsed)
+          : [];
+        if (preferredId) {
+          const matched = list.find((s: any) => s?.id === preferredId);
+          if (matched) return matched;
+        }
+        if (list.length > 0) return list[0];
       }
-    } catch {}
+    } catch (err) {
+      console.warn("[SchoolErpDashboard] Failed reading cached school:", err);
+    }
     return null;
   });
 
+  const resolvedSchoolId = activeSchool?.id || (() => {
+    try {
+      return localStorage.getItem("nst_active_school_id") || "";
+    } catch {
+      return "";
+    }
+  })();
+
+  const resolvedAdminUid = (() => {
+    try {
+      const raw = localStorage.getItem("nst_current_user");
+      if (raw) {
+        const u = JSON.parse(raw);
+        return u?.uid || u?.id || activeSchool?.createdBy || "school_admin";
+      }
+    } catch (err) {
+      console.warn("[SchoolErpDashboard] Failed reading active admin user:", err);
+    }
+    return activeSchool?.createdBy || "school_admin";
+  })();
+
   useEffect(() => {
-    getSchool("dps_gurgaon_sector45").then(s => {
+    if (!resolvedSchoolId) return;
+    getSchool(resolvedSchoolId).then(s => {
       if (s) setActiveSchool(s);
-    }).catch(() => {});
+    }).catch((err) => console.warn("[SchoolErpDashboard] School fetch failed:", err));
 
     const handleProfileUpdate = (e?: Event) => {
       const customEvent = e as CustomEvent<{ schoolId?: string; logoUrl?: string; name?: string }>;
-      const updatedLogo = customEvent?.detail?.logoUrl || getSavedSchoolLogo();
-      setActiveSchool((prev: any) => prev ? { ...prev, logoUrl: updatedLogo, name: customEvent?.detail?.name || prev.name } : { logoUrl: updatedLogo, name: customEvent?.detail?.name });
+      const updatedLogo = customEvent?.detail?.logoUrl || getSavedSchoolLogo(undefined, resolvedSchoolId);
+      setActiveSchool((prev: any) => prev ? { ...prev, logoUrl: updatedLogo, name: customEvent?.detail?.name || prev.name } : { id: resolvedSchoolId, logoUrl: updatedLogo, name: customEvent?.detail?.name });
     };
     window.addEventListener("school-profile-updated", handleProfileUpdate);
     return () => window.removeEventListener("school-profile-updated", handleProfileUpdate);
-  }, []);
+  }, [resolvedSchoolId]);
 
-  const schoolName = activeSchool?.name || "NSTZ SMART ACADEMY";
-  const schoolLogo = getSavedSchoolLogo(activeSchool?.logoUrl);
-  const schoolAddress = activeSchool?.address || "Institutional Academic Campus, Educational Zone";
+  const schoolName = activeSchool?.name || "School Administration";
+  const schoolLogo = getSavedSchoolLogo(activeSchool?.logoUrl, resolvedSchoolId);
+  const schoolAddress = activeSchool?.address || "";
 
   // Guarantee pre-react splash dismissal on App component mount
   useEffect(() => {
@@ -764,7 +798,7 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
         {activeTab === "staff" && (
           <StaffHRMManager
             school={{
-              id: activeSchool?.id || "demo_school",
+              id: resolvedSchoolId,
               name: schoolName,
               address: schoolAddress,
               logoUrl: schoolLogo,
@@ -940,8 +974,8 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
         {/* TAB 6: FESTIVAL HOLIDAYS & POWER TO ADD HOLIDAY */}
         {activeTab === "holidays" && (
           <HolidayManager
-            schoolId={activeSchool?.id || "demo_school"}
-            adminUid="admin"
+            schoolId={resolvedSchoolId}
+            adminUid={resolvedAdminUid}
             schoolName={schoolName}
             onBack={() => setActiveTab("dashboard")}
           />
@@ -1099,8 +1133,8 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
         {/* TAB 8: 1-YEAR NOTICES ARCHIVE WITH MONTH-WISE FILTER */}
         {activeTab === "notices" && (
           <NoticeBoardManager
-            schoolId={activeSchool?.id || "demo_school"}
-            adminUid="admin"
+            schoolId={resolvedSchoolId}
+            adminUid={resolvedAdminUid}
             isAdmin={true}
             onBack={() => setActiveTab("dashboard")}
           />
@@ -1283,7 +1317,7 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             <span className="font-semibold text-slate-400">{schoolName} ERP</span>
-            <span>• Session 2026-27 (1-Year Auto-Filled Demo Mode)</span>
+            <span>• Session {getDynamicAcademicSessionLabel()} (1-Year Auto-Filled Demo Mode)</span>
           </div>
           <div>
             13 Classes • 70 Students/Class (A:35, B:35) • 1:35 Ratio • 3-Day Late Rule • 6 Exams

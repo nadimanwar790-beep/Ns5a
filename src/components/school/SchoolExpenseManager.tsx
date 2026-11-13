@@ -23,10 +23,11 @@ import {
   Wrench,
   BookOpen
 } from "lucide-react";
-import { School, SchoolSession, MonthlyFee } from "../../school-types";
+import { School, SchoolSession, MonthlyFee, StoreSaleRecord } from "../../school-types";
 import { toast } from "sonner";
 import { getSchoolFeeHistory, getLocalFees } from "../../school-firebase";
-import { loadSchoolSubcollection, saveSchoolSubdoc, deleteSchoolSubdoc } from "../../utils/schoolCloudSync";
+import { loadSchoolSubcollection, saveSchoolSubdoc, deleteSchoolSubdoc, loadMergedStoreSales } from "../../utils/schoolCloudSync";
+import { computePaymentBreakdown } from "../../utils/paymentBreakdown";
 import { printHtmlInIframe } from "./AdmissionFormPrintModal";
 
 export interface SchoolExpense {
@@ -110,6 +111,7 @@ export const SchoolExpenseManager: React.FC<Props> = ({ school, activeSession })
   });
 
   const [feeRecords, setFeeRecords] = useState<MonthlyFee[]>(() => getLocalFees(schoolId));
+  const [storeSales, setStoreSales] = useState<StoreSaleRecord[]>([]);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedVoucherForPrint, setSelectedVoucherForPrint] = useState<SchoolExpense | null>(null);
@@ -125,6 +127,11 @@ export const SchoolExpenseManager: React.FC<Props> = ({ school, activeSession })
     getSchoolFeeHistory(schoolId, activeSession?.id)
       .then((fees) => {
         if (active && Array.isArray(fees)) setFeeRecords(fees);
+      })
+      .catch(() => {});
+    loadMergedStoreSales<StoreSaleRecord>(schoolId)
+      .then((sales) => {
+        if (active && Array.isArray(sales)) setStoreSales(sales);
       })
       .catch(() => {});
     return () => { active = false; };
@@ -149,22 +156,24 @@ export const SchoolExpenseManager: React.FC<Props> = ({ school, activeSession })
     }
   };
 
-  // Get Today's REAL Fee Inflow from Fee Manager records (never fake ₹18,500)
+  // Get Today's REAL Inflow (Fees + Store Sales across Online QR Code / NSTA Online / Cash)
   const todayFeeInflow = useMemo(() => {
-    const targetDate = filterDate || new Date().toISOString().slice(0, 10);
-    let cash = 0;
-    let online = 0;
-    for (const f of feeRecords) {
-      if (f.cancelled || (f.status !== "paid" && f.status !== "partial")) continue;
-      const feeDate = f.paidDate || (f.updatedAt ? String(f.updatedAt).slice(0, 10) : "");
-      if (feeDate === targetDate) {
-        const amt = Number(f.paidAmount ?? f.amount ?? 0);
-        if (f.paymentMode === "CASH" || !f.paymentMode) cash += amt;
-        else online += amt;
-      }
-    }
-    return { cash, online, total: cash + online };
-  }, [feeRecords, filterDate]);
+    const targetDate = filterDate || undefined;
+    const bd = computePaymentBreakdown({
+      fees: feeRecords,
+      storeSales,
+      datePrefix: targetDate,
+    });
+    return {
+      cash: bd.cash,
+      onlineQr: bd.onlineQr,
+      nstaOnline: bd.nstaOnline,
+      online: bd.onlineQr + bd.nstaOnline,
+      feeTotal: bd.feeTotal,
+      storeTotal: bd.storeTotal,
+      total: bd.total,
+    };
+  }, [feeRecords, storeSales, filterDate]);
 
   // Expenses calculations for selected date
   const dateExpensesSummary = useMemo(() => {
@@ -317,21 +326,31 @@ export const SchoolExpenseManager: React.FC<Props> = ({ school, activeSession })
 
       {/* Daily Cashbook & Balance HUD (3-Box Layout) */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        {/* Total Fee Inflow */}
+        {/* Total Fee & Store Inflow */}
         <div className="bg-slate-900/90 border border-emerald-500/30 rounded-2xl p-4 sm:p-5 relative overflow-hidden">
           <div className="flex items-center justify-between text-xs text-emerald-400 font-bold mb-2">
             <span className="flex items-center gap-1.5">
               <TrendingUp className="w-4 h-4" />
-              आज की कुल फीस आवक (Inflow)
+              कुल आवक (Fee + Store Inflow)
             </span>
-            <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20">फीस काउंटर</span>
+            <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20">काउंटर + ऑनलाइन</span>
           </div>
           <div className="text-2xl font-black text-white">
             ₹{todayFeeInflow.total.toLocaleString("en-IN")}
           </div>
-          <div className="text-[11px] text-slate-400 mt-2 flex justify-between">
-            <span>नकद (Cash): ₹{todayFeeInflow.cash.toLocaleString("en-IN")}</span>
-            <span>ऑनलाइन/UPI: ₹{todayFeeInflow.online.toLocaleString("en-IN")}</span>
+          <div className="grid grid-cols-3 gap-1.5 mt-2 pt-2 border-t border-slate-800 text-[10px]">
+            <div>
+              <span className="text-slate-400 block">Online QR</span>
+              <span className="font-black text-cyan-400">₹{todayFeeInflow.onlineQr.toLocaleString("en-IN")}</span>
+            </div>
+            <div className="border-l border-slate-800 pl-1.5">
+              <span className="text-slate-400 block">NSTA Online</span>
+              <span className="font-black text-indigo-400">₹{todayFeeInflow.nstaOnline.toLocaleString("en-IN")}</span>
+            </div>
+            <div className="border-l border-slate-800 pl-1.5">
+              <span className="text-slate-400 block">Cash</span>
+              <span className="font-black text-emerald-400">₹{todayFeeInflow.cash.toLocaleString("en-IN")}</span>
+            </div>
           </div>
         </div>
 

@@ -931,7 +931,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           isDetectingBusyRef.current = true;
           try {
             const detected = await detectFacesInFrame(video, enrolledMap, { schoolId });
-            if (detected[0]?.descriptor && (detected[0].descriptor.length === 512 || detected[0].descriptor.length === 128)) {
+            if (detected[0]?.descriptor && detected[0].descriptor.length === 512) {
               lastLiveDescriptorRef.current = detected[0].descriptor;
             }
 
@@ -2320,7 +2320,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
               ) : (
                 Object.values(enrolledMap).map((rec) => {
                   const isArcFace = rec.source === "arcface_512d" || rec.descriptor?.length === 512 || Boolean(rec.arcfaceDescriptor);
-                  const isNeural = isArcFace || (rec.source === "face_api_neural" && rec.descriptor?.length === 128);
+                  const isNeural = isArcFace;
                   const isTeacher = rec.role === "TEACHER" || (teachers && teachers.some((t: any) => t.id === rec.studentId));
                   return (
                     <div
@@ -2352,9 +2352,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                             <span className={isNeural ? "text-emerald-400 font-semibold" : "text-amber-400 font-semibold"}>
                               {isArcFace
                                 ? "512-D ArcFace Gold AI (99.83% LFW)"
-                                : isNeural
-                                ? "128-D ResNet-34 Active (99.38% LFW)"
-                                : "Auto-Upgrading to ArcFace..."}
+                                : "Auto-Upgrading to 512-D ArcFace..."}
                             </span>
                             <span className="text-slate-500">•</span>
                             <span className="text-slate-400 font-mono text-[10px]">

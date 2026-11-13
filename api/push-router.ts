@@ -1,5 +1,13 @@
 import crypto from "crypto";
 import webpush from "web-push";
+import {
+  getPublicRazorpayConfig,
+  saveSchoolRazorpayConfig,
+  testSchoolRazorpayConnection,
+  createSchoolRazorpayOrder,
+  verifySchoolRazorpayCheckout,
+  handleSchoolRazorpayWebhook,
+} from "./_razorpay";
 
 const RTDB_BASE_URL =
   process.env.FIREBASE_DATABASE_URL ||
@@ -783,6 +791,106 @@ export default async function handler(req: any, res: any) {
       const token = String(req.query?.token || TG_BOT_TOKEN);
       if (!filePath) return res.status(400).json({ error: "Missing path" });
       return res.redirect(302, `https://api.telegram.org/file/bot${token}/${filePath}`);
+    }
+
+    // ── PER-SCHOOL RAZORPAY ONLINE FEE & AUTO-WEBHOOK ROUTES ──────────────
+    const notifyRazorpayReceipt = async (info: {
+      schoolId: string;
+      studentId: string;
+      studentName: string;
+      amount: number;
+      monthLabel: string;
+      receiptNo: string;
+      purpose?: "fee_payment" | "store_order";
+    }) => {
+      const isStore = info.purpose === "store_order";
+      const title = isStore
+        ? `🛍️ स्कूल स्टोर रसीद • ₹${info.amount.toLocaleString("en-IN")} प्राप्त`
+        : `✅ शुल्क रसीद • ₹${info.amount.toLocaleString("en-IN")} प्राप्त`;
+      const body = isStore
+        ? `${info.studentName} का स्कूल स्टोर ऑर्डर ₹${info.amount.toLocaleString("en-IN")} NSTA Online से जमा हो गया है। रसीद: ${info.receiptNo}`
+        : `${info.studentName} (${info.monthLabel}) का ऑनलाइन शुल्क ₹${info.amount.toLocaleString("en-IN")} सफलतापूर्वक जमा हो गया है। रसीद: ${info.receiptNo}`;
+      const url = `/?schoolPortal=1&schoolId=${encodeURIComponent(info.schoolId)}&studentId=${encodeURIComponent(info.studentId)}&schoolTab=${isStore ? "store" : "fees"}`;
+
+      const subsObj = (await rtdbGet<Record<string, StoredPushSubscription>>("school_webpush_subs")) || {};
+      for (const [id, record] of Object.entries(subsObj)) {
+        if (!record?.subscription?.endpoint) continue;
+        record.id = id;
+        const hasStudent = (record.students || []).some(
+          (s) => s.id === info.studentId && (!s.schoolId || s.schoolId === info.schoolId)
+        );
+        if (hasStudent) {
+          await dispatchWebPush(record, {
+            title,
+            body,
+            type: isStore ? "STORE_RECEIPT" : "FEE_RECEIPT",
+            studentId: info.studentId,
+            schoolId: info.schoolId,
+            url,
+            urgent: true,
+          });
+        }
+      }
+      await dispatchFcmToUsers(
+        [info.studentId],
+        false,
+        { title, body, type: isStore ? "STORE_RECEIPT" : "FEE_RECEIPT", url },
+        { schoolId: info.schoolId }
+      );
+    };
+
+    if (method === "GET" && rawPath === "razorpay/config") {
+      const schoolId = String(req.query?.schoolId || "").trim();
+      if (!schoolId) return res.status(400).json({ ok: false, error: "schoolId is required" });
+      const proto = String(req.headers?.["x-forwarded-proto"] || "https").split(",")[0].trim();
+      const host = String(req.headers?.["x-forwarded-host"] || req.headers?.host || "");
+      const originBase = host ? `${proto}://${host}` : "";
+      const data = await getPublicRazorpayConfig(schoolId, originBase);
+      return res.status(200).json(data);
+    }
+
+    if (method === "POST" && rawPath === "razorpay/config") {
+      const result = await saveSchoolRazorpayConfig(req.body || {});
+      return res.status(result.status).json(result.body);
+    }
+
+    if (method === "POST" && rawPath === "razorpay/test") {
+      const schoolId = String(req.body?.schoolId || req.query?.schoolId || "").trim();
+      const result = await testSchoolRazorpayConnection(schoolId);
+      return res.status(result.status).json(result.body);
+    }
+
+    if (method === "POST" && rawPath === "razorpay/create-order") {
+      const result = await createSchoolRazorpayOrder(req.body || {});
+      return res.status(result.status).json(result.body);
+    }
+
+    if (method === "POST" && rawPath === "razorpay/verify-payment") {
+      const result = await verifySchoolRazorpayCheckout(req.body || {}, notifyRazorpayReceipt);
+      return res.status(result.status).json(result.body);
+    }
+
+    if (method === "POST" && rawPath === "razorpay/webhook") {
+      const signature = String(req.headers?.["x-razorpay-signature"] || "");
+      const querySchoolId = String(req.query?.schoolId || "");
+      const rawBody =
+        typeof req.rawBody === "string"
+          ? req.rawBody
+          : typeof req.body === "string"
+          ? req.body
+          : "";
+      const parsedBody =
+        typeof req.body === "string"
+          ? JSON.parse(req.body || "{}")
+          : req.body || {};
+      const result = await handleSchoolRazorpayWebhook({
+        rawBody,
+        parsedBody,
+        signature,
+        querySchoolId,
+        onNotify: notifyRazorpayReceipt,
+      });
+      return res.status(result.status).json(result.body);
     }
 
     return res.status(404).json({ error: `Unknown push endpoint: ${rawPath}` });

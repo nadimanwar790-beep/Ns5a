@@ -12,6 +12,7 @@ import type {
   School, SchoolStudent, SchoolTeacher, SchoolClass
 } from "../../school-types";
 import { loadSchoolSubcollection, syncSchoolSubcollection } from "../../utils/schoolCloudSync";
+import { shouldUseDemoForSchool } from "../../school-firebase";
 
 interface Props {
   school: School;
@@ -105,6 +106,7 @@ export const LibraryManager: React.FC<Props> = ({
   onBack
 }) => {
   const schoolId = school?.id || "SCH-001";
+  const isDemo = shouldUseDemoForSchool(schoolId);
   const itemsStorageKey = useMemo(() => `nst_school_inventory_items_${schoolId}`, [schoolId]);
   const bookingsStorageKey = useMemo(() => `nst_school_inventory_bookings_${schoolId}`, [schoolId]);
 
@@ -138,9 +140,13 @@ export const LibraryManager: React.FC<Props> = ({
           }));
         }
       }
-    } catch {}
+    } catch (err) {
+      console.warn("[LibraryManager] Failed reading cached inventory items:", err);
+    }
 
-    // Initial rich realistic seed dataset
+    if (!isDemo) return [];
+
+    // Initial rich realistic seed dataset (demo school only)
     return [
       {
         id: "item-b1",
@@ -275,7 +281,7 @@ export const LibraryManager: React.FC<Props> = ({
             borrowerName: i.borrowerName || "Student",
             borrowerClass: i.borrowerClass || "Class 10",
             borrowerRoll: i.borrowerRoll || "01",
-            borrowerPhone: i.borrowerPhone || "9876543210",
+            borrowerPhone: i.borrowerPhone || "",
             quantityBooked: 1,
             ratePerUnit: 382,
             totalAmount: 382,
@@ -287,7 +293,11 @@ export const LibraryManager: React.FC<Props> = ({
           }));
         }
       }
-    } catch {}
+    } catch (err) {
+      console.warn("[LibraryManager] Failed reading cached bookings:", err);
+    }
+
+    if (!isDemo) return [];
 
     return [
       {

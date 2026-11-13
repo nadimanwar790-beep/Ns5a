@@ -1,6 +1,8 @@
 // @ts-nocheck
 import React, { useState, useRef } from "react";
 import JSZip from "jszip";
+import { toast } from "sonner";
+import { getDynamicAcademicSessionLabel } from "../../utils/safeBrowserActions";
 import {
   Download,
   Upload,
@@ -75,7 +77,9 @@ export const SchoolBackupManager: React.FC<Props> = ({
   const [importParsedData, setImportParsedData] = useState<any>(null);
   const [importError, setImportError] = useState<string>("");
   const [importSuccess, setImportSuccess] = useState<string>("");
+  const [confirmRestore, setConfirmRestore] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const defaultSession = getDynamicAcademicSessionLabel();
 
   // Helper to find file inside zip recursively (case-insensitive & folder-agnostic)
   const findZipFile = (zip: JSZip, pattern: RegExp | string) => {
@@ -162,7 +166,7 @@ export const SchoolBackupManager: React.FC<Props> = ({
         format: "nsta_enterprise_full_backup",
         schoolId,
         schoolName: school?.name || "School",
-        sessionName: activeSession?.name || "2026-2027",
+        sessionName: activeSession?.name || defaultSession,
         exportedAt: new Date().toISOString(),
         isEncrypted: Boolean(backupPassword.trim()),
         recordCounts: {
@@ -208,7 +212,7 @@ export const SchoolBackupManager: React.FC<Props> = ({
         ` NSTA SCHOOL ERP - COMPLETE SESSION DISASTER RECOVERY ARCHIVE\n` +
         `============================================================\n\n` +
         `School: ${school?.name || "School"} (ID: ${schoolId})\n` +
-        `Session: ${activeSession?.name || "2026-2027"}\n` +
+        `Session: ${activeSession?.name || defaultSession}\n` +
         `Created on: ${new Date().toLocaleString("en-IN")}\n` +
         `Protection: ${backupPassword.trim() ? "Password Protected" : "Standard JSON Archive"}\n\n` +
         `HOW TO RESTORE:\n` +
@@ -226,7 +230,7 @@ export const SchoolBackupManager: React.FC<Props> = ({
 
       const safeSchoolName = (school?.name || "School").replace(/[^a-zA-Z0-9]/g, "_");
       const dateTag = new Date().toISOString().slice(0, 10);
-      const fileName = `NSTA_Backup_${safeSchoolName}_${activeSession?.name || "2026-27"}_${dateTag}.zip`;
+      const fileName = `NSTA_Backup_${safeSchoolName}_${activeSession?.name || defaultSession}_${dateTag}.zip`;
 
       const downloadUrl = URL.createObjectURL(contentBlob);
       const link = document.createElement("a");
@@ -247,7 +251,7 @@ export const SchoolBackupManager: React.FC<Props> = ({
       setExportProgress("");
     } catch (err: any) {
       console.error("[Backup Error]:", err);
-      alert("बैकअप तैयार करने में समस्या: " + (err?.message || err));
+      toast.error("बैकअप तैयार करने में समस्या: " + (err?.message || err));
       setIsExporting(false);
       setExportProgress("");
     }
@@ -273,7 +277,9 @@ export const SchoolBackupManager: React.FC<Props> = ({
         try {
           const text = await manifestFile.async("text");
           manifest = JSON.parse(text);
-        } catch {}
+        } catch (err) {
+          console.warn("[Backup] Manifest parse warning:", err);
+        }
       }
 
       // 2. Try to find database_dump.json
@@ -288,7 +294,9 @@ export const SchoolBackupManager: React.FC<Props> = ({
           if (!manifest && parsed.manifest) {
             manifest = parsed.manifest;
           }
-        } catch {}
+        } catch (err) {
+          console.warn("[Backup] Dump file parse warning:", err);
+        }
       }
 
       // 3. Fallback: Check individual json files inside database/ or root
@@ -301,27 +309,37 @@ export const SchoolBackupManager: React.FC<Props> = ({
       if (studentsFile && !extractedDatabase.students) {
         try {
           extractedDatabase.students = JSON.parse(await studentsFile.async("text"));
-        } catch {}
+        } catch (err) {
+          console.warn("[Backup] students.json parse warning:", err);
+        }
       }
       if (feesFile && !extractedDatabase.fees) {
         try {
           extractedDatabase.fees = JSON.parse(await feesFile.async("text"));
-        } catch {}
+        } catch (err) {
+          console.warn("[Backup] fees.json parse warning:", err);
+        }
       }
       if (teachersFile && !extractedDatabase.teachers) {
         try {
           extractedDatabase.teachers = JSON.parse(await teachersFile.async("text"));
-        } catch {}
+        } catch (err) {
+          console.warn("[Backup] teachers.json parse warning:", err);
+        }
       }
       if (classesFile && !extractedDatabase.classes) {
         try {
           extractedDatabase.classes = JSON.parse(await classesFile.async("text"));
-        } catch {}
+        } catch (err) {
+          console.warn("[Backup] classes.json parse warning:", err);
+        }
       }
       if (attendanceFile && !extractedDatabase.attendance) {
         try {
           extractedDatabase.attendance = JSON.parse(await attendanceFile.async("text"));
-        } catch {}
+        } catch (err) {
+          console.warn("[Backup] attendance.json parse warning:", err);
+        }
       }
 
       // Check if encrypted
@@ -353,7 +371,7 @@ export const SchoolBackupManager: React.FC<Props> = ({
       if (!manifest) {
         manifest = {
           schoolName: school?.name || "School Backup",
-          sessionName: activeSession?.name || "2026-27",
+          sessionName: activeSession?.name || defaultSession,
           exportedAt: new Date().toISOString(),
           isEncrypted,
           recordCounts: {
@@ -367,6 +385,7 @@ export const SchoolBackupManager: React.FC<Props> = ({
 
       setImportPreview(manifest);
       setImportParsedData(extractedDatabase);
+      setConfirmRestore(false);
     } catch (err: any) {
       console.error("[Zip Read Error]:", err);
       setImportError("ZIP फाइल पढ़ने में त्रुटि: " + (err?.message || err));
@@ -380,14 +399,11 @@ export const SchoolBackupManager: React.FC<Props> = ({
       setImportError("यह बैकअप पासवर्ड-प्रोटेक्टेड है। कृपया डिक्रिप्शन पासवर्ड दर्ज करें!");
       return;
     }
-
-    if (
-      !window.confirm(
-        `चेतावनी! क्या आप वाकई '${importPreview.schoolName || school?.name}' का डेटा रीस्टोर करना चाहते हैं? इससे वर्तमान सत्र का डेटाबेस अपडेट हो जाएगा।`
-      )
-    ) {
+    if (!confirmRestore) {
+      setConfirmRestore(true);
       return;
     }
+    setConfirmRestore(false);
 
     try {
       setIsImporting(true);
@@ -570,7 +586,7 @@ export const SchoolBackupManager: React.FC<Props> = ({
               </h2>
               <p className="text-xs text-indigo-200/80">
                 School: <strong className="text-amber-300">{school?.name || "School"}</strong> • Session:{" "}
-                <span className="text-emerald-300 font-semibold">{activeSession?.name || "2026-27"}</span>
+                <span className="text-emerald-300 font-semibold">{activeSession?.name || defaultSession}</span>
               </p>
             </div>
           </div>
@@ -745,24 +761,51 @@ export const SchoolBackupManager: React.FC<Props> = ({
             )}
           </div>
 
-          <div className="pt-3">
-            <button
-              onClick={handleExecuteRestore}
-              disabled={!importFile || !importPreview || isImporting}
-              className="w-full py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 transition cursor-pointer disabled:opacity-40"
-            >
-              {isImporting ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span>{importProgress || "डेटाबेस रीस्टोर हो रहा है..."}</span>
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="w-4 h-4" />
-                  डेटाबेस रीस्टोर करें (Restore Now)
-                </>
-              )}
-            </button>
+          <div className="pt-3 space-y-2">
+            {confirmRestore ? (
+              <div className="p-3 rounded-xl bg-amber-950/60 border border-amber-500/40 space-y-2">
+                <p className="text-xs font-bold text-amber-200">
+                  चेतावनी: क्या आप वाकई &apos;{importPreview?.schoolName || school?.name}&apos; का डेटा रीस्टोर करना चाहते हैं? इससे वर्तमान सत्र का डेटाबेस अपडेट हो जाएगा।
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleExecuteRestore}
+                    disabled={isImporting}
+                    className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs cursor-pointer disabled:opacity-40"
+                  >
+                    हाँ, रीस्टोर करें (Confirm Restore)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmRestore(false)}
+                    disabled={isImporting}
+                    className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs cursor-pointer"
+                  >
+                    रद्द करें
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={handleExecuteRestore}
+                disabled={!importFile || !importPreview || isImporting}
+                className="w-full py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 transition cursor-pointer disabled:opacity-40"
+              >
+                {isImporting ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>{importProgress || "डेटाबेस रीस्टोर हो रहा है..."}</span>
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="w-4 h-4" />
+                    डेटाबेस रीस्टोर करें (Restore Now)
+                  </>
+                )}
+              </button>
+            )}
           </div>
         </div>
       </div>

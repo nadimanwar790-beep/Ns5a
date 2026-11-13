@@ -17,6 +17,7 @@ import {
   getLocalSchoolCurriculumNotes
 } from "../../school-firebase";
 import { saveLucentEntryDirect, deleteLucentEntry, saveMcqLesson, fetchMcqLesson } from "../../firebase";
+import { ADMIN_WHATSAPP_NUMBER } from "../../constants";
 
 const syncClassNotesMcqsToRevisionHub = async (entry: LucentNoteEntry, subjectName?: string) => {
   if (!entry || !entry.lessonTitle || !entry.lessonTitle.trim()) return;
@@ -547,7 +548,7 @@ export const ClassCurriculumNotesManager: React.FC<Props> = ({
 
           <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
             <a
-              href={`https://wa.me/918227070298?text=${encodeURIComponent(`Hello Super Admin, I want to upgrade school "${schoolName || 'My School'}" (ID: ${schoolId}) to the Elite Plan (2x Price) to unlock Class 1-12 Custom Notes, MCQ, PDF & Video Manager.`)}`}
+              href={`https://wa.me/${ADMIN_WHATSAPP_NUMBER}?text=${encodeURIComponent(`Hello Super Admin, I want to upgrade school "${schoolName || 'My School'}" (ID: ${schoolId}) to the Elite Plan (2x Price) to unlock Class 1-12 Custom Notes, MCQ, PDF & Video Manager.`)}`}
               target="_blank"
               rel="noreferrer"
               className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-sm shadow-lg shadow-emerald-600/30 flex items-center gap-2 cursor-pointer"

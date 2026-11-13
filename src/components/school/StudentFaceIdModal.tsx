@@ -11,10 +11,12 @@ import {
   Loader2,
   Clock,
   Zap,
+  ImagePlus,
 } from "lucide-react";
 import {
   saveFaceDescriptor,
   extractNeuralDescriptor,
+  enrollPersonFromImageFile,
   playAttendanceSuccessChime,
   FaceDescriptorRecord,
 } from "../../utils/faceRecognitionEngine";
@@ -41,6 +43,7 @@ export const StudentFaceIdModal: React.FC<Props> = ({
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
   const [cameraActive, setCameraActive] = useState(false);
@@ -142,17 +145,23 @@ export const StudentFaceIdModal: React.FC<Props> = ({
       const has512 = Boolean(neural?.arcfaceDescriptor && neural.arcfaceDescriptor.length === 512);
 
       if (!has512) {
-        setCameraError("⚠️ ArcFace 512-D बायोमेट्रिक वेक्टर तैयार नहीं हो सका। कृपया पर्याप्त रोशनी में चेहरा सीधा रखें और पुनः प्रयास करें।");
+        setCameraError("⚠️ ArcFace 512-D बायोमेट्रिक वेक्टर तैयार नहीं हो सका। कृपया पर्याप्त रोशनी में चेहरा सीधा रखें या नीचे 'फोटो चुनें' से गैलरी फोटो अपलोड करें।");
         return;
       }
 
       const descriptor = neural!.arcfaceDescriptor!;
       const nowIso = new Date().toISOString();
       const stId = student?.id || student?.studentId || "student";
+      const targetSchoolId = schoolId || student?.schoolId || localStorage.getItem("nst_active_school_id") || "";
+
+      if (!targetSchoolId) {
+        setCameraError("⚠️ स्कूल ID नहीं मिली। कृपया लॉगआउट करके दोबारा जुड़ें।");
+        return;
+      }
 
       const record: FaceDescriptorRecord = {
         studentId: stId,
-        schoolId,
+        schoolId: targetSchoolId,
         name: student?.name || "Student",
         rollNo: String(student?.rollNo || ""),
         classId: student?.classId || "",
@@ -169,7 +178,7 @@ export const StudentFaceIdModal: React.FC<Props> = ({
       await saveFaceDescriptor(record);
 
       // 2. Update Student photo & timestamp in school database
-      await updateStudentPhoto(schoolId, stId, photoDataUrl);
+      await updateStudentPhoto(targetSchoolId, stId, photoDataUrl);
 
       // 3. Save local timestamp for 30-day enforcement
       try {
@@ -201,6 +210,67 @@ export const StudentFaceIdModal: React.FC<Props> = ({
     } finally {
       setProcessing(false);
       setCountdown(null);
+    }
+  };
+
+  const handleUploadPhotoFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || processing) return;
+
+    setCameraError(null);
+    setProcessing(true);
+    try {
+      const stId = student?.id || student?.studentId || "student";
+      const targetSchoolId = schoolId || student?.schoolId || localStorage.getItem("nst_active_school_id") || "";
+      if (!targetSchoolId) {
+        setCameraError("⚠️ स्कूल ID नहीं मिली।");
+        return;
+      }
+      const result = await enrollPersonFromImageFile(
+        file,
+        {
+          id: stId,
+          name: student?.name || "Student",
+          rollNo: String(student?.rollNo || ""),
+          classId: student?.classId || "",
+          className: student?.className || "",
+        },
+        targetSchoolId,
+        "STUDENT"
+      );
+
+      if (!result) {
+        setCameraError("⚠️ इस फोटो में चेहरा स्पष्ट नहीं मिला। कृपया सामने से ली गई साफ़ फोटो चुनें।");
+        return;
+      }
+
+      await updateStudentPhoto(targetSchoolId, stId, result.photoDataUrl);
+      const nowIso = new Date().toISOString();
+      try {
+        localStorage.setItem(`nst_face_last_update_${stId}`, nowIso);
+      } catch {}
+
+      playAttendanceSuccessChime();
+      try { hapticStrong(); } catch {}
+      speakNotification(
+        "फेस आईडी अपडेट सफल",
+        `नमस्ते ${student?.name || "छात्र"}! आपकी फोटो से फेस आईडी सफलतापूर्वक सेव हो गई है।`
+      );
+
+      setSuccess(true);
+      if (onFaceUpdated) {
+        onFaceUpdated(result.photoDataUrl);
+      }
+
+      setTimeout(() => {
+        stopCamera();
+        onClose();
+      }, 1500);
+    } catch (err: any) {
+      setCameraError(err?.message || "फोटो अपलोड करने में समस्या आई।");
+    } finally {
+      setProcessing(false);
     }
   };
 
@@ -309,7 +379,7 @@ export const StudentFaceIdModal: React.FC<Props> = ({
                 <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-sm flex flex-col items-center justify-center gap-3 z-20">
                   <Loader2 size={36} className="text-teal-400 animate-spin" />
                   <p className="text-xs font-bold text-teal-200">
-                    128-D बायोमेट्रिक वेक्टर बनाया जा रहा है...
+                    512-D ArcFace बायोमेट्रिक वेक्टर बनाया जा रहा है...
                   </p>
                 </div>
               )}
@@ -361,33 +431,53 @@ export const StudentFaceIdModal: React.FC<Props> = ({
             </div>
 
             {/* Action Buttons */}
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={onClose}
-                className="flex-1 py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition cursor-pointer"
-              >
-                रद्द करें (Cancel)
-              </button>
+            <div className="space-y-2">
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="flex-1 py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition cursor-pointer"
+                >
+                  रद्द करें (Cancel)
+                </button>
+
+                <button
+                  type="button"
+                  disabled={processing || !cameraActive || success}
+                  onClick={handleCaptureFace}
+                  className="flex-[2] py-3 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black text-xs shadow-lg shadow-teal-500/25 flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
+                >
+                  {processing ? (
+                    <>
+                      <Loader2 size={16} className="animate-spin" />
+                      <span>फेस ID बन रही है (2 Seconds)...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles size={16} />
+                      <span>📸 1-टैप फोटो लें व सेव करें (2 Seconds)</span>
+                    </>
+                  )}
+                </button>
+              </div>
 
               <button
                 type="button"
-                disabled={processing || !cameraActive || success}
-                onClick={handleCaptureFace}
-                className="flex-[2] py-3 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black text-xs shadow-lg shadow-teal-500/25 flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
+                disabled={processing || success}
+                onClick={() => fileInputRef.current?.click()}
+                className="w-full py-2.5 rounded-2xl bg-indigo-600/90 hover:bg-indigo-500 text-white font-bold text-xs border border-indigo-400/40 flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
               >
-                {processing ? (
-                  <>
-                    <Loader2 size={16} className="animate-spin" />
-                    <span>फेस ID बन रही है (2 Seconds)...</span>
-                  </>
-                ) : (
-                  <>
-                    <Sparkles size={16} />
-                    <span>📸 1-टैप फोटो लें व सेव करें (2 Seconds)</span>
-                  </>
-                )}
+                <ImagePlus size={16} />
+                <span>🖼️ गैलरी से फोटो चुनें (Upload Image)</span>
               </button>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleUploadPhotoFile}
+                className="hidden"
+              />
             </div>
           </div>
         )}

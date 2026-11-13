@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import type { School, SchoolBranch, SchoolStudent, SchoolClass } from "../../school-types";
 import { loadSchoolSubcollection, syncSchoolSubcollection, saveSchoolSubdoc } from "../../utils/schoolCloudSync";
+import { shouldUseDemoForSchool } from "../../school-firebase";
 
 interface Props {
   school: School;
@@ -40,7 +41,7 @@ const DEFAULT_BRANCHES: SchoolBranch[] = [
     address: "Sector 45, Urban Estate, Main Highway",
     city: "Gurugram / Patna",
     phone: "+91 98765 43210",
-    principalName: "Dr. Arvind Swaminathan",
+    principalName: "Principal",
     isMainBranch: true,
     totalStudents: 540,
     totalTeachers: 28,
@@ -82,13 +83,15 @@ export const MultiBranchManager: React.FC<Props> = ({
   onSwitchBranch,
   onClose,
 }) => {
-  const isDemo = Boolean(school?.id && (school.id === "demo_school" || school.id.startsWith("demo_")));
+  const isDemo = shouldUseDemoForSchool(school?.id);
 
   const [branches, setBranches] = useState<SchoolBranch[]>(() => {
     try {
       const saved = localStorage.getItem(`school_branches_${school?.id || "demo"}`);
       if (saved) return JSON.parse(saved);
-    } catch {}
+    } catch (err) {
+      console.warn("[MultiBranchManager] Failed reading cached branches:", err);
+    }
     if (isDemo) return DEFAULT_BRANCHES;
     return [
       {
@@ -145,7 +148,9 @@ export const MultiBranchManager: React.FC<Props> = ({
     setBranches(updated);
     try {
       localStorage.setItem(`school_branches_${school?.id || "demo"}`, JSON.stringify(updated));
-    } catch {}
+    } catch (err) {
+      console.warn("[MultiBranchManager] Failed caching branches:", err);
+    }
     syncSchoolSubcollection(school?.id, "school_branches", updated);
   };
 
@@ -164,7 +169,7 @@ export const MultiBranchManager: React.FC<Props> = ({
       code: (newBranchCode.trim() || `BR-${branches.length + 1}`).toUpperCase(),
       address: newBranchAddress.trim() || "School Campus",
       city: newBranchCity.trim() || "Main City",
-      phone: newBranchPhone.trim() || school.phone || "+91 98765 00000",
+      phone: newBranchPhone.trim() || school.phone || "",
       principalName: newBranchPrincipal.trim() || "Branch Incharge",
       isMainBranch: false,
       totalStudents: 0,

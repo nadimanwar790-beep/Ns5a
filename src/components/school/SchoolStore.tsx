@@ -2,8 +2,10 @@
 import React, { useState } from "react";
 import { ArrowLeft, CheckCircle2, MessageCircle, Users, BookOpen, Star, Crown, Lock, Shield, Sparkles } from "lucide-react";
 import type { School, SubscriptionTier } from "../../school-types";
+import { ADMIN_WHATSAPP_NUMBER } from "../../constants";
+import { safeOpenExternalUrl } from "../../utils/safeBrowserActions";
 
-export const ADMIN_WHATSAPP_NUMBER = "918227070298";
+export { ADMIN_WHATSAPP_NUMBER };
 
 type Duration = "1_year" | "monthly";
 
@@ -155,7 +157,7 @@ export const SchoolStore: React.FC<Props> = ({ school, onBack }) => {
     const msg = encodeURIComponent(
       `Namaste! 🙏\n\nMain *${school.name}* ka School Admin hoon.\n\nMujhe *IIC School ${tier.name} (${tier.badge}) — ${editionText} — ${durName} (${priceStr})* subscription chahiye.\n\n📋 School Details:\n• School: ${school.name}\n• School Code: ${school.code}\n• Admin Email: ${school.adminEmail}\n\nKripya subscription activate karein. Dhanyawad!`
     );
-    window.open(`https://wa.me/${ADMIN_WHATSAPP_NUMBER}?text=${msg}`, "_blank");
+    safeOpenExternalUrl(`https://wa.me/${ADMIN_WHATSAPP_NUMBER}?text=${msg}`);
   };
 
   const currentTier = school.subscription?.tier;

@@ -84,7 +84,9 @@ export const ReceiptCancellationModal: React.FC<Props> = ({
     try {
       const raw = localStorage.getItem(refundStorageKey);
       if (raw) return JSON.parse(raw);
-    } catch {}
+    } catch (err) {
+      console.warn("[ReceiptCancellationModal] Failed reading refund audit logs:", err);
+    }
     return [];
   });
 
@@ -96,9 +98,13 @@ export const ReceiptCancellationModal: React.FC<Props> = ({
         setAuditLogs(cloudLogs);
         try {
           localStorage.setItem(refundStorageKey, JSON.stringify(cloudLogs));
-        } catch {}
+        } catch (err) {
+          console.warn("[ReceiptCancellationModal] Failed caching refund audit logs:", err);
+        }
       }
-    }).catch(() => {});
+    }).catch((err) => {
+      console.warn("[ReceiptCancellationModal] Failed loading cloud refund logs:", err);
+    });
     return () => { active = false; };
   }, [isOpen, school?.id, refundStorageKey]);
 

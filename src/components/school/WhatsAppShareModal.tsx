@@ -16,6 +16,7 @@ import {
   Sparkles,
   Loader2,
 } from "lucide-react";
+import { safeOpenExternalUrl } from "../../utils/safeBrowserActions";
 
 export interface WhatsAppShareModalProps {
   isOpen: boolean;
@@ -178,13 +179,13 @@ export const WhatsAppShareModal: React.FC<WhatsAppShareModalProps> = ({
     const waUrl = targetWaNumber
       ? `https://wa.me/${targetWaNumber}?text=${encodeURIComponent(formattedMessage)}`
       : `https://wa.me/?text=${encodeURIComponent(formattedMessage)}`;
-    window.open(waUrl, "_blank", "noopener,noreferrer");
+    safeOpenExternalUrl(waUrl);
   };
 
   // 6. Just Open WhatsApp App (for manual number search & paste)
   const handleOpenWhatsAppSearch = () => {
     // Open WhatsApp Web or app
-    window.open("https://web.whatsapp.com", "_blank", "noopener,noreferrer");
+    safeOpenExternalUrl("https://web.whatsapp.com");
   };
 
   const resolvedTitle =

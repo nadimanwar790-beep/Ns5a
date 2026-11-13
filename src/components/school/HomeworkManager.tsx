@@ -14,6 +14,7 @@ import { DirectUploadButton } from "../DirectUploadButton";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 import { getDemoSchoolDataset } from "./demoDataStore";
 import { loadSchoolSubcollection, syncSchoolSubcollection } from "../../utils/schoolCloudSync";
+import { shouldUseDemoForSchool } from "../../school-firebase";
 
 interface Props {
   school: School;
@@ -47,41 +48,46 @@ export const HomeworkManager: React.FC<Props> = ({
     try {
       const saved = localStorage.getItem(storageKey);
       if (saved) return JSON.parse(saved);
-    } catch {}
-    return [
-      {
-        id: "hw-demo-1",
-        schoolId: school?.id || "",
-        classId: classes[0]?.id || "cls-1",
-        className: classes[0]?.name || "Class 10",
-        section: "A",
-        subjectName: "Mathematics",
-        teacherId: currentTeacherId || "tch-1",
-        teacherName: currentTeacherName || "Dr. Arvind Swaminathan",
-        title: "Exercise 4.2 - Quadratic Equations (Q1 to Q7)",
-        description: "Solve all sub-parts of Question 1 to 7 in fair notebook. Remember to write step-by-step factorization.",
-        assignedDate: new Date().toISOString().split("T")[0],
-        dueDate: new Date(Date.now() + 86400000).toISOString().split("T")[0],
-        status: "active",
-        createdAt: new Date().toISOString()
-      },
-      {
-        id: "hw-demo-2",
-        schoolId: school?.id || "",
-        classId: classes[0]?.id || "cls-1",
-        className: classes[0]?.name || "Class 10",
-        section: "A",
-        subjectName: "Science (Physics)",
-        teacherId: currentTeacherId || "tch-2",
-        teacherName: "Faculty Science",
-        title: "Ray Diagrams of Concave Mirrors",
-        description: "Draw the 6 ray diagrams showing image formation for different object positions. Label Pole, Focus and Center of Curvature.",
-        assignedDate: new Date().toISOString().split("T")[0],
-        dueDate: new Date(Date.now() + 86400000).toISOString().split("T")[0],
-        status: "active",
-        createdAt: new Date().toISOString()
-      }
-    ];
+    } catch (err) {
+      console.warn("[HomeworkManager] Failed reading homework cache:", err);
+    }
+    if (shouldUseDemoForSchool(school?.id)) {
+      return [
+        {
+          id: "hw-demo-1",
+          schoolId: school?.id || "",
+          classId: classes[0]?.id || "cls-1",
+          className: classes[0]?.name || "Class 10",
+          section: "A",
+          subjectName: "Mathematics",
+          teacherId: currentTeacherId || "tch-1",
+          teacherName: currentTeacherName || "Class Teacher",
+          title: "Exercise 4.2 - Quadratic Equations (Q1 to Q7)",
+          description: "Solve all sub-parts of Question 1 to 7 in fair notebook. Remember to write step-by-step factorization.",
+          assignedDate: new Date().toISOString().split("T")[0],
+          dueDate: new Date(Date.now() + 86400000).toISOString().split("T")[0],
+          status: "active",
+          createdAt: new Date().toISOString()
+        },
+        {
+          id: "hw-demo-2",
+          schoolId: school?.id || "",
+          classId: classes[0]?.id || "cls-1",
+          className: classes[0]?.name || "Class 10",
+          section: "A",
+          subjectName: "Science (Physics)",
+          teacherId: currentTeacherId || "tch-2",
+          teacherName: "Faculty Science",
+          title: "Ray Diagrams of Concave Mirrors",
+          description: "Draw the 6 ray diagrams showing image formation for different object positions. Label Pole, Focus and Center of Curvature.",
+          assignedDate: new Date().toISOString().split("T")[0],
+          dueDate: new Date(Date.now() + 86400000).toISOString().split("T")[0],
+          status: "active",
+          createdAt: new Date().toISOString()
+        }
+      ];
+    }
+    return [];
   });
 
   // Student Submissions list
@@ -89,7 +95,9 @@ export const HomeworkManager: React.FC<Props> = ({
     try {
       const saved = localStorage.getItem(subStorageKey);
       if (saved) return JSON.parse(saved);
-    } catch {}
+    } catch (err) {
+      console.warn("[HomeworkManager] Failed reading submissions cache:", err);
+    }
     return [];
   });
 
@@ -97,13 +105,17 @@ export const HomeworkManager: React.FC<Props> = ({
   useEffect(() => {
     try {
       localStorage.setItem(storageKey, JSON.stringify(homeworkList));
-    } catch {}
+    } catch (err) {
+      console.warn("[HomeworkManager] Failed saving homework cache:", err);
+    }
   }, [homeworkList, storageKey]);
 
   useEffect(() => {
     try {
       localStorage.setItem(subStorageKey, JSON.stringify(submissions));
-    } catch {}
+    } catch (err) {
+      console.warn("[HomeworkManager] Failed saving submissions cache:", err);
+    }
   }, [submissions, subStorageKey]);
 
   const [confirmDeleteHwId, setConfirmDeleteHwId] = useState<string | null>(null);
@@ -115,12 +127,12 @@ export const HomeworkManager: React.FC<Props> = ({
       .then((cloud) => {
         if (active && cloud.length > 0) setHomeworkList(cloud);
       })
-      .catch(() => {});
+      .catch((err) => console.warn("[HomeworkManager] Cloud homework load failed:", err));
     loadSchoolSubcollection<HomeworkSubmission>(school.id, "homework_submissions", subStorageKey)
       .then((cloudSubs) => {
         if (active && cloudSubs.length > 0) setSubmissions(cloudSubs);
       })
-      .catch(() => {});
+      .catch((err) => console.warn("[HomeworkManager] Cloud submissions load failed:", err));
     return () => { active = false; };
   }, [school?.id, storageKey, subStorageKey]);
 

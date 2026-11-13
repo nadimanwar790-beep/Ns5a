@@ -10,6 +10,7 @@ import {
 import type { School } from "../../school-types";
 import { getSavedSchoolLogo, cleanLogoUrl, formatAcademicSession } from "./feeReceiptUtils";
 import { printElementInIframe } from "./AdmissionFormPrintModal";
+import { safeOpenExternalUrl, getDynamicAcademicSessionLabel } from "../../utils/safeBrowserActions";
 
 interface Props {
   isOpen: boolean;
@@ -39,22 +40,22 @@ export const AdminIdCardModal: React.FC<Props> = ({
   const schoolName = school?.name || "Institutional Campus";
   const schoolLogo = getSavedSchoolLogo(school?.logoUrl, school?.id);
   const affiliation = school?.affiliation || school?.tagline || "Affiliated Educational Center";
-  const sessionLabel = formatAcademicSession(school?.session || "2026-27");
-  const principalName = customAdminName || school?.principalName || "Dr. Arvind Swaminathan";
+  const sessionLabel = formatAcademicSession(school?.session || getDynamicAcademicSessionLabel());
+  const principalName = customAdminName || school?.principalName || "Principal / School Admin";
   const principalTitle = customDesignation || "Principal & School Administrator";
   const signatureUrl = school?.principalSignatureUrl;
   const directorSignatureUrl = school?.directorSignatureUrl;
 
   const adminId = "ADMIN-01";
-  const phone = customAdminPhone || school?.phone || school?.mobile || "9811023450";
-  const email = customAdminEmail || school?.email || school?.adminEmail || "admin@dps.edu.in";
-  const bloodGroup = "B+";
-  const address = school?.address || "Institutional Area, Main Campus";
+  const phone = customAdminPhone || school?.phone || school?.mobile || "—";
+  const email = customAdminEmail || school?.email || school?.adminEmail || "—";
+  const bloodGroup = (school as any)?.principalBloodGroup || "—";
+  const address = school?.address || "Main Campus";
 
   // Standardized Admin Login & Attendance QR Code
   // Format: NSTA-SCHOOL-STAFF:schoolId:id:rollOrEmp:classOrDept:name:admNo:phone:father:mother:blood:dob:address:fee:title:schoolName
   const qrVerifyUrl = `NSTA-SCHOOL-STAFF:${[
-    encodeURIComponent(school?.id || "dps_gurgaon_sector45"),
+    encodeURIComponent(school?.id || "school"),
     encodeURIComponent("ADMIN-01"),
     encodeURIComponent("ADMIN-01"),
     encodeURIComponent("Administration & Head"),
@@ -97,7 +98,8 @@ export const AdminIdCardModal: React.FC<Props> = ({
     const encoded = encodeURIComponent(text);
     const cleanPhone = phone.replace(/[^0-9]/g, "");
     const targetPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
-    window.open(`https://wa.me/${targetPhone}?text=${encoded}`, "_blank");
+    const waUrl = targetPhone ? `https://wa.me/${targetPhone}?text=${encoded}` : `https://wa.me/?text=${encoded}`;
+    safeOpenExternalUrl(waUrl);
   };
 
   return (

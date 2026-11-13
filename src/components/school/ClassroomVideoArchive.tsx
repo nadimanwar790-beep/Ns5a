@@ -18,6 +18,7 @@ import {
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 import { CustomPlayer } from "../CustomPlayer";
 import { rotateScreen } from "../../utils/displayPrefs";
+import { ADMIN_WHATSAPP_NUMBER } from "../../constants";
 
 interface Props {
   school: School;
@@ -435,7 +436,7 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
 
           <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
             <a
-              href={`https://wa.me/918227070298?text=${encodeURIComponent(`Hello Super Admin, I want to upgrade school "${school?.name || 'My School'}" (ID: ${school?.id}) to the Elite Plan to unlock YouTube Live & Video Lectures.`)}`}
+              href={`https://wa.me/${ADMIN_WHATSAPP_NUMBER}?text=${encodeURIComponent(`Hello Super Admin, I want to upgrade school "${school?.name || 'My School'}" (ID: ${school?.id}) to the Elite Plan to unlock YouTube Live & Video Lectures.`)}`}
               target="_blank"
               rel="noreferrer"
               className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-sm shadow-lg shadow-emerald-600/30 flex items-center gap-2 cursor-pointer"

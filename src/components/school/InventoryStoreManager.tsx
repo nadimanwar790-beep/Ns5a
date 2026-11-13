@@ -12,8 +12,15 @@ import type {
   StoreInventoryItem, StoreSaleRecord, StoreReservationBooking
 } from "../../school-types";
 import { speakNotification } from "../../utils/voiceNotifyEngine";
-import { loadSchoolSubcollection, syncSchoolSubcollection } from "../../utils/schoolCloudSync";
+import {
+  loadSchoolSubcollection,
+  syncSchoolSubcollection,
+  loadMergedStoreSales,
+  loadMergedStoreReservations,
+} from "../../utils/schoolCloudSync";
+import { computePaymentBreakdown, formatStorePaymentModeLabel } from "../../utils/paymentBreakdown";
 import { printElementInIframe } from "./AdmissionFormPrintModal";
+import { shouldUseDemoForSchool } from "../../school-firebase";
 
 interface Props {
   school: School;
@@ -43,12 +50,16 @@ export const InventoryStoreManager: React.FC<Props> = ({
   const salesStorageKey = useMemo(() => `nst_school_store_sales_${school?.id || "default"}`, [school?.id]);
   const resStorageKey = useMemo(() => `nst_school_store_reservations_${school?.id || "default"}`, [school?.id]);
 
+  const isDemo = shouldUseDemoForSchool(school?.id);
   // Inventory Items List
   const [items, setItems] = useState<StoreInventoryItem[]>(() => {
     try {
       const saved = localStorage.getItem(invStorageKey);
       if (saved) return JSON.parse(saved);
-    } catch {}
+    } catch (err) {
+      console.warn("[InventoryStoreManager] Failed reading store items:", err);
+    }
+    if (!isDemo) return [];
     return [
       {
         id: "item-1",
@@ -128,7 +139,9 @@ export const InventoryStoreManager: React.FC<Props> = ({
     try {
       const saved = localStorage.getItem(salesStorageKey);
       if (saved) return JSON.parse(saved);
-    } catch {}
+    } catch (err) {
+      console.warn("[InventoryStoreManager] Failed reading store sales:", err);
+    }
     return [];
   });
 
@@ -137,7 +150,9 @@ export const InventoryStoreManager: React.FC<Props> = ({
     try {
       const saved = localStorage.getItem(resStorageKey);
       if (saved) return JSON.parse(saved);
-    } catch {}
+    } catch (err) {
+      console.warn("[InventoryStoreManager] Failed reading store reservations:", err);
+    }
     return [];
   });
 
@@ -151,7 +166,7 @@ export const InventoryStoreManager: React.FC<Props> = ({
     return () => clearInterval(t);
   }, []);
 
-  // Hydrate from Firestore
+  // Hydrate from Firestore + RTDB
   useEffect(() => {
     let active = true;
     const sid = school?.id;
@@ -159,10 +174,10 @@ export const InventoryStoreManager: React.FC<Props> = ({
     loadSchoolSubcollection<StoreInventoryItem>(sid, "store_items", invStorageKey).then((data) => {
       if (active && data.length > 0) setItems(data);
     });
-    loadSchoolSubcollection<StoreSaleRecord>(sid, "store_sales", salesStorageKey).then((data) => {
+    loadMergedStoreSales<StoreSaleRecord>(sid, salesStorageKey).then((data) => {
       if (active && data.length > 0) setSales(data);
     });
-    loadSchoolSubcollection<StoreReservationBooking>(sid, "store_reservations", resStorageKey).then((data) => {
+    loadMergedStoreReservations<StoreReservationBooking>(sid, resStorageKey).then((data) => {
       if (active && data.length > 0) setReservations(data);
     });
     return () => { active = false; };
@@ -187,13 +202,13 @@ export const InventoryStoreManager: React.FC<Props> = ({
     } catch {}
   }, [reservations, resStorageKey]);
 
-  // Check auto-expiry of bookings and restore stock
+  // Check auto-expiry of unpaid bookings and restore stock
   useEffect(() => {
     let stockChanged = false;
     let invCopy = [...items];
 
     const updatedRes = reservations.map((res) => {
-      if (res.status === "reserved" && new Date(res.expiresAt).getTime() <= currentEpoch) {
+      if (res.status === "reserved" && !res.razorpayPaymentId && new Date(res.expiresAt).getTime() <= currentEpoch) {
         stockChanged = true;
         res.items.forEach((booked) => {
           const itm = invCopy.find((i) => i.id === booked.itemId);
@@ -341,9 +356,11 @@ export const InventoryStoreManager: React.FC<Props> = ({
     return items.filter(item => item.stockQuantity <= item.lowStockAlert);
   }, [items]);
 
-  const totalSalesRevenue = useMemo(() => {
-    return sales.reduce((sum, sale) => sum + sale.totalAmount, 0);
+  const storeBreakdown = useMemo(() => {
+    return computePaymentBreakdown({ storeSales: sales });
   }, [sales]);
+
+  const totalSalesRevenue = storeBreakdown.storeTotal;
 
   // Filtered items
   const filteredItems = useMemo(() => {
@@ -537,7 +554,7 @@ export const InventoryStoreManager: React.FC<Props> = ({
 
       <div className="max-w-6xl mx-auto p-4 sm:p-6 space-y-4">
         {/* KPI Row */}
-        <div className="grid grid-cols-3 gap-3 print:hidden">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 print:hidden">
           <div className="bg-white dark:bg-slate-800 rounded-2xl p-4 border border-slate-200 dark:border-slate-700 shadow-xs">
             <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Total Stock Value</p>
             <p className="text-2xl font-black text-amber-600 dark:text-amber-400 mt-1">₹{totalStockValue.toLocaleString()}</p>
@@ -551,9 +568,25 @@ export const InventoryStoreManager: React.FC<Props> = ({
             <p className="text-[10px] text-slate-500 mt-0.5">Need Reordering</p>
           </div>
           <div className="bg-white dark:bg-slate-800 rounded-2xl p-4 border border-slate-200 dark:border-slate-700 shadow-xs">
-            <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Total Store Sales</p>
-            <p className="text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-1">₹{totalSalesRevenue.toLocaleString()}</p>
-            <p className="text-[10px] text-slate-500 mt-0.5">{sales.length} Invoices Generated</p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Total Store Sales</p>
+              <span className="text-[10px] font-bold text-slate-500">{sales.length} Bills</span>
+            </div>
+            <p className="text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-1">₹{totalSalesRevenue.toLocaleString("en-IN")}</p>
+            <div className="grid grid-cols-3 gap-1 mt-2 pt-2 border-t border-slate-100 dark:border-slate-700 text-[10px]">
+              <div>
+                <span className="text-slate-400 block">QR Code</span>
+                <span className="font-black text-blue-600 dark:text-blue-400">₹{storeBreakdown.storeOnlineQr.toLocaleString("en-IN")}</span>
+              </div>
+              <div className="border-l border-slate-100 dark:border-slate-700 pl-1.5">
+                <span className="text-slate-400 block">NSTA Online</span>
+                <span className="font-black text-indigo-600 dark:text-indigo-400">₹{storeBreakdown.storeNstaOnline.toLocaleString("en-IN")}</span>
+              </div>
+              <div className="border-l border-slate-100 dark:border-slate-700 pl-1.5">
+                <span className="text-slate-400 block">Cash</span>
+                <span className="font-black text-slate-700 dark:text-slate-200">₹{storeBreakdown.storeCash.toLocaleString("en-IN")}</span>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -821,7 +854,7 @@ export const InventoryStoreManager: React.FC<Props> = ({
                           <td className="p-3">
                             {isCollected ? (
                               <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 font-black text-[10px]">
-                                ✓ Collected &amp; Paid
+                                ✓ {booking.paymentMode === "nsta_online" || booking.razorpayPaymentId ? "NSTA Online Paid" : "Collected & Paid"}
                               </span>
                             ) : isExpired ? (
                               <span className="px-2 py-0.5 rounded-full bg-rose-100 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 font-bold text-[10px]">
@@ -904,9 +937,15 @@ export const InventoryStoreManager: React.FC<Props> = ({
                         <td className="p-3 text-slate-600 dark:text-slate-300">
                           {sale.items.map(i => `${i.itemName} (x${i.quantity})`).join(", ")}
                         </td>
-                        <td className="p-3 uppercase font-bold text-[10px]">
-                          <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-700">
-                            {sale.paymentMode}
+                        <td className="p-3 font-bold text-[10px]">
+                          <span className={`px-2 py-0.5 rounded ${
+                            sale.paymentMode === "nsta_online" || sale.razorpayPaymentId
+                              ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300"
+                              : sale.paymentMode === "online_upi" || sale.paymentMode === "card"
+                              ? "bg-blue-100 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300"
+                              : "bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200"
+                          }`}>
+                            {formatStorePaymentModeLabel(sale)}
                           </span>
                         </td>
                         <td className="p-3 font-black text-right text-emerald-600 dark:text-emerald-400">
@@ -1185,15 +1224,15 @@ export const InventoryStoreManager: React.FC<Props> = ({
                   <span>Total Amount Due:</span>
                   <span className="text-base text-emerald-600">₹{billTotalAmount}</span>
                 </div>
-                <div className="flex items-center gap-2 pt-2 border-t border-emerald-200/60 text-xs">
-                  <span className="font-bold text-slate-600">Payment:</span>
+                <div className="flex items-center gap-3 pt-2 border-t border-emerald-200/60 text-xs">
+                  <span className="font-bold text-slate-600 dark:text-slate-300">Payment:</span>
                   <label className="flex items-center gap-1 cursor-pointer">
                     <input type="radio" checked={billPaymentMode === "cash"} onChange={() => setBillPaymentMode("cash")} />
                     <span>Cash</span>
                   </label>
                   <label className="flex items-center gap-1 cursor-pointer">
                     <input type="radio" checked={billPaymentMode === "online_upi"} onChange={() => setBillPaymentMode("online_upi")} />
-                    <span>UPI / Online</span>
+                    <span>Online QR Code</span>
                   </label>
                 </div>
               </div>
@@ -1263,7 +1302,7 @@ export const InventoryStoreManager: React.FC<Props> = ({
             </div>
 
             <div className="text-center text-[10px] text-slate-400 pt-2 border-t">
-              <p>Mode: {printableReceipt.paymentMode.toUpperCase()}</p>
+              <p>Mode: {formatStorePaymentModeLabel(printableReceipt)}</p>
               <p className="mt-1">Thank you! Items once sold cannot be returned.</p>
             </div>
 

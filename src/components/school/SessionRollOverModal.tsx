@@ -1,5 +1,7 @@
 // @ts-nocheck
 import React, { useState, useEffect, useMemo } from "react";
+import { toast } from "sonner";
+import { getDynamicAcademicSessionLabel } from "../../utils/safeBrowserActions";
 import {
   GraduationCap,
   ArrowRight,
@@ -72,12 +74,16 @@ export const SessionRollOverModal: React.FC<Props> = ({
   const [step, setStep] = useState<1 | 2 | 3>(1);
 
   // Selected source & target sessions
+  const defaultSessionLabel = getDynamicAcademicSessionLabel();
+  const nextYearStart = Number(defaultSessionLabel.split("-")[0]) + 1 || new Date().getFullYear() + 1;
+  const nextSessionFallback = `${nextYearStart}-${String((nextYearStart + 1) % 100).padStart(2, "0")}`;
+
   const [fromSessionId, setFromSessionId] = useState<string>(
-    currentSession?.id || (sessions[0]?.id || "2026-27")
+    currentSession?.id || (sessions[0]?.id || defaultSessionLabel)
   );
   const [toSessionId, setToSessionId] = useState<string>(() => {
-    const next = sessions.find((s) => s.id !== (currentSession?.id || "2026-27"));
-    return next?.id || "2027-28";
+    const next = sessions.find((s) => s.id !== (currentSession?.id || defaultSessionLabel));
+    return next?.id || nextSessionFallback;
   });
 
   // Selected source & target classes
@@ -218,7 +224,7 @@ export const SessionRollOverModal: React.FC<Props> = ({
   // Execute promotion
   const handleExecutePromotion = async () => {
     if (selectedCount === 0) {
-      alert("कृपया प्रमोट करने के लिए कम से कम 1 छात्र चुनें!");
+      toast.error("कृपया प्रमोट करने के लिए कम से कम 1 छात्र चुनें!");
       return;
     }
 
@@ -319,7 +325,7 @@ export const SessionRollOverModal: React.FC<Props> = ({
       onSuccess?.();
     } catch (err: any) {
       console.error("Session roll-over execution error:", err);
-      alert("सत्र प्रमोशन के दौरान त्रुटि: " + (err?.message || err));
+      toast.error("सत्र प्रमोशन के दौरान त्रुटि: " + (err?.message || err));
     } finally {
       setIsExecuting(false);
       setProgressMsg("");
@@ -455,8 +461,8 @@ export const SessionRollOverModal: React.FC<Props> = ({
                         {s.name}
                       </option>
                     ))}
-                    {!sessions.some((s) => s.id === "2027-28") && (
-                      <option value="2027-28">Session 2027-28 (नया सत्र)</option>
+                    {!sessions.some((s) => s.id === nextSessionFallback) && (
+                      <option value={nextSessionFallback}>Session {nextSessionFallback} (नया सत्र)</option>
                     )}
                   </select>
                 </div>

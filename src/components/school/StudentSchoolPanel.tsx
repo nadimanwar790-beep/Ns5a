@@ -52,7 +52,9 @@ import {
   Check,
   X,
   ShoppingBag,
+  Zap,
 } from "lucide-react";
+import { toast } from "sonner";
 import QRCode from "react-qr-code";
 import { StudentFaceIdModal } from "./StudentFaceIdModal";
 import { ClassroomVideoArchive } from "./ClassroomVideoArchive";
@@ -119,6 +121,12 @@ import { isSchoolEliteCurriculum, type School, type SchoolStudent, type SchoolTe
 import { ParentLeaveManager } from "./ParentLeaveManager";
 import { PtmSchedulerModal } from "./PtmSchedulerModal";
 import { playBusArrivalAlarmChime, checkAndTriggerBusProximity } from "../../utils/busProximityAlarm";
+import { getDynamicAcademicSessionLabel } from "../../utils/safeBrowserActions";
+import {
+  fetchSchoolRazorpayConfig,
+  startStudentRazorpayFeeCheckout,
+  type PublicRazorpayConfig,
+} from "../../utils/razorpayCheckout";
 
 interface Props {
   uid?: string;
@@ -192,7 +200,7 @@ export const STUDENT_THEMES_META = [
 
 export const StudentSchoolPanel: React.FC<Props> = ({
   uid,
-  schoolId = "dps_gurgaon_sector45",
+  schoolId = "",
   studentId,
   studentName,
   classId,
@@ -254,6 +262,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   const [pushBusy, setPushBusy] = useState<boolean>(false);
   const [pushFeedback, setPushFeedback] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [showPtmModal, setShowPtmModal] = useState<boolean>(false);
+  const [confirmRemoveLinkedKey, setConfirmRemoveLinkedKey] = useState<string | null>(null);
   const [busAlarmTriggered, setBusAlarmTriggered] = useState<boolean>(false);
 
   // Student 3-Theme Switcher (White / Black / Midnight Current)
@@ -328,6 +337,8 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   const [liveAttendanceRecords, setLiveAttendanceRecords] = useState<any[]>([]);
   const [studentPhoto, setStudentPhoto] = useState<string | null>(null);
   const photoInputRef = React.useRef<HTMLInputElement | null>(null);
+  const [razorpayConfig, setRazorpayConfig] = useState<PublicRazorpayConfig | null>(null);
+  const [payingFeeKey, setPayingFeeKey] = useState<string | null>(null);
 
   // ── School Events & Memories states
   const [selectedMemoryMedia, setSelectedMemoryMedia] = useState<{
@@ -541,21 +552,15 @@ export const StudentSchoolPanel: React.FC<Props> = ({
 
     // 5. CRITICAL: If student is logged in or provided by name/props, construct their authentic record!
     if (matchName || matchAdm || matchId) {
-      const isNadim = (matchName && matchName.toLowerCase().includes("nadim")) || (matchAdm && matchAdm.includes("6616"));
-      const rawSessionCls = (sessionUser as any)?.className;
-      const cleanSessionCls =
-        rawSessionCls && !/^0\d+$/.test(String(rawSessionCls).trim()) && !/^class\s+0\d+$/i.test(String(rawSessionCls).trim())
-          ? rawSessionCls
-          : undefined;
       const safeStudent: SchoolStudent = {
         id: matchId || `std_${Date.now()}`,
         schoolId: sessionUser?.schoolId || schoolId,
-        schoolName: sessionUser?.schoolName || (sessionUser as any)?.school || (isNadim ? "Life maker public school" : (sessionUser?.schoolName || "School")),
-        sessionId: sessionId || "demo_session_2026_27",
-        classId: (sessionUser as any)?.classId || classId || sessionUser?.classLevel || (isNadim ? "cls_nursery" : "cls_10"),
-        className: cleanSessionCls || (isNadim ? "Nursery" : undefined),
+        schoolName: sessionUser?.schoolName || (sessionUser as any)?.school || "School",
+        sessionId: sessionId || "",
+        classId: (sessionUser as any)?.classId || classId || sessionUser?.classLevel || "",
+        className: cleanSessionCls,
         name: matchName || sessionUser?.name || "Student",
-        rollNo: matchRoll || (matchId?.startsWith("ROLL-") ? matchId.replace("ROLL-", "") : "01"),
+        rollNo: matchRoll || (matchId?.startsWith("ROLL-") ? matchId.replace("ROLL-", "") : ""),
         admissionNo: matchAdm || sessionUser?.admissionNo || `ADM-${(matchId || "26").slice(-6).toUpperCase()}`,
         fatherName: sessionUser?.fatherName || "",
         motherName: sessionUser?.motherName || "",
@@ -565,7 +570,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
         address: (sessionUser as any)?.address || undefined,
         monthlyFee: (typeof sessionUser?.monthlyFee === "number" && sessionUser.monthlyFee > 0)
           ? sessionUser.monthlyFee
-          : 1000,
+          : 0,
         photoUrl: sessionUser?.photoURL || sessionUser?.photoUrl || "",
         active: true,
         createdAt: new Date().toISOString(),
@@ -576,34 +581,37 @@ export const StudentSchoolPanel: React.FC<Props> = ({
         if (!cur.some(s => s.id === safeStudent.id || (s.admissionNo && s.admissionNo === safeStudent.admissionNo))) {
           setLocalStudents(safeStudent.schoolId, [safeStudent, ...cur]);
         }
-      } catch {}
+      } catch (err) {
+        console.warn("[StudentSchoolPanel] Failed syncing student cache:", err);
+      }
 
       return safeStudent;
     }
 
-    // Fallback demo student only when completely unauthenticated/guest
+    // Fallback demo student ONLY when demo mode is active for this school
     const fallbackPool = Array.isArray(dataset?.students) ? dataset.students : [];
-    const class10Student = fallbackPool.find(
-      (s) =>
-        s.classId === "demo_class_c10_sec_a" ||
-        (s.classId?.includes("c10") && (!s.section || s.section === "A")) ||
-        (s.classId === "cls_10" && s.section === "A")
-    );
+    const class10Student = shouldUseDemoForSchool(schoolId)
+      ? fallbackPool.find(
+          (s) =>
+            s.classId === "demo_class_c10_sec_a" ||
+            (s.classId?.includes("c10") && (!s.section || s.section === "A")) ||
+            (s.classId === "cls_10" && s.section === "A")
+        ) || fallbackPool[0]
+      : null;
+
     return (
-      class10Student ||
-      fallbackPool[0] || {
-        id: "demo_std_c10_a_01",
+      class10Student || {
+        id: studentId || "student_guest",
         schoolId,
-        sessionId: sessionId || "demo_session_2026_27",
-        classId: classId || "demo_class_c10_sec_a",
-        name: studentName || "Aarav Sharma",
-        rollNo: "1",
-        admissionNo: "ADM-26-C10A01",
-        fatherName: "Mr. Rajesh Sharma",
-        motherName: "Mrs. Sunita Sharma",
-        phone: "9876512010",
-        bloodGroup: "O+",
-        monthlyFee: 2400,
+        sessionId: sessionId || "",
+        classId: classId || "",
+        name: studentName || "Student",
+        rollNo: "",
+        admissionNo: "",
+        fatherName: "",
+        motherName: "",
+        phone: "",
+        monthlyFee: 0,
         active: true,
         createdAt: new Date().toISOString(),
       }
@@ -635,6 +643,19 @@ export const StudentSchoolPanel: React.FC<Props> = ({
     if (!schoolId || !currentStudent?.id) return;
     const unsub = subscribeToStudent(schoolId, currentStudent.id, (freshStudent) => {
       if (freshStudent) {
+        const stStatus = typeof (freshStudent as any).status === "string" ? (freshStudent as any).status.trim().toLowerCase() : "";
+        if (
+          freshStudent.active === false ||
+          (freshStudent as any).isDeleted === true ||
+          stStatus === "deleted"
+        ) {
+          if (onRemoveLinkedStudent) {
+            const key = `${freshStudent.schoolId || schoolId}__${freshStudent.id}`;
+            onRemoveLinkedStudent(key);
+          }
+          toast.info(`${freshStudent.name || currentStudent.name} का डेटा स्कूल से हटाया जा चुका है।`);
+          return;
+        }
         setLiveStudentData((prev: any) => ({
           ...prev,
           ...freshStudent,
@@ -1241,6 +1262,61 @@ export const StudentSchoolPanel: React.FC<Props> = ({
 
     return () => unsub();
   }, [schoolId, currentStudent.id, currentStudent.admissionNo, currentStudent.rollNo]);
+
+  // Load school Razorpay online fee config
+  useEffect(() => {
+    if (!schoolId) return;
+    let active = true;
+    fetchSchoolRazorpayConfig(schoolId).then((cfg) => {
+      if (active && cfg) setRazorpayConfig(cfg);
+    });
+    return () => {
+      active = false;
+    };
+  }, [schoolId]);
+
+  const handlePayFeeViaRazorpay = async (feeItem: any, payableAmount: number, monthLabel: string) => {
+    if (!schoolId || !activeStudent?.id || payableAmount <= 0) return;
+    const key = String(feeItem?.id || feeItem?.month || "fee");
+    setPayingFeeKey(key);
+    await startStudentRazorpayFeeCheckout({
+      schoolId,
+      schoolName: schoolDisplayName,
+      student: {
+        id: activeStudent.id,
+        name: activeStudent.name,
+        classId: activeStudent.classId,
+        className: formatClassLabel(studentClassLabel),
+        rollNo: activeStudent.rollNo,
+        admissionNo: activeStudent.admissionNo,
+        phone: activeStudent.phone || activeStudent.mobile,
+      },
+      fee: feeItem,
+      payableAmount,
+      monthLabel,
+      onSuccess: ({ receiptNo, fee: updatedFee }) => {
+        setPayingFeeKey(null);
+        toast.success(`✅ Fee jama ho gayi! Receipt: ${receiptNo}`);
+        if (updatedFee) {
+          setLiveFees((prev) => {
+            const next = prev.filter(
+              (x) => !(x.studentId === updatedFee.studentId && x.month === updatedFee.month)
+            );
+            return [updatedFee, ...next];
+          });
+          setFeeModalFormat("pos");
+          setSelectedFeeForReceipt(updatedFee);
+        }
+      },
+      onError: (msg) => {
+        setPayingFeeKey(null);
+        toast.error(msg || "Online fee payment failed");
+      },
+      onDismiss: () => {
+        setPayingFeeKey(null);
+      },
+    });
+  };
 
   // Student monthly fee dynamically determined
   const studentMonthlyFee = useMemo(() => {
@@ -1860,7 +1936,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   useEffect(() => {
     if (!studentId) return;
     const currentYear = new Date().getFullYear();
-    const sentKey = `nst_birthday_wish_sent_${schoolId || "dps_gurgaon_sector45"}_${studentId}_${currentYear}`;
+    const sentKey = `nst_birthday_wish_sent_${schoolId || "school"}_${studentId}_${currentYear}`;
     const pendingPopupKey = `nst_show_birthday_popup_${studentId}`;
 
     // 1. Check if pending popup flag was already queued
@@ -2158,12 +2234,15 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            const confirmed = window.confirm(
-                              `Kya aap "${st.name}" ka student profile is account se hatana chahte hain?`
-                            );
-                            if (!confirmed) return;
-
                             const stKey = st.id || st.admissionNo;
+                            if (confirmRemoveLinkedKey !== stKey) {
+                              setConfirmRemoveLinkedKey(stKey);
+                              setTimeout(() => {
+                                setConfirmRemoveLinkedKey((cur) => (cur === stKey ? null : cur));
+                              }, 3500);
+                              return;
+                            }
+                            setConfirmRemoveLinkedKey(null);
                             if (onRemoveLinkedStudent) {
                               onRemoveLinkedStudent(stKey);
                             }
@@ -2185,12 +2264,22 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                                   window.location.reload();
                                 }
                               }
-                            } catch {}
+                            } catch (err) {
+                              console.warn("[StudentSchoolPanel] Failed removing linked profile:", err);
+                            }
                           }}
                           title={`${st.name} ka ID card is account se hatayein`}
-                          className="pr-2 pl-0.5 py-1 text-slate-500 hover:text-rose-400 transition cursor-pointer"
+                          className={`pr-2 pl-1 py-1 transition cursor-pointer ${
+                            confirmRemoveLinkedKey === (st.id || st.admissionNo)
+                              ? "text-rose-400 font-black text-[10px]"
+                              : "text-slate-500 hover:text-rose-400"
+                          }`}
                         >
-                          <X className="w-3 h-3" />
+                          {confirmRemoveLinkedKey === (st.id || st.admissionNo) ? (
+                            <span>हटाएं?</span>
+                          ) : (
+                            <X className="w-3 h-3" />
+                          )}
                         </button>
                       )}
                     </div>
@@ -3172,7 +3261,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
 
             {/* Attendance Monthly Breakdown */}
             <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
-              <h4 className="text-sm font-bold text-white mb-3">Monthly Attendance Summary (Session 2026-27)</h4>
+              <h4 className="text-sm font-bold text-white mb-3">Monthly Attendance Summary (Session {getDynamicAcademicSessionLabel()})</h4>
               <div className="overflow-x-auto">
                 <table className="w-full text-xs text-left text-slate-300">
                   <thead className="bg-slate-800/80 text-slate-400 uppercase text-[10px] font-bold">
@@ -3303,7 +3392,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                       ₹{feeSummary.totalBilled.toLocaleString("en-IN")}
                     </span>
                     <span className="text-[9px] sm:text-[10px] text-slate-500 font-medium block truncate">
-                      Session 2026-27
+                      Session {getDynamicAcademicSessionLabel()}
                     </span>
                   </div>
                   <div className="hidden sm:flex w-10 h-10 rounded-xl bg-slate-800 border border-slate-700 items-center justify-center text-slate-300 shrink-0">
@@ -3700,6 +3789,22 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                             </div>
                           ) : (
                             <div className="flex items-center gap-2 flex-wrap">
+                              {razorpayConfig?.enabled && remaining > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handlePayFeeViaRazorpay(f, remaining, monthDisplay)}
+                                  disabled={payingFeeKey === (f.id || f.month)}
+                                  className="flex-1 min-w-[120px] py-2 px-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white text-xs font-black transition flex items-center justify-center gap-1.5 active:scale-95 cursor-pointer shadow-sm disabled:opacity-50"
+                                  title="Razorpay UPI / Card se turant online fee jama karein"
+                                >
+                                  <Zap className="w-3.5 h-3.5 text-amber-300" />
+                                  <span>
+                                    {payingFeeKey === (f.id || f.month)
+                                      ? "Opening..."
+                                      : `Pay ₹${remaining.toLocaleString("en-IN")}`}
+                                  </span>
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => {
@@ -3928,18 +4033,32 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                                         </button>
                                       </>
                                     ) : (
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setFeeModalFormat("a6");
-                                          setSelectedFeeForReceipt(f);
-                                        }}
-                                        className="px-2 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-white border border-amber-500/40 text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
-                                        title="आधिकारिक फीस डिमांड स्लिप देखें (कुल बकाया राशि सहित)"
-                                      >
-                                        <FileText className="w-3 h-3 text-amber-400" />
-                                        <span>मांग पर्ची</span>
-                                      </button>
+                                      <>
+                                        {razorpayConfig?.enabled && remaining > 0 && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handlePayFeeViaRazorpay(f, remaining, monthDisplay)}
+                                            disabled={payingFeeKey === (f.id || f.month)}
+                                            className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-black transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                            title="Razorpay Online Fee Payment"
+                                          >
+                                            <Zap className="w-3 h-3 text-amber-300" />
+                                            <span>Pay ₹{remaining.toLocaleString("en-IN")}</span>
+                                          </button>
+                                        )}
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setFeeModalFormat("a6");
+                                            setSelectedFeeForReceipt(f);
+                                          }}
+                                          className="px-2 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-white border border-amber-500/40 text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
+                                          title="आधिकारिक फीस डिमांड स्लिप देखें (कुल बकाया राशि सहित)"
+                                        >
+                                          <FileText className="w-3 h-3 text-amber-400" />
+                                          <span>मांग पर्ची</span>
+                                        </button>
+                                      </>
                                     )}
 
                                     <button
@@ -3974,7 +4093,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
               <div>
                 <h3 className="text-base font-bold text-white flex items-center gap-2">
                   <Award className="w-5 h-5 text-indigo-400" />
-                  Examination Performance &amp; Marksheets (Session 2026-27)
+                  Examination Performance &amp; Marksheets (Session {getDynamicAcademicSessionLabel()})
                 </h3>
                 <p className="text-xs text-slate-400 mt-1">
                   6-Stage Examination System: PA-1 (40), PA-2 (40), Half Yearly (100), PA-3 (40), PA-4 (40), Annual Exam (100)
@@ -4719,7 +4838,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
 
                 {/* Footer */}
                 <div className="px-3 py-1 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-[7px] text-slate-500 shrink-0">
-                  <span>Valid for Academic Session 2026-27</span>
+                  <span>Valid for Academic Session {getDynamicAcademicSessionLabel()}</span>
                   <span className="font-bold text-slate-800">Principal Signature ✓</span>
                 </div>
               </div>
@@ -5370,7 +5489,8 @@ export const StudentSchoolPanel: React.FC<Props> = ({
         lastFaceUpdate={lastFaceUpdate}
         onFaceUpdated={(newPhoto) => {
           setLastFaceUpdate(new Date().toISOString());
-          setActiveStudent((prev: any) => ({ ...prev, photoUrl: newPhoto }));
+          setStudentPhoto(newPhoto);
+          setLiveStudentData((prev: any) => ({ ...(prev || {}), photoUrl: newPhoto }));
         }}
       />
 

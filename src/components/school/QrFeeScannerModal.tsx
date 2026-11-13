@@ -73,7 +73,9 @@ export function parseIdCardQr(rawText: string) {
       if (studentId || rollNo || admissionNo) {
         return { studentId, rollNo, admissionNo, studentName, classId };
       }
-    } catch {}
+    } catch (err) {
+      console.warn("[QrFeeScannerModal] URL QR parse warning:", err);
+    }
   }
 
   // Case 3: JSON payload
@@ -86,7 +88,9 @@ export function parseIdCardQr(rawText: string) {
       studentName = parsed.name || parsed.studentName || "";
       classId = parsed.classId || "";
       return { studentId, rollNo, admissionNo, studentName, classId };
-    } catch {}
+    } catch (err) {
+      console.warn("[QrFeeScannerModal] JSON QR parse warning:", err);
+    }
   }
 
   // Case 4: Raw text is student ID, Admission No, or Roll No
@@ -185,7 +189,9 @@ export const QrFeeScannerModal: React.FC<Props> = ({
       if (scannerRef.current) {
         try {
           await scannerRef.current.stop();
-        } catch {}
+        } catch (err) {
+          console.warn("[QrFeeScannerModal] Previous scanner stop warning:", err);
+        }
       }
 
       const html5QrCode = new Html5Qrcode(qrRegionId, {
@@ -223,7 +229,9 @@ export const QrFeeScannerModal: React.FC<Props> = ({
           if (track && track.torchFeature?.().isSupported()) {
             setHasTorch(true);
           }
-        } catch {}
+        } catch (err) {
+          console.warn("[QrFeeScannerModal] Torch capability check warning:", err);
+        }
       } else {
         setCameraError("Camera nahi mila. Kripya QR photo upload karein ya Roll Number se search karein.");
       }
@@ -238,7 +246,9 @@ export const QrFeeScannerModal: React.FC<Props> = ({
     if (scannerRef.current && isScanning) {
       try {
         await scannerRef.current.stop();
-      } catch {}
+      } catch (err) {
+        console.warn("[QrFeeScannerModal] Stop camera warning:", err);
+      }
       setIsScanning(false);
     }
   };
@@ -251,7 +261,9 @@ export const QrFeeScannerModal: React.FC<Props> = ({
         advanced: [{ torch: nextTorch } as any],
       });
       setTorchOn(nextTorch);
-    } catch {}
+    } catch (err) {
+      console.warn("[QrFeeScannerModal] Torch toggle warning:", err);
+    }
   };
 
   const handleCameraSwitch = (newCamId: string) => {
@@ -276,7 +288,9 @@ export const QrFeeScannerModal: React.FC<Props> = ({
           setIsDecodingFile(false);
           return;
         }
-      } catch {}
+      } catch (err) {
+        console.warn("[QrFeeScannerModal] html5Qr scanFile fallback to jsQR:", err);
+      }
 
       // 2. Canvas + jsQR fallback
       const reader = new FileReader();
@@ -431,10 +445,10 @@ export const QrFeeScannerModal: React.FC<Props> = ({
                 {/* Fee Status Summary Card */}
                 {(() => {
                   const fee = matchedFee || {
-                    amount: matchedStudent.monthlyFee || 2000,
+                    amount: matchedStudent.monthlyFee ?? 0,
                     paid: false,
                     paidAmount: 0,
-                    balanceDue: matchedStudent.monthlyFee || 2000,
+                    balanceDue: matchedStudent.monthlyFee ?? 0,
                   };
                   const isPaid = Boolean(fee.paid);
                   const total = Number(fee.amount || fee.monthlyAmount || 0);
@@ -463,7 +477,7 @@ export const QrFeeScannerModal: React.FC<Props> = ({
                 {matchedStudent.usesBus && (
                   <div className="flex items-center justify-center gap-1.5 text-xs font-bold text-teal-700 dark:text-teal-300 bg-teal-100/60 dark:bg-teal-950/60 px-3 py-1.5 rounded-xl border border-teal-300 dark:border-teal-800">
                     <Bus className="w-4 h-4 text-teal-600" />
-                    <span>Bus Service Active ({matchedStudent.busRoute || "Daily Route"}) • Bus Fee: ₹{matchedStudent.busFee || 1000}</span>
+                    <span>Bus Service Active ({matchedStudent.busRoute || "Daily Route"}) • Bus Fee: ₹{matchedStudent.busFee ?? 0}</span>
                   </div>
                 )}
               </div>

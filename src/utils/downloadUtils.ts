@@ -1,5 +1,6 @@
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
+import { toast } from 'sonner';
 
 export interface DownloadBrandingOptions {
   appName?: string;
@@ -37,7 +38,9 @@ export const downloadAsHTML = (
         }
       } catch { /* cross-origin */ }
     }
-  } catch {}
+  } catch (err) {
+    console.warn('[downloadUtils] CSS stylesheet collection warning:', err);
+  }
 
   const safeFilename = (filename || 'notes').replace(/[^a-zA-Z0-9_\-. ]/g, '_');
 
@@ -86,11 +89,13 @@ export const downloadAsHTML = (
     document.body.appendChild(a);
     a.click();
     setTimeout(() => {
-      try { URL.revokeObjectURL(url); document.body.removeChild(a); } catch {}
+      try { URL.revokeObjectURL(url); document.body.removeChild(a); } catch (cleanupErr) {
+        console.warn('[downloadUtils] Anchor cleanup warning:', cleanupErr);
+      }
     }, 1000);
   } catch (err) {
     console.error('[download] HTML generation failed:', err);
-    alert('Download fail hua. Please try again.');
+    toast.error('Download fail hua. Please try again.');
   }
 };
 
@@ -105,7 +110,7 @@ export const downloadElementAsHTML = (
   const el = document.getElementById(elementId);
   if (!el) {
     console.error(`[download] Element #${elementId} not found`);
-    alert('Download element not found. Please try again.');
+    toast.error('Download element not found. Please try again.');
     return;
   }
   downloadAsHTML(el.innerHTML, filename, branding);
@@ -132,7 +137,7 @@ export const downloadAsMHTML = async (
   const element = document.getElementById(elementId);
   if (!element) {
     console.error(`[download] Element #${elementId} not found`);
-    alert('Download content not found. Please try again.');
+    toast.error('Download content not found. Please try again.');
     return;
   }
 
@@ -266,10 +271,10 @@ export const downloadAsMHTML = async (
     // silent no-op.
     try {
       downloadAsHTML(element.innerHTML, filename, branding);
-      alert('Report MHTML/Webpage format mein successfully download ho gayi.');
+      toast.success('Report MHTML/Webpage format mein successfully download ho gayi.');
     } catch (fallbackError) {
       console.error('[download] HTML fallback failed:', fallbackError);
-      alert('Download fail hua. Please try again.');
+      toast.error('Download fail hua. Please try again.');
     }
   } finally {
     element.style.position = originalStyles.position;

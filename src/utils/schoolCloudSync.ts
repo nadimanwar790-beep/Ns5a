@@ -200,3 +200,99 @@ export async function saveSchoolSettingBlob<T>(
     console.warn(`[schoolCloudSync] Failed saving setting blob ${settingKey}:`, err);
   }
 }
+
+const cleanRtdbNodeKey = (raw: string): string =>
+  String(raw || "").trim().replace(/[.#$[\]/]/g, "_");
+
+async function readSchoolRtdbNode<T>(
+  schoolId: string | undefined,
+  nodeName: string
+): Promise<T[]> {
+  if (!schoolId || isDemoSchoolId(schoolId)) return [];
+  try {
+    const { rtdb } = await import("../firebase");
+    if (!rtdb) return [];
+    const { ref, get } = await import("firebase/database");
+    const snap = await withCloudTimeout(
+      get(ref(rtdb, `schools/${cleanRtdbNodeKey(schoolId)}/${nodeName}`)),
+      3000
+    );
+    if (!snap.exists()) return [];
+    const val = snap.val();
+    if (!val || typeof val !== "object") return [];
+    return Object.values(val) as T[];
+  } catch (err) {
+    console.warn(`[schoolCloudSync] RTDB read failed for ${nodeName}:`, err);
+    return [];
+  }
+}
+
+export async function loadMergedStoreSales<T extends { id: string; receiptNo?: string; updatedAt?: string; date?: string }>(
+  schoolId: string | undefined,
+  localKey?: string
+): Promise<T[]> {
+  const key = localKey || `nst_school_store_sales_${schoolId || "default"}`;
+  const [fsItems, rtdbItems] = await Promise.all([
+    loadSchoolSubcollection<T>(schoolId, "store_sales", key),
+    readSchoolRtdbNode<T>(schoolId, "store_sales"),
+  ]);
+
+  const merged = new Map<string, T>();
+  for (const item of fsItems) {
+    if (item?.id) merged.set(item.id, item);
+  }
+  for (const item of rtdbItems) {
+    if (!item?.id) continue;
+    const prev = merged.get(item.id);
+    if (!prev || (item.updatedAt && (!prev.updatedAt || item.updatedAt >= prev.updatedAt))) {
+      merged.set(item.id, item);
+    }
+  }
+
+  const list = Array.from(merged.values()).sort((a, b) =>
+    String(b.updatedAt || b.date || "").localeCompare(String(a.updatedAt || a.date || ""))
+  );
+  if (list.length > 0) {
+    try {
+      localStorage.setItem(key, JSON.stringify(list));
+    } catch {}
+  }
+  return list;
+}
+
+export async function loadMergedStoreReservations<T extends { id: string; status?: string; bookedAt?: string; razorpayPaymentId?: string }>(
+  schoolId: string | undefined,
+  localKey?: string
+): Promise<T[]> {
+  const key = localKey || `nst_school_store_reservations_${schoolId || "default"}`;
+  const [fsItems, rtdbItems] = await Promise.all([
+    loadSchoolSubcollection<T>(schoolId, "store_reservations", key),
+    readSchoolRtdbNode<T>(schoolId, "store_reservations"),
+  ]);
+
+  const merged = new Map<string, T>();
+  for (const item of fsItems) {
+    if (item?.id) merged.set(item.id, item);
+  }
+  for (const item of rtdbItems) {
+    if (!item?.id) continue;
+    const prev = merged.get(item.id);
+    // Prefer RTDB patch when it holds collected/paid online status
+    if (!prev) {
+      merged.set(item.id, item);
+    } else if (item.razorpayPaymentId || item.status === "collected") {
+      merged.set(item.id, { ...prev, ...item });
+    }
+  }
+
+  const list = Array.from(merged.values()).sort((a, b) =>
+    String(b.bookedAt || "").localeCompare(String(a.bookedAt || ""))
+  );
+  if (list.length > 0) {
+    try {
+      localStorage.setItem(key, JSON.stringify(list));
+    } catch {}
+  }
+  return list;
+}
+

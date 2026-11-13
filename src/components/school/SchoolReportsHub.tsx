@@ -123,24 +123,31 @@ export const SchoolReportsHub: React.FC<Props> = ({
           (f) => f.studentId === s.id && (f.month === selectedMonth || !f.month)
         );
         const studentMonthFee = monthFees.find((f) => f.month === selectedMonth);
-        const monthlyBase = Number(s.monthlyFee || cls?.monthlyFee || 0);
+        const monthlyBase = Number(
+          s.monthlyFee || cls?.defaultFee || cls?.feeStructure?.tuitionFee || 0
+        );
         const busAmt = s.usesBus ? Number(s.busFee || 0) : 0;
         const expectedAmount = studentMonthFee
-          ? Number(studentMonthFee.amount || monthlyBase + busAmt)
+          ? Number(studentMonthFee.amount || studentMonthFee.monthlyAmount || monthlyBase + busAmt)
           : monthlyBase + busAmt;
         const paidAmount = monthFees
-          .filter((f) => f.month === selectedMonth && !f.cancelled)
-          .reduce(
-            (sum, f) =>
-              sum +
-              (f.status === "paid" || f.status === "partial"
-                ? Number(f.paidAmount ?? (f.status === "paid" ? f.amount || expectedAmount : 0))
-                : 0),
-            0
-          );
+          .filter((f) => {
+            const raw = f as MonthlyFee & { cancelled?: boolean; status?: string };
+            return f.month === selectedMonth && !raw.cancelled && raw.status !== "CANCELLED";
+          })
+          .reduce((sum, f) => {
+            const raw = f as MonthlyFee & { status?: string };
+            const isPaid = Boolean(f.paid || raw.status === "paid");
+            const isPartial = raw.status === "partial" || (!isPaid && Number(f.paidAmount || 0) > 0);
+            if (!isPaid && !isPartial) return sum;
+            return sum + Number(f.paidAmount ?? (isPaid ? f.amount || f.monthlyAmount || expectedAmount : 0));
+          }, 0);
         const isPaidFull =
-          Boolean(studentMonthFee && studentMonthFee.status === "paid") ||
-          (expectedAmount > 0 && paidAmount >= expectedAmount);
+          Boolean(
+            studentMonthFee &&
+              (studentMonthFee.paid ||
+                (studentMonthFee as MonthlyFee & { status?: string }).status === "paid")
+          ) || (expectedAmount > 0 && paidAmount >= expectedAmount);
         const dueAmount = Math.max(0, expectedAmount - paidAmount);
         return {
           student: s,
@@ -167,11 +174,28 @@ export const SchoolReportsHub: React.FC<Props> = ({
       let presentDays = 0;
       let absentDays = 0;
       for (const rec of classMonthRecords) {
-        const mark = rec.records?.[s.id];
-        if (!mark || mark === "holiday" || mark === "sunday") continue;
-        workingDays++;
-        if (mark === "present" || mark === "late") presentDays++;
-        else if (mark === "absent") absentDays++;
+        const legacyRecords = (rec as AttendanceRecord & { records?: Record<string, string> }).records;
+        const entry = rec.students?.[s.id] ?? legacyRecords?.[s.id];
+        if (!entry) continue;
+        if (typeof entry === "string") {
+          if (entry === "holiday" || entry === "sunday") continue;
+          workingDays++;
+          if (entry === "present" || entry === "late" || entry === "half_day") presentDays++;
+          else if (entry === "absent" || entry === "leave") absentDays++;
+        } else {
+          if ((entry.status as string) === "holiday" || (entry.status as string) === "sunday") continue;
+          workingDays++;
+          if (
+            entry.present ||
+            entry.status === "present" ||
+            entry.status === "late" ||
+            entry.status === "half_day"
+          ) {
+            presentDays++;
+          } else {
+            absentDays++;
+          }
+        }
       }
       const pct = workingDays > 0 ? Math.round((presentDays / workingDays) * 100) : null;
       return {

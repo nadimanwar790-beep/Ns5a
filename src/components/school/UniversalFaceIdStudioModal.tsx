@@ -22,21 +22,28 @@ import {
   HelpCircle,
   Volume2,
   Lightbulb,
-  ScanFace
+  ScanFace,
+  ImagePlus,
+  Loader2
 } from "lucide-react";
 import {
   saveFaceDescriptor,
   deleteFaceDescriptor,
   extractNeuralDescriptor,
   extractNeuralDescriptorWith3DPose,
+  initArcFaceEngine,
+  isArcFaceReady,
+  getArcFaceError,
   estimateHeadPose,
   draw3DHolographicMesh,
   playAttendanceSuccessChime,
+  playCooldownTick,
   getSchoolFaceDescriptors,
   detectFacesInFrame,
   assessFaceLightingAndQuality,
   enrollStudentFromPhotoUrl,
   enrollTeacherFromPhotoUrl,
+  enrollPersonFromImageFile,
   isActiveRosterPerson,
   FaceDescriptorRecord,
   DetectedFaceBox,
@@ -59,13 +66,15 @@ interface Props {
   onEnrollmentUpdated?: () => void;
 }
 
+const EMPTY_LIST: any[] = [];
+
 export const UniversalFaceIdStudioModal: React.FC<Props> = ({
   isOpen,
   onClose,
   schoolId,
-  students = [],
-  teachers = [],
-  classes = [],
+  students = EMPTY_LIST,
+  teachers = EMPTY_LIST,
+  classes = EMPTY_LIST,
   initialTab,
   initialTargetPerson,
   initialTargetType,
@@ -73,12 +82,18 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
 }) => {
   // Navigation tabs: "STUDENTS" | "TEACHERS" | "TEST"
   const [activeTab, setActiveTab] = useState<"STUDENTS" | "TEACHERS" | "TEST">(initialTab || "STUDENTS");
-  const [localTeachersList, setLocalTeachersList] = useState<any[]>(teachers || []);
+  const [localTeachersList, setLocalTeachersList] = useState<any[]>(() =>
+    teachers && teachers.length > 0 ? teachers : (schoolId ? getLocalTeachers(schoolId) || [] : [])
+  );
+  const teachersPropSig = (teachers || []).map((t) => `${t?.id || ""}:${t?.photoUrl ? 1 : 0}:${t?.active ?? ""}`).join("|");
+  const fetchedTeachersSchoolRef = useRef<string>("");
 
   useEffect(() => {
     if (teachers && teachers.length > 0) {
       setLocalTeachersList(teachers);
-    } else if (schoolId) {
+      fetchedTeachersSchoolRef.current = schoolId;
+    } else if (schoolId && fetchedTeachersSchoolRef.current !== schoolId) {
+      fetchedTeachersSchoolRef.current = schoolId;
       const local = getLocalTeachers(schoolId);
       if (local && local.length > 0) {
         setLocalTeachersList(local);
@@ -90,7 +105,7 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
         }).catch(() => {});
       }
     }
-  }, [teachers, schoolId]);
+  }, [teachersPropSig, schoolId]);
 
   useEffect(() => {
     if (initialTab) {
@@ -154,16 +169,24 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
     time: string;
   } | null>(null);
 
-  // Load descriptors from IndexedDB and Firestore
+  const studentsRef = useRef<any[]>(students);
+  studentsRef.current = students;
+  const teachersRef = useRef<any[]>(localTeachersList);
+  teachersRef.current = localTeachersList;
+  const hasLoadedDescriptorsRef = useRef<boolean>(false);
+
+  // Load descriptors from IndexedDB and Firestore (never flickers the UI once loaded)
   const loadDescriptors = useCallback(async () => {
-    setLoadingMap(true);
+    if (!hasLoadedDescriptorsRef.current) {
+      setLoadingMap(true);
+    }
     try {
       const map = await getSchoolFaceDescriptors(schoolId);
       const rosterById = new Map<string, any>();
-      for (const s of students || []) {
+      for (const s of studentsRef.current || []) {
         if (s?.id) rosterById.set(s.id, s);
       }
-      for (const t of localTeachersList || []) {
+      for (const t of teachersRef.current || []) {
         if (t?.id) rosterById.set(t.id, t);
       }
       const cleanMap: Record<string, FaceDescriptorRecord> = {};
@@ -173,29 +196,124 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
         cleanMap[id] = rec;
       }
       setEnrolledMap(cleanMap);
+      hasLoadedDescriptorsRef.current = true;
     } catch (e) {
       console.warn("Error loading face descriptors:", e);
     } finally {
       setLoadingMap(false);
     }
-  }, [schoolId, students, localTeachersList]);
+  }, [schoolId]);
 
   const [isBatchVectorizing, setIsBatchVectorizing] = useState(false);
+  const [batchVectorizeProgress, setBatchVectorizeProgress] = useState<{ current: number; total: number } | null>(null);
+  const [uploadingPersonId, setUploadingPersonId] = useState<string | null>(null);
+  const fileUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingUploadTargetRef = useRef<{ person: any; role: "STUDENT" | "TEACHER" } | null>(null);
   const [confirmDeleteFaceId, setConfirmDeleteFaceId] = useState<string | null>(null);
+
+  const handleTriggerPhotoUpload = (person: any, role: "STUDENT" | "TEACHER") => {
+    pendingUploadTargetRef.current = { person, role };
+    if (fileUploadInputRef.current) {
+      fileUploadInputRef.current.value = "";
+      fileUploadInputRef.current.click();
+    }
+  };
+
+  const handlePhotoFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const target = pendingUploadTargetRef.current;
+    e.target.value = "";
+    if (!file || !target) return;
+
+    const { person, role } = target;
+    setUploadingPersonId(person.id);
+    if (targetPerson?.id === person.id) {
+      setIsProcessingCapture(true);
+      setGuidanceMsg("फोटो से फेस डेटा तैयार किया जा रहा है...");
+    }
+
+    try {
+      const result = await enrollPersonFromImageFile(
+        file,
+        {
+          id: person.id,
+          name: person.name,
+          rollNo: String(person.rollNo || ""),
+          classId: person.classId,
+          className: person.className,
+          designation: person.designation || (Array.isArray(person.subjects) ? person.subjects.join(", ") : undefined),
+        },
+        schoolId,
+        role
+      );
+
+      if (!result) {
+        const errMsg = "इस फोटो में चेहरा स्पष्ट नहीं मिला। कृपया सामने से ली गई साफ़ फोटो चुनें।";
+        toast.error(errMsg);
+        if (targetPerson?.id === person.id) {
+          setGuidanceMsg("⚠️ " + errMsg);
+        }
+        return;
+      }
+
+      if (role === "STUDENT") {
+        try {
+          await updateStudentPhoto(schoolId, person.id, result.photoDataUrl);
+        } catch {}
+      } else {
+        try {
+          await updateTeacher(schoolId, person.id, { photoUrl: result.photoDataUrl });
+        } catch {}
+      }
+
+      person.photoUrl = result.photoDataUrl;
+      setEnrolledMap((prev) => ({ ...prev, [person.id]: result.record }));
+      playAttendanceSuccessChime();
+      try { hapticStrong(); } catch {}
+      toast.success(`✅ ${person.name} की फोटो से फेस हाजिरी के लिए सेव हो गई!`);
+      speakNotification("फोटो फेस आईडी सेव", `${person.name} की फोटो सफलतापूर्वक सेव हो गई है।`);
+      if (onEnrollmentUpdated) onEnrollmentUpdated();
+
+      if (targetPerson?.id === person.id) {
+        setCaptureSuccess(true);
+        setTimeout(() => {
+          setTargetPerson(null);
+          setCaptureSuccess(false);
+          setIsProcessingCapture(false);
+        }, 1400);
+      }
+    } catch (err: any) {
+      const errMsg = err?.message || "फोटो अपलोड करने में समस्या आई।";
+      toast.error(errMsg);
+      if (targetPerson?.id === person.id) {
+        setGuidanceMsg("⚠️ " + errMsg);
+      }
+    } finally {
+      setUploadingPersonId(null);
+      if (targetPerson?.id === person.id) {
+        setIsProcessingCapture(false);
+      }
+    }
+  };
+
   const handle1ClickClassAutoVectorize = async () => {
-    const list = targetType === "STUDENT" ? students : localTeachersList;
+    const currentRole = activeTab === "TEACHERS" ? "TEACHER" : "STUDENT";
+    const list = currentRole === "STUDENT" ? students : localTeachersList;
     const withPhotos = (list || []).filter((p) => p && isActiveRosterPerson(p) && p.photoUrl && p.photoUrl.trim());
     if (withPhotos.length === 0) {
       toast.error("सक्रिय प्रोफाइल में फोटो उपलब्ध नहीं है। कृपया पहले फोटो जोड़ें।");
       return;
     }
     setIsBatchVectorizing(true);
-    setGuidanceMsg(`⚡ 1-क्लिक में पूरी क्लास (${withPhotos.length} छात्र) सेव हो रही है...`);
+    setBatchVectorizeProgress({ current: 0, total: withPhotos.length });
+    setGuidanceMsg(`⚡ 1-क्लिक में पूरी लिस्ट (${withPhotos.length}) सेव हो रही है...`);
     try {
       let saved = 0;
-      for (const p of withPhotos) {
+      for (let i = 0; i < withPhotos.length; i++) {
+        const p = withPhotos[i];
+        setBatchVectorizeProgress({ current: i + 1, total: withPhotos.length });
         try {
-          const rec = targetType === "TEACHER"
+          const rec = currentRole === "TEACHER"
             ? await enrollTeacherFromPhotoUrl({
                 id: p.id,
                 schoolId,
@@ -224,12 +342,13 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
       }
       await loadDescriptors();
       playAttendanceSuccessChime();
-      toast.success(`✅ पूरी क्लास (${saved} छात्र) 1-क्लिक में 2 सेकंड में सेव हो गई!`);
+      toast.success(`✅ ${saved} प्रोफाइल फोटो से फेस हाजिरी के लिए सेव हो गए!`);
       if (onEnrollmentUpdated) onEnrollmentUpdated();
     } catch {
       toast.error("क्लास सेव करने में समस्या आई");
     } finally {
       setIsBatchVectorizing(false);
+      setBatchVectorizeProgress(null);
     }
   };
 
@@ -237,6 +356,7 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
     if (isOpen) {
       loadDescriptors();
     } else {
+      hasLoadedDescriptorsRef.current = false;
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
@@ -599,18 +719,23 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
         photoDataUrl = canvas.toDataURL("image/jpeg", 0.90);
       }
 
-      // Strictly enforce valid 512-D ArcFace primary descriptor (zero 128-D or canvas fallback)
+      // Strictly enforce valid 512-D ArcFace primary descriptor ONLY (zero 128-D)
       let primaryDesc = final3D.front || final3D.left || final3D.right || [];
       if (primaryDesc.length !== 512 && video) {
         const neural = await extractNeuralDescriptor(video).catch(() => null);
-        if (neural?.descriptor && neural.descriptor.length === 512) {
-          primaryDesc = neural.descriptor;
+        if (neural?.arcfaceDescriptor && neural.arcfaceDescriptor.length === 512) {
+          primaryDesc = neural.arcfaceDescriptor;
         }
       }
 
       if (primaryDesc.length !== 512) {
         setIsProcessingCapture(false);
-        setGuidanceMsg("⚠️ ArcFace 512-D मॉडल तैयार नहीं है या चेहरा स्पष्ट नहीं दिखा। कृपया रोशनी में दोबारा स्कैन करें।");
+        const arcErr = !isArcFaceReady() ? getArcFaceError() : null;
+        setGuidanceMsg(
+          arcErr
+            ? `⚠️ ArcFace 512-D इंजन लोड नहीं हुआ: ${arcErr}`
+            : "⚠️ ArcFace 512-D मॉडल तैयार नहीं है या चेहरा स्पष्ट नहीं दिखा। कृपया रोशनी में दोबारा स्कैन करें या गैलरी से साफ़ फोटो जोड़ें।"
+        );
         return;
       }
 
@@ -631,6 +756,7 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
         className: targetPerson.className,
         photoUrl: photoDataUrl || targetPerson.photoUrl || "",
         descriptor: primaryDesc,
+        arcfaceDescriptor: primaryDesc,
         multiAngleDescriptors: composite3D,
         descriptors3D: composite3D,
         depthMesh: {
@@ -641,7 +767,7 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
           anglesCount: 3,
         },
         enrolledAt: new Date().toISOString(),
-        source: "3d_multi_angle",
+        source: "arcface_512d",
         preprocessOrder: "RGB",
       };
 
@@ -718,19 +844,24 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
         return;
       }
 
-      // Extract genuine 512-D ArcFace neural embedding (strict zero-fallback)
+      // Strictly extract 512-D ArcFace neural embedding ONLY (zero 128-D)
+      await initArcFaceEngine().catch(() => false);
       const neural3D = await extractNeuralDescriptorWith3DPose(canvas).catch(() => null);
       const neuralStd = !neural3D ? await extractNeuralDescriptor(canvas).catch(() => null) : null;
+      const neuralResult = neural3D || neuralStd;
 
       const descriptor =
-        neural3D?.descriptor?.length === 512
-          ? neural3D.descriptor
-          : neuralStd?.descriptor?.length === 512
-          ? neuralStd.descriptor
+        neuralResult?.arcfaceDescriptor?.length === 512
+          ? neuralResult.arcfaceDescriptor
           : null;
 
       if (!descriptor) {
-        setGuidanceMsg("⚠️ ArcFace 512-D वेक्टर तैयार नहीं हो सका। कृपया चेहरा कैमरे के सामने सीधा और पर्याप्त रोशनी में रखें।");
+        const arcErr = !isArcFaceReady() ? getArcFaceError() : null;
+        setGuidanceMsg(
+          arcErr
+            ? `⚠️ ArcFace 512-D इंजन लोड नहीं हो सका: ${arcErr}`
+            : "⚠️ ArcFace 512-D वेक्टर तैयार नहीं हो सका। कृपया चेहरा कैमरे के सामने सीधा रखें या नीचे 'फोटो जोड़ें' से गैलरी फोटो अपलोड करें।"
+        );
         setIsProcessingCapture(false);
         return;
       }
@@ -738,7 +869,6 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
       const source = "arcface_512d";
 
       // 1-TAP FAST ENROLLMENT (2-Second Face ID Generation)
-      // Generates full frontal vector and mirrors 3D composite immediately for maximum convenience and 99%+ accuracy
       const final3D = {
         front: descriptor,
         left: descriptor,
@@ -756,6 +886,7 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
         className: targetPerson.className,
         photoUrl: photoDataUrl || targetPerson.photoUrl || "",
         descriptor,
+        arcfaceDescriptor: descriptor,
         multiAngleDescriptors: final3D,
         descriptors3D: final3D,
         depthMesh: {
@@ -910,7 +1041,7 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
                 </span>
               </div>
               <p className="text-xs text-emerald-200/80">
-                2D फोटो की जगह छात्रों व शिक्षकों का असली लाइव चेहरा कैमरे से स्कैन करें, ताकि हाजिरी 100% सटीक लगे
+                सीधे गैलरी से फोटो जोड़ें (Upload Image) या लाइव कैमरे से स्कैन करें — दोनों से फेस हाजिरी 100% सटीक लगेगी
               </p>
             </div>
           </div>
@@ -1101,7 +1232,7 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
                                   </span>
                                 ) : (
                                   <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                                    {rec?.source === "live_studio" ? "लाइव स्कैन" : "फोटो एन्कोडेड"}
+                                    {rec?.source === "id_photo" ? "🖼️ फोटो से सेव" : rec?.source === "live_studio" ? "लाइव स्कैन" : "फेस आईडी सक्रिय"}
                                   </span>
                                 )}
                               </div>
@@ -1113,20 +1244,40 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
                           </div>
                         </div>
 
-                        <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                        <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleTriggerPhotoUpload(person, isStudent ? "STUDENT" : "TEACHER")}
+                            disabled={uploadingPersonId === person.id}
+                            className="flex-1 py-1.5 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm shadow-indigo-600/20 disabled:opacity-50"
+                            title="बिना लाइव स्कैन किए सीधे गैलरी से फोटो अपलोड करें"
+                          >
+                            {uploadingPersonId === person.id ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                <span>सेव...</span>
+                              </>
+                            ) : (
+                              <>
+                                <ImagePlus className="w-3.5 h-3.5" />
+                                <span>{isEnrolled ? "फोटो बदलें" : "फोटो जोड़ें"}</span>
+                              </>
+                            )}
+                          </button>
+
                           <button
                             onClick={() => {
                               setTargetPerson(person);
                               setTargetType(isStudent ? "STUDENT" : "TEACHER");
                             }}
-                            className={`flex-1 py-1.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer ${
+                            className={`flex-1 py-1.5 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1 transition active:scale-95 cursor-pointer ${
                               isEnrolled
                                 ? "bg-slate-800 hover:bg-slate-700 text-slate-200"
                                 : "bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-md shadow-emerald-600/20"
                             }`}
                           >
                             <Camera className="w-3.5 h-3.5" />
-                            <span>{isEnrolled ? "री-स्कैन (Re-Scan)" : "लाइव चेहरा स्कैन करें"}</span>
+                            <span>{isEnrolled ? "री-स्कैन" : "लाइव स्कैन"}</span>
                           </button>
 
                           {isEnrolled && (
@@ -1414,10 +1565,30 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
                     </>
                   )}
                 </button>
+
+                {/* Direct Image Upload Alternative (No live scan required) */}
+                <button
+                  type="button"
+                  onClick={() => handleTriggerPhotoUpload(targetPerson, targetType)}
+                  disabled={isProcessingCapture || uploadingPersonId === targetPerson.id}
+                  className="w-full py-2.5 rounded-2xl text-indigo-100 font-bold text-xs flex items-center justify-center gap-2 bg-indigo-600/90 hover:bg-indigo-500 border border-indigo-400/40 transition cursor-pointer disabled:opacity-50 active:scale-95"
+                >
+                  <ImagePlus className="w-4 h-4 text-indigo-200" />
+                  <span>🖼️ लाइव स्कैन की जगह गैलरी से फोटो जोड़ें (Add Image)</span>
+                </button>
               </div>
             </div>
           </div>
         )}
+
+        {/* Hidden Gallery/File Picker for Direct Image Enrollment */}
+        <input
+          ref={fileUploadInputRef}
+          type="file"
+          accept="image/*"
+          onChange={handlePhotoFileSelected}
+          className="hidden"
+        />
       </div>
     </div>
   );

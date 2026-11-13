@@ -16,6 +16,7 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { DirectUploadButton } from "../DirectUploadButton";
+import { getDynamicAcademicSessionLabel } from "../../utils/safeBrowserActions";
 import {
   saveStudent,
   updateStudent,
@@ -967,7 +968,7 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                 नया छात्र नामांकन (New Student Admission)
               </h2>
               <p className="text-xs text-blue-200/80">
-                {school.name} • {activeSession?.name || "Session 2026-27"}
+                {school.name} • {activeSession?.name || `Session ${getDynamicAcademicSessionLabel()}`}
               </p>
             </div>
           </div>

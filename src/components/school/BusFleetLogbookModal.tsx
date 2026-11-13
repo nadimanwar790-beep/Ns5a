@@ -131,7 +131,9 @@ export const BusFleetLogbookModal: React.FC<Props> = ({ school, onClose }) => {
     try {
       const saved = localStorage.getItem(`bus_fitness_${school?.id || "demo"}`);
       if (saved) return JSON.parse(saved);
-    } catch {}
+    } catch (err) {
+      console.warn("[BusFleetLogbook] Fitness parse warning:", err);
+    }
     return isDemo ? DEFAULT_FITNESS_RECORDS : [];
   });
 
@@ -139,7 +141,9 @@ export const BusFleetLogbookModal: React.FC<Props> = ({ school, onClose }) => {
     try {
       const saved = localStorage.getItem(`bus_fuel_${school?.id || "demo"}`);
       if (saved) return JSON.parse(saved);
-    } catch {}
+    } catch (err) {
+      console.warn("[BusFleetLogbook] Fuel logs parse warning:", err);
+    }
     return isDemo ? DEFAULT_FUEL_LOGS : [];
   });
 
@@ -148,11 +152,11 @@ export const BusFleetLogbookModal: React.FC<Props> = ({ school, onClose }) => {
   const [fuelVehicle, setFuelVehicle] = useState(fitnessRecords[0]?.vehicleNumber || "");
   const [fuelDate, setFuelDate] = useState(() => new Date().toISOString().split("T")[0]);
   const [fuelType, setFuelType] = useState<"DIESEL" | "CNG" | "PETROL">("DIESEL");
-  const [fuelQuantity, setFuelQuantity] = useState(40);
-  const [fuelRate, setFuelRate] = useState(92.5);
-  const [startKm, setStartKm] = useState(42330);
-  const [endKm, setEndKm] = useState(42510);
-  const [driverName, setDriverName] = useState("Sanjay Kumar");
+  const [fuelQuantity, setFuelQuantity] = useState(isDemo ? 40 : 0);
+  const [fuelRate, setFuelRate] = useState(isDemo ? 92.5 : 0);
+  const [startKm, setStartKm] = useState(0);
+  const [endKm, setEndKm] = useState(0);
+  const [driverName, setDriverName] = useState("");
   const [receiptNumber, setReceiptNumber] = useState("");
 
   const [editingBusId, setEditingBusId] = useState<string | null>(null);
@@ -175,7 +179,9 @@ export const BusFleetLogbookModal: React.FC<Props> = ({ school, onClose }) => {
     setFitnessRecords(updated);
     try {
       localStorage.setItem(`bus_fitness_${school?.id || "demo"}`, JSON.stringify(updated));
-    } catch {}
+    } catch (err) {
+      console.warn("[BusFleetLogbook] Save fitness warning:", err);
+    }
     syncSchoolSubcollection(school?.id, "bus_fitness", updated);
   };
 
@@ -189,7 +195,9 @@ export const BusFleetLogbookModal: React.FC<Props> = ({ school, onClose }) => {
     setFuelLogs(updated);
     try {
       localStorage.setItem(`bus_fuel_${school?.id || "demo"}`, JSON.stringify(updated));
-    } catch {}
+    } catch (err) {
+      console.warn("[BusFleetLogbook] Save fuel warning:", err);
+    }
     syncSchoolSubcollection(school?.id, "bus_fuel", updated);
   };
 
@@ -244,7 +252,7 @@ export const BusFleetLogbookModal: React.FC<Props> = ({ school, onClose }) => {
   const totalKmDriven = fuelLogs.reduce((sum, l) => sum + l.totalKmDriven, 0);
   const avgMileage = totalKmDriven > 0 && fuelLogs.reduce((sum, l) => sum + l.quantityUnits, 0) > 0
     ? (totalKmDriven / fuelLogs.reduce((sum, l) => sum + l.quantityUnits, 0)).toFixed(1)
-    : "4.5";
+    : "0.0";
 
   const handleSendRenewalAlert = async (bus: VehicleFitnessRecord, docName: string, expiryDate: string) => {
     const msg = `🚨 *URGENT TRANSPORT DOCUMENT RENEWAL ALERT*\nSchool: ${school?.name || "School"}\nVehicle: ${bus.vehicleNumber}\nDocument: ${docName}\nExpiry Date: ${expiryDate}\nPlease renew immediately with RTO / Insurance Company to prevent traffic fines or route stoppage.\n- Admin Office`;

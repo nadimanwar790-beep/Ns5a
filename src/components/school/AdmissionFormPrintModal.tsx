@@ -53,7 +53,7 @@ export function calculateAgeOnAprilFirst(
   }
   if (!birthDate || isNaN(birthDate.getTime())) return null;
 
-  const refYear = sessionYear || 2026;
+  const refYear = sessionYear || new Date().getFullYear();
   const targetDate = new Date(refYear, 3, 1); // 1st April
   if (birthDate > targetDate) return { years: 0, months: 0, days: 0 };
 
@@ -1809,7 +1809,7 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
                     ? "bg-amber-500 text-slate-950 shadow-xs"
                     : "text-slate-300 hover:text-white hover:bg-slate-700/60"
                 }`}
-                title="फोटो वाला ओरिजिनल क्लासिक बॉक्स ग्रिड फॉर्म (Life Maker Public School)"
+                title="फोटो वाला ओरिजिनल क्लासिक बॉक्स ग्रिड एडमिशन फॉर्म"
               >
                 📷 क्लासिक फॉर्म
               </button>

@@ -11,6 +11,7 @@ import type {
   ParentTeacherQuery, QueryReply
 } from "../../school-types";
 import { loadSchoolSubcollection, syncSchoolSubcollection } from "../../utils/schoolCloudSync";
+import { shouldUseDemoForSchool } from "../../school-firebase";
 
 interface Props {
   school: School;
@@ -49,55 +50,62 @@ export const ParentTeacherQueryManager: React.FC<Props> = ({
     try {
       const saved = localStorage.getItem(storageKey);
       if (saved) return JSON.parse(saved);
-    } catch {}
-    return [
-      {
-        id: "query-1",
-        schoolId: school?.id || "",
-        studentId: students[0]?.id || "std-1",
-        studentName: students[0]?.name || "Aarav Kumar",
-        rollNo: "01",
-        className: "Class 10 - Section A",
-        category: "leave",
-        subject: "Medical Leave Application (2 Days)",
-        message: "Respected Class Teacher, Aarav has been diagnosed with viral fever. Doctor advised 2 days bed rest. Kindly grant medical leave for 4th and 5th March 2026. Medical certificate attached.",
-        status: "resolved",
-        createdAt: "2026-03-02T09:30:00.000Z",
-        updatedAt: "2026-03-02T11:15:00.000Z",
-        replies: [
-          {
-            id: "rep-1",
-            senderId: "tch-1",
-            senderName: "Dr. Arvind Swaminathan (Class Teacher)",
-            senderRole: "TEACHER",
-            message: "Dear Parent, Leave application has been approved. Please take care of Aarav's health. He can collect missed notes from his classmates upon return.",
-            timestamp: "2026-03-02T11:15:00.000Z"
-          }
-        ]
-      },
-      {
-        id: "query-2",
-        schoolId: school?.id || "",
-        studentId: students[1]?.id || "std-2",
-        studentName: students[1]?.name || "Priya Sharma",
-        rollNo: "02",
-        className: "Class 10 - Section A",
-        category: "academic",
-        subject: "Doubt in Mathematics Trigonometry Chapter",
-        message: "Hello Sir, Priya is having trouble understanding height and distance formula applications. Could you please give 10 minutes extra time during zero period tomorrow?",
-        status: "open",
-        createdAt: "2026-03-03T14:20:00.000Z",
-        updatedAt: "2026-03-03T14:20:00.000Z",
-        replies: []
-      }
-    ];
+    } catch (err) {
+      console.warn("[ParentTeacherQueryManager] Failed reading cached queries:", err);
+    }
+    if (shouldUseDemoForSchool(school?.id)) {
+      return [
+        {
+          id: "query-1",
+          schoolId: school?.id || "",
+          studentId: students[0]?.id || "std-1",
+          studentName: students[0]?.name || "Aarav Kumar",
+          rollNo: "01",
+          className: "Class 10 - Section A",
+          category: "leave",
+          subject: "Medical Leave Application (2 Days)",
+          message: "Respected Class Teacher, Aarav has been diagnosed with viral fever. Doctor advised 2 days bed rest. Kindly grant medical leave for 4th and 5th March 2026. Medical certificate attached.",
+          status: "resolved",
+          createdAt: "2026-03-02T09:30:00.000Z",
+          updatedAt: "2026-03-02T11:15:00.000Z",
+          replies: [
+            {
+              id: "rep-1",
+              senderId: "tch-1",
+              senderName: "Class Teacher",
+              senderRole: "TEACHER",
+              message: "Dear Parent, Leave application has been approved. Please take care of Aarav's health. He can collect missed notes from his classmates upon return.",
+              timestamp: "2026-03-02T11:15:00.000Z"
+            }
+          ]
+        },
+        {
+          id: "query-2",
+          schoolId: school?.id || "",
+          studentId: students[1]?.id || "std-2",
+          studentName: students[1]?.name || "Priya Sharma",
+          rollNo: "02",
+          className: "Class 10 - Section A",
+          category: "academic",
+          subject: "Doubt in Mathematics Trigonometry Chapter",
+          message: "Hello Sir, Priya is having trouble understanding height and distance formula applications. Could you please give 10 minutes extra time during zero period tomorrow?",
+          status: "open",
+          createdAt: "2026-03-03T14:20:00.000Z",
+          updatedAt: "2026-03-03T14:20:00.000Z",
+          replies: []
+        }
+      ];
+    }
+    return [];
   });
 
   // Sync to localStorage
   useEffect(() => {
     try {
       localStorage.setItem(storageKey, JSON.stringify(queries));
-    } catch {}
+    } catch (err) {
+      console.warn("[ParentTeacherQueryManager] Failed saving queries:", err);
+    }
   }, [queries, storageKey]);
 
   useEffect(() => {
@@ -107,7 +115,7 @@ export const ParentTeacherQueryManager: React.FC<Props> = ({
       .then((cloud) => {
         if (active && cloud.length > 0) setQueries(cloud);
       })
-      .catch(() => {});
+      .catch((err) => console.warn("[ParentTeacherQueryManager] Cloud query load failed:", err));
     return () => { active = false; };
   }, [school?.id, storageKey]);
 

@@ -64,7 +64,20 @@ import {
 } from '../services/sessionManager';
 import { getDemoSchoolDataset } from './school/demoDataStore';
 import { INITIAL_STUDENTS } from './school/feeReceiptUtils';
-import { saveSchoolUserProfile, getStudent, getLocalStudents, setLocalStudents, getStudentOrAdmissionRecord, dispatchOfficialSchoolWelcomeMessage } from '../school-firebase';
+import {
+  saveSchoolUserProfile,
+  getStudent,
+  getSchool,
+  findStudentInSchoolRemote,
+  saveUserLinkedStudents,
+  getUserLinkedStudents,
+  getStudentLinkKey,
+  getLocalStudents,
+  setLocalStudents,
+  getStudentOrAdmissionRecord,
+  dispatchOfficialSchoolWelcomeMessage,
+} from '../school-firebase';
+import { isActiveRosterPerson, deleteFaceDescriptor } from '../utils/faceRecognitionEngine';
 
 interface Props {
   onLogin: (user: User) => void;
@@ -1239,18 +1252,52 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
     setError(null);
 
     try {
-      const studentId = matched.studentId || matched.id;
-      const targetSchoolId = matched.schoolId || localStorage.getItem('nst_active_school_id') || 'dps_gurgaon_sector45';
+      const studentId = matched?.studentId || matched?.id;
+      const targetSchoolId = matched?.schoolId || localStorage.getItem('nst_active_school_id') || '';
       const cleanSchoolId = targetSchoolId;
 
-      // 1. Resolve student record strictly from active school roster
-      let matchedStudent = getStudent(studentId, cleanSchoolId);
+      if (!studentId || !cleanSchoolId) {
+        setError("Face ID से स्कूल/छात्र की पहचान पूरी नहीं हो सकी। कृपया अपना स्कूल चुनकर पुनः प्रयास करें।");
+        return;
+      }
+
+      // 1. Verify against authoritative cloud record first so deleted/inactive students cannot log in
+      const [remoteStudent, localOrDbStudent, schoolRecord] = await Promise.all([
+        findStudentInSchoolRemote(cleanSchoolId, studentId, matched.admissionNo).catch(() => null),
+        getStudent(cleanSchoolId, studentId).catch(() => null),
+        getSchool(cleanSchoolId).catch(() => null),
+      ]);
+
+      const authoritativeRecord = remoteStudent || localOrDbStudent;
+      if (remoteStudent && !isActiveRosterPerson(remoteStudent)) {
+        void deleteFaceDescriptor(studentId, cleanSchoolId).catch(() => {});
+        setError("यह छात्र रिकॉर्ड स्कूल से हटाया जा चुका है या निष्क्रिय है। कृपया स्कूल एडमिन से संपर्क करें।");
+        return;
+      }
+
+      let matchedStudent: any = authoritativeRecord;
       if (!matchedStudent) {
-        matchedStudent = getStudentOrAdmissionRecord(studentId, cleanSchoolId);
+        matchedStudent = await getStudentOrAdmissionRecord(cleanSchoolId, {
+          id: studentId,
+          admissionNo: matched.admissionNo,
+          name: matched.name,
+        }).catch(() => null);
       }
       if (!matchedStudent) {
         const pool = getLocalStudents(cleanSchoolId);
-        matchedStudent = pool.find((s: any) => s.id === studentId || s.rollNo === matched.rollNo || s.name?.toLowerCase() === matched.name?.toLowerCase());
+        matchedStudent = pool.find(
+          (s: any) =>
+            isActiveRosterPerson(s) &&
+            (s.id === studentId ||
+              (matched.admissionNo && s.admissionNo === matched.admissionNo) ||
+              (s.rollNo === matched.rollNo && s.name?.toLowerCase() === matched.name?.toLowerCase()))
+        );
+      }
+
+      if (matchedStudent && !isActiveRosterPerson(matchedStudent)) {
+        void deleteFaceDescriptor(studentId, cleanSchoolId).catch(() => {});
+        setError("यह छात्र रिकॉर्ड स्कूल से हटाया जा चुका है। कृपया स्कूल एडमिन से संपर्क करें।");
+        return;
       }
 
       // Check if existing user account exists for this student's email/phone to retain auth identity
@@ -1266,59 +1313,95 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
         } catch {}
       }
 
-      const rollVal = matched.rollNo || matchedStudent?.rollNo || '01';
+      const rollVal = matchedStudent?.rollNo || matched.rollNo || '01';
       const studentName = matchedStudent?.name || matched.name || 'Student';
-      const classLevel = matchedStudent?.classId || matched.classId || 'cls_10';
-      const className = matchedStudent?.className || matched.className || 'Class 10';
+      const classLevel = matchedStudent?.classId || matched.classId || 'cls_nursery';
+      const className = matchedStudent?.className || matched.className || '';
+      const resolvedSchoolName =
+        schoolRecord?.name ||
+        matched.schoolName ||
+        (matchedStudent as any)?.schoolName ||
+        'School';
       const studentPhoto = matchedStudent?.photoUrl || matched.photoUrl || '';
-      const admNo = matchedStudent?.admissionNo || matched.admissionNo || `ADM-${rollVal}`;
-      const parentPhone = matchedStudent?.phone || matched.phone || existingAccount?.mobile || '9876543210';
-      const finalEmail = matchedStudent?.email || existingAccount?.email || `${(studentName || 'student').toLowerCase().replace(/\s+/g, '')}@student.dps.edu.in`;
-      const finalUserId = existingAccount?.id || existingAccount?.uid || studentId || `student_${Date.now()}`;
+      const admNo = matchedStudent?.admissionNo || matched.admissionNo || `ADM-${String(studentId).slice(-6).toUpperCase()}`;
+      const parentPhone = matchedStudent?.phone || matched.phone || existingAccount?.mobile || '';
+      const resolvedMonthlyFee = Number(matchedStudent?.monthlyFee ?? matched.monthlyFee ?? 0);
+      const finalEmail =
+        matchedStudent?.email ||
+        existingAccount?.email ||
+        `${(studentName || 'student').toLowerCase().replace(/[^a-z0-9]/g, '')}@student.nsta.in`;
+      const finalUserId = existingAccount?.id || existingAccount?.uid || studentId;
 
       const studentUser: User = {
         ...(existingAccount || {}),
         id: finalUserId,
         uid: finalUserId,
+        studentId: studentId,
         name: studentName,
         email: finalEmail,
         role: 'STUDENT',
         displayId: `ROLL-${rollVal}`,
         schoolId: cleanSchoolId,
+        schoolName: resolvedSchoolName,
         userType: 'SCHOOL_STUDENT',
         classLevel: classLevel,
+        classId: classLevel,
         className: className,
         admissionNo: admNo,
         rollNo: rollVal,
         mobile: parentPhone,
         avatar: studentPhoto,
-        fatherName: matchedStudent?.fatherName || matched.fatherName || existingAccount?.fatherName || 'Guardian',
+        fatherName: matchedStudent?.fatherName || matched.fatherName || existingAccount?.fatherName || '',
         motherName: matchedStudent?.motherName || matched.motherName || existingAccount?.motherName || '',
-        bloodGroup: matchedStudent?.bloodGroup || matched.bloodGroup || existingAccount?.bloodGroup || 'O+',
-        monthlyFee: matchedStudent?.monthlyFee || 1800,
+        bloodGroup: matchedStudent?.bloodGroup || matched.bloodGroup || existingAccount?.bloodGroup || '',
+        monthlyFee: resolvedMonthlyFee,
         provider: 'face_recognition_login',
         isFaceLogin: true,
         loginTimestamp: new Date().toISOString()
       };
 
-      // 2. Ensure student exists in local student roster
+      const studentEntry: any = {
+        type: 'STUDENT',
+        id: studentId,
+        schoolId: cleanSchoolId,
+        schoolName: resolvedSchoolName,
+        name: studentName,
+        rollNo: rollVal,
+        admissionNo: admNo,
+        phone: parentPhone,
+        fatherName: studentUser.fatherName,
+        motherName: studentUser.motherName,
+        bloodGroup: studentUser.bloodGroup,
+        classId: classLevel,
+        className: className,
+        photoUrl: studentPhoto,
+        monthlyFee: resolvedMonthlyFee,
+        active: true,
+        createdAt: matchedStudent?.createdAt || new Date().toISOString(),
+        linkedAt: new Date().toISOString(),
+      };
+
+      // 2. Sync active student cache & linked student binding cleanly
       try {
-        const studentEntry = {
-          id: studentUser.id,
-          schoolId: cleanSchoolId,
-          name: studentUser.name,
-          rollNo: rollVal,
-          admissionNo: admNo,
-          phone: parentPhone,
-          classId: classLevel,
-          className: className,
-          photoUrl: studentPhoto,
-          monthlyFee: 1800,
-          active: true,
-          createdAt: new Date().toISOString()
-        };
+        localStorage.setItem('nst_active_school_id', cleanSchoolId);
         const curPool = getLocalStudents(cleanSchoolId);
-        setLocalStudents(cleanSchoolId, [studentEntry, ...curPool.filter((s: any) => s.id !== studentUser.id && (!admNo || s.admissionNo !== admNo))]);
+        setLocalStudents(cleanSchoolId, [
+          studentEntry,
+          ...curPool.filter((s: any) => s.id !== studentId && (!admNo || s.admissionNo !== admNo)),
+        ]);
+        const compositeKey = getStudentLinkKey(studentEntry, cleanSchoolId);
+        const existingLinks = existingAccount
+          ? await getUserLinkedStudents(finalUserId).catch(() => null)
+          : null;
+        const mergedLinks = Array.isArray(existingLinks?.students)
+          ? [
+              studentEntry,
+              ...existingLinks!.students.filter(
+                (s: any) => !(s.id === studentId && (s.schoolId || cleanSchoolId) === cleanSchoolId)
+              ),
+            ]
+          : [studentEntry];
+        await saveUserLinkedStudents(finalUserId, mergedLinks, compositeKey).catch(() => {});
       } catch {}
 
       // 3. Complete login instantly in UI
@@ -1329,7 +1412,7 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
         void dispatchOfficialSchoolWelcomeMessage(studentUser, {
           force: false,
           triggerPopup: true,
-          schoolName: 'Delhi Public School'
+          schoolName: resolvedSchoolName,
         });
         localStorage.setItem(`nst_show_welcome_popup_${studentUser.id}`, 'true');
       } catch {}
@@ -1342,7 +1425,7 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
         role: 'SCHOOL_STUDENT',
         name: studentUser.name,
         email: studentUser.email,
-        studentRef: studentUser.id,
+        studentRef: studentId,
         classId: studentUser.classLevel,
         sessionId: '2026-27'
       }).catch(() => {});

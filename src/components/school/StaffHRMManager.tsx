@@ -294,6 +294,7 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [confirmDeleteStaffId, setConfirmDeleteStaffId] = useState<string | null>(null);
   const [confirmDeletePayoutId, setConfirmDeletePayoutId] = useState<string | null>(null);
+  const [confirmDeleteAccountantId, setConfirmDeleteAccountantId] = useState<string | null>(null);
 
   // New staff modal
   const [showAddStaff, setShowAddStaff] = useState(false);
@@ -361,7 +362,9 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
     try {
       const saved = localStorage.getItem(`nst_admin_att_${school?.id || "default"}_${todayStr()}`);
       if (saved) return JSON.parse(saved);
-    } catch {}
+    } catch (err) {
+      console.warn("[StaffHRMManager] Failed reading admin attendance:", err);
+    }
     return { date: todayStr(), present: false };
   });
 
@@ -376,7 +379,9 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
     setAdminAttendanceRecord(updated);
     try {
       localStorage.setItem(adminAttKey, JSON.stringify(updated));
-    } catch {}
+    } catch (err) {
+      console.warn("[StaffHRMManager] Failed saving admin attendance:", err);
+    }
     showToast("success", `✓ एडमिन ${type === "in" ? "Punch-In (आगमन)" : "Punch-Out (प्रस्थान)"} समय (${nowTime}) सफलतापूर्वक दर्ज हो गया!`);
     speakNotification(
       "एडमिन हाजिरी दर्ज",
@@ -756,7 +761,7 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
                   </span>
                 </div>
                 <p className="text-xs text-indigo-200 mt-0.5">
-                  {school.principalName || "Dr. Arvind Swaminathan"} • ID: <span className="font-mono font-bold text-amber-300">ADMIN-01</span>
+                  {school.principalName || "Principal / School Admin"} • ID: <span className="font-mono font-bold text-amber-300">ADMIN-01</span>
                 </p>
                 <div className="flex items-center gap-3 text-[11px] text-slate-300 mt-1 font-mono">
                   <span>In Time: <strong className="text-emerald-400">{adminAttendanceRecord.inTime || "--:--"}</strong></span>
@@ -1107,20 +1112,38 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
                       </div>
 
                       <div className="flex items-center gap-2 self-end sm:self-auto">
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            if (window.confirm(`क्या आप ${acc.name} को हटाना चाहते हैं?`)) {
-                              await deleteAccountant(school.id, acc.id);
-                              setAccountantsList((prev) => prev.filter((a) => a.id !== acc.id));
-                              showToast("success", `${acc.name} को सफलता पूर्वक हटा दिया गया।`);
-                            }
-                          }}
-                          className="px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 hover:bg-rose-100 text-xs font-bold transition flex items-center gap-1 cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          <span>हटाएं</span>
-                        </button>
+                        {confirmDeleteAccountantId === acc.id ? (
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                await deleteAccountant(school.id, acc.id);
+                                setAccountantsList((prev) => prev.filter((a) => a.id !== acc.id));
+                                setConfirmDeleteAccountantId(null);
+                                showToast("success", `${acc.name} को सफलता पूर्वक हटा दिया गया।`);
+                              }}
+                              className="px-2.5 py-1.5 rounded-xl bg-rose-600 text-white hover:bg-rose-700 text-xs font-black transition cursor-pointer"
+                            >
+                              पक्का हटाएं
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteAccountantId(null)}
+                              className="px-2.5 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold cursor-pointer"
+                            >
+                              रद्द करें
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteAccountantId(acc.id)}
+                            className="px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 hover:bg-rose-100 text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>हटाएं</span>
+                          </button>
+                        )}
                       </div>
                     </div>
 
@@ -2132,7 +2155,7 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
                 onSubmit={async (e) => {
                   e.preventDefault();
                   if (!accountantForm.name.trim() || !accountantForm.phone.trim()) {
-                    alert("कृपया नाम व मोबाइल नंबर दर्ज करें।");
+                    showToast("error", "कृपया नाम व मोबाइल नंबर दर्ज करें।");
                     return;
                   }
 

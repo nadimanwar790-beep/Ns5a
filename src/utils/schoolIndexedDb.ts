@@ -78,15 +78,16 @@ function primeLegacyKeysSynchronously(): Array<[string, any]> {
       }
     }
 
-    // Migrate legacy single-school global logo strictly to default school key and purge global key
+    // Migrate legacy single-school global logo only if an active school ID exists
     const legacyLogo =
       localStorage.getItem("nst_active_school_logo") ||
       localStorage.getItem("nst_school_logo");
-    if (legacyLogo && typeof legacyLogo === "string" && legacyLogo.trim()) {
-      const defaultLogoKey = "school_logo:dps_gurgaon_sector45";
-      if (!memCache.has(defaultLogoKey)) {
-        memCache.set(defaultLogoKey, legacyLogo.trim());
-        migrated.push([defaultLogoKey, legacyLogo.trim()]);
+    const activeSchoolId = localStorage.getItem("nst_active_school_id")?.trim();
+    if (legacyLogo && typeof legacyLogo === "string" && legacyLogo.trim() && activeSchoolId) {
+      const targetLogoKey = `school_logo:${activeSchoolId}`;
+      if (!memCache.has(targetLogoKey)) {
+        memCache.set(targetLogoKey, legacyLogo.trim());
+        migrated.push([targetLogoKey, legacyLogo.trim()]);
       }
     }
   } catch (err) {
@@ -107,19 +108,25 @@ export function hydrateSchoolIndexedDb(): Promise<void> {
       if (initialMigratedEntries.length > 0) {
         await Promise.all(
           initialMigratedEntries.map(([k, v]) =>
-            schoolIdb.setItem(k, v).catch(() => {})
+            schoolIdb.setItem(k, v).catch((err) => {
+              console.warn(`[schoolIndexedDb] Migration write warning (${k}):`, err);
+            })
           )
         );
         if (typeof localStorage !== "undefined") {
           for (const [k] of initialMigratedEntries) {
             try {
               localStorage.removeItem(k);
-            } catch {}
+            } catch (err) {
+              console.warn(`[schoolIndexedDb] LocalStorage cleanup warning (${k}):`, err);
+            }
           }
           try {
             localStorage.removeItem("nst_active_school_logo");
             localStorage.removeItem("nst_school_logo");
-          } catch {}
+          } catch (err) {
+            console.warn("[schoolIndexedDb] Logo key cleanup warning:", err);
+          }
         }
       }
 

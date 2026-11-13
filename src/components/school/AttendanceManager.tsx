@@ -12,6 +12,7 @@ import {
   Cake, Gift, Heart, Wifi, WifiOff, Cloud, CloudOff, RefreshCw, Volume2, Clock
 } from "lucide-react";
 import { toast } from "sonner";
+import { safeOpenExternalUrl } from "../../utils/safeBrowserActions";
 import { speakNotification } from "../../utils/voiceNotifyEngine";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 import { QrAttendanceScannerModal } from "./QrAttendanceScannerModal";
@@ -431,7 +432,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
       : `आदरणीय अभिभावक, आपका बच्चा ${student.name} (Roll #${student.rollNo || "-"}) आज विद्यालय में उपस्थित नहीं हुआ है। यदि अवकाश का कारण है तो कृपया विद्यालय को अवगत कराएं। - ${className}`;
     
     if (cleanPhone) {
-      window.open(`https://wa.me/91${cleanPhone.slice(-10)}?text=${encodeURIComponent(msg)}`, "_blank");
+      safeOpenExternalUrl(`https://wa.me/91${cleanPhone.slice(-10)}?text=${encodeURIComponent(msg)}`);
     } else {
       toast.error("इस छात्र के पेरेंट्स का फोन नंबर उपलब्ध नहीं है।");
     }
@@ -507,17 +508,36 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 print:min-h-0 print:bg-white">
       <style>{`
         @media print {
-          @page { size: landscape; margin: 5mm; }
-          .attendance-matrix-table th,
-          .attendance-matrix-table td {
-            padding: 2px 3px !important;
-            font-size: 8.5px !important;
-            min-width: 0 !important;
-            position: static !important;
+          @page { size: A4 landscape; margin: 4mm; }
+          html, body {
+            width: 100% !important;
+            overflow: visible !important;
+            margin: 0 !important;
+            padding: 0 !important;
           }
           .attendance-matrix-table {
             width: 100% !important;
-            table-layout: auto !important;
+            table-layout: fixed !important;
+            border-collapse: collapse !important;
+          }
+          .attendance-matrix-table th,
+          .attendance-matrix-table td {
+            padding: 1.5px 2px !important;
+            font-size: 7.5px !important;
+            line-height: 1.15 !important;
+            min-width: 0 !important;
+            position: static !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            white-space: nowrap !important;
+          }
+          .attendance-matrix-table th:first-child,
+          .attendance-matrix-table td:first-child {
+            width: 24px !important;
+          }
+          .attendance-matrix-table th:nth-child(2),
+          .attendance-matrix-table td:nth-child(2) {
+            width: 82px !important;
           }
         }
       `}</style>

@@ -9,9 +9,11 @@ import {
   saveUserLinkedStudents,
   getUserLinkedStudents,
   getLocalUserLinkedStudents,
+  setLocalUserLinkedStudents,
   getLocalLinkedTeacher,
   setLocalLinkedTeacher,
   getStudentLinkKey,
+  verifyLinkedStudentsAuthoritative,
   findStudentInSchoolRemote,
   getSchool,
   subscribeToAllSchools,
@@ -22,6 +24,7 @@ import {
   detachUserFromSchool,
   deleteSchool,
 } from "../../school-firebase";
+import { toast } from "sonner";
 import { getDemoSchoolDataset, isDemoDataEnabled, setDemoDataEnabled } from "./demoDataStore";
 import { syncLinkedStudentsToPushSubscription } from "../../utils/schoolPushClient";
 import { QrScannerModal } from "../QrScannerModal";
@@ -346,15 +349,18 @@ export const SchoolEcosystem: React.FC<Props> = ({
   const [studentActiveTab, setStudentActiveTab] = useState<string>("overview");
 
   // 3. PERSISTENT MULTI-STUDENT LINKED LIST + TEACHER ENTITY
+  const isDirectStudentLoginProvider =
+    user?.provider === "qr_student_id" || user?.provider === "face_recognition_login";
+
   const [linkedStudents, setLinkedStudents] = useState<any[]>(() => {
-    if (user?.provider === "qr_student_id") {
+    if (isDirectStudentLoginProvider) {
       const cleanClsName =
         user.className && user.className !== user.rollNo && !/^0\d+$/.test(String(user.className).trim())
           ? user.className
           : undefined;
-      const qrSingle = sanitizeStudentLink({
+      const directSingle = sanitizeStudentLink({
         type: "STUDENT",
-        id: user.id || user.uid,
+        id: user.studentId || user.id || user.uid,
         name: user.name || "Student",
         classId: user.classId || user.classLevel || "cls_nursery",
         className: cleanClsName,
@@ -362,7 +368,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
         admissionNo:
           user.admissionNo && !user.admissionNo.startsWith("NSTA-") && !user.admissionNo.includes(":")
             ? user.admissionNo
-            : `ADM-${String(user.id || user.uid || "26").slice(-6).toUpperCase()}`,
+            : `ADM-${String(user.studentId || user.id || user.uid || "26").slice(-6).toUpperCase()}`,
         fatherName: user.fatherName || "",
         motherName: user.motherName || "",
         bloodGroup: user.bloodGroup || "",
@@ -370,10 +376,24 @@ export const SchoolEcosystem: React.FC<Props> = ({
         address: user.address || "",
         phone: user.mobile || user.phone || "",
         monthlyFee: user.monthlyFee,
+        photoUrl: user.avatar || user.photoURL || user.photoUrl || "",
         schoolId: user.schoolId || defaultSchoolId,
         schoolName: user.schoolName || "",
       });
-      return qrSingle ? [qrSingle] : [];
+      // For face/QR login, also preserve any other family students already bound to this account
+      try {
+        const localBundle = getLocalUserLinkedStudents(uid);
+        if (localBundle && Array.isArray(localBundle.students) && localBundle.students.length > 0) {
+          const map = new Map<string, any>();
+          if (directSingle) map.set(getStudentLinkKey(directSingle, defaultSchoolId), directSingle);
+          localBundle.students.map(sanitizeStudentLink).filter(Boolean).forEach((st: any) => {
+            const k = getStudentLinkKey(st, defaultSchoolId);
+            if (!map.has(k)) map.set(k, st);
+          });
+          return Array.from(map.values());
+        }
+      } catch {}
+      return directSingle ? [directSingle] : [];
     }
     try {
       const localBundle = getLocalUserLinkedStudents(uid);
@@ -423,7 +443,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
   useEffect(() => {
     if (typeof window === "undefined" || !uid) return;
     const handleIdbHydrated = () => {
-      if (user?.provider !== "qr_student_id") {
+      if (!isDirectStudentLoginProvider) {
         const localBundle = getLocalUserLinkedStudents(uid);
         if (localBundle && Array.isArray(localBundle.students) && localBundle.students.length > 0) {
           const cleaned = localBundle.students.map(sanitizeStudentLink).filter(Boolean);
@@ -442,7 +462,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
     };
     window.addEventListener("school-idb-hydrated", handleIdbHydrated);
     return () => window.removeEventListener("school-idb-hydrated", handleIdbHydrated);
-  }, [uid, defaultSchoolId]);
+  }, [uid, defaultSchoolId, isDirectStudentLoginProvider]);
 
   // Active student derived from multi-school + multi-student composite key
   const linkedEntity =
@@ -452,51 +472,125 @@ export const SchoolEcosystem: React.FC<Props> = ({
     linkedStudents[0] ||
     null;
 
-  // Hydrate permanently linked students from Firebase whenever user logs in with their User ID!
+  // Hydrate linked students from Firebase AND prune any students deleted/deactivated in their school!
   useEffect(() => {
     if (!uid || isExplicitAdmin || isTeacherRole || user?.provider === "qr_teacher_id") return;
     let mounted = true;
-    getUserLinkedStudents(uid)
-      .then((bundle) => {
-        if (!mounted || !bundle || !Array.isArray(bundle.students) || bundle.students.length === 0) return;
-        const cleanedRemote = bundle.students.map(sanitizeStudentLink).filter(Boolean);
-        setLinkedStudents((prev) => {
-          const mergedMap = new Map<string, any>();
-          cleanedRemote.forEach((s: any) => mergedMap.set(getStudentLinkKey(s, defaultSchoolId), s));
-          prev.forEach((s: any) => {
-            const k = getStudentLinkKey(s, defaultSchoolId);
-            if (!mergedMap.has(k)) mergedMap.set(k, s);
-          });
-          return Array.from(mergedMap.values());
+
+    const hydrateAndPrune = async () => {
+      try {
+        const bundle = await getUserLinkedStudents(uid);
+        if (!mounted) return;
+
+        const cleanedRemote = Array.isArray(bundle?.students)
+          ? bundle!.students.map(sanitizeStudentLink).filter(Boolean)
+          : [];
+
+        // Build unified candidate list from remote + current state (without keeping students explicitly cleared in remote)
+        const remoteHasExplicitList = Boolean(bundle && Array.isArray(bundle.students));
+        const candidateMap = new Map<string, any>();
+
+        cleanedRemote.forEach((s: any) => {
+          const k = getStudentLinkKey(s, defaultSchoolId);
+          if (k) candidateMap.set(k, s);
         });
+
+        // Preserve any freshly initialized direct QR/Face login student or offline un-synced entries
+        if (!remoteHasExplicitList || isDirectStudentLoginProvider) {
+          linkedStudents.forEach((s: any) => {
+            const k = getStudentLinkKey(s, defaultSchoolId);
+            if (k && !candidateMap.has(k)) candidateMap.set(k, s);
+          });
+        }
+
+        const candidates = Array.from(candidateMap.values());
+        if (candidates.length === 0) {
+          if (remoteHasExplicitList && linkedStudents.length > 0 && !isDirectStudentLoginProvider) {
+            setLinkedStudents([]);
+            setActiveStudentKey("");
+          }
+          return;
+        }
+
+        // Verify every candidate against each school's authoritative cloud student roster
+        const { validStudents, removedStudents, verifiedAnySchool } =
+          await verifyLinkedStudentsAuthoritative(candidates, defaultSchoolId);
+
+        if (!mounted) return;
+
+        const cleanedValid = validStudents.map(sanitizeStudentLink).filter(Boolean);
+        const removedIds = new Set(removedStudents.map((r: any) => getStudentLinkKey(r, defaultSchoolId)));
+
+        setLinkedStudents(cleanedValid);
+
+        // Pick a valid active student key
+        let nextActiveKey = "";
         if (typeof window !== "undefined") {
           const sp = new URLSearchParams(window.location.search);
           const urlSid = sp.get("studentId");
           const urlSchId = sp.get("schoolId");
           if (urlSid) {
-            const foundUrl = cleanedRemote.find(
+            const foundUrl = cleanedValid.find(
               (s: any) => s.id === urlSid && (!urlSchId || s.schoolId === urlSchId)
             );
-            if (foundUrl) {
-              setActiveStudentKey(getStudentLinkKey(foundUrl, defaultSchoolId));
-              return;
-            }
+            if (foundUrl) nextActiveKey = getStudentLinkKey(foundUrl, defaultSchoolId);
           } else if (urlSchId) {
-            const foundBySchool = cleanedRemote.find((s: any) => s.schoolId === urlSchId);
-            if (foundBySchool) {
-              setActiveStudentKey(getStudentLinkKey(foundBySchool, defaultSchoolId));
-            }
+            const foundBySchool = cleanedValid.find((s: any) => s.schoolId === urlSchId);
+            if (foundBySchool) nextActiveKey = getStudentLinkKey(foundBySchool, defaultSchoolId);
           }
         }
-        if (bundle.activeStudentKey || bundle.activeStudentId) {
-          setActiveStudentKey((cur) => cur || bundle.activeStudentKey || bundle.activeStudentId || getStudentLinkKey(cleanedRemote[0], defaultSchoolId));
+
+        if (!nextActiveKey) {
+          const preferredKey =
+            (!removedIds.has(activeStudentKey) && activeStudentKey) ||
+            bundle?.activeStudentKey ||
+            bundle?.activeStudentId ||
+            "";
+          const stillValidPreferred = cleanedValid.find(
+            (s: any) =>
+              getStudentLinkKey(s, defaultSchoolId) === preferredKey || s.id === preferredKey
+          );
+          nextActiveKey = stillValidPreferred
+            ? getStudentLinkKey(stillValidPreferred, defaultSchoolId)
+            : cleanedValid[0]
+            ? getStudentLinkKey(cleanedValid[0], defaultSchoolId)
+            : "";
         }
-      })
-      .catch(() => {});
+
+        setActiveStudentKey(nextActiveKey);
+
+        if (removedStudents.length > 0 || verifiedAnySchool) {
+          try {
+            setLocalUserLinkedStudents(uid, cleanedValid, nextActiveKey);
+            localStorage.setItem("nst_linked_students", JSON.stringify(cleanedValid));
+            localStorage.setItem(
+              `nst_user_linked_students_${uid}`,
+              JSON.stringify({ students: cleanedValid, activeStudentKey: nextActiveKey })
+            );
+          } catch {}
+          if (removedStudents.length > 0) {
+            void saveUserLinkedStudents(uid, cleanedValid, nextActiveKey);
+            void syncLinkedStudentsToPushSubscription(uid, cleanedValid);
+            const removedNames = removedStudents
+              .map((s: any) => s.name)
+              .filter(Boolean)
+              .slice(0, 2)
+              .join(", ");
+            toast.info(
+              removedNames
+                ? `स्कूल से हटाए गए छात्र (${removedNames}) आपके अकाउंट से अपने-आप हटा दिए गए।`
+                : "स्कूल से हटाए गए छात्र आपके अकाउंट से हटा दिए गए।"
+            );
+          }
+        }
+      } catch {}
+    };
+
+    void hydrateAndPrune();
     return () => {
       mounted = false;
     };
-  }, [uid, isExplicitAdmin, isTeacherRole]);
+  }, [uid, isExplicitAdmin, isTeacherRole, defaultSchoolId, isDirectStudentLoginProvider]);
 
   // Auto-attach siblings linked via Admin (familyGroupId / siblingStudentIds) to the Parent's linkedStudents list
   useEffect(() => {
@@ -653,7 +747,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
   const effectiveSchoolId =
     (isExplicitAdmin && selectedAdminSchoolId)
       ? selectedAdminSchoolId
-      : (linkedEntity?.schoolId || profile?.schoolId || user?.schoolId || defaultSchoolId || (allSchools[0]?.id || "dps_gurgaon_sector45"));
+      : (linkedEntity?.schoolId || profile?.schoolId || user?.schoolId || defaultSchoolId || (allSchools[0]?.id || ""));
 
   // ── QR SCAN & MANUAL INPUT HANDLER ──────────────────────────────────────────
   const handleLinkSuccess = (decodedRaw: string, targetType: "AUTO" | "STUDENT" | "TEACHER" = "AUTO") => {

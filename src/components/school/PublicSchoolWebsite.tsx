@@ -9,6 +9,7 @@ import {
 import { saveSchoolPublicInquiry, generateId } from "../../school-firebase";
 import { toast } from "sonner";
 import { cleanLogoUrl, getSavedSchoolLogo, isAppLogo } from "./feeReceiptUtils";
+import { getDynamicAcademicSessionLabel } from "../../utils/safeBrowserActions";
 
 interface Props {
   school: School;
@@ -225,7 +226,7 @@ export const PublicSchoolWebsite: React.FC<Props> = ({
             <div className="max-w-6xl mx-auto relative z-10 grid grid-cols-1 md:grid-cols-12 gap-8 items-center">
               <div className="md:col-span-7 space-y-4">
                 <span className="inline-block px-3 py-1 rounded-full bg-white/20 backdrop-blur-xs text-amber-300 text-xs font-black uppercase tracking-wider">
-                  Admissions Open for Session 2026-27
+                  Admissions Open for Session {getDynamicAcademicSessionLabel()}
                 </span>
                 <h2 className="text-3xl sm:text-5xl font-black tracking-tight leading-tight">
                   Empowering Young Minds for a Brighter Future

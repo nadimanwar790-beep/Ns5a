@@ -6,6 +6,7 @@ import {
   FileSpreadsheet, CreditCard, Calendar, User, Phone, MapPin, Download, AlertCircle
 } from "lucide-react";
 import { getSchool, getStudent } from "../../school-firebase";
+import { getDynamicAcademicSessionLabel } from "../../utils/safeBrowserActions";
 
 interface Props {
   verifyType?: "marksheet" | "certificate" | "idcard" | string;
@@ -36,7 +37,7 @@ export const DocumentVerificationView: React.FC<Props> = ({
         const urlSchoolName = p.get('school') || p.get('schoolName') || "";
         const urlCertNo = p.get('cNo') || p.get('certNo') || p.get('dispatchNo') || "";
         const urlCertTitle = p.get('certTitle') || p.get('title') || "";
-        const urlSession = p.get('session') || "2026-27";
+        const urlSession = p.get('session') || getDynamicAcademicSessionLabel();
         const urlStudentId = p.get('u') || p.get('uid') || p.get('studentId') || "";
         const urlAdmNo = p.get('adm') || p.get('admNo') || p.get('regNo') || "";
         const urlClassId = p.get('c') || p.get('classId') || "";
@@ -46,15 +47,15 @@ export const DocumentVerificationView: React.FC<Props> = ({
           const initialRecord = {
             type: urlType,
             officialVerified: true,
-            school: urlSchoolName ? decodeURIComponent(urlSchoolName) : "NSTA Registered School / Academy",
-            schoolCode: urlSchoolId ? `SCH-${urlSchoolId.slice(0, 8)}` : "SCH-REG",
-            student: urlName ? decodeURIComponent(urlName) : "Verified Candidate",
+            school: urlSchoolName ? decodeURIComponent(urlSchoolName) : "Registered School",
+            schoolCode: urlSchoolId ? `SCH-${urlSchoolId.slice(0, 8)}` : "—",
+            student: urlName ? decodeURIComponent(urlName) : "—",
             roll: urlRoll || "—",
-            regNo: urlAdmNo ? decodeURIComponent(urlAdmNo) : (urlStudentId ? `REG-${urlStudentId.slice(0, 8)}` : "REG-VERIFIED"),
-            class: urlClassId ? `Class ${urlClassId.slice(0, 6)}` : "Enrolled Class",
+            regNo: urlAdmNo ? decodeURIComponent(urlAdmNo) : (urlStudentId ? `REG-${urlStudentId.slice(0, 8)}` : "—"),
+            class: urlClassId ? `Class ${urlClassId.slice(0, 6)}` : "—",
             session: urlSession,
-            certificateNo: urlCertNo ? decodeURIComponent(urlCertNo) : "TC-2026-0842",
-            certificateType: urlCertTitle ? decodeURIComponent(urlCertTitle) : "Transfer & Character Certificate",
+            certificateNo: urlCertNo ? decodeURIComponent(urlCertNo) : "—",
+            certificateType: urlCertTitle ? decodeURIComponent(urlCertTitle) : "Academic Certificate",
             status: "VERIFIED ACTIVE & GENUINE",
             date: new Date().toISOString().split("T")[0],
             photoUrl: "",
@@ -66,8 +67,8 @@ export const DocumentVerificationView: React.FC<Props> = ({
           // Try to enrich with live Firebase school and student profile
           if (urlSchoolId && urlStudentId) {
             Promise.all([
-              getSchool(urlSchoolId).catch(() => null),
-              getStudent(urlSchoolId, urlStudentId).catch(() => null)
+              getSchool(urlSchoolId).catch((err) => { console.warn("[DocVerify] getSchool warning:", err); return null; }),
+              getStudent(urlSchoolId, urlStudentId).catch((err) => { console.warn("[DocVerify] getStudent warning:", err); return null; })
             ]).then(([schoolObj, studentObj]) => {
               if (schoolObj || studentObj) {
                 setDocData((prev: any) => ({
@@ -83,40 +84,35 @@ export const DocumentVerificationView: React.FC<Props> = ({
                   bloodGroup: studentObj?.bloodGroup || prev?.bloodGroup,
                 }));
               }
-            }).catch(() => {});
+            }).catch((err) => {
+              console.warn("[DocVerify] Profile enrichment warning:", err);
+            });
           }
         } else {
-          // Fallback default sample for verification demonstration
+          // Do NOT fabricate a verified record when parameters are missing
           setDocData({
             type: verifyType,
-            officialVerified: true,
-            school: "National Model Academy (Affiliated to CBSE/State Board)",
-            schoolCode: "SCH-2026-99",
-            student: "Rohan Kumar Sharma",
-            roll: "101",
-            regNo: "REG-2026-X101",
-            class: "Class 10 (Secondary)",
-            session: "2026-27",
-            total: "532/600",
-            gpa: "4.85",
-            grade: "A+",
-            status: "PASSED (First Division with Distinction)",
+            officialVerified: false,
+            school: "Verification Record Not Found",
+            schoolCode: "—",
+            student: "",
+            roll: "—",
+            regNo: "—",
+            class: "—",
+            session: urlSession,
+            status: "UNVERIFIED / INVALID QR",
             date: new Date().toISOString().split("T")[0],
-            photoUrl: "",
-            certificateNo: "TC-2026-0842",
-            certificateType: "Transfer & Character Certificate",
-            issueDate: new Date().toISOString().split("T")[0],
-            phone: "+91 98765 43210",
           });
         }
       }
-    } catch {
+    } catch (err) {
+      console.warn("[DocVerify] Verification payload parse warning:", err);
       setDocData({
         type: verifyType,
-        officialVerified: true,
-        school: "National Smart Academy",
-        student: "Verified Candidate",
-        status: "VERIFIED",
+        officialVerified: false,
+        school: "Verification Error",
+        student: "",
+        status: "UNVERIFIED",
         date: new Date().toISOString().split("T")[0],
       });
     } finally {
@@ -155,6 +151,22 @@ export const DocumentVerificationView: React.FC<Props> = ({
       </div>
 
       {/* Verification Shield Indicator */}
+      {!docData?.officialVerified ? (
+        <div className="w-full max-w-3xl bg-rose-950/80 border-2 border-rose-500/50 rounded-2xl p-6 mb-6 flex items-start gap-4 shadow-xl text-rose-100">
+          <div className="w-12 h-12 rounded-xl bg-rose-500/20 border border-rose-400 flex items-center justify-center shrink-0">
+            <AlertCircle className="w-7 h-7 text-rose-400" />
+          </div>
+          <div className="space-y-1">
+            <h3 className="font-black text-base text-white tracking-wide">
+              अमान्य या अधूरा सत्यापन कोड (Invalid / Missing Verification Record)
+            </h3>
+            <p className="text-xs text-rose-200/90 leading-relaxed">
+              इस QR कोड या लिंक में वैध दस्तावेज़ रिकॉर्ड नहीं मिला है। कृपया स्कूल द्वारा जारी आधिकारिक Marksheet, Certificate या ID Card का QR कोड स्कैन करें।
+            </p>
+          </div>
+        </div>
+      ) : (
+      <>
       <div className="w-full max-w-3xl bg-emerald-950/80 border-2 border-emerald-500/50 rounded-2xl p-4 mb-6 flex items-center gap-3.5 shadow-xl text-emerald-200 print:hidden">
         <div className="w-12 h-12 rounded-xl bg-emerald-500/20 border border-emerald-400 flex items-center justify-center shrink-0">
           <ShieldCheck className="w-7 h-7 text-emerald-400 animate-pulse" />
@@ -184,10 +196,10 @@ export const DocumentVerificationView: React.FC<Props> = ({
             </div>
             <div>
               <h1 className="text-xl sm:text-2xl font-black uppercase tracking-tight text-amber-300">
-                {docData?.school || "National Academy"}
+                {docData?.school || "Registered School"}
               </h1>
               <p className="text-[11px] text-slate-400 font-semibold tracking-wider uppercase">
-                Official Document Verification &bull; Code: {docData?.schoolCode || "SCH-001"}
+                Official Document Verification &bull; Code: {docData?.schoolCode || "—"}
               </p>
             </div>
           </div>
@@ -211,26 +223,26 @@ export const DocumentVerificationView: React.FC<Props> = ({
                 </div>
                 <div>
                   <span className="text-slate-500 font-bold">Father's Name: </span>
-                  <span className="text-slate-800 font-bold">{docData?.fatherName || "Shri Parent"}</span>
+                  <span className="text-slate-800 font-bold">{docData?.fatherName || "—"}</span>
                 </div>
                 <div>
                   <span className="text-slate-500 font-bold">Class &amp; Section: </span>
-                  <span className="text-indigo-900 font-black">{docData?.class || "Class 10"} - A</span>
+                  <span className="text-indigo-900 font-black">{docData?.class || "—"}</span>
                 </div>
                 <div>
                   <span className="text-slate-500 font-bold">Academic Session: </span>
-                  <span className="text-slate-900 font-bold">{docData?.session || "2026-27"}</span>
+                  <span className="text-slate-900 font-bold">{docData?.session || getDynamicAcademicSessionLabel()}</span>
                 </div>
               </div>
 
               <div className="space-y-1.5 text-right flex-1">
                 <div>
                   <span className="text-slate-500 font-bold">Roll Number: </span>
-                  <span className="text-indigo-700 font-black text-sm">{docData?.roll || "101"}</span>
+                  <span className="text-indigo-700 font-black text-sm">{docData?.roll || "—"}</span>
                 </div>
                 <div>
                   <span className="text-slate-500 font-bold">Reg / Admission No: </span>
-                  <span className="text-slate-900 font-black">{docData?.regNo || "REG-101"}</span>
+                  <span className="text-slate-900 font-black">{docData?.regNo || "—"}</span>
                 </div>
                 <div>
                   <span className="text-slate-500 font-bold">Publish Date: </span>
@@ -239,7 +251,7 @@ export const DocumentVerificationView: React.FC<Props> = ({
                 <div>
                   <span className="text-slate-500 font-bold">Result Status: </span>
                   <span className="px-2 py-0.5 rounded font-black text-xs bg-emerald-100 text-emerald-800">
-                    {docData?.status || "PASSED"}
+                    {docData?.status || "VERIFIED"}
                   </span>
                 </div>
                 {(docData?.classRank || docData?.sectionRank) && (
@@ -274,20 +286,22 @@ export const DocumentVerificationView: React.FC<Props> = ({
             </div>
 
             {/* Overall Score Highlight */}
+            {(docData?.total || docData?.gpa || docData?.grade) && (
             <div className="grid grid-cols-3 gap-3 p-3 bg-indigo-50 border border-indigo-200 rounded-xl text-center">
               <div>
                 <span className="text-[10px] font-bold text-slate-500 uppercase block">Total Marks</span>
-                <span className="text-lg font-black text-indigo-950">{docData?.total || "532/600"}</span>
+                <span className="text-lg font-black text-indigo-950">{docData?.total || "—"}</span>
               </div>
               <div>
                 <span className="text-[10px] font-bold text-slate-500 uppercase block">GPA Score</span>
-                <span className="text-lg font-black text-indigo-950">{docData?.gpa || "4.85"}</span>
+                <span className="text-lg font-black text-indigo-950">{docData?.gpa || "—"}</span>
               </div>
               <div>
                 <span className="text-[10px] font-bold text-slate-500 uppercase block">Grade &amp; Division</span>
-                <span className="text-lg font-black text-emerald-700">{docData?.grade || "A+"} (First Div)</span>
+                <span className="text-lg font-black text-emerald-700">{docData?.grade || "—"}</span>
               </div>
             </div>
+            )}
 
             {/* Verification Footer & Stamp */}
             <div className="pt-4 border-t-2 border-slate-900 flex items-center justify-between text-xs">
@@ -320,20 +334,19 @@ export const DocumentVerificationView: React.FC<Props> = ({
                 {docData?.certificateType || "TRANSFER & CONDUCT CERTIFICATE"}
               </h2>
               <p className="text-xs font-mono font-bold text-indigo-800">
-                Certificate No: {docData?.certificateNo || "CERT-2026-904"}
+                Certificate No: {docData?.certificateNo || "—"}
               </p>
             </div>
 
             <p className="text-sm text-slate-700 leading-relaxed max-w-xl mx-auto font-serif">
               This is to officially certify that <strong className="text-slate-950 text-base">{docData?.student}</strong>,
-              Roll No: <strong>{docData?.roll || "101"}</strong>, Admission No: <strong>{docData?.regNo || "REG-101"}</strong>,
-              was a bona fide student of this recognized institution. The student has shown exemplary conduct,
-              regular attendance, and successfully fulfilled all academic requirements.
+              Roll No: <strong>{docData?.roll || "—"}</strong>, Admission No: <strong>{docData?.regNo || "—"}</strong>,
+              was a bona fide student of this recognized institution.
             </p>
 
             <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-xl inline-flex items-center gap-2 text-emerald-800 font-bold text-xs">
               <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-              Verified Authenticity: Stored in Central State/Board Ledger
+              Verified Authenticity: Stored in Institutional Ledger
             </div>
 
             <div className="pt-8 border-t-2 border-slate-900 flex items-center justify-between text-xs text-left">
@@ -363,8 +376,8 @@ export const DocumentVerificationView: React.FC<Props> = ({
 
               <div>
                 <h3 className="text-lg font-black text-amber-300">{docData?.student}</h3>
-                <p className="text-xs font-bold text-slate-300">{docData?.class || "Class 10"} &bull; Roll #{docData?.roll || "01"}</p>
-                <p className="text-[10px] text-slate-400 mt-1">Adm: {docData?.regNo || "ADM-101"} | Ph: {docData?.phone || "Registered"}</p>
+                <p className="text-xs font-bold text-slate-300">{docData?.class || "—"} &bull; Roll #{docData?.roll || "—"}</p>
+                <p className="text-[10px] text-slate-400 mt-1">Adm: {docData?.regNo || "—"} | Ph: {docData?.phone || "Registered"}</p>
               </div>
 
               <div className="p-2 bg-white rounded-xl inline-block shadow">
@@ -377,6 +390,8 @@ export const DocumentVerificationView: React.FC<Props> = ({
           </div>
         )}
       </div>
+      </>
+      )}
     </div>
   );
 };

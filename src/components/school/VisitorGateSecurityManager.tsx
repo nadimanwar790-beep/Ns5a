@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import type { School, SecurityVisitorPass, StudentEarlyGatePass, SchoolStudent, SchoolClass } from "../../school-types";
 import { loadSchoolSubcollection, syncSchoolSubcollection } from "../../utils/schoolCloudSync";
+import { shouldUseDemoForSchool } from "../../school-firebase";
 import { printElementInIframe } from "./AdmissionFormPrintModal";
 
 interface Props {
@@ -93,7 +94,7 @@ const DEFAULT_EARLY_PASSES: StudentEarlyGatePass[] = [
     parentName: "Shri Ashok Sharma (Father)",
     parentPhone: "+91 98765 11001",
     reason: "Severe viral fever during 3rd period, picked by father",
-    approvedBy: "Dr. Arvind Swaminathan (Principal)",
+    approvedBy: "Principal",
     approvalStatus: "APPROVED",
     requestTime: "11:20 AM, 11 Nov 2026",
     exitTime: "11:35 AM",
@@ -125,13 +126,15 @@ export const VisitorGateSecurityManager: React.FC<Props> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<"visitors" | "early_exit">("visitors");
 
-  const isDemo = Boolean(school?.id && (school.id === "demo_school" || school.id.startsWith("demo_")));
+  const isDemo = shouldUseDemoForSchool(school?.id);
 
   const [visitors, setVisitors] = useState<SecurityVisitorPass[]>(() => {
     try {
       const saved = localStorage.getItem(`gate_visitors_${school?.id || "demo"}`);
       if (saved) return JSON.parse(saved);
-    } catch {}
+    } catch (err) {
+      console.warn("[VisitorGateSecurityManager] Failed reading visitors:", err);
+    }
     return isDemo ? DEFAULT_VISITORS : [];
   });
 
@@ -139,7 +142,9 @@ export const VisitorGateSecurityManager: React.FC<Props> = ({
     try {
       const saved = localStorage.getItem(`gate_early_passes_${school?.id || "demo"}`);
       if (saved) return JSON.parse(saved);
-    } catch {}
+    } catch (err) {
+      console.warn("[VisitorGateSecurityManager] Failed reading early passes:", err);
+    }
     return isDemo ? DEFAULT_EARLY_PASSES : [];
   });
 
@@ -178,7 +183,7 @@ export const VisitorGateSecurityManager: React.FC<Props> = ({
   const [eStudentName, setEStudentName] = useState("");
   const [eClassName, setEClassName] = useState("Class 10-A");
   const [eParentName, setEParentName] = useState("");
-  const [eParentPhone, setEParentPhone] = useState("+91 98765 00000");
+  const [eParentPhone, setEParentPhone] = useState("");
   const [eReason, setEReason] = useState("High fever / Medical emergency");
   const [eApprover, setEApprover] = useState("Principal Office");
 
@@ -186,7 +191,9 @@ export const VisitorGateSecurityManager: React.FC<Props> = ({
     setVisitors(updated);
     try {
       localStorage.setItem(`gate_visitors_${school?.id || "demo"}`, JSON.stringify(updated));
-    } catch {}
+    } catch (err) {
+      console.warn("[VisitorGateSecurityManager] Failed caching visitors:", err);
+    }
     syncSchoolSubcollection(school?.id, "gate_visitors", updated);
   };
 
@@ -194,7 +201,9 @@ export const VisitorGateSecurityManager: React.FC<Props> = ({
     setEarlyPasses(updated);
     try {
       localStorage.setItem(`gate_early_passes_${school?.id || "demo"}`, JSON.stringify(updated));
-    } catch {}
+    } catch (err) {
+      console.warn("[VisitorGateSecurityManager] Failed caching early passes:", err);
+    }
     syncSchoolSubcollection(school?.id, "gate_early_passes", updated);
   };
 
@@ -211,7 +220,7 @@ export const VisitorGateSecurityManager: React.FC<Props> = ({
       passNumber: passNo,
       schoolId: school.id,
       visitorName: vName.trim(),
-      visitorPhone: vPhone.trim() || "+91 98765 00000",
+      visitorPhone: vPhone.trim(),
       visitorType: vType,
       purpose: vPurpose.trim(),
       personToMeet: vPersonToMeet.trim(),

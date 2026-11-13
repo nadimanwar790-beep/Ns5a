@@ -47,7 +47,7 @@ export const INITIAL_STUDENTS: Student[] = [
     motherName: "Renu Verma",
     classGrade: "X",
     section: "A",
-    phone: "9835012345",
+    phone: "9876500002",
     email: "ananya.verma@dpspatna.edu.in",
     photoUrl: "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=240&auto=format&fit=crop&q=80",
     address: "Kankarbagh Colony, Patna, Bihar",

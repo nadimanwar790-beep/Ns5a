@@ -19617,7 +19617,7 @@ const AdminDashboardInner: React.FC<Props> = ({ onNavigate, settings, onUpdateSe
                                   const statusEl = document.getElementById('iic-src-zip-status');
                                   if (statusEl) statusEl.textContent = '⏳ Source Code ZIP ban raha hai (~5 MB)...';
                                   try {
-                                      const res = await fetch('/api/export-source-zip?includeModels=0');
+                                      const res = await fetch('/api/export-source-zip?lite=1');
                                       if (!res.ok) {
                                           const errData = await res.json().catch(() => ({}));
                                           throw new Error(errData?.error || `HTTP ${res.status}`);
@@ -19641,32 +19641,19 @@ const AdminDashboardInner: React.FC<Props> = ({ onNavigate, settings, onUpdateSe
                               <Download size={15} /> Code ZIP (~5 MB)
                           </button>
                           <button
-                              onClick={async () => {
+                              onClick={() => {
                                   const statusEl = document.getElementById('iic-src-zip-status');
-                                  if (statusEl) statusEl.textContent = '⏳ Code + Face Models ZIP ban raha hai (~22 MB)...';
-                                  try {
-                                      const res = await fetch('/api/export-source-zip?includeModels=1');
-                                      if (!res.ok) {
-                                          const errData = await res.json().catch(() => ({}));
-                                          throw new Error(errData?.error || `HTTP ${res.status}`);
-                                      }
-                                      const blob = await res.blob();
-                                      const url = URL.createObjectURL(blob);
-                                      const a = document.createElement('a');
-                                      a.href = url;
-                                      a.download = `nsta-app-full-${new Date().toISOString().slice(0, 10)}.zip`;
-                                      document.body.appendChild(a);
-                                      a.click();
-                                      a.remove();
-                                      setTimeout(() => URL.revokeObjectURL(url), 5000);
-                                      if (statusEl) statusEl.textContent = `✅ Full ZIP download shuru ho gayi (${(blob.size / (1024 * 1024)).toFixed(2)} MB)!`;
-                                  } catch (e: any) {
-                                      if (statusEl) statusEl.textContent = `❌ ${e?.message || 'Download failed (Dev preview URL par hi chalta hai)'}`;
-                                  }
+                                  if (statusEl) statusEl.textContent = '⏳ Full App ZIP (Code + Models + WASM) browser download shuru ho raha hai...';
+                                  const a = document.createElement('a');
+                                  a.href = '/api/export-source-zip?includeModels=1&includeWasm=1';
+                                  a.download = `nsta-app-full-${new Date().toISOString().slice(0, 10)}.zip`;
+                                  document.body.appendChild(a);
+                                  a.click();
+                                  a.remove();
                               }}
                               className="w-full py-2.5 px-3 bg-slate-700 hover:bg-slate-600 text-white font-bold rounded-xl flex items-center justify-center gap-2 text-xs active:scale-95 transition-all border border-slate-600 cursor-pointer"
                           >
-                              <Download size={15} /> Code + Face Models (~22 MB)
+                              <Download size={15} /> Full App ZIP (Code + Models + WASM)
                           </button>
                       </div>
                       <p id="iic-src-zip-status" className="text-[10px] text-indigo-200 font-mono min-h-[16px] text-center"></p>

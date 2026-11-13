@@ -158,7 +158,7 @@ export const buildClassFeeDraft = (cls?: SchoolClass | null): ClassFeeStructure 
       ? Math.max(0, Number(fs.registrationFee))
       : (cls as any)?.registrationFee !== undefined
       ? Math.max(0, Number((cls as any).registrationFee))
-      : 500; // Life Maker Public School standard default
+      : 500; // Standard default registration fee
 
   const rawExaminationFee =
     fs?.examinationFee !== undefined
@@ -4007,7 +4007,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                 const fees = getClassFees(targetCls, { usesBus: submittedApp.usesBus });
                 const totalPayable = fees.totalPayable;
                 const schoolPhone = (school.whatsappNo || school.mobile || school.phone || "").replace(/\D/g, "");
-                const cleanWhatsAppNumber = schoolPhone.length === 10 ? `91${schoolPhone}` : schoolPhone || "919876543210";
+                const cleanWhatsAppNumber = schoolPhone.length === 10 ? `91${schoolPhone}` : schoolPhone;
 
                 const whatsappLines = [
                   `*🏛️ ${school.name || "School"}*`,
@@ -5878,7 +5878,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                             type="text"
                             value={form.previousSchool}
                             onChange={(e) => setForm({ ...form, previousSchool: e.target.value })}
-                            placeholder="e.g. Govt Middle School Affour"
+                            placeholder="e.g. Govt Middle School"
                             className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                           />
                         </div>
@@ -5970,7 +5970,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                             type="text"
                             value={form.busRoute}
                             onChange={(e) => setForm({ ...form, busRoute: e.target.value })}
-                            placeholder="Specify Location / Stop (e.g. Affour Nagra)"
+                            placeholder="Specify Location / Stop (e.g. Main Market Stop)"
                             className="px-3.5 py-2 rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold sm:w-64 focus:outline-none focus:ring-2 focus:ring-amber-500"
                           />
                         )}

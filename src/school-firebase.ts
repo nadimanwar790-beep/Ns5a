@@ -1449,23 +1449,39 @@ export const saveStudent = async (student: SchoolStudent) => {
   return sanitized;
 };
 
+const isActiveSchoolStudentRecord = (s: any): boolean => {
+  if (!s || typeof s !== "object") return false;
+  if (s.active === false || s.isDeleted === true || s.tcIssued === true) return false;
+  const st = typeof s.status === "string" ? s.status.trim().toLowerCase() : "";
+  if (st === "deleted" || st === "disabled" || st === "inactive") return false;
+  return true;
+};
+
 export const getStudent = async (schoolId: string, studentId: string): Promise<SchoolStudent | null> => {
-  // 1. Instant IndexedDB RAM cache lookup
+  // 1. Instant IndexedDB RAM cache lookup (only active students)
   const local = getLocalStudents(schoolId).find(
-    (s: any) => s.id === studentId || s.admissionNo === studentId || s.rollNo === studentId
+    (s: any) =>
+      isActiveSchoolStudentRecord(s) &&
+      (s.id === studentId || s.admissionNo === studentId || s.rollNo === studentId)
   );
   if (local) return local;
 
   if (rtdb) {
     try {
       const snap = await withTimeout(get(ref(rtdb, `schools/${schoolId}/students/${studentId}`)), 2000);
-      if (snap && snap.exists()) return snap.val() as SchoolStudent;
+      if (snap && snap.exists()) {
+        const val = snap.val() as SchoolStudent;
+        return isActiveSchoolStudentRecord(val) ? val : null;
+      }
     } catch {}
   }
   if (db) {
     try {
       const snap = await withTimeout(getDoc(d(`schools/${schoolId}/students/${studentId}`)), 2500);
-      if (snap && snap.exists()) return snap.data() as SchoolStudent;
+      if (snap && snap.exists()) {
+        const data = snap.data() as SchoolStudent;
+        return isActiveSchoolStudentRecord(data) ? data : null;
+      }
     } catch {}
   }
   return null;
@@ -1679,11 +1695,89 @@ export const isStudentInClass = (
   return false;
 };
 
+export const getActiveCloudStudents = async (
+  schoolId: string
+): Promise<{ students: SchoolStudent[]; cloudVerified: boolean; rawAllRecords: SchoolStudent[] }> => {
+  if (!schoolId) return { students: [], cloudVerified: false, rawAllRecords: [] };
+  const useDemo = shouldUseDemoForSchool(schoolId);
+  const rawMap = new Map<string, SchoolStudent>();
+  let fsOk = false;
+  let rtdbOk = false;
+
+  const jobs: Promise<void>[] = [];
+
+  if (db) {
+    jobs.push(
+      withTimeout(getDocs(col(`schools/${schoolId}/students`)), 3500)
+        .then((snap: any) => {
+          fsOk = true;
+          (snap?.docs || []).forEach((docSnap: any) => {
+            const data = docSnap.data() as SchoolStudent;
+            const sid = data?.id || docSnap.id;
+            if (!sid) return;
+            if (!useDemo && isDemoRecord(data)) return;
+            rawMap.set(sid, { ...data, id: sid, schoolId: data?.schoolId || schoolId });
+          });
+        })
+        .catch(() => {})
+    );
+  }
+
+  if (rtdb) {
+    jobs.push(
+      withTimeout(get(ref(rtdb, `schools/${schoolId}/students`)), 3000)
+        .then((snap: any) => {
+          rtdbOk = true;
+          const val = snap?.val?.();
+          if (val && typeof val === "object") {
+            Object.entries(val).forEach(([k, v]: [string, any]) => {
+              if (!v || typeof v !== "object") return;
+              const sid = v.id || k;
+              if (!useDemo && isDemoRecord(v)) return;
+              const existing = rawMap.get(sid);
+              // If either RTDB or Firestore marks student deleted/inactive, preserve deletion flag cleanly
+              if (existing) {
+                const deletedEither = !isActiveSchoolStudentRecord(existing) || !isActiveSchoolStudentRecord(v);
+                rawMap.set(sid, {
+                  ...v,
+                  ...existing,
+                  id: sid,
+                  schoolId: existing.schoolId || v.schoolId || schoolId,
+                  active: deletedEither ? false : (existing.active ?? v.active),
+                  isDeleted: Boolean((existing as any).isDeleted || (v as any).isDeleted),
+                } as SchoolStudent);
+              } else {
+                rawMap.set(sid, { ...v, id: sid, schoolId: v.schoolId || schoolId } as SchoolStudent);
+              }
+            });
+          }
+        })
+        .catch(() => {})
+    );
+  }
+
+  await Promise.all(jobs);
+
+  const cloudVerified = fsOk || rtdbOk;
+  const rawAllRecords = Array.from(rawMap.values());
+  const activeCloud = rawAllRecords.filter((s) => isActiveSchoolStudentRecord(s));
+
+  if (cloudVerified) {
+    setLocalStudents(schoolId, activeCloud);
+    return { students: activeCloud, cloudVerified: true, rawAllRecords };
+  }
+
+  const localActive = getLocalStudents(schoolId).filter(
+    (s) => isActiveSchoolStudentRecord(s) && (useDemo || !isDemoRecord(s))
+  );
+  return { students: localActive, cloudVerified: false, rawAllRecords: localActive };
+};
+
 export const getStudents = async (schoolId: string, classId?: string, className?: string, sessionId?: string): Promise<SchoolStudent[]> => {
   const useDemo = shouldUseDemoForSchool(schoolId, sessionId);
   const local = getLocalStudents(schoolId);
   const matchingLocal = local.filter((s: any) => {
-    if (s.active === false) return false;
+    if (!isActiveSchoolStudentRecord(s)) return false;
     if (classId && !isStudentInClass(s, classId, className)) return false;
     if (sessionId && s.sessionId && s.sessionId !== sessionId) return false;
     return true;
@@ -1692,21 +1786,13 @@ export const getStudents = async (schoolId: string, classId?: string, className?
   if (!useDemo) {
     const realLocal = matchingLocal.filter(s => !isDemoRecord(s));
     if (realLocal.length > 0) return realLocal;
-    if (db) {
-      try {
-        const snap = await withTimeout(getDocs(col(`schools/${schoolId}/students`)), 2500);
-        const all = (snap as any).docs
-          .map((docSnap: any) => docSnap.data() as SchoolStudent)
-          .filter((s: any) => s.active !== false && !isDemoRecord(s));
-        if (all.length > 0) {
-          setLocalStudents(schoolId, all);
-          return all.filter((s: any) => {
-            if (classId && !isStudentInClass(s, classId, className)) return false;
-            if (sessionId && s.sessionId && s.sessionId !== sessionId) return false;
-            return true;
-          });
-        }
-      } catch {}
+    const { students: cloudStudents } = await getActiveCloudStudents(schoolId);
+    if (cloudStudents.length > 0) {
+      return cloudStudents.filter((s: any) => {
+        if (classId && !isStudentInClass(s, classId, className)) return false;
+        if (sessionId && s.sessionId && s.sessionId !== sessionId) return false;
+        return true;
+      });
     }
     return realLocal;
   }
@@ -1715,26 +1801,20 @@ export const getStudents = async (schoolId: string, classId?: string, className?
     return matchingLocal;
   }
 
-  if (db) {
-    try {
-      const snap = await withTimeout(getDocs(col(`schools/${schoolId}/students`)), 2500);
-      const all = (snap as any).docs.map((docSnap: any) => docSnap.data() as SchoolStudent).filter((s: any) => s.active !== false);
-      if (all.length > 0) {
-        setLocalStudents(schoolId, all);
-        const filtered = all.filter((s: any) => {
-          if (classId && !isStudentInClass(s, classId, className)) return false;
-          if (sessionId && s.sessionId && s.sessionId !== sessionId) return false;
-          return true;
-        });
-        if (filtered.length > 0) return filtered;
-      }
-    } catch {}
+  const { students: cloudStudents } = await getActiveCloudStudents(schoolId);
+  if (cloudStudents.length > 0) {
+    const filtered = cloudStudents.filter((s: any) => {
+      if (classId && !isStudentInClass(s, classId, className)) return false;
+      if (sessionId && s.sessionId && s.sessionId !== sessionId) return false;
+      return true;
+    });
+    if (filtered.length > 0) return filtered;
   }
 
   const demo = getDemoSchoolDataset();
   if (demo && demo.students && demo.students.length > 0) {
     const filteredDemo = demo.students.filter(s => {
-      if (s.active === false) return false;
+      if (!isActiveSchoolStudentRecord(s)) return false;
       if (classId && !isStudentInClass(s, classId, className)) return false;
       if (sessionId && s.sessionId && s.sessionId !== sessionId) return false;
       return true;
@@ -1878,7 +1958,11 @@ export const subscribeToStudent = (
     const local = getLocalStudents(schoolId);
     const found = local.find(s => s.id === studentId || (s.admissionNo && s.admissionNo.toLowerCase() === studentId.toLowerCase()));
     if (found) {
-      cb(found);
+      if (isActiveSchoolStudentRecord(found)) {
+        cb(found);
+      } else {
+        cb({ ...found, active: false, isDeleted: true, status: "deleted" } as any);
+      }
     } else if (useDemo) {
       const demo = getDemoSchoolDataset();
       const demoFound = demo?.students?.find(s => s.id === studentId || (s.admissionNo && s.admissionNo.toLowerCase() === studentId.toLowerCase()));
@@ -1897,9 +1981,16 @@ export const subscribeToStudent = (
       cb(e.detail.data as SchoolStudent);
     }
   };
+  const handleStudentDeleted = (e: any) => {
+    if (e.detail?.schoolId && e.detail.schoolId !== schoolId) return;
+    if (e.detail?.studentId === studentId) {
+      cb({ id: studentId, schoolId, active: false, isDeleted: true, status: "deleted" } as any);
+    }
+  };
   if (typeof window !== "undefined") {
     window.addEventListener("school-idb-hydrated", deliverLocal);
     window.addEventListener("student-updated", handleLocalUpdate);
+    window.addEventListener("student-deleted", handleStudentDeleted);
   }
 
   let rtdbUnsub: any = null;
@@ -1931,6 +2022,7 @@ export const subscribeToStudent = (
     if (typeof window !== "undefined") {
       window.removeEventListener("school-idb-hydrated", deliverLocal);
       window.removeEventListener("student-updated", handleLocalUpdate);
+      window.removeEventListener("student-deleted", handleStudentDeleted);
     }
     if (typeof fsUnsub === "function") fsUnsub();
     if (typeof rtdbUnsub === "function") rtdbUnsub();
@@ -1988,15 +2080,32 @@ export const updateStudent = async (schoolId: string, studentId: string, data: P
 };
 
 export const deleteStudent = async (schoolId: string, studentId: string) => {
+  const deletedAt = new Date().toISOString();
+  const deletePatch = {
+    active: false,
+    isDeleted: true,
+    status: "deleted",
+    deletedAt,
+  };
   try {
     const local = getLocalStudents(schoolId);
-    setLocalStudents(schoolId, local.map(s => s.id === studentId ? { ...s, active: false } : s));
+    setLocalStudents(schoolId, local.filter(s => s.id !== studentId));
   } catch {}
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("student-deleted", { detail: { schoolId, studentId } }));
+  }
   if (rtdb) {
-    try { await withTimeout(update(ref(rtdb, `schools/${schoolId}/students/${studentId}`), { active: false }), 2000); } catch {}
+    try {
+      await Promise.allSettled([
+        withTimeout(update(ref(rtdb, `schools/${schoolId}/students/${studentId}`), deletePatch), 2000),
+        withTimeout(set(ref(rtdb, `schools/${schoolId}/deleted_students/${studentId}`), { id: studentId, deletedAt }), 2000),
+      ]);
+    } catch {}
   }
   if (db) {
-    try { await withTimeout(setDoc(d(`schools/${schoolId}/students/${studentId}`), { active: false }, { merge: true }), 2500); } catch {}
+    try {
+      await withTimeout(setDoc(d(`schools/${schoolId}/students/${studentId}`), deletePatch, { merge: true }), 2500);
+    } catch {}
   }
   import("./utils/faceRecognitionEngineV2")
     .then((m) => m.deleteFaceDescriptor(studentId, schoolId))
@@ -3172,12 +3281,44 @@ export const subscribeToStudentFees = (
     err => { console.warn(`[school-firebase] subscribeToStudentFees error:`, err?.code || err); }
   );
 
+  let rtdbUnsub: (() => void) | null = null;
+  if (rtdb) {
+    try {
+      rtdbUnsub = onValue(ref(rtdb, `schools/${schoolId}/fees`), snap => {
+        if (!snap.exists()) return;
+        const val = snap.val() || {};
+        const remoteList = Object.values(val)
+          .filter((f: any) => f && f.studentId === studentId) as MonthlyFee[];
+        if (remoteList.length > 0) {
+          try {
+            const cur = getLocalFees(schoolId);
+            const mergedMap = new Map<string, MonthlyFee>();
+            cur.forEach((f: any) => {
+              const k = `${f.studentId}_${f.month || f.id || ""}`;
+              mergedMap.set(k, f);
+            });
+            remoteList.forEach((rf: any) => {
+              const k = `${rf.studentId}_${rf.month || rf.id || ""}`;
+              const prev = mergedMap.get(k);
+              if (!prev || rf.paid || rf.razorpayPaymentId || (rf.updatedAt && (!prev.updatedAt || rf.updatedAt > prev.updatedAt))) {
+                mergedMap.set(k, rf);
+              }
+            });
+            setLocalFees(schoolId, Array.from(mergedMap.values()));
+          } catch {}
+          cb(remoteList.sort((a, b) => (b.month || "").localeCompare(a.month || "")));
+        }
+      });
+    } catch {}
+  }
+
   return () => {
     if (typeof window !== "undefined") {
       window.removeEventListener("school-idb-hydrated", deliverCurrent);
       window.removeEventListener("fee-updated", handleFeeUpdate);
     }
     if (typeof fsUnsub === "function") fsUnsub();
+    if (typeof rtdbUnsub === "function") rtdbUnsub();
   };
 };
 
@@ -3268,6 +3409,25 @@ export const getMonthlyFees = async (schoolId: string, month: string, classId?: 
     } catch {}
   }
 
+  if (rtdb) {
+    try {
+      const snap = await withTimeout(get(ref(rtdb, `schools/${schoolId}/fees`)), 2000);
+      if (snap.exists()) {
+        let rtdbList = Object.values(snap.val() || {}) as MonthlyFee[];
+        rtdbList = rtdbList.filter(f => f && f.month === month);
+        if (classId) rtdbList = rtdbList.filter(f => isStudentInClass(f, classId));
+        if (sessionId) rtdbList = rtdbList.filter(f => !f.sessionId || f.sessionId === sessionId);
+        if (!useDemo) rtdbList = rtdbList.filter(f => !isDemoRecord(f));
+        rtdbList.forEach(rf => {
+          const prev = map.get(rf.studentId);
+          if (!prev || rf.paid || rf.razorpayPaymentId || (rf.updatedAt && (!prev.updatedAt || rf.updatedAt > prev.updatedAt))) {
+            map.set(rf.studentId, rf);
+          }
+        });
+      }
+    } catch {}
+  }
+
   const result = Array.from(map.values()).sort((a, b) => (a.studentName || "").localeCompare(b.studentName || ""));
   return !useDemo ? result.filter(f => !isDemoRecord(f)) : result;
 };
@@ -3308,6 +3468,24 @@ export const getSchoolFeeHistory = async (schoolId: string, sessionId?: string):
           feeMap.set(key, af);
         }
       });
+    } catch {}
+  }
+
+  if (rtdb) {
+    try {
+      const snap = await withTimeout(get(ref(rtdb, `schools/${schoolId}/fees`)), 2000);
+      if (snap.exists()) {
+        let rtdbAll = Object.values(snap.val() || {}) as MonthlyFee[];
+        if (sessionId) rtdbAll = rtdbAll.filter(af => !af.sessionId || af.sessionId === sessionId);
+        if (!useDemo) rtdbAll = rtdbAll.filter(af => !isDemoRecord(af));
+        rtdbAll.forEach((af: any) => {
+          const key = af.studentId && af.month ? `${af.studentId}_${af.month}` : (af.receiptNo || af.id || String(Math.random()));
+          const prev = feeMap.get(key);
+          if (!prev || af.paid || af.razorpayPaymentId || (af.updatedAt && (!prev.updatedAt || af.updatedAt > prev.updatedAt))) {
+            feeMap.set(key, af);
+          }
+        });
+      }
     } catch {}
   }
 
@@ -4712,6 +4890,34 @@ export const getLocalUserLinkedStudents = (uid: string): UserLinkedStudentsBundl
   return null;
 };
 
+export const setLocalUserLinkedStudents = (
+  uid: string,
+  students: any[],
+  activeStudentIdOrKey?: string
+): void => {
+  if (!uid) return;
+  const cleanList = Array.isArray(students) ? students : [];
+  const matchedActive =
+    cleanList.find((s: any) => getStudentLinkKey(s) === activeStudentIdOrKey) ||
+    cleanList.find((s: any) => s.id === activeStudentIdOrKey) ||
+    cleanList[0] ||
+    null;
+
+  const bundle: UserLinkedStudentsBundle = {
+    students: cleanList,
+    activeStudentId: matchedActive?.id || "",
+    activeStudentKey: matchedActive ? getStudentLinkKey(matchedActive) : "",
+    updatedAt: new Date().toISOString(),
+  };
+
+  setSchoolCacheSync(`nst_school_linked_list_${uid}`, bundle);
+  if (matchedActive) {
+    setSchoolCacheSync(`nst_school_linked_${uid}`, matchedActive);
+  } else {
+    removeSchoolCacheSync(`nst_school_linked_${uid}`);
+  }
+};
+
 export const getLocalLinkedTeacher = (uid: string): any | null => {
   if (!uid) return null;
   const saved = getSchoolCacheSync<any>(`nst_school_linked_${uid}`, null);
@@ -4781,8 +4987,11 @@ export const getUserLinkedStudents = async (uid: string): Promise<UserLinkedStud
     try {
       const snap = await withTimeout(get(ref(rtdb, `school_user_links/${safeUid}`)), 2000);
       const val = snap?.val?.();
-      if (val && Array.isArray(val.students) && val.students.length > 0) {
+      if (val && Array.isArray(val.students)) {
         setSchoolCacheSync(`nst_school_linked_list_${uid}`, val);
+        if (val.students.length === 0) {
+          removeSchoolCacheSync(`nst_school_linked_${uid}`);
+        }
         return val as UserLinkedStudentsBundle;
       }
     } catch {}
@@ -4793,8 +5002,11 @@ export const getUserLinkedStudents = async (uid: string): Promise<UserLinkedStud
       const snap = await withTimeout(getDoc(d(`school_user_links/${safeUid}`)), 2500);
       if (snap.exists()) {
         const data = snap.data() as UserLinkedStudentsBundle;
-        if (data && Array.isArray(data.students) && data.students.length > 0) {
+        if (data && Array.isArray(data.students)) {
           setSchoolCacheSync(`nst_school_linked_list_${uid}`, data);
+          if (data.students.length === 0) {
+            removeSchoolCacheSync(`nst_school_linked_${uid}`);
+          }
           return data;
         }
       }
@@ -4802,6 +5014,140 @@ export const getUserLinkedStudents = async (uid: string): Promise<UserLinkedStud
   }
 
   return localBundle;
+};
+
+/**
+ * Verifies every linked student on an App User ID against each school's authoritative
+ * cloud roster (Firestore + RTDB). If a school roster is reachable and confirms a student
+ * was deleted or deactivated (missing from roster or active===false / isDeleted===true),
+ * that stale student is automatically pruned. Offline/unreachable schools are preserved safely.
+ */
+export const verifyLinkedStudentsAuthoritative = async (
+  students: any[],
+  defaultSchoolId = "dps_gurgaon_sector45"
+): Promise<{ validStudents: any[]; removedStudents: any[]; verifiedAnySchool: boolean }> => {
+  const input = Array.isArray(students) ? students.filter(Boolean) : [];
+  if (input.length === 0) {
+    return { validStudents: [], removedStudents: [], verifiedAnySchool: false };
+  }
+
+  const schoolIds = Array.from(
+    new Set(
+      input
+        .map((s: any) => String(s.schoolId || defaultSchoolId || "").trim())
+        .filter(Boolean)
+    )
+  );
+
+  const cloudCheckBySchool = new Map<
+    string,
+    { cloudVerified: boolean; activeMap: Map<string, any>; deletedIdSet: Set<string>; rawMap: Map<string, any> }
+  >();
+
+  await Promise.all(
+    schoolIds.map(async (schId) => {
+      try {
+        const [{ cloudVerified, students: activeList, rawAllRecords }, deletedRtdbSet] = await Promise.all([
+          getActiveCloudStudents(schId),
+          (async () => {
+            const setIds = new Set<string>();
+            if (rtdb) {
+              try {
+                const delSnap = await withTimeout(get(ref(rtdb, `schools/${schId}/deleted_students`)), 2000);
+                const val = delSnap?.val?.();
+                if (val && typeof val === "object") {
+                  Object.keys(val).forEach((k) => setIds.add(k));
+                }
+              } catch {}
+            }
+            return setIds;
+          })(),
+        ]);
+
+        const activeMap = new Map<string, any>();
+        activeList.forEach((st: any) => {
+          if (st?.id) activeMap.set(st.id, st);
+          if (st?.admissionNo) activeMap.set(`adm:${String(st.admissionNo).trim().toLowerCase()}`, st);
+        });
+
+        const rawMap = new Map<string, any>();
+        rawAllRecords.forEach((st: any) => {
+          if (st?.id) rawMap.set(st.id, st);
+          if (st?.admissionNo) rawMap.set(`adm:${String(st.admissionNo).trim().toLowerCase()}`, st);
+          if (!isActiveSchoolStudentRecord(st) && st?.id) {
+            deletedRtdbSet.add(st.id);
+          }
+        });
+
+        cloudCheckBySchool.set(schId, {
+          cloudVerified: cloudVerified || deletedRtdbSet.size > 0,
+          activeMap,
+          deletedIdSet: deletedRtdbSet,
+          rawMap,
+        });
+      } catch {
+        cloudCheckBySchool.set(schId, {
+          cloudVerified: false,
+          activeMap: new Map(),
+          deletedIdSet: new Set(),
+          rawMap: new Map(),
+        });
+      }
+    })
+  );
+
+  const validStudents: any[] = [];
+  const removedStudents: any[] = [];
+  let verifiedAnySchool = false;
+
+  for (const linked of input) {
+    const schId = String(linked.schoolId || defaultSchoolId || "").trim();
+    const check = cloudCheckBySchool.get(schId);
+
+    // Keep demo students ONLY when demo mode is active for demo school and not explicitly deleted
+    if (shouldUseDemoForSchool(schId) && isDemoRecord(linked)) {
+      if (!check?.deletedIdSet.has(linked.id)) {
+        validStudents.push(linked);
+      } else {
+        removedStudents.push(linked);
+      }
+      continue;
+    }
+
+    if (!check || !check.cloudVerified) {
+      // Offline / cloud unreachable -> keep safely rather than wiping user's list blindly
+      validStudents.push(linked);
+      continue;
+    }
+
+    verifiedAnySchool = true;
+    const admKey = linked.admissionNo ? `adm:${String(linked.admissionNo).trim().toLowerCase()}` : "";
+
+    // Explicit deleted tombstone or inactive raw record
+    if ((linked.id && check.deletedIdSet.has(linked.id)) || (linked.id && check.rawMap.has(linked.id) && !isActiveSchoolStudentRecord(check.rawMap.get(linked.id)))) {
+      removedStudents.push(linked);
+      continue;
+    }
+
+    const activeMatch =
+      (linked.id ? check.activeMap.get(linked.id) : undefined) ||
+      (admKey ? check.activeMap.get(admKey) : undefined);
+
+    if (activeMatch) {
+      validStudents.push({
+        ...linked,
+        ...activeMatch,
+        type: "STUDENT",
+        schoolId: activeMatch.schoolId || schId,
+        schoolName: linked.schoolName || activeMatch.schoolName || "",
+      });
+    } else {
+      // School's cloud roster responded cleanly, and this student no longer exists in it!
+      removedStudents.push(linked);
+    }
+  }
+
+  return { validStudents, removedStudents, verifiedAnySchool };
 };
 
 // ── TEACHER REFERRAL 10% COMMISSION PAYOUTS & SETTINGS ───────────────────────

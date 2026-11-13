@@ -9,6 +9,8 @@ import {
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "../../firebase";
 import { TIER_CONFIG, type School, type SubscriptionTier } from "../../school-types";
+import { ADMIN_WHATSAPP_NUMBER, SUPPORT_PHONE } from "../../constants";
+import { safeOpenExternalUrl } from "../../utils/safeBrowserActions";
 
 interface Props {
   school: School | null;
@@ -203,7 +205,7 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
       `💰 *Amount:* ₹${buyingPlan.amount.toLocaleString("en-IN")}\n\n` +
       `Kripya hamare school ke liye ye plan activate karein.`
     );
-    window.open(`https://wa.me/918227070298?text=${text}`, "_blank");
+    safeOpenExternalUrl(`https://wa.me/${ADMIN_WHATSAPP_NUMBER}?text=${text}`);
   };
 
   // ── Manual Contact Request ───────────────────────────────────────────────
@@ -892,7 +894,7 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
                       onClick={openWhatsAppCheckout}
                       className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
                     >
-                      <MessageSquare size={15} /> WhatsApp (+91 8227070298) se Buy Karein
+                      <MessageSquare size={15} /> WhatsApp (+91 {SUPPORT_PHONE}) se Buy Karein
                     </button>
 
                     <button

@@ -1146,6 +1146,8 @@ export const MarksheetGenerator: React.FC<Props> = ({
       };
     })();
 
+    const isDenseSubjects = subjects.length >= 12;
+
     // Helper to render level-appropriate marks table for Pre-Primary, Primary, and Middle/Secondary wings
     const renderSubjectMarksTable = (isCompactTable: boolean, isVeryCompactTable: boolean, inLandscape: boolean) => {
       if (activeWing === "pre_primary") {
@@ -1173,7 +1175,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                   const pct = Math.round((total / max) * 100);
                   const stars = getStarRating(pct);
                   const grade = pct >= 85 ? "A+" : pct >= 70 ? "A" : pct >= 50 ? "B" : "C";
-                  const cellPad = inLandscape ? "py-1.5 px-1" : "p-1";
+                  const cellPad = isDenseSubjects ? "py-0.5 px-1" : inLandscape ? "py-1.5 px-1" : "p-1";
                   return (
                     <tr key={sub.id} className={idx % 2 === 0 ? "bg-white" : "bg-slate-50/70"}>
                       <td className={`${cellPad} text-center font-bold text-slate-500 border-r border-slate-300`}>{idx + 1}</td>
@@ -1229,7 +1231,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
               <tbody className={`divide-y divide-slate-300 font-medium ${isVeryCompactTable ? "text-[8px]" : "text-[9.5px]"}`}>
                 {subjects.map((sub, idx) => {
                   const stats = calculateSubjectStats(sub);
-                  const cellPad = inLandscape ? "py-1.5 px-1" : "p-1";
+                  const cellPad = isDenseSubjects ? "py-0.5 px-1" : inLandscape ? "py-1.5 px-1" : "p-1";
                   return (
                     <tr key={sub.id} className={idx % 2 === 0 ? "bg-white" : "bg-slate-50/70"}>
                       <td className={`${cellPad} text-center font-bold text-slate-500 border-r border-slate-300`}>{idx + 1}</td>
@@ -1291,7 +1293,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
             <tbody className={`divide-y divide-slate-300 font-medium ${isVeryCompactTable ? "text-[8px]" : "text-[9.5px]"}`}>
               {subjects.map((sub, idx) => {
                 const stats = calculateSubjectStats(sub);
-                const cellPad = inLandscape ? "py-1.5 px-1" : "p-1";
+                const cellPad = isDenseSubjects ? "py-0.5 px-1" : inLandscape ? "py-1.5 px-1" : "p-1";
                 return (
                   <tr key={sub.id} className={idx % 2 === 0 ? "bg-white" : "bg-slate-50/70"}>
                     <td className={`${cellPad} text-center font-bold text-slate-500 border-r border-slate-300`}>{idx + 1}</td>
@@ -1643,7 +1645,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
     return (
       <div key={targetStudent?.id || "single"} className="marksheet-print-page w-full flex justify-center print:block">
         <div
-          className={`marksheet-sheet-box w-full ${isLandscapeView ? "min-w-[880px] max-w-[1100px]" : "min-w-[720px] max-w-[840px]"} bg-white rounded-xl border-4 border-slate-900 shadow-2xl ${isCompact ? "p-4" : "p-6"} text-slate-900 print:shadow-none print:m-0 print:border-2 print:border-black print:max-w-none print:min-w-0 print:p-4 print:rounded-none print:overflow-visible relative overflow-hidden flex flex-col justify-between`}
+          className={`marksheet-sheet-box ${isDenseSubjects ? "marksheet-dense-sheet" : ""} w-full ${isLandscapeView ? "min-w-[880px] max-w-[1100px]" : "min-w-[720px] max-w-[840px]"} bg-white rounded-xl border-4 border-slate-900 shadow-2xl ${isDenseSubjects ? "p-3" : isCompact ? "p-4" : "p-6"} text-slate-900 print:shadow-none print:m-0 print:border-2 print:border-black print:max-w-none print:min-w-0 print:p-3 print:rounded-none print:overflow-visible relative overflow-hidden flex flex-col justify-between`}
           style={{ fontFamily: "'Inter', sans-serif" }}
         >
           {/* Decorative Watermark */}
@@ -1659,7 +1661,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                LEFT SIDE (50%): Cumulative Multi-Term Exams & Attendance Correlation
                RIGHT SIDE (50%): Official Level-Appropriate Final Marksheet
                ══════════════════════════════════════════════════════════════════ */
-            <div className="marksheet-landscape-split grid grid-cols-12 gap-5 w-full h-full print:h-auto">
+            <div className={`marksheet-landscape-split grid grid-cols-12 ${isDenseSubjects ? "gap-3" : "gap-5"} w-full h-full print:h-auto`}>
               {/* LEFT COLUMN: Cumulative Academic & Term Attendance Progress */}
               <div className="col-span-6 flex flex-col justify-between border-r-2 border-slate-800 pr-5">
                 <div>
@@ -1727,30 +1729,32 @@ export const MarksheetGenerator: React.FC<Props> = ({
                           const t1Avg = Math.round(((pa1 + pa2) / 80) * 100);
 
                           if (isHalfYearly) {
+                            const rowPad = isDenseSubjects ? "py-0.5 px-1" : "p-1";
                             return (
                               <tr key={sub.id || idx} className={idx % 2 === 0 ? "bg-white" : "bg-slate-50/70"}>
-                                <td className="p-1 font-bold text-slate-900 border-r border-slate-300 truncate max-w-[120px]">{sub.name}</td>
-                                <td className="p-1 text-center font-mono border-r border-slate-300">{pa1}</td>
-                                <td className="p-1 text-center font-mono border-r border-slate-300">{pa2}</td>
-                                <td className="p-1 text-center font-mono font-bold text-indigo-900 border-r border-slate-300 bg-indigo-50/40">{hy}</td>
-                                <td className="p-1 text-center font-mono font-bold text-amber-900 border-r border-slate-300 bg-amber-50/40">{t1Avg}%</td>
-                                <td className="p-1 text-center font-bold">
+                                <td className={`${rowPad} font-bold text-slate-900 border-r border-slate-300 truncate max-w-[120px]`}>{sub.name}</td>
+                                <td className={`${rowPad} text-center font-mono border-r border-slate-300`}>{pa1}</td>
+                                <td className={`${rowPad} text-center font-mono border-r border-slate-300`}>{pa2}</td>
+                                <td className={`${rowPad} text-center font-mono font-bold text-indigo-900 border-r border-slate-300 bg-indigo-50/40`}>{hy}</td>
+                                <td className={`${rowPad} text-center font-mono font-bold text-amber-900 border-r border-slate-300 bg-amber-50/40`}>{t1Avg}%</td>
+                                <td className={`${rowPad} text-center font-bold`}>
                                   {isGrowing ? <span className="text-emerald-700">↗ Up</span> : <span className="text-amber-700">→ Stb</span>}
                                 </td>
                               </tr>
                             );
                           }
 
+                          const rowPad = isDenseSubjects ? "py-0.5 px-1" : "p-1";
                           return (
                             <tr key={sub.id || idx} className={idx % 2 === 0 ? "bg-white" : "bg-slate-50/70"}>
-                              <td className="p-1 font-bold text-slate-900 border-r border-slate-300 truncate max-w-[105px]">{sub.name}</td>
-                              <td className="p-1 text-center font-mono border-r border-slate-300">{pa1}</td>
-                              <td className="p-1 text-center font-mono border-r border-slate-300">{pa2}</td>
-                              <td className="p-1 text-center font-mono font-bold text-indigo-900 border-r border-slate-300 bg-indigo-50/40">{hy}</td>
-                              <td className="p-1 text-center font-mono border-r border-slate-300">{pa3}</td>
-                              <td className="p-1 text-center font-mono border-r border-slate-300">{pa4}</td>
-                              <td className="p-1 text-center font-mono font-bold text-amber-900 border-r border-slate-300 bg-amber-50/40">{ann}</td>
-                              <td className="p-1 text-center font-bold">
+                              <td className={`${rowPad} font-bold text-slate-900 border-r border-slate-300 truncate max-w-[105px]`}>{sub.name}</td>
+                              <td className={`${rowPad} text-center font-mono border-r border-slate-300`}>{pa1}</td>
+                              <td className={`${rowPad} text-center font-mono border-r border-slate-300`}>{pa2}</td>
+                              <td className={`${rowPad} text-center font-mono font-bold text-indigo-900 border-r border-slate-300 bg-indigo-50/40`}>{hy}</td>
+                              <td className={`${rowPad} text-center font-mono border-r border-slate-300`}>{pa3}</td>
+                              <td className={`${rowPad} text-center font-mono border-r border-slate-300`}>{pa4}</td>
+                              <td className={`${rowPad} text-center font-mono font-bold text-amber-900 border-r border-slate-300 bg-amber-50/40`}>{ann}</td>
+                              <td className={`${rowPad} text-center font-bold`}>
                                 {isGrowing ? <span className="text-emerald-700">↗ Up</span> : <span className="text-amber-700">→ Stb</span>}
                               </td>
                             </tr>
@@ -2648,6 +2652,17 @@ export const MarksheetGenerator: React.FC<Props> = ({
             .marksheet-sheet-box th,
             .marksheet-sheet-box td {
               width: auto !important;
+            }
+            .marksheet-dense-sheet {
+              padding: 2.5mm !important;
+              font-size: 9px !important;
+            }
+            .marksheet-dense-sheet table th,
+            .marksheet-dense-sheet table td {
+              padding-top: 1.5px !important;
+              padding-bottom: 1.5px !important;
+              font-size: 7.5px !important;
+              line-height: 1.15 !important;
             }
           }
           @media print and (orientation: portrait) {

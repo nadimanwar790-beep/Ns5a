@@ -5,6 +5,14 @@ import path from "path";
 import crypto from "crypto";
 import webpush from "web-push";
 import JSZip from "jszip";
+import {
+  getPublicRazorpayConfig,
+  saveSchoolRazorpayConfig,
+  testSchoolRazorpayConnection,
+  createSchoolRazorpayOrder,
+  verifySchoolRazorpayCheckout,
+  handleSchoolRazorpayWebhook,
+} from "./api/_razorpay";
 
 // Prevent transient socket resets (e.g. pre-warmer closing connections early)
 // or background async errors from terminating the dev/prod server process.
@@ -617,7 +625,16 @@ async function startServer() {
   initPushEngineSync();
   const app = express();
 
-  app.use(express.json({ limit: "5mb" }));
+  app.use(
+    express.json({
+      limit: "5mb",
+      verify: (req: any, _res, buf) => {
+        if (req.originalUrl?.includes("/api/razorpay/webhook")) {
+          req.rawBody = buf.toString("utf8");
+        }
+      },
+    })
+  );
 
   // 1. Public VAPID key for browser PushManager.subscribe()
   app.get("/api/school-push/vapid-public-key", (_req, res) => {
@@ -1094,14 +1111,127 @@ async function startServer() {
     return res.redirect(302, `https://api.telegram.org/file/bot${token}/${filePath}`);
   });
 
+  // ── PER-SCHOOL RAZORPAY ONLINE FEE & AUTO-WEBHOOK ENDPOINTS ──────────────
+  const notifyRazorpayFeeReceipt = async (info: {
+    schoolId: string;
+    studentId: string;
+    studentName: string;
+    amount: number;
+    monthLabel: string;
+    receiptNo: string;
+    purpose?: "fee_payment" | "store_order";
+  }) => {
+    const isStore = info.purpose === "store_order";
+    const title = isStore
+      ? `🛍️ स्कूल स्टोर रसीद • ₹${info.amount.toLocaleString("en-IN")} प्राप्त`
+      : `✅ शुल्क रसीद • ₹${info.amount.toLocaleString("en-IN")} प्राप्त`;
+    const body = isStore
+      ? `${info.studentName} का स्कूल स्टोर ऑर्डर ₹${info.amount.toLocaleString("en-IN")} NSTA Online से जमा हो गया है। रसीद: ${info.receiptNo}`
+      : `${info.studentName} (${info.monthLabel}) का ऑनलाइन शुल्क ₹${info.amount.toLocaleString("en-IN")} सफलतापूर्वक जमा हो गया है। रसीद: ${info.receiptNo}`;
+    const url = `/?schoolPortal=1&schoolId=${encodeURIComponent(info.schoolId)}&studentId=${encodeURIComponent(info.studentId)}&schoolTab=${isStore ? "store" : "fees"}`;
+
+    for (const record of subscriptionsMap.values()) {
+      const hasStudent = (record.students || []).some(
+        (s) => s.id === info.studentId && (!s.schoolId || s.schoolId === info.schoolId)
+      );
+      if (hasStudent) {
+        await dispatchWebPush(record, {
+          title,
+          body,
+          type: isStore ? "STORE_RECEIPT" : "FEE_RECEIPT",
+          studentId: info.studentId,
+          schoolId: info.schoolId,
+          url,
+          urgent: true,
+        });
+      }
+    }
+    await dispatchFcmToUsers(
+      [info.studentId],
+      false,
+      { title, body, type: isStore ? "STORE_RECEIPT" : "FEE_RECEIPT", url },
+      { schoolId: info.schoolId }
+    );
+  };
+
+  app.get("/api/razorpay/config", async (req, res) => {
+    try {
+      const schoolId = String(req.query?.schoolId || "").trim();
+      if (!schoolId) return res.status(400).json({ ok: false, error: "schoolId is required" });
+      const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "https").split(",")[0].trim();
+      const host = String(req.headers["x-forwarded-host"] || req.get("host") || "");
+      const originBase = host ? `${proto}://${host}` : "";
+      const data = await getPublicRazorpayConfig(schoolId, originBase);
+      return res.json(data);
+    } catch (err: any) {
+      return res.status(500).json({ ok: false, error: err?.message || "Failed to load Razorpay config" });
+    }
+  });
+
+  app.post("/api/razorpay/config", async (req, res) => {
+    try {
+      const result = await saveSchoolRazorpayConfig(req.body || {});
+      return res.status(result.status).json(result.body);
+    } catch (err: any) {
+      return res.status(500).json({ ok: false, error: err?.message || "Failed to save Razorpay config" });
+    }
+  });
+
+  app.post("/api/razorpay/test", async (req, res) => {
+    try {
+      const schoolId = String(req.body?.schoolId || req.query?.schoolId || "").trim();
+      const result = await testSchoolRazorpayConnection(schoolId);
+      return res.status(result.status).json(result.body);
+    } catch (err: any) {
+      return res.status(500).json({ ok: false, error: err?.message || "Razorpay test failed" });
+    }
+  });
+
+  app.post("/api/razorpay/create-order", async (req, res) => {
+    try {
+      const result = await createSchoolRazorpayOrder(req.body || {});
+      return res.status(result.status).json(result.body);
+    } catch (err: any) {
+      return res.status(500).json({ ok: false, error: err?.message || "Order creation failed" });
+    }
+  });
+
+  app.post("/api/razorpay/verify-payment", async (req, res) => {
+    try {
+      const result = await verifySchoolRazorpayCheckout(req.body || {}, notifyRazorpayFeeReceipt);
+      return res.status(result.status).json(result.body);
+    } catch (err: any) {
+      return res.status(500).json({ ok: false, error: err?.message || "Payment verification failed" });
+    }
+  });
+
+  app.post("/api/razorpay/webhook", async (req: any, res) => {
+    try {
+      const signature = String(req.headers["x-razorpay-signature"] || "");
+      const querySchoolId = String(req.query?.schoolId || "");
+      const result = await handleSchoolRazorpayWebhook({
+        rawBody: req.rawBody || "",
+        parsedBody: req.body,
+        signature,
+        querySchoolId,
+        onNotify: notifyRazorpayFeeReceipt,
+      });
+      return res.status(result.status).json(result.body);
+    } catch (err: any) {
+      return res.status(500).json({ ok: false, error: err?.message || "Webhook error" });
+    }
+  });
+
   // Dev-only Source Code ZIP export endpoint
   app.get("/api/export-source-zip", async (req, res) => {
     if (isProduction) {
       return res.status(403).json({ error: "Source export is disabled in production" });
     }
     try {
-      const includeModels = req.query?.includeModels !== "0";
-      const includeWasm = req.query?.includeWasm === "1";
+      const liteMode = req.query?.lite === "1";
+      const includeModels = !liteMode && req.query?.includeModels !== "0";
+      const includeWasm = !liteMode && req.query?.includeWasm !== "0";
+      const includeAssets = req.query?.includeAssets === "1";
       const zip = new JSZip();
 
       const excludedDirs = new Set([
@@ -1127,7 +1257,7 @@ async function startServer() {
 
           if (entry.isDirectory()) {
             if (excludedDirs.has(entry.name)) continue;
-            if (relPath === "public/assets/aistudio") continue;
+            if (!includeAssets && relPath === "public/assets/aistudio") continue;
             if (!includeModels && relPath === "public/models") continue;
             if (!includeWasm && relPath === "public/onnx-wasm") continue;
             walkDir(fullPath, relPath);
@@ -1140,17 +1270,23 @@ async function startServer() {
 
       walkDir(ROOT_DIR);
 
+      const dateTag = new Date().toISOString().slice(0, 10);
+      const zipName =
+        includeModels && includeWasm
+          ? `nsta-app-full-${dateTag}.zip`
+          : `nsta-app-source-${dateTag}.zip`;
+
       res.setHeader("Content-Type", "application/zip");
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="nsta-app-source-${new Date().toISOString().slice(0, 10)}.zip"`
+        `attachment; filename="${zipName}"`
       );
 
       const stream = zip.generateNodeStream({
         type: "nodebuffer",
         streamFiles: true,
         compression: "DEFLATE",
-        compressionOptions: { level: 6 },
+        compressionOptions: { level: 1 },
       });
       stream.pipe(res);
     } catch (err: any) {

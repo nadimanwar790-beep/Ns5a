@@ -15,7 +15,8 @@ import {
   Check,
   ShieldCheck,
   ArrowRight,
-  Loader2
+  Loader2,
+  ImagePlus
 } from "lucide-react";
 import {
   enrollStudentFromPhotoUrl,
@@ -24,8 +25,11 @@ import {
   deleteFaceDescriptor,
   extractDescriptorFromCanvas,
   extractNeuralDescriptor,
+  enrollPersonFromImageFile,
+  playAttendanceSuccessChime,
   FaceDescriptorRecord
 } from "../../utils/faceRecognitionEngine";
+import { updateStudentPhoto } from "../../school-firebase";
 
 export interface FaceEnrollmentModalProps {
   isOpen: boolean;
@@ -58,6 +62,61 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
   const [captureSuccess, setCaptureSuccess] = useState<boolean>(false);
   const streamRef = useRef<MediaStream | null>(null);
   const [confirmDeleteStudentId, setConfirmDeleteStudentId] = useState<string | null>(null);
+  const [uploadingStudentId, setUploadingStudentId] = useState<string | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadTargetRef = useRef<any | null>(null);
+
+  const handleTriggerUpload = (st: any) => {
+    uploadTargetRef.current = st;
+    if (uploadInputRef.current) {
+      uploadInputRef.current.value = "";
+      uploadInputRef.current.click();
+    }
+  };
+
+  const handleStudentPhotoFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const st = uploadTargetRef.current;
+    e.target.value = "";
+    if (!file || !st) return;
+
+    setUploadingStudentId(st.id);
+    try {
+      const res = await enrollPersonFromImageFile(
+        file,
+        {
+          id: st.id,
+          name: st.name,
+          rollNo: String(st.rollNo || ""),
+          classId: st.classId,
+          className: st.className,
+        },
+        schoolId,
+        "STUDENT"
+      );
+
+      if (!res) {
+        toast.error("इस फोटो में चेहरा स्पष्ट नहीं मिला। कृपया सामने से ली गई साफ़ फोटो चुनें।");
+        return;
+      }
+
+      try {
+        await updateStudentPhoto(schoolId, st.id, res.photoDataUrl);
+      } catch {}
+      st.photoUrl = res.photoDataUrl;
+      playAttendanceSuccessChime();
+      toast.success(`✅ ${st.name} की फोटो से फेस हाजिरी के लिए सेव हो गई!`);
+      if (onEnrollmentUpdated) onEnrollmentUpdated();
+      if (liveCaptureTarget?.id === st.id) {
+        setCaptureSuccess(true);
+        setTimeout(() => setLiveCaptureTarget(null), 1300);
+      }
+    } catch (err: any) {
+      toast.error(err?.message || "फोटो सेव करने में समस्या आई।");
+    } finally {
+      setUploadingStudentId(null);
+    }
+  };
 
   // Start Live Capture Camera
   const startLiveStudioCamera = async (overrideMode?: "user" | "environment") => {
@@ -146,7 +205,7 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
     const has512 = Boolean(neural?.arcfaceDescriptor && neural.arcfaceDescriptor.length === 512);
 
     if (!has512) {
-      toast.error("⚠️ चेहरे के 5 मुख्य बिंदु (आँखें, नाक, होंठ) स्पष्ट नहीं दिखे। कृपया सीधी रोशनी में सामने देखकर दोबारा फ़ोटो लें।");
+      toast.error("⚠️ 512-D ArcFace वेक्टर तैयार नहीं हो सका। कृपया सीधी रोशनी में सामने देखकर दोबारा फ़ोटो लें या 'फोटो जोड़ें' चुनें।");
       return;
     }
 
@@ -166,6 +225,10 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
     };
 
     await saveFaceDescriptor(record);
+    try {
+      await updateStudentPhoto(schoolId, liveCaptureTarget.id, photoDataUrl);
+    } catch {}
+    playAttendanceSuccessChime();
     setCaptureSuccess(true);
     if (onEnrollmentUpdated) onEnrollmentUpdated();
 
@@ -259,7 +322,7 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
                 Face Enrollment Desk (फेस नामांकन)
               </h2>
               <p className="text-xs text-slate-400">
-                Manage student 128-D biometric vectors & ID card photo mappings
+                फोटो जोड़ें (Upload Image) या लाइव कैमरे से फेस ID सेव करें — दोनों से हाजिरी लगेगी
               </p>
             </div>
           </div>
@@ -424,6 +487,21 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
 
                     <button
                       type="button"
+                      onClick={() => handleTriggerUpload(st)}
+                      disabled={uploadingStudentId === st.id}
+                      className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                      title="गैलरी से छात्र की फोटो जोड़ें (बिना लाइव स्कैन)"
+                    >
+                      {uploadingStudentId === st.id ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <ImagePlus className="w-3.5 h-3.5" />
+                      )}
+                      <span className="hidden sm:inline">{enrolled ? "फोटो बदलें" : "फोटो जोड़ें"}</span>
+                    </button>
+
+                    <button
+                      type="button"
                       onClick={() => setLiveCaptureTarget(st)}
                       className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer"
                       title="Open Live Camera Studio to Capture High-Res Face"
@@ -535,9 +613,27 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
               <Camera className="w-4 h-4" />
               <span>📸 1-टैप फोटो लें व फेस ID बनाएं (2 Seconds)</span>
             </button>
+
+            <button
+              type="button"
+              onClick={() => handleTriggerUpload(liveCaptureTarget)}
+              disabled={captureSuccess || uploadingStudentId === liveCaptureTarget?.id}
+              className="w-full mt-2 py-2.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-bold rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+            >
+              <ImagePlus className="w-4 h-4" />
+              <span>🖼️ लाइव स्कैन की जगह फोटो जोड़ें (Add Image)</span>
+            </button>
           </div>
         </div>
       )}
+
+      <input
+        ref={uploadInputRef}
+        type="file"
+        accept="image/*"
+        onChange={handleStudentPhotoFileSelected}
+        className="hidden"
+      />
     </div>
   );
 };

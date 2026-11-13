@@ -23,6 +23,7 @@ import {
   formatAcademicSession,
 } from "./feeReceiptUtils";
 import { printHtmlInIframe } from "./AdmissionFormPrintModal";
+import { safeOpenExternalUrl, getDynamicAcademicSessionLabel } from "../../utils/safeBrowserActions";
 
 interface Props {
   isOpen: boolean;
@@ -46,7 +47,7 @@ export const AnnualBulkFeeStatementModal: React.FC<Props> = ({
   school,
   student,
   className = "Nursery",
-  sessionName = "2026-2027",
+  sessionName = getDynamicAcademicSessionLabel(),
   allFees = [],
   feeSummary,
   isStudentView = false,
@@ -233,7 +234,7 @@ export const AnnualBulkFeeStatementModal: React.FC<Props> = ({
       const targetUrl = cleanPhone
         ? `https://api.whatsapp.com/send?phone=91${cleanPhone}&text=${encodeURIComponent(text)}`
         : `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
-      window.open(targetUrl, "_blank");
+      safeOpenExternalUrl(targetUrl);
     } finally {
       setSharingWhatsApp(false);
     }
@@ -483,7 +484,7 @@ export const AnnualBulkFeeStatementModal: React.FC<Props> = ({
                         f.receiptCategory === "admission" ||
                         String(f.receiptNo || "").startsWith("ADM-");
 
-                      let monthDisplay = f.month || "2026-04";
+                      let monthDisplay = f.month || new Date().toISOString().slice(0, 7);
                       if (isAdm) {
                         monthDisplay = "प्रवेश शुल्क, किट व प्रथम माह (Admission & Kit)";
                       } else if (/^\d{4}-\d{2}$/.test(monthDisplay)) {
@@ -504,7 +505,7 @@ export const AnnualBulkFeeStatementModal: React.FC<Props> = ({
                         ? 0
                         : Number(f.balanceDue !== undefined ? f.balanceDue : (isPaid ? 0 : Math.max(0, billed - paid)));
 
-                      const rNo = isPreAdm ? "—" : (isPaid || paid > 0 ? (f.receiptNo || `DPS-26-${String(idx + 1).padStart(4, "0")}`) : "—");
+                      const rNo = isPreAdm ? "—" : (isPaid || paid > 0 ? (f.receiptNo || `RCP-${String(idx + 1).padStart(4, "0")}`) : "—");
                       const dateStr = f.paidDate || f.paymentDate ? new Date(f.paidDate || f.paymentDate).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" }) : (isUpcoming ? "आगामी" : (isPreAdm ? "—" : "Pending"));
                       const modeStr = f.payModeInfo?.payMode || f.paymentMode || (isPaid ? "Cash" : (isPreAdm ? "—" : "Pending"));
 

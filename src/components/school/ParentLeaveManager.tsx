@@ -18,6 +18,7 @@ import {
 import { toast } from "sonner";
 import { School, SchoolStudent } from "../../school-types";
 import { loadSchoolSubcollection, syncSchoolSubcollection } from "../../utils/schoolCloudSync";
+import { shouldUseDemoForSchool } from "../../school-firebase";
 
 export interface StudentLeaveApplication {
   id: string;
@@ -61,13 +62,17 @@ export const ParentLeaveManager: React.FC<Props> = ({
   onLeaveUpdated
 }) => {
   const schoolId = school?.id || "SCH-001";
+  const isDemo = shouldUseDemoForSchool(schoolId);
   const leavesStorageKey = `school_leaves_${schoolId}`;
 
   const [leaves, setLeaves] = useState<StudentLeaveApplication[]>(() => {
     try {
       const raw = localStorage.getItem(leavesStorageKey);
       if (raw) return JSON.parse(raw);
-    } catch {}
+    } catch (err) {
+      console.warn("[ParentLeaveManager] Failed reading cached leaves:", err);
+    }
+    if (!isDemo) return [];
     const today = new Date().toISOString().slice(0, 10);
     return [
       {

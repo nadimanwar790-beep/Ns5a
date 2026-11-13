@@ -6,6 +6,8 @@ import {
   Sliders, Shield, Play
 } from "lucide-react";
 import type { School, BusLiveLocation } from "../../school-types";
+import { shouldUseDemoForSchool } from "../../school-firebase";
+import { safeOpenExternalUrl } from "../../utils/safeBrowserActions";
 import { rtdb } from "../../firebase";
 import { ref as dbRef, onValue } from "firebase/database";
 
@@ -73,26 +75,96 @@ const DEFAULT_BUS_FLEET = [
 ];
 
 export const AdminBusFleetRadar: React.FC<Props> = ({ school, onOpenDriverConsole, onClose }) => {
-  const [buses, setBuses] = useState<BusLiveLocation[]>(DEFAULT_BUS_FLEET);
-  const [selectedBusId, setSelectedBusId] = useState<string>("bus-01");
+  const isDemo = shouldUseDemoForSchool(school?.id);
+  const [buses, setBuses] = useState<BusLiveLocation[]>(() => (isDemo ? DEFAULT_BUS_FLEET : []));
+  const [selectedBusId, setSelectedBusId] = useState<string>(() => (isDemo ? "bus-01" : ""));
   const [filterMode, setFilterMode] = useState<"all" | "active">("all");
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
 
   // Subscribe to live bus updates
   useEffect(() => {
+    const sid = school?.id || "";
+    const demoMode = shouldUseDemoForSchool(sid);
+
     // 1. Check local bus states
     const loadLocalBuses = () => {
-      const updated = DEFAULT_BUS_FLEET.map((baseBus) => {
-        try {
-          const raw = localStorage.getItem(`nst_live_bus_${school?.id || "default"}_${baseBus.busId}`);
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            return { ...baseBus, ...parsed };
+      if (demoMode) {
+        const updated = DEFAULT_BUS_FLEET.map((baseBus) => {
+          try {
+            const raw = localStorage.getItem(`nst_live_bus_${sid || "default"}_${baseBus.busId}`);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              return { ...baseBus, ...parsed };
+            }
+          } catch (err) {
+            console.warn("[AdminBusFleetRadar] Demo bus parse warning:", err);
           }
-        } catch {}
-        return baseBus;
+          return baseBus;
+        });
+        setBuses(updated);
+        setLastRefreshed(new Date());
+        return;
+      }
+
+      // Real school: load from configured fitness vehicles + any live bus telemetry keys
+      const map = new Map<string, BusLiveLocation>();
+      try {
+        const fitRaw = sid ? localStorage.getItem(`bus_fitness_${sid}`) : null;
+        if (fitRaw) {
+          const fitList = JSON.parse(fitRaw);
+          if (Array.isArray(fitList)) {
+            fitList.forEach((v: any, idx: number) => {
+              const busId = v.id || `bus_${idx + 1}`;
+              map.set(busId, {
+                busId,
+                busNumber: v.vehicleNumber || `Bus #${idx + 1}`,
+                route: v.route || "Configured Route",
+                driverName: v.driverName || "—",
+                driverPhone: v.driverPhone || "",
+                latitude: Number(v.latitude || 0),
+                longitude: Number(v.longitude || 0),
+                speed: 0,
+                heading: 0,
+                accuracy: 0,
+                tripStatus: "idle",
+                tripType: "morning_pickup",
+                lastUpdated: new Date().toISOString(),
+                currentStop: "Depot",
+                totalStops: 0,
+                completedStops: [],
+              });
+            });
+          }
+        }
+      } catch (err) {
+        console.warn("[AdminBusFleetRadar] Fitness list parse warning:", err);
+      }
+
+      if (sid) {
+        try {
+          const livePrefix = `nst_live_bus_${sid}_`;
+          for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && k.startsWith(livePrefix)) {
+              const raw = localStorage.getItem(k);
+              if (raw) {
+                const parsed = JSON.parse(raw) as BusLiveLocation;
+                const bid = parsed.busId || k.slice(livePrefix.length);
+                map.set(bid, { ...(map.get(bid) || {}), ...parsed, busId: bid });
+              }
+            }
+          }
+        } catch (err) {
+          console.warn("[AdminBusFleetRadar] Live bus storage warning:", err);
+        }
+      }
+
+      setBuses((prev) => {
+        // Preserve any RTDB entries already loaded in memory while merging local updates
+        const merged = new Map<string, BusLiveLocation>(prev.map((b) => [b.busId, b]));
+        map.forEach((val, key) => merged.set(key, { ...(merged.get(key) || {}), ...val }));
+        return Array.from(merged.values());
       });
-      setBuses(updated);
       setLastRefreshed(new Date());
     };
 
@@ -102,9 +174,11 @@ export const AdminBusFleetRadar: React.FC<Props> = ({ school, onOpenDriverConsol
     const handleBusUpdate = (e: any) => {
       const live = e?.detail as BusLiveLocation;
       if (live && live.busId) {
-        setBuses((prev) =>
-          prev.map((b) => (b.busId === live.busId ? { ...b, ...live } : b))
-        );
+        setBuses((prev) => {
+          const exists = prev.some((b) => b.busId === live.busId);
+          if (!exists) return [...prev, live];
+          return prev.map((b) => (b.busId === live.busId ? { ...b, ...live } : b));
+        });
         setLastRefreshed(new Date());
       }
     };
@@ -112,9 +186,9 @@ export const AdminBusFleetRadar: React.FC<Props> = ({ school, onOpenDriverConsol
 
     // 3. Firebase RTDB listener if connected
     let unsubRtdb: any = null;
-    if (rtdb && school?.id) {
+    if (rtdb && sid) {
       try {
-        const qRef = dbRef(rtdb, `school_bus_locations/${school.id}`);
+        const qRef = dbRef(rtdb, `school_bus_locations/${sid}`);
         unsubRtdb = onValue(qRef, (snap) => {
           if (snap.exists()) {
             const data = snap.val();
@@ -145,7 +219,7 @@ export const AdminBusFleetRadar: React.FC<Props> = ({ school, onOpenDriverConsol
 
   const activeBuses = buses.filter((b) => b.tripStatus === "started");
   const displayList = filterMode === "active" ? activeBuses : buses;
-  const currentSelectedBus = buses.find((b) => b.busId === selectedBusId) || buses[0];
+  const currentSelectedBus = buses.find((b) => b.busId === selectedBusId) || buses[0] || null;
 
   // Helper to construct Google Maps link
   const getGoogleMapsUrl = (lat: number, lng: number) => {
@@ -208,11 +282,22 @@ export const AdminBusFleetRadar: React.FC<Props> = ({ school, onOpenDriverConsol
       </div>
 
       {/* Grid: Left List + Right Interactive Vector Radar */}
+      {!currentSelectedBus ? (
+        <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-8 text-center space-y-3">
+          <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 text-amber-400 flex items-center justify-center mx-auto">
+            <Bus size={24} />
+          </div>
+          <h3 className="text-sm font-black text-white">अभी कोई लाइव बस या रूट दर्ज नहीं है</h3>
+          <p className="text-xs text-slate-400 max-w-md mx-auto">
+            जब आप वाहन लॉगबुक में बस जोड़ेंगे या ड्राइवर मोबाइल मोड से लाइव ट्रिप शुरू होगी, तो बस की लोकेशन और स्पीड यहाँ रियल-टाइम में दिखेगी।
+          </p>
+        </div>
+      ) : (
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
         {/* Fleet List (5 cols) */}
         <div className="lg:col-span-5 space-y-3">
           {displayList.map((bus) => {
-            const isSelected = bus.busId === selectedBusId;
+            const isSelected = bus.busId === currentSelectedBus.busId;
             const isLive = bus.tripStatus === "started";
 
             return (
@@ -250,7 +335,7 @@ export const AdminBusFleetRadar: React.FC<Props> = ({ school, onOpenDriverConsol
                     <span className="truncate max-w-[150px]">{bus.currentStop || "Depot"}</span>
                   </span>
                   <span className="font-mono text-slate-500">
-                    {new Date(bus.lastUpdated).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                    {bus.lastUpdated ? new Date(bus.lastUpdated).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}
                   </span>
                 </div>
               </div>
@@ -271,24 +356,27 @@ export const AdminBusFleetRadar: React.FC<Props> = ({ school, onOpenDriverConsol
             </div>
 
             <div className="flex items-center gap-2">
-              <a
-                href={getGoogleMapsUrl(currentSelectedBus.latitude, currentSelectedBus.longitude)}
-                target="_blank"
-                rel="noreferrer"
-                className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-indigo-300 text-xs font-bold flex items-center gap-1.5 transition-colors border border-slate-700"
-              >
-                <ExternalLink size={13} /> Maps Link
-              </a>
-              <a
-                href={`tel:${currentSelectedBus.driverPhone}`}
-                className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-md shadow-emerald-600/20"
-              >
-                <Phone size={13} /> Call Driver
-              </a>
+              {Number(currentSelectedBus.latitude) !== 0 && Number(currentSelectedBus.longitude) !== 0 && (
+                <button
+                  type="button"
+                  onClick={() => safeOpenExternalUrl(getGoogleMapsUrl(currentSelectedBus.latitude, currentSelectedBus.longitude))}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-indigo-300 text-xs font-bold flex items-center gap-1.5 transition-colors border border-slate-700 cursor-pointer"
+                >
+                  <ExternalLink size={13} /> Maps Link
+                </button>
+              )}
+              {currentSelectedBus.driverPhone && (
+                <a
+                  href={`tel:${currentSelectedBus.driverPhone}`}
+                  className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-md shadow-emerald-600/20"
+                >
+                  <Phone size={13} /> Call Driver
+                </a>
+              )}
             </div>
           </div>
 
-          {/* Interactive Simulated Vector Radar Visualizer */}
+          {/* Interactive Vector Radar Visualizer */}
           <div className="my-6 relative w-full h-56 rounded-2xl bg-gradient-to-b from-slate-900 to-slate-950 border border-slate-800 flex items-center justify-center overflow-hidden">
             {/* Concentric Radar Rings */}
             <div className="absolute w-52 h-52 rounded-full border border-indigo-500/10 animate-ping"></div>
@@ -313,7 +401,7 @@ export const AdminBusFleetRadar: React.FC<Props> = ({ school, onOpenDriverConsol
               </div>
             </div>
 
-            {/* Simulated Road Path Trail */}
+            {/* Road Path Trail */}
             <svg className="absolute inset-0 w-full h-full pointer-events-none opacity-40">
               <path
                 d="M 20 180 Q 150 110, 250 120 T 450 60"
@@ -329,7 +417,7 @@ export const AdminBusFleetRadar: React.FC<Props> = ({ school, onOpenDriverConsol
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center pt-3 border-t border-slate-800/80">
             <div className="bg-slate-900/80 p-2.5 rounded-xl border border-slate-800">
               <span className="text-[10px] text-slate-400 block font-semibold">ड्राइवर का नाम</span>
-              <span className="text-xs font-bold text-white truncate block">{currentSelectedBus.driverName}</span>
+              <span className="text-xs font-bold text-white truncate block">{currentSelectedBus.driverName || "—"}</span>
             </div>
             <div className="bg-slate-900/80 p-2.5 rounded-xl border border-slate-800">
               <span className="text-[10px] text-slate-400 block font-semibold">करंट स्टॉप</span>
@@ -340,18 +428,19 @@ export const AdminBusFleetRadar: React.FC<Props> = ({ school, onOpenDriverConsol
             <div className="bg-slate-900/80 p-2.5 rounded-xl border border-slate-800">
               <span className="text-[10px] text-slate-400 block font-semibold">GPS अक्षांश / देशांतर</span>
               <span className="text-xs font-bold font-mono text-slate-200 block truncate">
-                {currentSelectedBus.latitude.toFixed(4)}, {currentSelectedBus.longitude.toFixed(4)}
+                {Number(currentSelectedBus.latitude || 0).toFixed(4)}, {Number(currentSelectedBus.longitude || 0).toFixed(4)}
               </span>
             </div>
             <div className="bg-slate-900/80 p-2.5 rounded-xl border border-slate-800">
               <span className="text-[10px] text-slate-400 block font-semibold">स्टॉप्स प्रगति</span>
               <span className="text-xs font-bold font-mono text-emerald-400 block">
-                {currentSelectedBus.completedStops?.length || 0} / {currentSelectedBus.totalStops || 4}
+                {currentSelectedBus.completedStops?.length || 0} / {currentSelectedBus.totalStops || 0}
               </span>
             </div>
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 };

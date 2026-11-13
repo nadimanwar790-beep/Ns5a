@@ -1,5 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect, useMemo } from "react";
+import { safeOpenExternalUrl } from "../../utils/safeBrowserActions";
 import {
   IndianRupee,
   Receipt,
@@ -43,7 +44,9 @@ import {
   PhoneCall,
   Sparkles,
   Laptop,
-  Smartphone
+  Smartphone,
+  Bell,
+  RotateCcw
 } from "lucide-react";
 import { rotateToLandscape, rotateToPortrait, setDesktopMode, useDeviceOrientation } from "../../utils/displayPrefs";
 import type {
@@ -55,7 +58,8 @@ import type {
   SchoolAccountant,
   AccountantPermissions,
   SchoolExpenseVoucher,
-  AdmissionApplication
+  AdmissionApplication,
+  StoreSaleRecord
 } from "../../school-types";
 import {
   getSchool,
@@ -63,6 +67,7 @@ import {
   getSessions,
   getStudents,
   getMonthlyFees,
+  getSchoolFeeHistory,
   saveFee,
   currentMonthStr,
   getAccountants,
@@ -74,15 +79,19 @@ import {
   saveStudent,
   updateStudent,
   getAttendance,
-  todayStr,
+  todayStr as getTodayDateStr,
   getTeachers
 } from "../../school-firebase";
+import { loadMergedStoreSales } from "../../utils/schoolCloudSync";
+import { computePaymentBreakdown } from "../../utils/paymentBreakdown";
 import { toast } from "sonner";
 import { FeeManager } from "./FeeManager";
 import { OnlineAdmissionManager } from "./OnlineAdmissionManager";
 import { AbsenteeActionPage } from "./AbsenteeActionPage";
 import { SiblingProfileManager } from "./SiblingProfileManager";
 import { NstaMessengerSuite } from "./NstaMessengerSuite";
+import { ReceiptCancellationModal } from "./ReceiptCancellationModal";
+import { RazorpaySettingsModal } from "./RazorpaySettingsModal";
 import { printHtmlInIframe } from "./AdmissionFormPrintModal";
 import {
   printPosSlipDirect,
@@ -111,6 +120,13 @@ type AccountantTab =
   | "daybook"
   | "expenses"
   | "bus_fees"
+  | "admission_receipt"
+  | "qr_pay"
+  | "fee_alerts"
+  | "class_rates"
+  | "receipt_header"
+  | "receipt_cancellation"
+  | "razorpay_setup"
   | "messenger";
 
 const DEFAULT_PERMISSIONS: AccountantPermissions = {
@@ -151,6 +167,8 @@ export const AccountantPanel: React.FC<Props> = ({
   const [sessions, setSessions] = useState<SchoolSession[]>([]);
   const [students, setStudents] = useState<SchoolStudent[]>([]);
   const [fees, setFees] = useState<MonthlyFee[]>([]);
+  const [allHistoryFees, setAllHistoryFees] = useState<MonthlyFee[]>([]);
+  const [storeSales, setStoreSales] = useState<StoreSaleRecord[]>([]);
   const [expenses, setExpenses] = useState<SchoolExpenseVoucher[]>([]);
   const [accountants, setAccountants] = useState<SchoolAccountant[]>([]);
   const [teachers, setTeachers] = useState<any[]>([]);
@@ -243,9 +261,11 @@ export const AccountantPanel: React.FC<Props> = ({
         const currentSess = sessData?.find((s: any) => s.active) || sessData?.[0];
         const targetSessionId = currentSess?.id;
 
-        const [stdData, feeData] = await Promise.all([
+        const [stdData, feeData, histFeeData, storeSalesData] = await Promise.all([
           getStudents(schoolId, undefined, undefined, targetSessionId),
-          getMonthlyFees(schoolId, currentMonthStr(), undefined, targetSessionId)
+          getMonthlyFees(schoolId, currentMonthStr(), undefined, targetSessionId),
+          getSchoolFeeHistory(schoolId, targetSessionId).catch(() => []),
+          loadMergedStoreSales<StoreSaleRecord>(schoolId).catch(() => [])
         ]);
 
         if (!mounted) return;
@@ -254,12 +274,14 @@ export const AccountantPanel: React.FC<Props> = ({
         setSessions(sessData || []);
         setStudents(stdData || []);
         setFees(feeData || []);
+        setAllHistoryFees(Array.isArray(histFeeData) ? histFeeData : []);
+        setStoreSales(Array.isArray(storeSalesData) ? storeSalesData : []);
         setExpenses(expData || []);
         setAccountants(accData || []);
         setTeachers(tchData || []);
 
         // Load today's attendance summary across classes
-        const todayDateStr = todayStr();
+        const todayDateStr = getTodayDateStr();
         if (clsData && clsData.length > 0) {
           try {
             let pCount = 0;
@@ -284,7 +306,9 @@ export const AccountantPanel: React.FC<Props> = ({
               totalMarked: tMarked,
               attendancePct: pct,
             });
-          } catch {}
+          } catch (attErr) {
+            console.warn("[AccountantPanel] Failed loading attendance summary:", attErr);
+          }
         }
 
         if (accData && accData.length > 0) {
@@ -296,7 +320,7 @@ export const AccountantPanel: React.FC<Props> = ({
             id: accountantId || "acc_head_01",
             schoolId,
             name: "Head Accountant",
-            phone: "+91 98765 43210",
+            phone: "",
             employeeId: "ACC-01",
             designation: "Senior School Accountant & Cashier",
             joinDate: "2026-04-01",
@@ -332,31 +356,24 @@ export const AccountantPanel: React.FC<Props> = ({
     return d.toISOString().slice(0, 10);
   }, []);
 
-  // Today's Financial Summary
+  // Today's Financial Summary (3-Channel: Cash / Online QR Code / NSTA Online across Fees + Store)
   const financialSummary = useMemo(() => {
-    let todayCashFee = 0;
-    let todayUpiFee = 0;
-    let todayTotalFee = 0;
-    let monthTotalFee = 0;
+    const feePool = allHistoryFees.length > 0 ? allHistoryFees : fees;
+    const todayBreakdown = computePaymentBreakdown({
+      fees: feePool,
+      storeSales,
+      datePrefix: todayStr,
+    });
+    const monthPrefix = todayStr.slice(0, 7);
+    const monthBreakdown = computePaymentBreakdown({
+      fees: feePool,
+      storeSales,
+      datePrefix: monthPrefix,
+    });
+
     let monthPendingDues = 0;
-
     fees.forEach(f => {
-      const isPaidToday = f.paidDate && f.paidDate.startsWith(todayStr);
-      const isPaid = Boolean(f.paid);
-      const amount = Number(f.paidAmount || f.amount || 0);
-
-      if (isPaid) {
-        monthTotalFee += amount;
-        if (isPaidToday) {
-          todayTotalFee += amount;
-          const mode = (f.payModeInfo?.payMode || "Cash").toLowerCase();
-          if (mode.includes("upi") || mode.includes("online") || mode.includes("qr") || mode.includes("bank")) {
-            todayUpiFee += amount;
-          } else {
-            todayCashFee += amount;
-          }
-        }
-      } else {
+      if (!f.paid) {
         monthPendingDues += Number(f.balanceDue !== undefined ? f.balanceDue : f.amount || 0);
       }
     });
@@ -377,13 +394,20 @@ export const AccountantPanel: React.FC<Props> = ({
       }
     });
 
-    const netCashInHand = todayCashFee - todayExpenseCash;
+    const netCashInHand = todayBreakdown.cash - todayExpenseCash;
 
     return {
-      todayCashFee: todayCashFee || 0,
-      todayUpiFee: todayUpiFee || 0,
-      todayTotalFee: todayTotalFee || 0,
-      monthTotalFee: monthTotalFee || 0,
+      todayCashFee: todayBreakdown.cash,
+      todayQrFee: todayBreakdown.onlineQr,
+      todayNstaOnlineFee: todayBreakdown.nstaOnline,
+      todayUpiFee: todayBreakdown.onlineQr + todayBreakdown.nstaOnline,
+      todayTotalFee: todayBreakdown.total,
+      todayFeeOnlyTotal: todayBreakdown.feeTotal,
+      todayStoreTotal: todayBreakdown.storeTotal,
+      monthTotalFee: monthBreakdown.total,
+      monthCash: monthBreakdown.cash,
+      monthOnlineQr: monthBreakdown.onlineQr,
+      monthNstaOnline: monthBreakdown.nstaOnline,
       monthPendingDues: monthPendingDues || 0,
       totalDuesAmount: monthPendingDues || 0,
       todayExpenseTotal: todayExpenseTotal || 0,
@@ -391,7 +415,7 @@ export const AccountantPanel: React.FC<Props> = ({
       todayExpenseUpi: todayExpenseUpi || 0,
       netCashInHand: netCashInHand || 0,
     };
-  }, [fees, expenses, todayStr]);
+  }, [fees, allHistoryFees, storeSales, expenses, todayStr]);
 
   // Defaulters List - O(N) optimized with hash map lookups
   const defaultersList = useMemo(() => {
@@ -806,6 +830,100 @@ export const AccountantPanel: React.FC<Props> = ({
             )}
 
             <div className="text-[10px] font-black uppercase tracking-wider text-slate-500 px-3 py-1 pt-2">
+              फीस टूल्स व सेटिंग्स (FEE TOOLS)
+            </div>
+
+            {permissions.canCollectFee && (
+              <>
+                <button
+                  onClick={() => setActiveTab("admission_receipt")}
+                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
+                    activeTab === "admission_receipt"
+                      ? "bg-amber-500 text-slate-950 shadow-md font-black"
+                      : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+                  }`}
+                >
+                  <Receipt className="w-4 h-4 text-emerald-400" />
+                  <span>New Admission Receipt (+ प्रवेश शुल्क)</span>
+                </button>
+
+                <button
+                  onClick={() => setActiveTab("qr_pay")}
+                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
+                    activeTab === "qr_pay"
+                      ? "bg-amber-500 text-slate-950 shadow-md font-black"
+                      : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+                  }`}
+                >
+                  <QrCode className="w-4 h-4 text-amber-400" />
+                  <span>Scan ID Card QR (फास्ट पे)</span>
+                </button>
+              </>
+            )}
+
+            {permissions.canSendFeeAlerts && (
+              <button
+                onClick={() => setActiveTab("fee_alerts")}
+                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
+                  activeTab === "fee_alerts"
+                    ? "bg-amber-500 text-slate-950 shadow-md font-black"
+                    : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+                }`}
+              >
+                <Bell className="w-4 h-4 text-purple-400" />
+                <span>Class Fee Alerts & Push</span>
+              </button>
+            )}
+
+            <button
+              onClick={() => setActiveTab("class_rates")}
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
+                activeTab === "class_rates"
+                  ? "bg-amber-500 text-slate-950 shadow-md font-black"
+                  : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+              }`}
+            >
+              <Sparkles className="w-4 h-4 text-blue-400" />
+              <span>Class Fee Rates & Structure</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab("receipt_header")}
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
+                activeTab === "receipt_header"
+                  ? "bg-amber-500 text-slate-950 shadow-md font-black"
+                  : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+              }`}
+            >
+              <Building2 className="w-4 h-4 text-slate-300" />
+              <span>Receipt Header & Print Settings</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab("receipt_cancellation")}
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
+                activeTab === "receipt_cancellation"
+                  ? "bg-rose-600 text-white shadow-md font-black"
+                  : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+              }`}
+            >
+              <RotateCcw className="w-4 h-4 text-rose-400" />
+              <span>Receipt Cancellation & Refund</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab("razorpay_setup")}
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
+                activeTab === "razorpay_setup"
+                  ? "bg-indigo-600 text-white shadow-md font-black"
+                  : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+              }`}
+            >
+              <CreditCard className="w-4 h-4 text-indigo-400" />
+              <span>Razorpay Auto-Webhook Setup</span>
+            </button>
+
+            <div className="text-[10px] font-black uppercase tracking-wider text-slate-500 px-3 py-1 pt-2">
               कम्युनिकेशन व मेसेंजर (COMMUNICATION)
             </div>
 
@@ -1029,6 +1147,107 @@ export const AccountantPanel: React.FC<Props> = ({
                   </button>
                 )}
 
+                <div className="text-[10px] font-black uppercase tracking-wider text-slate-500 px-3 py-1 pt-2">
+                  फीस टूल्स व सेटिंग्स (FEE TOOLS)
+                </div>
+
+                {permissions.canCollectFee && (
+                  <>
+                    <button
+                      onClick={() => {
+                        setActiveTab("admission_receipt");
+                        setIsMobileMenuOpen(false);
+                      }}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
+                        activeTab === "admission_receipt" ? "bg-amber-500 text-slate-950 font-black" : "text-slate-300"
+                      }`}
+                    >
+                      <Receipt className="w-4 h-4 text-emerald-400" />
+                      <span>New Admission Receipt (+ प्रवेश शुल्क)</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setActiveTab("qr_pay");
+                        setIsMobileMenuOpen(false);
+                      }}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
+                        activeTab === "qr_pay" ? "bg-amber-500 text-slate-950 font-black" : "text-slate-300"
+                      }`}
+                    >
+                      <QrCode className="w-4 h-4 text-amber-400" />
+                      <span>Scan ID Card QR (फास्ट पे)</span>
+                    </button>
+                  </>
+                )}
+
+                {permissions.canSendFeeAlerts && (
+                  <button
+                    onClick={() => {
+                      setActiveTab("fee_alerts");
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
+                      activeTab === "fee_alerts" ? "bg-amber-500 text-slate-950 font-black" : "text-slate-300"
+                    }`}
+                  >
+                    <Bell className="w-4 h-4 text-purple-400" />
+                    <span>Class Fee Alerts & Push</span>
+                  </button>
+                )}
+
+                <button
+                  onClick={() => {
+                    setActiveTab("class_rates");
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
+                    activeTab === "class_rates" ? "bg-amber-500 text-slate-950 font-black" : "text-slate-300"
+                  }`}
+                >
+                  <Sparkles className="w-4 h-4 text-blue-400" />
+                  <span>Class Fee Rates & Structure</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setActiveTab("receipt_header");
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
+                    activeTab === "receipt_header" ? "bg-amber-500 text-slate-950 font-black" : "text-slate-300"
+                  }`}
+                >
+                  <Building2 className="w-4 h-4 text-slate-300" />
+                  <span>Receipt Header & Print Settings</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setActiveTab("receipt_cancellation");
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
+                    activeTab === "receipt_cancellation" ? "bg-rose-600 text-white font-black" : "text-slate-300"
+                  }`}
+                >
+                  <RotateCcw className="w-4 h-4 text-rose-400" />
+                  <span>Receipt Cancellation & Refund</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setActiveTab("razorpay_setup");
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
+                    activeTab === "razorpay_setup" ? "bg-indigo-600 text-white font-black" : "text-slate-300"
+                  }`}
+                >
+                  <CreditCard className="w-4 h-4 text-indigo-400" />
+                  <span>Razorpay Auto-Webhook Setup</span>
+                </button>
+
                 <button
                   onClick={() => {
                     setActiveTab("messenger");
@@ -1171,7 +1390,7 @@ export const AccountantPanel: React.FC<Props> = ({
                   </div>
                 </div>
 
-                {/* 3. Today's Total Fee Collections */}
+                {/* 3. Today's Total Collections (3-Channel Breakdown) */}
                 <div className="p-5 rounded-3xl bg-slate-950 border border-slate-800 shadow-lg space-y-2">
                   <div className="flex items-center justify-between text-xs text-slate-400 font-bold">
                     <span>आज का कुल संकलन</span>
@@ -1180,9 +1399,20 @@ export const AccountantPanel: React.FC<Props> = ({
                   <div className="text-3xl font-black text-white tabular-nums">
                     ₹ {(Number(financialSummary.todayTotalFee) || 0).toLocaleString("en-IN")}
                   </div>
-                  <p className="text-[11px] text-slate-400">
-                    नकद: ₹{(Number(financialSummary.todayCashFee) || 0).toLocaleString("en-IN")} • UPI: ₹{(Number(financialSummary.todayUpiFee) || 0).toLocaleString("en-IN")}
-                  </p>
+                  <div className="grid grid-cols-3 gap-1.5 pt-1.5 border-t border-slate-800/80 text-[10px]">
+                    <div>
+                      <span className="text-slate-400 block">Online QR</span>
+                      <span className="font-black text-cyan-400 tabular-nums">₹{(Number(financialSummary.todayQrFee) || 0).toLocaleString("en-IN")}</span>
+                    </div>
+                    <div className="border-l border-slate-800 pl-1.5">
+                      <span className="text-slate-400 block">NSTA Online</span>
+                      <span className="font-black text-indigo-400 tabular-nums">₹{(Number(financialSummary.todayNstaOnlineFee) || 0).toLocaleString("en-IN")}</span>
+                    </div>
+                    <div className="border-l border-slate-800 pl-1.5">
+                      <span className="text-slate-400 block">Cash</span>
+                      <span className="font-black text-emerald-400 tabular-nums">₹{(Number(financialSummary.todayCashFee) || 0).toLocaleString("en-IN")}</span>
+                    </div>
+                  </div>
                 </div>
 
                 {/* 4. Total Dues & Defaulters */}
@@ -1236,7 +1466,7 @@ export const AccountantPanel: React.FC<Props> = ({
                   const url = targetPhone
                     ? `https://wa.me/${targetPhone}?text=${msg}`
                     : `https://wa.me/?text=${msg}`;
-                  window.open(url, "_blank", "noopener,noreferrer");
+                  safeOpenExternalUrl(url);
                 };
 
                 const handleSettleDue = async () => {
@@ -1753,18 +1983,28 @@ export const AccountantPanel: React.FC<Props> = ({
 
               {/* 4 STAT CARDS */}
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                {/* 1. Today's Total Fee */}
+                {/* 1. Today's Total Collections */}
                 <div className="p-5 rounded-2xl bg-slate-950 border border-slate-800 shadow-md">
                   <div className="flex items-center justify-between text-xs font-bold text-slate-400">
-                    <span>आज कुल फीस संकलन</span>
+                    <span>आज कुल संकलन (Fee + Store)</span>
                     <TrendingUp className="w-4 h-4 text-emerald-400" />
                   </div>
                   <div className="mt-2 text-2xl font-black text-emerald-400 tabular-nums">
                     ₹ {(Number(financialSummary.todayTotalFee) || 0).toLocaleString("en-IN")}
                   </div>
-                  <div className="mt-1 flex items-center justify-between text-[11px] text-slate-400">
-                    <span>नकद: ₹{(Number(financialSummary.todayCashFee) || 0).toLocaleString("en-IN")}</span>
-                    <span>UPI: ₹{(Number(financialSummary.todayUpiFee) || 0).toLocaleString("en-IN")}</span>
+                  <div className="mt-2 pt-1.5 border-t border-slate-800 grid grid-cols-3 gap-1 text-[10px]">
+                    <div>
+                      <span className="text-slate-400 block">Online QR</span>
+                      <span className="font-black text-cyan-400 tabular-nums">₹{(Number(financialSummary.todayQrFee) || 0).toLocaleString("en-IN")}</span>
+                    </div>
+                    <div className="border-l border-slate-800 pl-1">
+                      <span className="text-slate-400 block">NSTA Online</span>
+                      <span className="font-black text-indigo-400 tabular-nums">₹{(Number(financialSummary.todayNstaOnlineFee) || 0).toLocaleString("en-IN")}</span>
+                    </div>
+                    <div className="border-l border-slate-800 pl-1">
+                      <span className="text-slate-400 block">Cash</span>
+                      <span className="font-black text-white tabular-nums">₹{(Number(financialSummary.todayCashFee) || 0).toLocaleString("en-IN")}</span>
+                    </div>
                   </div>
                 </div>
 
@@ -1970,6 +2210,58 @@ export const AccountantPanel: React.FC<Props> = ({
             </div>
           )}
 
+          {/* FEE TOOL MENU TABS (MOVED FROM FEE TOOLS DROPDOWN) */}
+          {(activeTab === "admission_receipt" ||
+            activeTab === "qr_pay" ||
+            activeTab === "fee_alerts" ||
+            activeTab === "class_rates" ||
+            activeTab === "receipt_header") && (
+            <div className="h-full">
+              <FeeManager
+                key={activeTab}
+                schoolId={schoolId}
+                school={school || undefined}
+                sessionId={activeSession.id}
+                adminId={activeAccountant?.id || "accountant"}
+                userRole="ACCOUNTANT"
+                actorName={activeAccountant?.name || "Accountant"}
+                initialTool={
+                  activeTab === "admission_receipt"
+                    ? "admission_receipt"
+                    : activeTab === "qr_pay"
+                      ? "qr_scanner"
+                      : activeTab === "fee_alerts"
+                        ? "fee_alert"
+                        : activeTab === "class_rates"
+                          ? "class_rates"
+                          : "header"
+                }
+                onBack={() => setActiveTab("fee_collection")}
+              />
+            </div>
+          )}
+
+          {activeTab === "receipt_cancellation" && (
+            <ReceiptCancellationModal
+              isOpen={true}
+              onClose={() => setActiveTab("fee_collection")}
+              school={school || { id: schoolId, name: "School" } as any}
+              activeSession={activeSession}
+              onReceiptCancelled={() => setRefreshTrigger((t) => t + 1)}
+            />
+          )}
+
+          {activeTab === "razorpay_setup" && (
+            <RazorpaySettingsModal
+              isOpen={true}
+              onClose={() => setActiveTab("fee_collection")}
+              schoolId={schoolId}
+              schoolName={school?.name}
+              adminUid={activeAccountant?.id || "accountant"}
+              onSaved={() => toast.success("Razorpay Online Fee & Auto-Webhook settings saved!")}
+            />
+          )}
+
           {/* TAB 3: ONLINE & DIRECT ADMISSION */}
           {activeTab === "admissions" && (
             <div className="h-full">
@@ -2154,20 +2446,37 @@ export const AccountantPanel: React.FC<Props> = ({
                 </div>
               </div>
 
-              {/* Digital UPI Statement */}
-              <div className="p-6 rounded-3xl bg-slate-950 border border-slate-800 shadow-md space-y-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-black text-white flex items-center gap-2">
-                    <QrCode className="w-4 h-4 text-indigo-400" />
-                    <span>डिजिटल / UPI व बैंक ट्रांसफर संग्रह</span>
-                  </h3>
-                  <span className="font-black text-indigo-400 text-sm tabular-nums">
-                    ₹ {(Number(financialSummary.todayUpiFee) || 0).toLocaleString("en-IN")}
-                  </span>
+              {/* Digital Online Statement (Online QR Code vs NSTA Online) */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="p-6 rounded-3xl bg-slate-950 border border-cyan-500/30 shadow-md space-y-2">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-black text-white flex items-center gap-2">
+                      <QrCode className="w-4 h-4 text-cyan-400" />
+                      <span>Online QR Code (Counter UPI / Bank)</span>
+                    </h3>
+                    <span className="font-black text-cyan-400 text-lg tabular-nums">
+                      ₹ {(Number(financialSummary.todayQrFee) || 0).toLocaleString("en-IN")}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    स्कूल काउंटर QR कोड / PhonePe / GPay / बैंक ट्रांसफर से प्राप्त डिजिटल राशि।
+                  </p>
                 </div>
-                <p className="text-xs text-slate-400">
-                  यह राशि सीधे विद्यालय के अधिकृत बैंक खाते अथवा QR कोड में क्रेडिट हुई है, अतः Accountant के नकद गल्ले से अलग है।
-                </p>
+
+                <div className="p-6 rounded-3xl bg-slate-950 border border-indigo-500/30 shadow-md space-y-2">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-black text-white flex items-center gap-2">
+                      <CreditCard className="w-4 h-4 text-indigo-400" />
+                      <span>NSTA Online (Razorpay Gateway)</span>
+                    </h3>
+                    <span className="font-black text-indigo-400 text-lg tabular-nums">
+                      ₹ {(Number(financialSummary.todayNstaOnlineFee) || 0).toLocaleString("en-IN")}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    अभिभावक व छात्र पोर्टल से Razorpay द्वारा ऑनलाइन जमा की गई फीस व स्कूल स्टोर राशि।
+                  </p>
+                </div>
               </div>
             </div>
           )}

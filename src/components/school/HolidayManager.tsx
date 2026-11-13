@@ -18,6 +18,7 @@ import {
   subscribeToSchoolHolidays,
   saveSchoolCommunityPost,
   deleteSchoolCommunityPost,
+  shouldUseDemoForSchool,
 } from "../../school-firebase";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 
@@ -48,10 +49,10 @@ export const HolidayManager: React.FC<Props> = ({ schoolId, adminUid, schoolName
   });
 
   const loadHolidays = () => {
-    const dataset = getDemoSchoolDataset();
-    if (!isDemoDataEnabled()) {
-      setHolidays(dataset.holidays.filter(h => h.isPreloaded === false));
+    if (!shouldUseDemoForSchool(schoolId)) {
+      setHolidays([]);
     } else {
+      const dataset = getDemoSchoolDataset();
       setHolidays([...dataset.holidays]);
     }
   };

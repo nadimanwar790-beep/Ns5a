@@ -15,6 +15,7 @@ import {
   CreditCard, CheckCircle, AlertCircle, Clock, ChevronRight, FileText, StickyNote, Calendar, Crown,
   Bell, Sliders, Smartphone, Check, Sparkles
 } from "lucide-react";
+import { toast } from "sonner";
 
 interface Props {
   adminUid: string;
@@ -855,7 +856,9 @@ export const SuperAdminPanel: React.FC<Props> = ({ adminUid, onBack }) => {
       }
       const direct = localStorage.getItem('nst_notification_gate_bypass');
       if (direct !== null) return direct === 'true';
-    } catch {}
+    } catch (err) {
+      console.warn('[SuperAdminPanel] Policy load warning:', err);
+    }
     return true; // Default is bypass enabled
   });
   const [savingPolicy, setSavingPolicy] = useState(false);
@@ -874,7 +877,9 @@ export const SuperAdminPanel: React.FC<Props> = ({ adminUid, onBack }) => {
         const parsed = raw ? JSON.parse(raw) : {};
         parsed.notificationGateBypass = newVal;
         localStorage.setItem('nst_system_settings', JSON.stringify(parsed));
-      } catch {}
+      } catch (err) {
+        console.warn('[SuperAdminPanel] Settings cache update warning:', err);
+      }
 
       // 3. Sync to RTDB and Firestore
       try {
@@ -1609,7 +1614,7 @@ export const SuperAdminPanel: React.FC<Props> = ({ adminUid, onBack }) => {
                   onClick={() => {
                     localStorage.removeItem('nst_notif_gate_skipped');
                     sessionStorage.removeItem('nst_notif_gate_skipped');
-                    alert("स्किप स्थिति रीसेट कर दी गई है! नए यूज़र की तरह परमिशन गेट देखने के लिए पेज रीफ्रेश करें।");
+                    toast.success("स्किप स्थिति रीसेट कर दी गई है! नए यूज़र की तरह परमिशन गेट देखने के लिए पेज रीफ्रेश करें।");
                   }}
                   className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-medium transition cursor-pointer flex items-center gap-1"
                 >

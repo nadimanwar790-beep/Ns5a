@@ -16,6 +16,7 @@ import { saveLesson, deleteLesson } from "../../school-firebase";
 import type { LessonMCQ } from "../../school-types";
 import McqQuestionDisplay from "../McqQuestionDisplay";
 import { DirectUploadButton } from "../DirectUploadButton";
+import { safeOpenExternalUrl } from "../../utils/safeBrowserActions";
 
 type Mode = "reading" | "writing" | "pdf" | "mcq";
 type NightMode = "normal" | "night" | "sepia";
@@ -163,6 +164,7 @@ export const SmartClass: React.FC<Props> = ({
   const [editSheetTab, setEditSheetTab]           = useState<"general" | "reading" | "writing" | "pdf" | "mcq">("general");
   const [editSaving, setEditSaving]               = useState(false);
   const [editDeleting, setEditDeleting]           = useState(false);
+  const [confirmDeleteLesson, setConfirmDeleteLesson] = useState(false);
   const [selectedMcqIds, setSelectedMcqIds]       = useState<Set<string>>(new Set());
   const [editMcqExpanded, setEditMcqExpanded]     = useState<string | null>(null); // stores MCQ id, not index
 
@@ -214,7 +216,7 @@ export const SmartClass: React.FC<Props> = ({
       downloadHtml(html, `${title} · Reading`);
       showSavedMsg("📥 Reading notes saved!");
     } else if (mode === "pdf" && lesson.pdfUrl) {
-      window.open(lesson.pdfUrl, "_blank");
+      safeOpenExternalUrl(lesson.pdfUrl);
       showSavedMsg("📄 PDF opened in browser");
     } else {
       showSavedMsg("⚠️ Is mode mein koi content nahi hai");
@@ -253,7 +255,10 @@ export const SmartClass: React.FC<Props> = ({
   };
 
   const handleQuickDeleteLesson = async () => {
-    if (!window.confirm(`"${lesson.title}" permanently delete karo? Yeh wapas nahi aayega.`)) return;
+    if (!confirmDeleteLesson) {
+      setConfirmDeleteLesson(true);
+      return;
+    }
     setEditDeleting(true);
     try {
       await deleteLesson(lesson.schoolId, lesson.id);
@@ -261,6 +266,7 @@ export const SmartClass: React.FC<Props> = ({
     } catch {
       showSavedMsg("❌ Delete fail — dobara try karo");
       setEditDeleting(false);
+      setConfirmDeleteLesson(false);
     }
   };
 
@@ -314,10 +320,23 @@ export const SmartClass: React.FC<Props> = ({
               className="flex items-center gap-1.5 px-3 py-1.5 bg-white text-indigo-700 rounded-xl text-xs font-black active:scale-95 transition disabled:opacity-60 shrink-0">
               <Save size={12} /> {editSaving ? "Saving…" : "Save"}
             </button>
-            <button onClick={handleQuickDeleteLesson} disabled={editDeleting}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 bg-red-500/25 text-white border border-red-400/40 rounded-xl text-xs font-black active:scale-95 transition disabled:opacity-60 shrink-0">
-              <Trash2 size={12} /> {editDeleting ? "…" : "Del"}
-            </button>
+            {confirmDeleteLesson ? (
+              <div className="flex items-center gap-1 shrink-0">
+                <button onClick={handleQuickDeleteLesson} disabled={editDeleting}
+                  className="flex items-center gap-1 px-2.5 py-1.5 bg-red-600 text-white rounded-xl text-xs font-black active:scale-95 transition disabled:opacity-60">
+                  <Trash2 size={12} /> {editDeleting ? "…" : "Confirm"}
+                </button>
+                <button onClick={() => setConfirmDeleteLesson(false)} disabled={editDeleting}
+                  className="px-2 py-1.5 bg-white/20 text-white rounded-xl text-xs font-bold">
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button onClick={() => setConfirmDeleteLesson(true)} disabled={editDeleting}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-red-500/25 text-white border border-red-400/40 rounded-xl text-xs font-black active:scale-95 transition disabled:opacity-60 shrink-0">
+                <Trash2 size={12} /> Del
+              </button>
+            )}
           </div>
 
           {/* ── Tab bar ── */}
@@ -351,10 +370,23 @@ export const SmartClass: React.FC<Props> = ({
                 </div>
                 <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-2xl p-4 mt-6">
                   <p className="text-[10px] font-black text-red-600 dark:text-red-400 uppercase tracking-wide mb-3">⚠️ Danger Zone</p>
-                  <button onClick={handleQuickDeleteLesson} disabled={editDeleting}
-                    className="w-full py-2.5 bg-red-600 text-white rounded-xl text-sm font-black flex items-center justify-center gap-2 active:scale-95 transition disabled:opacity-60">
-                    <Trash2 size={14} /> {editDeleting ? "Deleting…" : "Yeh Lesson Delete Karo"}
-                  </button>
+                  {confirmDeleteLesson ? (
+                    <div className="flex items-center gap-2">
+                      <button onClick={handleQuickDeleteLesson} disabled={editDeleting}
+                        className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm font-black flex items-center justify-center gap-2 active:scale-95 transition disabled:opacity-60">
+                        <Trash2 size={14} /> {editDeleting ? "Deleting…" : "Confirm Delete?"}
+                      </button>
+                      <button onClick={() => setConfirmDeleteLesson(false)} disabled={editDeleting}
+                        className="px-4 py-2.5 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-bold">
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button onClick={() => setConfirmDeleteLesson(true)} disabled={editDeleting}
+                      className="w-full py-2.5 bg-red-600 text-white rounded-xl text-sm font-black flex items-center justify-center gap-2 active:scale-95 transition disabled:opacity-60">
+                      <Trash2 size={14} /> Yeh Lesson Delete Karo
+                    </button>
+                  )}
                 </div>
               </div>
             )}

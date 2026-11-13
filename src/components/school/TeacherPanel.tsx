@@ -1,5 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect, useMemo } from "react";
+import { toast } from "sonner";
 import {
   subscribeToClasses, subscribeToSubjects, subscribeToStudents,
   subscribeToAllStudents, subscribeToLessons, getSchool, getSessions,
@@ -169,7 +170,9 @@ export const TeacherPanel: React.FC<Props> = ({
     try {
       localStorage.setItem("nst_app_view_mode", "STUDENT");
       window.dispatchEvent(new CustomEvent("nst_open_student_dashboard"));
-    } catch {}
+    } catch (err) {
+      console.warn("[TeacherPanel] Explore full app switch warning:", err);
+    }
     if (onOpenPlatformContent) {
       onOpenPlatformContent();
     } else if (onBack) {
@@ -221,7 +224,9 @@ export const TeacherPanel: React.FC<Props> = ({
     try {
       const saved = (localStorage.getItem("nst_app_theme") || localStorage.getItem("nst_student_theme")) as any;
       if (saved === "white" || saved === "black" || saved === "current") return saved;
-    } catch {}
+    } catch (err) {
+      console.warn("[TeacherPanel] Theme load warning:", err);
+    }
     return "current";
   });
 
@@ -251,7 +256,9 @@ export const TeacherPanel: React.FC<Props> = ({
         }
       }
       window.dispatchEvent(new Event("nst-dark-theme-change"));
-    } catch {}
+    } catch (err) {
+      console.warn("[TeacherPanel] Theme apply warning:", err);
+    }
   };
 
   useEffect(() => {
@@ -263,6 +270,7 @@ export const TeacherPanel: React.FC<Props> = ({
   const [studentSearch, setStudentSearch] = useState("");
   const [selectedClassFilter, setSelectedClassFilter] = useState<string>("ALL");
   const [showFaceStudio, setShowFaceStudio] = useState(false);
+  const [confirmDeleteSubjectId, setConfirmDeleteSubjectId] = useState<string | null>(null);
 
   // Multi-book addition state
   const [showAddBooksModal, setShowAddBooksModal] = useState(false);
@@ -346,7 +354,6 @@ export const TeacherPanel: React.FC<Props> = ({
   useEffect(() => {
     const checkOrientation = () => {
       const isLandscape = window.innerWidth > window.innerHeight;
-      setIsNativeLandscape(isLandscape);
       if (isLandscape) {
         setShowRotatePrompt(false);
       }
@@ -386,7 +393,9 @@ export const TeacherPanel: React.FC<Props> = ({
           setIsSidebarHidden(true);
           try {
             localStorage.setItem("school_teacher_sidebar_hidden", "true");
-          } catch {}
+          } catch (err) {
+            console.warn("[TeacherPanel] Sidebar pref warning:", err);
+          }
         } else if (diffX > 0) {
           // Swipe Right -> Reveal menu ONLY if drag started from left 20% edge of screen
           const maxLeftEdge = typeof window !== "undefined" ? window.innerWidth * 0.20 : 80;
@@ -395,7 +404,9 @@ export const TeacherPanel: React.FC<Props> = ({
               setIsSidebarHidden(false);
               try {
                 localStorage.setItem("school_teacher_sidebar_hidden", "false");
-              } catch {}
+              } catch (err) {
+                console.warn("[TeacherPanel] Sidebar pref warning:", err);
+              }
             } else {
               setIsSidebarOpen(true);
             }
@@ -506,10 +517,11 @@ export const TeacherPanel: React.FC<Props> = ({
   // Subscribe to lessons
   useEffect(() => {
     if (!selectedSubject) return;
+    const useDemo = shouldUseDemoForSchool(schoolId, activeSession?.id);
     const unsub = subscribeToLessons(schoolId, selectedSubject.id, (lesList) => {
       if (lesList && lesList.length > 0) {
         setLessons(lesList);
-      } else {
+      } else if (useDemo) {
         setLessons([
           {
             id: `les_${selectedSubject.id}_1`,
@@ -530,32 +542,14 @@ export const TeacherPanel: React.FC<Props> = ({
               }
             ],
             createdAt: new Date().toISOString()
-          },
-          {
-            id: `les_${selectedSubject.id}_2`,
-            schoolId,
-            subjectId: selectedSubject.id,
-            title: `Chapter 2: Advanced Applications & Question Bank`,
-            order: 2,
-            features: { readingEnabled: true, writingEnabled: true, pdfEnabled: true, mcqEnabled: true },
-            readingContent: `## Chapter 2: Problem Solving & Practice\n\nFollow the step-by-step methods and exam guidelines.`,
-            writingPrompt: `Describe two practical experiments or exercises covered in this chapter.`,
-            mcqQuestions: [
-              {
-                id: "q2",
-                question: "Which approach yields best results in exams?",
-                options: ["Consistent daily revision", "Last minute cramming", "Leaving answers blank", "None"],
-                correctOption: 0,
-                explanation: "Consistent revision ensures peak memory recall."
-              }
-            ],
-            createdAt: new Date().toISOString()
           }
         ]);
+      } else {
+        setLessons([]);
       }
     });
     return unsub;
-  }, [schoolId, selectedSubject]);
+  }, [schoolId, selectedSubject, activeSession?.id]);
 
   const filteredStudents = useMemo(() => {
     return allStudents.filter((s) => {
@@ -590,7 +584,9 @@ export const TeacherPanel: React.FC<Props> = ({
     setIsRotatedLandscape(nextIsRotated);
     try {
       localStorage.setItem("school_erp_rotated_landscape", nextIsRotated ? "true" : "false");
-    } catch {}
+    } catch (err) {
+      console.warn("[TeacherPanel] Orientation save warning:", err);
+    }
 
     if (nextIsRotated) {
       await rotateToLandscape();
@@ -657,13 +653,15 @@ export const TeacherPanel: React.FC<Props> = ({
   };
 
   const handleDeleteSubject = async (sub: SchoolSubject) => {
-    if (!confirm(`Kya aap "${sub.name}" book/subject ko delete karna chahte hain?`)) return;
     try {
       await deleteSubject(schoolId, sub.id);
       setSubjects((prev) => prev.filter((s) => s.id !== sub.id));
       setAllSubjects((prev) => prev.filter((s) => s.id !== sub.id));
+      setConfirmDeleteSubjectId(null);
+      toast.success(`"${sub.name}" delete ho gaya.`);
     } catch (err) {
-      alert("Error deleting subject");
+      console.error("[TeacherPanel] Delete subject error:", err);
+      toast.error("Subject delete karne me samasya aayi.");
     }
   };
 
@@ -815,7 +813,9 @@ export const TeacherPanel: React.FC<Props> = ({
             setIsSidebarHidden(false);
             try {
               localStorage.setItem("school_teacher_sidebar_hidden", "false");
-            } catch {}
+            } catch (err) {
+              console.warn("[TeacherPanel] Sidebar reveal warning:", err);
+            }
           }}
           className="hidden md:flex flex-col w-2 hover:w-3.5 bg-slate-900 border-r border-indigo-500/40 hover:border-amber-400 shrink-0 h-screen h-[100dvh] max-h-screen cursor-pointer transition-all duration-200 z-30 group relative"
           title="मेनू खोलें (Click ya Swipe Right)"
@@ -857,7 +857,9 @@ export const TeacherPanel: React.FC<Props> = ({
               setIsSidebarHidden(true);
               try {
                 localStorage.setItem("school_teacher_sidebar_hidden", "true");
-              } catch {}
+              } catch (err) {
+                console.warn("[TeacherPanel] Sidebar hide warning:", err);
+              }
             }}
             className="p-1 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition cursor-pointer shrink-0"
             title="मेनू को बाएँ छुपाएं (Swipe Left)"
@@ -2063,14 +2065,33 @@ export const TeacherPanel: React.FC<Props> = ({
                     <BookOpen className="w-3.5 h-3.5" />
                     <span>Lessons / Chapters</span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteSubject(sub)}
-                    className="p-2 text-slate-400 hover:text-rose-500 rounded-xl transition cursor-pointer"
-                    title="Delete Book"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  {confirmDeleteSubjectId === sub.id ? (
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteSubject(sub)}
+                        className="px-2.5 py-1 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black cursor-pointer"
+                      >
+                        Delete
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteSubjectId(null)}
+                        className="px-2 py-1 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteSubjectId(sub.id)}
+                      className="p-2 text-slate-400 hover:text-rose-500 rounded-xl transition cursor-pointer"
+                      title="Delete Book"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

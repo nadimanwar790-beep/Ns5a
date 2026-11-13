@@ -17,6 +17,7 @@ import {
   type DpsReceiptData,
   type FeeReceiptItem,
 } from "./feeReceiptUtils";
+import { safeOpenExternalUrl, getDynamicAcademicSessionLabel } from "../../utils/safeBrowserActions";
 
 interface FeeDocumentOptions {
   fee: MonthlyFee;
@@ -54,7 +55,7 @@ export function buildDpsReceiptData({
   feeHistory,
   schoolDetails,
 }: FeeDocumentOptions): DpsReceiptData {
-  const baseMonthlyAmount = Number(fee.monthlyAmount ?? fee.amount ?? 0) || 5000;
+  const baseMonthlyAmount = Number(fee.monthlyAmount ?? fee.amount ?? 0);
   const arrears = Number(fee.arrearsAmount || 0);
 
   // Format month name cleanly (e.g. "NOV 2026")
@@ -145,7 +146,7 @@ export function buildDpsReceiptData({
     studentPhotoUrl: (student as any)?.photoUrl || (student as any)?.photo || "",
     installment: isAdmissionReceipt ? "ADMISSION" : installment,
     receiptDate: isDueDemandSlip ? receiptDate : (receiptTime ? `${receiptDate} (${receiptTime})` : receiptDate),
-    session: formatAcademicSession((fee as any)?.sessionId || "2026-27"),
+    session: formatAcademicSession((fee as any)?.sessionId || getDynamicAcademicSessionLabel()),
     className: className || fee.classId || "Class",
     counterNo: isDueDemandSlip ? "DUE-DEMAND" : isAdmissionReceipt ? "ADM-RECEIPT" : "FEE-RECEIPT",
 
@@ -540,18 +541,9 @@ export async function shareFeeReceiptOnWhatsApp(
     : `https://wa.me/?text=${encodeURIComponent(message)}`;
 
   try {
-    const link = document.createElement("a");
-    link.href = waUrl;
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-    document.body.appendChild(link);
-    link.click();
-    setTimeout(() => {
-      if (document.body.contains(link)) document.body.removeChild(link);
-    }, 100);
+    safeOpenExternalUrl(waUrl);
   } catch (err) {
-    console.error("Direct link click failed, falling back to window.open", err);
-    window.open(waUrl, "_blank");
+    console.warn("Direct WhatsApp open failed:", err);
   }
 }
 

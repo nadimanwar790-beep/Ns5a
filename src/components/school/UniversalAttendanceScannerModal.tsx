@@ -164,13 +164,12 @@ export const UniversalAttendanceScannerModal: React.FC<Props> = ({
     if (
       rawText.includes("ADMIN-01") ||
       rawText.includes("SCHOOL_ADMIN") ||
-      rawText.includes("Dr. Arvind Swaminathan") ||
       rawText.toLowerCase().includes("principal") ||
       (school.principalName && rawText.includes(encodeURIComponent(school.principalName)))
     ) {
       matchedRole = "ADMIN";
       matchedId = "ADMIN-01";
-      matchedName = school.principalName || "Dr. Arvind Swaminathan (School Admin)";
+      matchedName = school.principalName || "School Admin";
       matchedPhoto = school.logoUrl || "";
     }
     // Case 2: NSTA-SCHOOL-STAFF:schoolId:id:empId:dept:name...
@@ -217,7 +216,9 @@ export const UniversalAttendanceScannerModal: React.FC<Props> = ({
           if (u) {
             foundSt = students.find((s) => s.id === u);
           }
-        } catch {}
+        } catch (err) {
+          console.warn("[UniversalAttendanceScannerModal] URL QR parse warning:", err);
+        }
       }
 
       if (foundSt) {
