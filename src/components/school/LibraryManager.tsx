@@ -11,6 +11,7 @@ import {
 import type {
   School, SchoolStudent, SchoolTeacher, SchoolClass
 } from "../../school-types";
+import { loadSchoolSubcollection, syncSchoolSubcollection } from "../../utils/schoolCloudSync";
 
 interface Props {
   school: School;
@@ -356,6 +357,19 @@ export const LibraryManager: React.FC<Props> = ({
     ];
   });
 
+  // Hydrate from Firestore
+  useEffect(() => {
+    let active = true;
+    if (!schoolId) return;
+    loadSchoolSubcollection<LibraryStoreItem>(schoolId, "library_items", itemsStorageKey).then((data) => {
+      if (active && data.length > 0) setItems(data);
+    });
+    loadSchoolSubcollection<ItemBookingRecord>(schoolId, "library_bookings", bookingsStorageKey).then((data) => {
+      if (active && data.length > 0) setBookings(data);
+    });
+    return () => { active = false; };
+  }, [schoolId, itemsStorageKey, bookingsStorageKey]);
+
   // Sync to LocalStorage
   useEffect(() => {
     try {
@@ -368,6 +382,10 @@ export const LibraryManager: React.FC<Props> = ({
       localStorage.setItem(bookingsStorageKey, JSON.stringify(bookings));
     } catch {}
   }, [bookings, bookingsStorageKey]);
+
+  // Inline Delete Confirm States
+  const [confirmDeleteItemId, setConfirmDeleteItemId] = useState<string | null>(null);
+  const [confirmDeleteBookingId, setConfirmDeleteBookingId] = useState<string | null>(null);
 
   // Active View Filter
   const [activeCategory, setActiveCategory] = useState<"ALL" | InventoryType>("ALL");
@@ -489,28 +507,28 @@ export const LibraryManager: React.FC<Props> = ({
       const bookedCount = editingItem.totalStock - editingItem.availableStock;
       const updatedAvailable = Math.max(0, totalStk - bookedCount);
 
-      setItems(prev =>
-        prev.map(it =>
-          it.id === editingItem.id
-            ? {
-                ...it,
-                itemType: formType,
-                title: formTitle.trim(),
-                authorOrBrand: formAuthorBrand.trim(),
-                code: formCode.trim() || it.code,
-                subCategory: formSubCat.trim() || "General",
-                targetClass: formTargetClass.trim() || "All",
-                shelfLocation: formShelf.trim(),
-                imageUrl: formImageUrl || it.imageUrl,
-                rate: rateVal,
-                discountPct: discVal,
-                discountedPrice: discounted,
-                totalStock: totalStk,
-                availableStock: updatedAvailable
-              }
-            : it
-        )
+      const nextItems = items.map(it =>
+        it.id === editingItem.id
+          ? {
+              ...it,
+              itemType: formType,
+              title: formTitle.trim(),
+              authorOrBrand: formAuthorBrand.trim(),
+              code: formCode.trim() || it.code,
+              subCategory: formSubCat.trim() || "General",
+              targetClass: formTargetClass.trim() || "All",
+              shelfLocation: formShelf.trim(),
+              imageUrl: formImageUrl || it.imageUrl,
+              rate: rateVal,
+              discountPct: discVal,
+              discountedPrice: discounted,
+              totalStock: totalStk,
+              availableStock: updatedAvailable
+            }
+          : it
       );
+      setItems(nextItems);
+      syncSchoolSubcollection(schoolId, "library_items", nextItems);
       toast.success(`✅ "${formTitle}" सफलतापूर्वक अपडेट हुआ!`);
     } else {
       // Create new item
@@ -532,18 +550,21 @@ export const LibraryManager: React.FC<Props> = ({
         availableStock: totalStk,
         addedAt: new Date().toISOString().split("T")[0]
       };
-      setItems(prev => [newItem, ...prev]);
+      const nextItems = [newItem, ...items];
+      setItems(nextItems);
+      syncSchoolSubcollection(schoolId, "library_items", nextItems);
       toast.success(`🎉 नया आइटम "${formTitle}" स्टॉक में दर्ज हो गया!`);
     }
     setShowItemModal(false);
   };
 
   // Delete Item
-  const handleDeleteItem = (id: string, name: string) => {
-    if (window.confirm(`क्या आप "${name}" को स्थायी रूप से स्टॉक से हटाना चाहते हैं?`)) {
-      setItems(prev => prev.filter(i => i.id !== id));
-      toast.success("आइटम हटा दिया गया।");
-    }
+  const handleDeleteItem = (id: string) => {
+    const nextItems = items.filter(i => i.id !== id);
+    setItems(nextItems);
+    syncSchoolSubcollection(schoolId, "library_items", nextItems);
+    setConfirmDeleteItemId(null);
+    toast.success("आइटम हटा दिया गया।");
   };
 
   // ── BOOK / ISSUE ITEM HANDLER ───────────────────────────────────────────
@@ -633,16 +654,16 @@ export const LibraryManager: React.FC<Props> = ({
     };
 
     // Decrease available stock of the item
-    setItems(prev =>
-      prev.map(it =>
-        it.id === bookingTargetItem.id
-          ? { ...it, availableStock: Math.max(0, it.availableStock - bookQuantity) }
-          : it
-      )
+    const nextItems = items.map(it =>
+      it.id === bookingTargetItem.id
+        ? { ...it, availableStock: Math.max(0, it.availableStock - bookQuantity) }
+        : it
     );
-
-    // Append to bookings
-    setBookings(prev => [newRecord, ...prev]);
+    const nextBookings = [newRecord, ...bookings];
+    setItems(nextItems);
+    setBookings(nextBookings);
+    syncSchoolSubcollection(schoolId, "library_items", nextItems);
+    syncSchoolSubcollection(schoolId, "library_bookings", nextBookings);
     setBookingTargetItem(null);
     toast.success(
       `🎉 ${bName} के नाम पर ${bookQuantity} x "${bookingTargetItem.title}" सफलतापूर्वक बुक/इश्यू हो गया!`
@@ -652,44 +673,43 @@ export const LibraryManager: React.FC<Props> = ({
   // Mark Book Returned
   const handleMarkReturned = (record: ItemBookingRecord) => {
     const today = new Date().toISOString().split("T")[0];
-    setBookings(prev =>
-      prev.map(b => (b.id === record.id ? { ...b, status: "returned", returnDate: today } : b))
+    const nextBookings = bookings.map(b => (b.id === record.id ? { ...b, status: "returned" as const, returnDate: today } : b));
+    const nextItems = items.map(it =>
+      it.id === record.itemId
+        ? { ...it, availableStock: Math.min(it.totalStock, it.availableStock + record.quantityBooked) }
+        : it
     );
-    // Increase stock back
-    setItems(prev =>
-      prev.map(it =>
-        it.id === record.itemId
-          ? { ...it, availableStock: Math.min(it.totalStock, it.availableStock + record.quantityBooked) }
-          : it
-      )
-    );
+    setBookings(nextBookings);
+    setItems(nextItems);
+    syncSchoolSubcollection(schoolId, "library_bookings", nextBookings);
+    syncSchoolSubcollection(schoolId, "library_items", nextItems);
     toast.success(`📖 "${record.itemTitle}" सुरक्षित वापस जमा हो गई और स्टॉक में +${record.quantityBooked} जुड़ गया!`);
   };
 
   // Mark Dress / Stationery Delivered
   const handleMarkDelivered = (record: ItemBookingRecord) => {
-    setBookings(prev =>
-      prev.map(b => (b.id === record.id ? { ...b, status: "delivered" } : b))
-    );
+    const nextBookings = bookings.map(b => (b.id === record.id ? { ...b, status: "delivered" as const } : b));
+    setBookings(nextBookings);
+    syncSchoolSubcollection(schoolId, "library_bookings", nextBookings);
     toast.success(`👕 "${record.itemTitle}" छात्र को डिलीवर मार्क कर दिया गया!`);
   };
 
   // Delete booking record
   const handleDeleteBooking = (record: ItemBookingRecord) => {
-    if (window.confirm("क्या आप यह बुकिंग रिकॉर्ड हटाना चाहते हैं?")) {
-      if (record.status !== "returned") {
-        // Rollback stock
-        setItems(prev =>
-          prev.map(it =>
-            it.id === record.itemId
-              ? { ...it, availableStock: Math.min(it.totalStock, it.availableStock + record.quantityBooked) }
-              : it
-          )
-        );
-      }
-      setBookings(prev => prev.filter(b => b.id !== record.id));
-      toast.success("बुकिंग रिकॉर्ड हटा दिया गया।");
+    if (record.status !== "returned") {
+      const nextItems = items.map(it =>
+        it.id === record.itemId
+          ? { ...it, availableStock: Math.min(it.totalStock, it.availableStock + record.quantityBooked) }
+          : it
+      );
+      setItems(nextItems);
+      syncSchoolSubcollection(schoolId, "library_items", nextItems);
     }
+    const nextBookings = bookings.filter(b => b.id !== record.id);
+    setBookings(nextBookings);
+    syncSchoolSubcollection(schoolId, "library_bookings", nextBookings);
+    setConfirmDeleteBookingId(null);
+    toast.success("बुकिंग रिकॉर्ड हटा दिया गया।");
   };
 
   // ── FILTERED DATA ────────────────────────────────────────────────────────
@@ -739,7 +759,7 @@ export const LibraryManager: React.FC<Props> = ({
   );
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 pb-20 text-slate-800 dark:text-slate-100">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 pb-20 text-slate-800 dark:text-slate-100 print:min-h-0 print:bg-white print:pb-0">
       {/* ── TOP BANNER ──────────────────────────────────────────────────────── */}
       <div className="bg-gradient-to-r from-emerald-950 via-teal-950 to-slate-950 text-white px-4 py-5 shadow-lg border-b border-emerald-800/40 print:hidden">
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-3 flex-wrap">
@@ -864,7 +884,7 @@ export const LibraryManager: React.FC<Props> = ({
         </div>
 
         {/* ── MAIN TABS (CATALOG vs BOOKING LEDGER) ───────────────────────────── */}
-        <div className="flex items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-700 pb-3 flex-wrap">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-700 pb-3 flex-wrap print:hidden">
           <div className="flex items-center gap-1.5 p-1 bg-slate-200/80 dark:bg-slate-800/80 rounded-2xl">
             <button
               type="button"
@@ -958,7 +978,7 @@ export const LibraryManager: React.FC<Props> = ({
         </div>
 
         {/* ── SEARCH & FILTER BAR ────────────────────────────────────────────── */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 print:hidden">
           <div className="relative flex-1">
             <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
@@ -1141,7 +1161,7 @@ export const LibraryManager: React.FC<Props> = ({
                       </div>
 
                       {/* Card Bottom Actions */}
-                      <div className="p-3 border-t border-slate-100 dark:border-slate-700 flex items-center justify-between gap-2 bg-slate-50/50 dark:bg-slate-900/30">
+                      <div className="p-3 border-t border-slate-100 dark:border-slate-700 flex items-center justify-between gap-2 bg-slate-50/50 dark:bg-slate-900/30 print:hidden">
                         <button
                           type="button"
                           onClick={() => handleOpenBookModal(item)}
@@ -1162,14 +1182,33 @@ export const LibraryManager: React.FC<Props> = ({
                             >
                               <Edit3 className="w-3.5 h-3.5" />
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteItem(item.id, item.title)}
-                              className="p-2 rounded-xl bg-rose-100 dark:bg-rose-950/60 hover:bg-rose-200 text-rose-600 dark:text-rose-400 transition cursor-pointer"
-                              title="हटाएं"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            {confirmDeleteItemId === item.id ? (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteItem(item.id)}
+                                  className="px-2 py-1.5 rounded-xl bg-rose-600 text-white text-[10px] font-black cursor-pointer"
+                                >
+                                  Confirm
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteItemId(null)}
+                                  className="px-1.5 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-[10px] font-bold cursor-pointer"
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteItemId(item.id)}
+                                className="p-2 rounded-xl bg-rose-100 dark:bg-rose-950/60 hover:bg-rose-200 text-rose-600 dark:text-rose-400 transition cursor-pointer"
+                                title="हटाएं"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>
@@ -1361,14 +1400,33 @@ export const LibraryManager: React.FC<Props> = ({
                                 )}
 
                                 {isAdmin && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDeleteBooking(rec)}
-                                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 cursor-pointer transition"
-                                    title="रिकॉर्ड हटाएं"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
+                                  confirmDeleteBookingId === rec.id ? (
+                                    <div className="flex items-center gap-1 print:hidden">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteBooking(rec)}
+                                        className="px-2 py-1 rounded-lg bg-rose-600 text-white text-[10px] font-black cursor-pointer"
+                                      >
+                                        Confirm
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setConfirmDeleteBookingId(null)}
+                                        className="px-1.5 py-1 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 text-[10px] font-bold cursor-pointer"
+                                      >
+                                        ✕
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => setConfirmDeleteBookingId(rec.id)}
+                                      className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 cursor-pointer transition print:hidden"
+                                      title="रिकॉर्ड हटाएं"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  )
                                 )}
                               </div>
                             </td>

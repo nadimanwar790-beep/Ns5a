@@ -5,10 +5,12 @@ import {
   Search, Filter, ChevronLeft, User, Users, Shield, MessageCircle,
   FileText, CornerDownRight, Check
 } from "lucide-react";
+import { toast } from "sonner";
 import type {
   School, SchoolStudent, SchoolTeacher, SchoolClass,
   ParentTeacherQuery, QueryReply
 } from "../../school-types";
+import { loadSchoolSubcollection, syncSchoolSubcollection } from "../../utils/schoolCloudSync";
 
 interface Props {
   school: School;
@@ -98,6 +100,17 @@ export const ParentTeacherQueryManager: React.FC<Props> = ({
     } catch {}
   }, [queries, storageKey]);
 
+  useEffect(() => {
+    if (!school?.id) return;
+    let active = true;
+    loadSchoolSubcollection<ParentTeacherQuery>(school.id, "pt_queries", storageKey)
+      .then((cloud) => {
+        if (active && cloud.length > 0) setQueries(cloud);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [school?.id, storageKey]);
+
   // Selected Query View / Thread
   const [selectedQueryId, setSelectedQueryId] = useState<string | null>(queries[0]?.id || null);
   const [replyInput, setReplyInput] = useState("");
@@ -150,7 +163,7 @@ export const ParentTeacherQueryManager: React.FC<Props> = ({
       timestamp: new Date().toISOString()
     };
 
-    setQueries(prev => prev.map(q => {
+    const nextQueries = queries.map(q => {
       if (q.id === activeQuery.id) {
         return {
           ...q,
@@ -160,20 +173,25 @@ export const ParentTeacherQueryManager: React.FC<Props> = ({
         };
       }
       return q;
-    }));
+    });
+    setQueries(nextQueries);
+    void syncSchoolSubcollection(school?.id, "pt_queries", nextQueries);
 
     setReplyInput("");
   };
 
   // Change Query Status
   const handleUpdateStatus = (queryId: string, status: ParentTeacherQuery["status"]) => {
-    setQueries(prev => prev.map(q => q.id === queryId ? { ...q, status, updatedAt: new Date().toISOString() } : q));
+    const nextQueries = queries.map(q => q.id === queryId ? { ...q, status, updatedAt: new Date().toISOString() } : q);
+    setQueries(nextQueries);
+    void syncSchoolSubcollection(school?.id, "pt_queries", nextQueries);
+    toast.success("Query status update ho gaya.");
   };
 
   // Submit New Query
   const handleCreateQuery = () => {
     if (!newSubject.trim() || !newMessage.trim()) {
-      alert("Kripya Subject aur Message enter karein.");
+      toast.error("Kripya Subject aur Message enter karein.");
       return;
     }
 
@@ -210,11 +228,14 @@ export const ParentTeacherQueryManager: React.FC<Props> = ({
       updatedAt: new Date().toISOString()
     };
 
-    setQueries(prev => [created, ...prev]);
+    const nextQueries = [created, ...queries];
+    setQueries(nextQueries);
+    void syncSchoolSubcollection(school?.id, "pt_queries", nextQueries);
     setSelectedQueryId(created.id);
     setShowNewQueryModal(false);
     setNewSubject("");
     setNewMessage("");
+    toast.success("Query safaltapoorvak bhej di gayi!");
   };
 
   return (

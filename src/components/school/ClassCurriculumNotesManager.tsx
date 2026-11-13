@@ -1,5 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect } from "react";
+import { toast } from "sonner";
 import {
   ArrowLeft, Save, Trash2, Edit3, Video, FileText, Music,
   CheckCircle2, AlertCircle, Sparkles, Plus, Search, Filter,
@@ -307,6 +308,7 @@ export const ClassCurriculumNotesManager: React.FC<Props> = ({
   const [isSaving, setIsSaving] = useState(false);
   const [successToast, setSuccessToast] = useState<string | null>(null);
   const [previewModeByPage, setPreviewModeByPage] = useState<Record<string, boolean>>({});
+  const [confirmDeleteNoteId, setConfirmDeleteNoteId] = useState<string | null>(null);
 
   // Filters for history
   const [filterClass, setFilterClass] = useState<string>("ALL");
@@ -348,7 +350,7 @@ export const ClassCurriculumNotesManager: React.FC<Props> = ({
   // Save handler
   const handleSave = async () => {
     if (!lessonTitle.trim()) {
-      alert("Chapter / Lesson title daalein.");
+      toast.error("Chapter / Lesson title daalein.");
       return;
     }
 
@@ -372,7 +374,7 @@ export const ClassCurriculumNotesManager: React.FC<Props> = ({
        (p as any).videoUrl?.trim() || (p as any).pdfUrl?.trim() || (p as any).audioUrl?.trim())
     );
     if (validPages.length === 0) {
-      alert("Kam se kam ek page ke notes, media ya MCQ add karein.");
+      toast.error("Kam se kam ek page ke notes, media ya MCQ add karein.");
       return;
     }
 
@@ -434,7 +436,7 @@ export const ClassCurriculumNotesManager: React.FC<Props> = ({
       setTimeout(() => setSuccessToast(null), 4000);
       handleResetForm();
     } catch (err: any) {
-      alert(`Save error: ${err?.message || "Failed to save"}`);
+      toast.error(`Save error: ${err?.message || "Failed to save"}`);
     } finally {
       setIsSaving(false);
     }
@@ -442,7 +444,11 @@ export const ClassCurriculumNotesManager: React.FC<Props> = ({
 
   // Delete handler
   const handleDelete = async (entry: LucentNoteEntry) => {
-    if (!confirm(`"${entry.lessonTitle}" delete karein?`)) return;
+    if (confirmDeleteNoteId !== entry.id) {
+      setConfirmDeleteNoteId(entry.id);
+      return;
+    }
+    setConfirmDeleteNoteId(null);
     if (editingId === entry.id) setEditingId(null);
 
     try {
@@ -458,9 +464,10 @@ export const ClassCurriculumNotesManager: React.FC<Props> = ({
         setNotesList(updated);
       }
       setSuccessToast(`🗑️ "${entry.lessonTitle}" deleted!`);
+      toast.success(`"${entry.lessonTitle}" deleted!`);
       setTimeout(() => setSuccessToast(null), 3000);
     } catch (err: any) {
-      alert(`Delete error: ${err?.message || "Failed"}`);
+      toast.error(`Delete error: ${err?.message || "Failed"}`);
     }
   };
 
@@ -1166,13 +1173,32 @@ export const ClassCurriculumNotesManager: React.FC<Props> = ({
                     >
                       <Edit3 size={14} />
                     </button>
-                    <button
-                      onClick={() => handleDelete(entry)}
-                      className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg cursor-pointer"
-                      title="Delete"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    {confirmDeleteNoteId === entry.id ? (
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(entry)}
+                          className="px-2 py-1 rounded-lg bg-red-600 text-white text-[10px] font-black cursor-pointer"
+                        >
+                          Confirm
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteNoteId(null)}
+                          className="px-1.5 py-1 rounded-lg bg-slate-200 text-slate-700 text-[10px] font-bold cursor-pointer"
+                        >
+                          रद्द
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => handleDelete(entry)}
+                        className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg cursor-pointer"
+                        title="Delete"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
                   </div>
                 </div>
               ))

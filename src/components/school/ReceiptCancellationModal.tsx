@@ -1,5 +1,6 @@
 // @ts-nocheck
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
+import { toast } from "sonner";
 import {
   AlertTriangle,
   RotateCcw,
@@ -15,6 +16,8 @@ import {
   Clock
 } from "lucide-react";
 import { School, SchoolSession } from "../../school-types";
+import { loadSchoolSubcollection, syncSchoolSubcollection } from "../../utils/schoolCloudSync";
+import { printElementInIframe } from "./AdmissionFormPrintModal";
 
 export interface RefundVoucher {
   id: string;
@@ -59,7 +62,9 @@ export const ReceiptCancellationModal: React.FC<Props> = ({
   const [remarks, setRemarks] = useState("");
   const [authorizedBy, setAuthorizedBy] = useState("Admin (Principal)");
   const [isProcessing, setIsProcessing] = useState(false);
+  const [confirmCancelReceiptId, setConfirmCancelReceiptId] = useState<string | null>(null);
   const [successVoucher, setSuccessVoucher] = useState<RefundVoucher | null>(null);
+  const voucherPrintRef = useRef<HTMLDivElement>(null);
 
   // Load paid fee records from localStorage
   const allFeeRecords = useMemo(() => {
@@ -83,6 +88,20 @@ export const ReceiptCancellationModal: React.FC<Props> = ({
     return [];
   });
 
+  useEffect(() => {
+    if (!isOpen || !school?.id) return;
+    let active = true;
+    loadSchoolSubcollection<RefundVoucher>(school.id, "refund_vouchers").then((cloudLogs) => {
+      if (active && cloudLogs.length > 0) {
+        setAuditLogs(cloudLogs);
+        try {
+          localStorage.setItem(refundStorageKey, JSON.stringify(cloudLogs));
+        } catch {}
+      }
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [isOpen, school?.id, refundStorageKey]);
+
   const matchingReceipts = useMemo(() => {
     if (!searchQuery.trim()) return allFeeRecords.slice(0, 10);
     const q = searchQuery.toLowerCase().trim();
@@ -99,12 +118,14 @@ export const ReceiptCancellationModal: React.FC<Props> = ({
   const handleExecuteCancellation = () => {
     if (!selectedReceipt) return;
     if (!remarks.trim()) {
-      alert("कृपया कैंसिलेशन व रिफंड का विस्तृत कारण (Remarks) दर्ज करें!");
+      toast.error("कृपया कैंसिलेशन व रिफंड का विस्तृत कारण (Remarks) दर्ज करें!");
       return;
     }
 
-    const confirmMsg = `क्या आप वाकई रसीद #${selectedReceipt.receiptNo || selectedReceipt.id} को निरस्त (Cancel) करना चाहते हैं? इससे छात्र के लेजर में ₹${selectedReceipt.paidAmount || selectedReceipt.amount} का बकाया फिर से बहाल हो जाएगा।`;
-    if (!window.confirm(confirmMsg)) return;
+    if (confirmCancelReceiptId !== selectedReceipt.id) {
+      setConfirmCancelReceiptId(selectedReceipt.id);
+      return;
+    }
 
     try {
       setIsProcessing(true);
@@ -152,12 +173,17 @@ export const ReceiptCancellationModal: React.FC<Props> = ({
       const updatedLogs = [newVoucher, ...auditLogs];
       setAuditLogs(updatedLogs);
       localStorage.setItem(refundStorageKey, JSON.stringify(updatedLogs));
+      if (school?.id) {
+        syncSchoolSubcollection(school.id, "refund_vouchers", updatedLogs);
+      }
 
+      setConfirmCancelReceiptId(null);
       setSuccessVoucher(newVoucher);
       setIsProcessing(false);
+      toast.success(`रसीद #${newVoucher.originalReceiptNo} निरस्त कर रिफंड वाउचर जारी किया गया!`);
       onReceiptCancelled?.();
     } catch (err: any) {
-      alert("रसीद निरस्तीकरण में त्रुटि: " + (err?.message || err));
+      toast.error("रसीद निरस्तीकरण में त्रुटि: " + (err?.message || err));
       setIsProcessing(false);
     }
   };
@@ -206,7 +232,7 @@ export const ReceiptCancellationModal: React.FC<Props> = ({
               </div>
 
               {/* Printable Official Refund Voucher Slip */}
-              <div id="print-refund-voucher" className="bg-white text-slate-900 rounded-2xl p-6 border shadow space-y-4">
+              <div ref={voucherPrintRef} id="print-refund-voucher" className="bg-white text-slate-900 rounded-2xl p-6 border shadow space-y-4">
                 <div className="text-center border-b pb-3">
                   <div className="text-xs font-black uppercase text-rose-700 tracking-wider">OFFICIAL REFUND VOUCHER / भुगतान वापसी रसीद</div>
                   <h3 className="text-lg font-black text-slate-900">{school?.name || "SCHOOL NAME"}</h3>
@@ -251,9 +277,9 @@ export const ReceiptCancellationModal: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div className="flex items-center gap-3 pt-2">
+              <div className="flex items-center gap-3 pt-2 no-print print:hidden">
                 <button
-                  onClick={() => window.print()}
+                  onClick={() => voucherPrintRef.current && printElementInIframe(voucherPrintRef.current, `Refund_Voucher_${successVoucher.voucherNo}`)}
                   className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow"
                 >
                   <Printer className="w-4 h-4" />
@@ -405,20 +431,41 @@ export const ReceiptCancellationModal: React.FC<Props> = ({
                   <div className="flex items-center gap-3 pt-2">
                     <button
                       type="button"
-                      onClick={() => setSelectedReceipt(null)}
+                      onClick={() => { setSelectedReceipt(null); setConfirmCancelReceiptId(null); }}
                       className="flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs"
                     >
                       पीछे जाएं
                     </button>
-                    <button
-                      type="button"
-                      onClick={handleExecuteCancellation}
-                      disabled={isProcessing}
-                      className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs shadow-lg shadow-rose-600/30 flex items-center justify-center gap-2"
-                    >
-                      <RotateCcw className="w-4 h-4" />
-                      रसीद कैंसिल व रिफंड जारी करें
-                    </button>
+                    {confirmCancelReceiptId === selectedReceipt.id ? (
+                      <div className="flex-1 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleExecuteCancellation}
+                          disabled={isProcessing}
+                          className="flex-1 py-2.5 rounded-xl bg-rose-700 hover:bg-rose-600 text-white font-black text-xs shadow-lg flex items-center justify-center gap-1.5"
+                        >
+                          <RotateCcw className="w-4 h-4" />
+                          Confirm Cancel (₹{(selectedReceipt.paidAmount || selectedReceipt.amount || 0).toLocaleString("en-IN")})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmCancelReceiptId(null)}
+                          className="px-3 py-2.5 rounded-xl bg-slate-700 text-slate-200 font-bold text-xs"
+                        >
+                          रद्द
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleExecuteCancellation}
+                        disabled={isProcessing}
+                        className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs shadow-lg shadow-rose-600/30 flex items-center justify-center gap-2"
+                      >
+                        <RotateCcw className="w-4 h-4" />
+                        रसीद कैंसिल व रिफंड जारी करें
+                      </button>
+                    )}
                   </div>
                 </div>
               )}

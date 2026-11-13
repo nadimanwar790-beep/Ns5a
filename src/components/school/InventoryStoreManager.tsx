@@ -1,5 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect, useMemo, useRef } from "react";
+import { toast } from "sonner";
 import {
   ShoppingBag, Plus, Search, Tag, AlertTriangle, Printer, Trash2,
   Edit3, CheckCircle2, Check, IndianRupee, QrCode, Filter, ChevronLeft,
@@ -11,6 +12,8 @@ import type {
   StoreInventoryItem, StoreSaleRecord, StoreReservationBooking
 } from "../../school-types";
 import { speakNotification } from "../../utils/voiceNotifyEngine";
+import { loadSchoolSubcollection, syncSchoolSubcollection } from "../../utils/schoolCloudSync";
+import { printElementInIframe } from "./AdmissionFormPrintModal";
 
 interface Props {
   school: School;
@@ -140,10 +143,30 @@ export const InventoryStoreManager: React.FC<Props> = ({
 
   // Clock ticker for countdown
   const [currentEpoch, setCurrentEpoch] = useState(Date.now());
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const receiptRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     const t = setInterval(() => setCurrentEpoch(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
+
+  // Hydrate from Firestore
+  useEffect(() => {
+    let active = true;
+    const sid = school?.id;
+    if (!sid) return;
+    loadSchoolSubcollection<StoreInventoryItem>(sid, "store_items", invStorageKey).then((data) => {
+      if (active && data.length > 0) setItems(data);
+    });
+    loadSchoolSubcollection<StoreSaleRecord>(sid, "store_sales", salesStorageKey).then((data) => {
+      if (active && data.length > 0) setSales(data);
+    });
+    loadSchoolSubcollection<StoreReservationBooking>(sid, "store_reservations", resStorageKey).then((data) => {
+      if (active && data.length > 0) setReservations(data);
+    });
+    return () => { active = false; };
+  }, [school?.id, invStorageKey, salesStorageKey, resStorageKey]);
 
   // Sync with LocalStorage
   useEffect(() => {
@@ -190,6 +213,8 @@ export const InventoryStoreManager: React.FC<Props> = ({
         localStorage.setItem(invStorageKey, JSON.stringify(invCopy));
         localStorage.setItem(resStorageKey, JSON.stringify(updatedRes));
       } catch {}
+      syncSchoolSubcollection(school?.id, "store_items", invCopy);
+      syncSchoolSubcollection(school?.id, "store_reservations", updatedRes);
     }
   }, [currentEpoch]);
 
@@ -231,6 +256,8 @@ export const InventoryStoreManager: React.FC<Props> = ({
     setReservations(nextReservations);
     localStorage.setItem(salesStorageKey, JSON.stringify(nextSales));
     localStorage.setItem(resStorageKey, JSON.stringify(nextReservations));
+    syncSchoolSubcollection(school?.id, "store_sales", nextSales);
+    syncSchoolSubcollection(school?.id, "store_reservations", nextReservations);
 
     setPrintableReceipt(saleRecord);
     speakNotification(
@@ -257,6 +284,8 @@ export const InventoryStoreManager: React.FC<Props> = ({
     setReservations(nextReservations);
     localStorage.setItem(invStorageKey, JSON.stringify(nextItems));
     localStorage.setItem(resStorageKey, JSON.stringify(nextReservations));
+    syncSchoolSubcollection(school?.id, "store_items", nextItems);
+    syncSchoolSubcollection(school?.id, "store_reservations", nextReservations);
     speakNotification("बुकिंग रद्द", `ऑर्डर ${res.id} रद्द करके स्टॉक वापस जोड़ दिया गया।`);
   };
 
@@ -282,7 +311,7 @@ export const InventoryStoreManager: React.FC<Props> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > 3 * 1024 * 1024) {
-      alert("Kripya 3MB se kam size ki photo chunein.");
+      toast.error("Kripya 3MB se kam size ki photo chunein.");
       return;
     }
     const reader = new FileReader();
@@ -335,7 +364,7 @@ export const InventoryStoreManager: React.FC<Props> = ({
   // Add Item
   const handleSaveItem = () => {
     if (!itemFormName.trim()) {
-      alert("Kripya Item ka naam enter karein.");
+      toast.error("Kripya Item ka naam enter karein.");
       return;
     }
 
@@ -355,18 +384,23 @@ export const InventoryStoreManager: React.FC<Props> = ({
       updatedAt: new Date().toISOString()
     };
 
-    setItems(prev => [newItem, ...prev]);
+    const nextItems = [newItem, ...items];
+    setItems(nextItems);
+    syncSchoolSubcollection(school?.id, "store_items", nextItems);
     setShowAddItemModal(false);
     setItemFormName("");
     setItemFormVariant("");
     setItemFormImageUrl("");
+    toast.success(`"${newItem.name}" store inventory me add ho gaya.`);
   };
 
   // Delete Item
   const handleDeleteItem = (id: string) => {
-    if (window.confirm("Kya aap sach me yeh item inventory se hatana chahte hain?")) {
-      setItems(prev => prev.filter(i => i.id !== id));
-    }
+    const nextItems = items.filter(i => i.id !== id);
+    setItems(nextItems);
+    syncSchoolSubcollection(school?.id, "store_items", nextItems);
+    setConfirmDeleteId(null);
+    toast.success("Item inventory se hata diya gaya.");
   };
 
   // Add line to bill
@@ -391,7 +425,7 @@ export const InventoryStoreManager: React.FC<Props> = ({
   // Complete Sale & Print Bill
   const handleCompleteSale = () => {
     if (billItems.length === 0) {
-      alert("Kripya kam se kam ek item select karein.");
+      toast.error("Kripya kam se kam ek item select karein.");
       return;
     }
 
@@ -425,7 +459,7 @@ export const InventoryStoreManager: React.FC<Props> = ({
     };
 
     // Deduct stock from inventory
-    setItems(prev => prev.map(item => {
+    const nextItems = items.map(item => {
       const soldLine = billItems.find(b => b.itemId === item.id);
       if (soldLine) {
         return {
@@ -434,13 +468,17 @@ export const InventoryStoreManager: React.FC<Props> = ({
         };
       }
       return item;
-    }));
-
-    setSales(prev => [saleRecord, ...prev]);
+    });
+    const nextSales = [saleRecord, ...sales];
+    setItems(nextItems);
+    setSales(nextSales);
+    syncSchoolSubcollection(school?.id, "store_items", nextItems);
+    syncSchoolSubcollection(school?.id, "store_sales", nextSales);
     setShowBillModal(false);
     setBillItems([]);
     setBillStudentId("");
     setPrintableReceipt(saleRecord);
+    toast.success(`Sale completed! Receipt #${saleRecord.receiptNo}`);
   };
 
   return (
@@ -670,13 +708,32 @@ export const InventoryStoreManager: React.FC<Props> = ({
                                 Sell
                               </button>
                               {isAdmin && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteItem(item.id)}
-                                  className="p-1.5 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg cursor-pointer"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
+                                confirmDeleteId === item.id ? (
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteItem(item.id)}
+                                      className="px-2 py-1 rounded-lg bg-rose-600 text-white text-[10px] font-black cursor-pointer"
+                                    >
+                                      Confirm
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setConfirmDeleteId(null)}
+                                      className="px-1.5 py-1 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 text-[10px] font-bold cursor-pointer"
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmDeleteId(item.id)}
+                                    className="p-1.5 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )
                               )}
                             </div>
                           </td>
@@ -1166,7 +1223,7 @@ export const InventoryStoreManager: React.FC<Props> = ({
       {/* ── PRINTABLE STORE RECEIPT MODAL ── */}
       {printableReceipt && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white text-slate-900 rounded-3xl max-w-sm w-full p-6 shadow-2xl border space-y-4 font-mono">
+          <div ref={receiptRef} className="bg-white text-slate-900 rounded-3xl max-w-sm w-full p-6 shadow-2xl border space-y-4 font-mono">
             <div className="text-center border-b pb-3">
               <h3 className="font-black text-lg uppercase">{school?.name || "School Store"}</h3>
               <p className="text-[10px] text-slate-500">{school?.address}</p>
@@ -1210,10 +1267,18 @@ export const InventoryStoreManager: React.FC<Props> = ({
               <p className="mt-1">Thank you! Items once sold cannot be returned.</p>
             </div>
 
-            <div className="flex gap-2 pt-2">
+            <div className="flex gap-2 pt-2 no-print print:hidden">
               <button
                 type="button"
-                onClick={() => window.print()}
+                onClick={() => {
+                  if (receiptRef.current) {
+                    printElementInIframe(
+                      receiptRef.current,
+                      `Store Receipt #${printableReceipt.receiptNo}`,
+                      `.no-print { display: none !important; }`
+                    );
+                  }
+                }}
                 className="flex-1 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
               >
                 <Printer className="w-4 h-4" />

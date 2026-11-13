@@ -1,5 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect, useCallback } from "react";
+import { toast } from "sonner";
 import {
   X,
   Camera,
@@ -26,17 +27,17 @@ import {
 import {
   saveFaceDescriptor,
   deleteFaceDescriptor,
-  extractDescriptorFromCanvas,
   extractNeuralDescriptor,
   extractNeuralDescriptorWith3DPose,
   estimateHeadPose,
   draw3DHolographicMesh,
-  estimateEyeNoseLandmarks,
   playAttendanceSuccessChime,
   getSchoolFaceDescriptors,
   detectFacesInFrame,
-  matchFaceDescriptor,
   assessFaceLightingAndQuality,
+  enrollStudentFromPhotoUrl,
+  enrollTeacherFromPhotoUrl,
+  isActiveRosterPerson,
   FaceDescriptorRecord,
   DetectedFaceBox,
   HeadPoseEstimate
@@ -158,20 +159,34 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
     setLoadingMap(true);
     try {
       const map = await getSchoolFaceDescriptors(schoolId);
-      setEnrolledMap(map);
+      const rosterById = new Map<string, any>();
+      for (const s of students || []) {
+        if (s?.id) rosterById.set(s.id, s);
+      }
+      for (const t of localTeachersList || []) {
+        if (t?.id) rosterById.set(t.id, t);
+      }
+      const cleanMap: Record<string, FaceDescriptorRecord> = {};
+      for (const [id, rec] of Object.entries(map)) {
+        const rp = rosterById.get(id);
+        if (rp && !isActiveRosterPerson(rp)) continue;
+        cleanMap[id] = rec;
+      }
+      setEnrolledMap(cleanMap);
     } catch (e) {
       console.warn("Error loading face descriptors:", e);
     } finally {
       setLoadingMap(false);
     }
-  }, [schoolId]);
+  }, [schoolId, students, localTeachersList]);
 
   const [isBatchVectorizing, setIsBatchVectorizing] = useState(false);
+  const [confirmDeleteFaceId, setConfirmDeleteFaceId] = useState<string | null>(null);
   const handle1ClickClassAutoVectorize = async () => {
     const list = targetType === "STUDENT" ? students : localTeachersList;
-    const withPhotos = (list || []).filter((p) => p && p.photoUrl && p.photoUrl.trim());
+    const withPhotos = (list || []).filter((p) => p && isActiveRosterPerson(p) && p.photoUrl && p.photoUrl.trim());
     if (withPhotos.length === 0) {
-      alert("छात्रों की प्रोफाइल में फोटो उपलब्ध नहीं है। कृपया पहले फोटो जोड़ें।");
+      toast.error("सक्रिय प्रोफाइल में फोटो उपलब्ध नहीं है। कृपया पहले फोटो जोड़ें।");
       return;
     }
     setIsBatchVectorizing(true);
@@ -180,24 +195,39 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
       let saved = 0;
       for (const p of withPhotos) {
         try {
-          const rec = await enrollStudentFromPhotoUrl({
-            id: p.id,
-            schoolId,
-            name: p.name,
-            rollNo: String(p.rollNo || ""),
-            classId: p.classId,
-            className: p.className,
-            photoUrl: p.photoUrl,
-          });
+          const rec = targetType === "TEACHER"
+            ? await enrollTeacherFromPhotoUrl({
+                id: p.id,
+                schoolId,
+                name: p.name,
+                designation: p.designation,
+                photoUrl: p.photoUrl,
+                active: p.active,
+                isDeleted: p.isDeleted,
+                status: p.status,
+              })
+            : await enrollStudentFromPhotoUrl({
+                id: p.id,
+                schoolId,
+                name: p.name,
+                rollNo: String(p.rollNo || ""),
+                classId: p.classId,
+                className: p.className,
+                photoUrl: p.photoUrl,
+                active: p.active,
+                isDeleted: p.isDeleted,
+                status: p.status,
+                tcIssued: p.tcIssued,
+              });
           if (rec) saved++;
         } catch {}
       }
       await loadDescriptors();
       playAttendanceSuccessChime();
-      alert(`✅ पूरी क्लास (${saved} छात्र) 1-क्लिक में 2 सेकंड में सेव हो गई!`);
+      toast.success(`✅ पूरी क्लास (${saved} छात्र) 1-क्लिक में 2 सेकंड में सेव हो गई!`);
       if (onEnrollmentUpdated) onEnrollmentUpdated();
     } catch {
-      alert("क्लास सेव करने में समस्या आई");
+      toast.error("क्लास सेव करने में समस्या आई");
     } finally {
       setIsBatchVectorizing(false);
     }
@@ -377,7 +407,7 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
           ctx.clearRect(0, 0, canvas.width, canvas.height);
 
           try {
-            const detected = await detectFacesInFrame(video, enrolledMap);
+            const detected = await detectFacesInFrame(video, enrolledMap, { schoolId });
 
             if (detected.length > 0) {
               const face = detected[0];
@@ -396,7 +426,7 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
               ctx.fillStyle = "#ffffff";
               ctx.font = "bold 13px sans-serif";
               const label = matchedStudent
-                ? `✓ ${matchedStudent.name} (${Math.round(matchedStudent.confidencePercent)}%)`
+                ? `✓ ${matchedStudent.name} (Sim: ${Math.round(matchedStudent.similarityPercent)}%)`
                 : "चेहरा मिला (Unregistered Face)";
               ctx.fillText(label, x + 8, Math.max(22, y - 10));
 
@@ -405,7 +435,7 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
                 if (rec) {
                   setTestMatchedPerson({
                     record: rec,
-                    confidence: matchedStudent.confidencePercent,
+                    confidence: matchedStudent.similarityPercent,
                     time: new Date().toLocaleTimeString("en-IN")
                   });
                 }
@@ -569,22 +599,25 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
         photoDataUrl = canvas.toDataURL("image/jpeg", 0.90);
       }
 
-      // Ensure we have a valid primary descriptor (512-D ArcFace or 128-D ResNet)
+      // Strictly enforce valid 512-D ArcFace primary descriptor (zero 128-D or canvas fallback)
       let primaryDesc = final3D.front || final3D.left || final3D.right || [];
-      if (primaryDesc.length !== 512 && primaryDesc.length !== 128 && video) {
+      if (primaryDesc.length !== 512 && video) {
         const neural = await extractNeuralDescriptor(video).catch(() => null);
-        if (neural?.descriptor && (neural.descriptor.length === 512 || neural.descriptor.length === 128)) {
+        if (neural?.descriptor && neural.descriptor.length === 512) {
           primaryDesc = neural.descriptor;
-        } else {
-          const box = { x: 50, y: 50, width: 220, height: 220 };
-          primaryDesc = extractDescriptorFromCanvas(video, box);
         }
       }
 
+      if (primaryDesc.length !== 512) {
+        setIsProcessingCapture(false);
+        setGuidanceMsg("⚠️ ArcFace 512-D मॉडल तैयार नहीं है या चेहरा स्पष्ट नहीं दिखा। कृपया रोशनी में दोबारा स्कैन करें।");
+        return;
+      }
+
       const composite3D = {
-        front: final3D.front || primaryDesc,
-        left: final3D.left || primaryDesc,
-        right: final3D.right || primaryDesc,
+        front: final3D.front?.length === 512 ? final3D.front : primaryDesc,
+        left: final3D.left?.length === 512 ? final3D.left : primaryDesc,
+        right: final3D.right?.length === 512 ? final3D.right : primaryDesc,
       };
 
       const record: FaceDescriptorRecord = {
@@ -598,6 +631,7 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
         className: targetPerson.className,
         photoUrl: photoDataUrl || targetPerson.photoUrl || "",
         descriptor: primaryDesc,
+        multiAngleDescriptors: composite3D,
         descriptors3D: composite3D,
         depthMesh: {
           yaw: currentHeadPose?.yaw || 0,
@@ -608,6 +642,7 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
         },
         enrolledAt: new Date().toISOString(),
         source: "3d_multi_angle",
+        preprocessOrder: "RGB",
       };
 
       await saveFaceDescriptor(record);
@@ -683,24 +718,24 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
         return;
       }
 
-      // Extract neural embedding with fallback
+      // Extract genuine 512-D ArcFace neural embedding (strict zero-fallback)
       const neural3D = await extractNeuralDescriptorWith3DPose(canvas).catch(() => null);
       const neuralStd = !neural3D ? await extractNeuralDescriptor(canvas).catch(() => null) : null;
-      const landmarks = estimateEyeNoseLandmarks(canvas, box);
-      const fallbackDesc = extractDescriptorFromCanvas(canvas, box, false, landmarks);
 
-      const descriptor = (neural3D?.descriptor && (neural3D.descriptor.length === 512 || neural3D.descriptor.length === 128))
-        ? neural3D.descriptor
-        : (neuralStd?.descriptor && (neuralStd.descriptor.length === 512 || neuralStd.descriptor.length === 128))
-        ? neuralStd.descriptor
-        : fallbackDesc;
+      const descriptor =
+        neural3D?.descriptor?.length === 512
+          ? neural3D.descriptor
+          : neuralStd?.descriptor?.length === 512
+          ? neuralStd.descriptor
+          : null;
 
-      const is512 = descriptor && descriptor.length === 512;
-      const source = is512
-        ? "arcface_512d"
-        : (neural3D?.descriptor || neuralStd?.descriptor)
-        ? (scanMode === "3D_MULTI_ANGLE" ? "3d_multi_angle" : "face_api_neural")
-        : "live_studio";
+      if (!descriptor) {
+        setGuidanceMsg("⚠️ ArcFace 512-D वेक्टर तैयार नहीं हो सका। कृपया चेहरा कैमरे के सामने सीधा और पर्याप्त रोशनी में रखें।");
+        setIsProcessingCapture(false);
+        return;
+      }
+
+      const source = "arcface_512d";
 
       // 1-TAP FAST ENROLLMENT (2-Second Face ID Generation)
       // Generates full frontal vector and mirrors 3D composite immediately for maximum convenience and 99%+ accuracy
@@ -721,6 +756,7 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
         className: targetPerson.className,
         photoUrl: photoDataUrl || targetPerson.photoUrl || "",
         descriptor,
+        multiAngleDescriptors: final3D,
         descriptors3D: final3D,
         depthMesh: {
           yaw: currentHeadPose?.yaw || 0,
@@ -730,7 +766,8 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
           anglesCount: 3,
         },
         enrolledAt: new Date().toISOString(),
-        source
+        source,
+        preprocessOrder: "RGB",
       };
 
       await saveFaceDescriptor(record);
@@ -804,9 +841,11 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
 
   // Delete Face Record
   const handleDeleteFace = async (id: string, name: string) => {
-    if (!window.confirm(`क्या आप वाकई ${name} का फेस आईडी बायोमेट्रिक डेटा हटाना चाहते हैं?`)) {
+    if (confirmDeleteFaceId !== id) {
+      setConfirmDeleteFaceId(id);
       return;
     }
+    setConfirmDeleteFaceId(null);
     try {
       await deleteFaceDescriptor(id, schoolId);
       setEnrolledMap((prev) => {
@@ -815,9 +854,10 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
         return next;
       });
       speakNotification("बायोमेट्रिक हटाया गया", `${name} का फेस डेटा हटा दिया गया।`);
+      toast.success(`${name} का फेस डेटा हटा दिया गया।`);
       if (onEnrollmentUpdated) onEnrollmentUpdated();
     } catch (e: any) {
-      alert("हटाने में समस्या: " + (e?.message || e));
+      toast.error("हटाने में समस्या: " + (e?.message || e));
     }
   };
 
@@ -1054,10 +1094,10 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
                             </p>
                             {isEnrolled ? (
                               <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                                {rec?.descriptors3D?.left || rec?.descriptors3D?.right || rec?.source === "3d_multi_angle" ? (
+                                {rec?.multiAngleDescriptors?.left || rec?.multiAngleDescriptors?.right || rec?.descriptors3D?.left || rec?.descriptors3D?.right || rec?.source === "3d_multi_angle" ? (
                                   <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 flex items-center gap-1">
                                     <Sparkles className="w-2.5 h-2.5 text-cyan-400" />
-                                    <span>3D सुरक्षित (Multi-Angle)</span>
+                                    <span>Multi-Angle 2D सुरक्षित</span>
                                   </span>
                                 ) : (
                                   <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
@@ -1090,13 +1130,32 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
                           </button>
 
                           {isEnrolled && (
-                            <button
-                              onClick={() => handleDeleteFace(person.id, person.name)}
-                              className="p-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 transition cursor-pointer"
-                              title="बायोमेट्रिक डेटा हटाएं"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            confirmDeleteFaceId === person.id ? (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteFace(person.id, person.name)}
+                                  className="px-2 py-1.5 rounded-xl bg-rose-600 text-white text-[10px] font-black cursor-pointer"
+                                >
+                                  Confirm
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteFaceId(null)}
+                                  className="px-2 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-[10px] font-bold cursor-pointer"
+                                >
+                                  रद्द
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => handleDeleteFace(person.id, person.name)}
+                                className="p-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 transition cursor-pointer"
+                                title="बायोमेट्रिक डेटा हटाएं"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )
                           )}
                         </div>
                       </div>

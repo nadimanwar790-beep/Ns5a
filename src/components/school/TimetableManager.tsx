@@ -1,5 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect, useMemo } from "react";
+import { toast } from "sonner";
 import {
   Clock, Calendar, BookOpen, Users, Plus, Edit3, Trash2, Printer,
   Save, AlertTriangle, CheckCircle2, ChevronLeft, Sparkles, Filter,
@@ -93,6 +94,7 @@ export const TimetableManager: React.FC<Props> = ({
   const [selectedDay, setSelectedDay] = useState<string>("Monday");
   const [viewMode, setViewMode] = useState<"day" | "week" | "teacher" | "archive">("week");
   const [filterTeacherId, setFilterTeacherId] = useState<string>(currentTeacherId || "");
+  const [confirmDeletePeriodNum, setConfirmDeletePeriodNum] = useState<number | null>(null);
 
   // ── 2. Section Management & Persistence ──
   const sectionsStorageKey = useMemo(() => `nst_school_sections_${school?.id || "default"}`, [school?.id]);
@@ -479,14 +481,16 @@ export const TimetableManager: React.FC<Props> = ({
   // Delete a period slot across the entire school timetable
   const handleDeletePeriodSlot = (pNum: number) => {
     if (periodSlots.length <= 1) {
-      alert("Kam se kam ek period timetable me hona anivarya hai.");
+      toast.error("Kam se kam ek period timetable me hona anivarya hai.");
       return;
     }
     const targetSlot = periodSlots.find(p => p.periodNumber === pNum);
     const label = targetSlot?.label || `Period ${pNum}`;
-    if (!window.confirm(`क्या आप ${label} को पूरे टाइमटेबल से हटाना (Delete) चाहते हैं?`)) {
+    if (confirmDeletePeriodNum !== pNum) {
+      setConfirmDeletePeriodNum(pNum);
       return;
     }
+    setConfirmDeletePeriodNum(null);
 
     const filtered = periodSlots.filter(p => p.periodNumber !== pNum);
     const reindexed = filtered.map((p, idx) => ({
@@ -511,6 +515,7 @@ export const TimetableManager: React.FC<Props> = ({
       });
       return updated;
     });
+    toast.success(`${label} टाइमटेबल से हटाया गया।`);
   };
 
   // Quick Add next period slot (Period N+1)
@@ -754,7 +759,14 @@ export const TimetableManager: React.FC<Props> = ({
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 pb-20">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 pb-20 print:min-h-0 print:bg-white print:pb-0">
+      <style>{`
+        @media print {
+          @page { size: landscape; margin: 6mm; }
+          .timetable-print-table { font-size: 9px !important; width: 100% !important; table-layout: fixed; }
+          .timetable-print-table th, .timetable-print-table td { padding: 4px !important; min-width: 0 !important; position: static !important; }
+        }
+      `}</style>
       {/* Header */}
       <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white px-4 py-4 sm:py-5 shadow-md border-b border-indigo-800/40 print:hidden">
         <div className="max-w-6xl mx-auto space-y-3">
@@ -1008,28 +1020,53 @@ export const TimetableManager: React.FC<Props> = ({
 
           {/* ── 1. WEEKLY GRID VIEW (Table) ── */}
           {viewMode === "week" && (
-            <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xs overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs border-collapse">
+            <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xs overflow-hidden print:overflow-visible print:border-slate-300 print:shadow-none print:rounded-none">
+              <div className="overflow-x-auto print:overflow-visible">
+                <table className="w-full text-left text-xs border-collapse timetable-print-table">
                   <thead>
                     <tr className="bg-slate-100 dark:bg-slate-700/60 border-b border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200">
-                      <th className="p-3 font-black w-24 sticky left-0 bg-slate-100 dark:bg-slate-700">Day</th>
+                      <th className="p-3 font-black w-24 sticky left-0 bg-slate-100 dark:bg-slate-700 print:static">Day</th>
                       {periodSlots.map((t) => (
                         <th key={t.periodNumber} className="p-3 font-black text-center border-l border-slate-200 dark:border-slate-700 min-w-[130px] group relative">
                           <div className="flex items-center justify-center gap-1.5">
                             <span>{t.label || `Period ${t.periodNumber}`}</span>
                             {isAdmin && periodSlots.length > 1 && (
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDeletePeriodSlot(t.periodNumber);
-                                }}
-                                className="opacity-0 group-hover:opacity-100 hover:text-red-500 text-slate-400 p-0.5 rounded transition cursor-pointer print:hidden"
-                                title={`Period ${t.periodNumber} डिलीट करें`}
-                              >
-                                <Trash2 className="w-3 h-3 text-red-500" />
-                              </button>
+                              confirmDeletePeriodNum === t.periodNumber ? (
+                                <span className="inline-flex items-center gap-1 print:hidden">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleDeletePeriodSlot(t.periodNumber);
+                                    }}
+                                    className="px-1.5 py-0.5 rounded bg-red-600 text-white text-[9px] font-black cursor-pointer"
+                                  >
+                                    Delete?
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setConfirmDeletePeriodNum(null);
+                                    }}
+                                    className="px-1 py-0.5 rounded bg-slate-200 text-slate-700 text-[9px] font-bold cursor-pointer"
+                                  >
+                                    ✕
+                                  </button>
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeletePeriodSlot(t.periodNumber);
+                                  }}
+                                  className="opacity-0 group-hover:opacity-100 hover:text-red-500 text-slate-400 p-0.5 rounded transition cursor-pointer print:hidden"
+                                  title={`Period ${t.periodNumber} डिलीट करें`}
+                                >
+                                  <Trash2 className="w-3 h-3 text-red-500" />
+                                </button>
+                              )
                             )}
                           </div>
                           <div className="text-[10px] text-slate-400 font-normal">{t.startTime} - {t.endTime}</div>
@@ -2116,14 +2153,33 @@ export const TimetableManager: React.FC<Props> = ({
                     <span>Break</span>
                   </label>
 
-                  <button
-                    type="button"
-                    onClick={() => handleDeletePeriodSlot(slot.periodNumber)}
-                    className="p-1.5 text-slate-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg transition cursor-pointer shrink-0"
-                    title={`Period ${slot.periodNumber} डिलीट करें`}
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  {confirmDeletePeriodNum === slot.periodNumber ? (
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleDeletePeriodSlot(slot.periodNumber)}
+                        className="px-2 py-1 rounded-lg bg-red-600 text-white text-[10px] font-black cursor-pointer"
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeletePeriodNum(null)}
+                        className="px-2 py-1 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 text-[10px] font-bold cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleDeletePeriodSlot(slot.periodNumber)}
+                      className="p-1.5 text-slate-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg transition cursor-pointer shrink-0"
+                      title={`Period ${slot.periodNumber} डिलीट करें`}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
               ))}
             </div>

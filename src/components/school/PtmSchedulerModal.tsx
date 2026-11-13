@@ -1,5 +1,6 @@
 // @ts-nocheck
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
+import { toast } from "sonner";
 import {
   Users,
   Calendar,
@@ -14,6 +15,8 @@ import {
   BookOpen
 } from "lucide-react";
 import { School, SchoolSession, SchoolStudent } from "../../school-types";
+import { loadSchoolSubcollection, syncSchoolSubcollection } from "../../utils/schoolCloudSync";
+import { printElementInIframe } from "./AdmissionFormPrintModal";
 
 export interface PtmSlot {
   id: string;
@@ -92,6 +95,24 @@ export const PtmSchedulerModal: React.FC<Props> = ({
   const [selectedEventId, setSelectedEventId] = useState<string>(events[0]?.id || "");
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [bookedPass, setBookedPass] = useState<any>(null);
+  const [confirmBookSlotId, setConfirmBookSlotId] = useState<string | null>(null);
+  const passPrintRef = useRef<HTMLDivElement>(null);
+  const schedulePrintRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isOpen || !school?.id) return;
+    let active = true;
+    loadSchoolSubcollection<PtmEvent>(school.id, "ptm_events").then((cloudEvents) => {
+      if (active && cloudEvents.length > 0) {
+        setEvents(cloudEvents);
+        setSelectedEventId((prev) => cloudEvents.some((e) => e.id === prev) ? prev : cloudEvents[0].id);
+        try {
+          localStorage.setItem(ptmStorageKey, JSON.stringify(cloudEvents));
+        } catch {}
+      }
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [isOpen, school?.id, ptmStorageKey]);
 
   // New Event Form State
   const [newTitle, setNewTitle] = useState("अर्धवार्षिक प्रगति समीक्षा PTM");
@@ -112,6 +133,9 @@ export const PtmSchedulerModal: React.FC<Props> = ({
     } catch (e) {
       console.warn("PTM save error:", e);
     }
+    if (school?.id) {
+      syncSchoolSubcollection(school.id, "ptm_events", updated);
+    }
   };
 
   const activeEvent = useMemo(() => {
@@ -127,7 +151,7 @@ export const PtmSchedulerModal: React.FC<Props> = ({
     const endMins = parseInt(newEndHour) * 60 + parseInt(newEndMin);
 
     if (endMins <= startMins) {
-      alert("समाप्ति का समय शुरुआत के समय से बाद का होना चाहिए!");
+      toast.error("समाप्ति का समय शुरुआत के समय से बाद का होना चाहिए!");
       return;
     }
 
@@ -170,18 +194,19 @@ export const PtmSchedulerModal: React.FC<Props> = ({
     saveEvents(updated);
     setSelectedEventId(newEv.id);
     setShowCreateModal(false);
+    toast.success("नया PTM इवेंट सफलतापूर्वक बनाया गया!");
   };
 
   // Parent Books a Slot
   const handleBookSlot = (slot: PtmSlot) => {
     if (slot.isBooked) return;
+    if (confirmBookSlotId !== slot.id) {
+      setConfirmBookSlotId(slot.id);
+      return;
+    }
     const stName = currentStudent?.name || "Student Name";
     const stId = currentStudent?.id || "STU-PARENT";
     const phone = currentStudent?.parentPhone || currentStudent?.mobile || "Parent";
-
-    if (!window.confirm(`क्या आप वाकई ${slot.startTime} से ${slot.endTime} का PTM स्लॉट बुक करना चाहते हैं?`)) {
-      return;
-    }
 
     const updatedEvents = events.map((ev) => {
       if (ev.id === activeEvent.id) {
@@ -206,10 +231,12 @@ export const PtmSchedulerModal: React.FC<Props> = ({
     });
 
     saveEvents(updatedEvents);
+    setConfirmBookSlotId(null);
     setBookedPass({
       event: activeEvent,
       slot: { ...slot, isBooked: true, bookedStudentName: stName }
     });
+    toast.success(`PTM स्लॉट (${slot.startTime} - ${slot.endTime}) सफलतापूर्वक बुक हो गया!`);
   };
 
   return (
@@ -255,7 +282,7 @@ export const PtmSchedulerModal: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div className="bg-white text-slate-900 rounded-3xl p-6 sm:p-8 border shadow-xl space-y-4 max-w-md mx-auto">
+              <div ref={passPrintRef} className="bg-white text-slate-900 rounded-3xl p-6 sm:p-8 border shadow-xl space-y-4 max-w-md mx-auto">
                 <div className="text-center border-b pb-3">
                   <div className="inline-block px-3 py-0.5 rounded-full bg-indigo-50 text-indigo-700 text-[10px] font-black uppercase tracking-wider mb-1">
                     OFFICIAL PTM APPOINTMENT PASS
@@ -298,9 +325,9 @@ export const PtmSchedulerModal: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div className="flex items-center justify-center gap-3 pt-2">
+              <div className="flex items-center justify-center gap-3 pt-2 no-print print:hidden">
                 <button
-                  onClick={() => window.print()}
+                  onClick={() => passPrintRef.current && printElementInIframe(passPrintRef.current, `PTM_Pass_${bookedPass.slot.bookedStudentName || "Pass"}`)}
                   className="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-2"
                 >
                   <Printer className="w-4 h-4" />
@@ -343,7 +370,7 @@ export const PtmSchedulerModal: React.FC<Props> = ({
                       + नया PTM इवेंट बनाएं
                     </button>
                     <button
-                      onClick={() => window.print()}
+                      onClick={() => schedulePrintRef.current && printElementInIframe(schedulePrintRef.current, `PTM_Schedule_${activeEvent?.className || "Schedule"}`, `body { background: #fff !important; color: #0f172a !important; } * { color: #0f172a !important; background-color: transparent !important; border-color: #cbd5e1 !important; }`)}
                       className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs flex items-center gap-1.5"
                     >
                       <Printer className="w-3.5 h-3.5" />
@@ -353,6 +380,7 @@ export const PtmSchedulerModal: React.FC<Props> = ({
                 )}
               </div>
 
+              <div ref={schedulePrintRef} className="space-y-4">
               {/* Event Details Card */}
               {activeEvent && (
                 <div className="p-4 rounded-2xl bg-indigo-950/30 border border-indigo-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
@@ -398,17 +426,20 @@ export const PtmSchedulerModal: React.FC<Props> = ({
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
                     {activeEvent.slots.map((slot) => {
                       const isBooked = slot.isBooked;
+                      const isConfirming = confirmBookSlotId === slot.id;
                       return (
                         <div
                           key={slot.id}
                           onClick={() => {
-                            if (!isBooked && mode === "PARENT_STUDENT") {
-                              handleBookSlot(slot);
+                            if (!isBooked && mode === "PARENT_STUDENT" && !isConfirming) {
+                              setConfirmBookSlotId(slot.id);
                             }
                           }}
                           className={`p-3.5 rounded-2xl border text-center transition ${
                             isBooked
                               ? "bg-rose-950/20 border-rose-500/30 cursor-not-allowed opacity-80"
+                              : isConfirming
+                              ? "bg-emerald-950/40 border-emerald-400 ring-2 ring-emerald-500/40 shadow-md"
                               : "bg-slate-950 border-slate-800 hover:border-emerald-500/80 hover:bg-slate-900 cursor-pointer shadow-md"
                           }`}
                         >
@@ -419,6 +450,23 @@ export const PtmSchedulerModal: React.FC<Props> = ({
                             <div className="text-[10px] text-rose-400 font-bold mt-1.5 flex items-center justify-center gap-1">
                               <span>🔒 बुक:</span>
                               <span className="truncate max-w-[80px]">{slot.bookedStudentName || "Parent"}</span>
+                            </div>
+                          ) : isConfirming ? (
+                            <div className="mt-2 flex items-center justify-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); handleBookSlot(slot); }}
+                                className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black cursor-pointer"
+                              >
+                                Confirm बुक
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); setConfirmBookSlotId(null); }}
+                                className="px-2 py-1 rounded-lg bg-slate-800 text-slate-300 text-[10px] font-bold cursor-pointer"
+                              >
+                                रद्द
+                              </button>
                             </div>
                           ) : (
                             <div className="text-[10px] text-emerald-400 font-bold mt-1.5">
@@ -431,6 +479,7 @@ export const PtmSchedulerModal: React.FC<Props> = ({
                   </div>
                 </div>
               )}
+              </div>
             </>
           )}
         </div>

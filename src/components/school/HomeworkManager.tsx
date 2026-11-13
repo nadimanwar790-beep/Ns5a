@@ -9,9 +9,11 @@ import type {
   School, SchoolClass, SchoolSubject, SchoolTeacher, SchoolStudent,
   DailyHomework, HomeworkSubmission
 } from "../../school-types";
+import { toast } from "sonner";
 import { DirectUploadButton } from "../DirectUploadButton";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 import { getDemoSchoolDataset } from "./demoDataStore";
+import { loadSchoolSubcollection, syncSchoolSubcollection } from "../../utils/schoolCloudSync";
 
 interface Props {
   school: School;
@@ -104,6 +106,24 @@ export const HomeworkManager: React.FC<Props> = ({
     } catch {}
   }, [submissions, subStorageKey]);
 
+  const [confirmDeleteHwId, setConfirmDeleteHwId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!school?.id) return;
+    let active = true;
+    loadSchoolSubcollection<DailyHomework>(school.id, "daily_homework", storageKey)
+      .then((cloud) => {
+        if (active && cloud.length > 0) setHomeworkList(cloud);
+      })
+      .catch(() => {});
+    loadSchoolSubcollection<HomeworkSubmission>(school.id, "homework_submissions", subStorageKey)
+      .then((cloudSubs) => {
+        if (active && cloudSubs.length > 0) setSubmissions(cloudSubs);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [school?.id, storageKey, subStorageKey]);
+
   // Filters
   const initialClass = currentStudent?.classId || (classes[0]?.id || "ALL");
   const [selectedClassFilter, setSelectedClassFilter] = useState<string>(initialClass);
@@ -144,7 +164,7 @@ export const HomeworkManager: React.FC<Props> = ({
   // Add Homework Handler
   const handleCreateHomework = () => {
     if (!formTitle.trim() || !formClassId) {
-      alert("Kripya Class aur Homework Title enter karein.");
+      toast.error("Kripya Class aur Homework Title enter karein.");
       return;
     }
 
@@ -167,11 +187,14 @@ export const HomeworkManager: React.FC<Props> = ({
       createdAt: new Date().toISOString()
     };
 
-    setHomeworkList(prev => [newHw, ...prev]);
+    const nextList = [newHw, ...homeworkList];
+    setHomeworkList(nextList);
+    void syncSchoolSubcollection(school?.id, "daily_homework", nextList);
     setShowAddForm(false);
     setFormTitle("");
     setFormDescription("");
     setFormAttachmentUrl("");
+    toast.success("Homework class ko publish ho gaya!");
 
     // Broadcast instant homework notification to all students in the class
     void sendSchoolPushNotification({
@@ -187,15 +210,17 @@ export const HomeworkManager: React.FC<Props> = ({
 
   // Delete Homework
   const handleDeleteHomework = (id: string) => {
-    if (window.confirm("Kya aap sach me yeh homework delete karna chahte hain?")) {
-      setHomeworkList(prev => prev.filter(h => h.id !== id));
-    }
+    const nextList = homeworkList.filter(h => h.id !== id);
+    setHomeworkList(nextList);
+    setConfirmDeleteHwId(null);
+    void syncSchoolSubcollection(school?.id, "daily_homework", nextList);
+    toast.success("Homework delete kar diya gaya.");
   };
 
   // Submit Homework by Student
   const handleSubmitWork = (hwId: string) => {
     if (!submissionText.trim() && !submissionFileUrl) {
-      alert("Kripya thoda vivran ya notebook photo upload karein.");
+      toast.error("Kripya thoda vivran ya notebook photo upload karein.");
       return;
     }
 
@@ -212,15 +237,17 @@ export const HomeworkManager: React.FC<Props> = ({
       status: "submitted"
     };
 
-    setSubmissions(prev => [newSub, ...prev.filter(s => !(s.homeworkId === hwId && s.studentId === newSub.studentId))]);
+    const nextSubs = [newSub, ...submissions.filter(s => !(s.homeworkId === hwId && s.studentId === newSub.studentId))];
+    setSubmissions(nextSubs);
+    void syncSchoolSubcollection(school?.id, "homework_submissions", nextSubs);
     setSubmittingHwId(null);
     setSubmissionText("");
     setSubmissionFileUrl("");
-    alert("🎉 Homework successfully submit ho gaya!");
+    toast.success("🎉 Homework successfully submit ho gaya!");
   };
 
-  // Share Homework on WhatsApp
-  const handleShareWhatsApp = (hw: DailyHomework) => {
+  // Share Homework on WhatsApp (Clipboard copy for iframe safety)
+  const handleShareWhatsApp = async (hw: DailyHomework) => {
     const text = `📚 *${school?.name || "School"} — Daily Homework*\n\n` +
       `📅 *Date:* ${hw.assignedDate} | *Due:* ${hw.dueDate}\n` +
       `🏫 *Class:* ${hw.className} ${hw.section ? `(${hw.section})` : ""}\n` +
@@ -231,8 +258,12 @@ export const HomeworkManager: React.FC<Props> = ({
       (hw.attachmentUrl ? `📎 *Attachment:* ${hw.attachmentUrl}\n` : "") +
       `\nKripya sabhi chhatra apna homework samay par poora karein.`;
 
-    const url = `https://wa.me/?text=${encodeURIComponent(text)}`;
-    window.open(url, "_blank");
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success("Homework message copy ho gaya! WhatsApp class group me paste karein.");
+    } catch {
+      toast.info("WhatsApp group me bhejne ke liye homework copy karein.");
+    }
   };
 
   return (
@@ -568,14 +599,33 @@ export const HomeworkManager: React.FC<Props> = ({
 
                       {/* Admin / Teacher delete */}
                       {(currentRole === "ADMIN" || currentRole === "TEACHER") && (
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteHomework(hw.id)}
-                          className="p-2 rounded-xl text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition cursor-pointer"
-                          title="Delete Homework"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        confirmDeleteHwId === hw.id ? (
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteHomework(hw.id)}
+                              className="px-2.5 py-1 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black cursor-pointer"
+                            >
+                              Delete
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteHwId(null)}
+                              className="px-2 py-1 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteHwId(hw.id)}
+                            className="p-2 rounded-xl text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition cursor-pointer"
+                            title="Delete Homework"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )
                       )}
                     </div>
                   </div>

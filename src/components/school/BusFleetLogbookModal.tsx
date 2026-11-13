@@ -1,5 +1,6 @@
 // @ts-nocheck
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { toast } from "sonner";
 import {
   Bus,
   Fuel,
@@ -19,6 +20,7 @@ import {
   Share2
 } from "lucide-react";
 import type { School, VehicleFuelLog, VehicleFitnessRecord } from "../../school-types";
+import { loadSchoolSubcollection, syncSchoolSubcollection } from "../../utils/schoolCloudSync";
 
 interface Props {
   school: School;
@@ -153,11 +155,42 @@ export const BusFleetLogbookModal: React.FC<Props> = ({ school, onClose }) => {
   const [driverName, setDriverName] = useState("Sanjay Kumar");
   const [receiptNumber, setReceiptNumber] = useState("");
 
+  const [editingBusId, setEditingBusId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const sid = school?.id;
+    if (!sid) return;
+    const suffix = sid || "demo";
+    loadSchoolSubcollection<VehicleFitnessRecord>(sid, "bus_fitness", `bus_fitness_${suffix}`).then((data) => {
+      if (active && data.length > 0) setFitnessRecords(data);
+    });
+    loadSchoolSubcollection<VehicleFuelLog>(sid, "bus_fuel", `bus_fuel_${suffix}`).then((data) => {
+      if (active && data.length > 0) setFuelLogs(data);
+    });
+    return () => { active = false; };
+  }, [school?.id]);
+
+  const saveFitnessRecords = (updated: VehicleFitnessRecord[]) => {
+    setFitnessRecords(updated);
+    try {
+      localStorage.setItem(`bus_fitness_${school?.id || "demo"}`, JSON.stringify(updated));
+    } catch {}
+    syncSchoolSubcollection(school?.id, "bus_fitness", updated);
+  };
+
+  const handleUpdateExpiryField = (busId: string, field: keyof VehicleFitnessRecord, val: string) => {
+    const updated = fitnessRecords.map((b) => (b.id === busId ? { ...b, [field]: val } : b));
+    saveFitnessRecords(updated);
+    toast.success("Renewal expiry date updated.");
+  };
+
   const saveFuelLogs = (updated: VehicleFuelLog[]) => {
     setFuelLogs(updated);
     try {
       localStorage.setItem(`bus_fuel_${school?.id || "demo"}`, JSON.stringify(updated));
     } catch {}
+    syncSchoolSubcollection(school?.id, "bus_fuel", updated);
   };
 
   const handleAddFuel = (e: React.FormEvent) => {
@@ -185,6 +218,7 @@ export const BusFleetLogbookModal: React.FC<Props> = ({ school, onClose }) => {
 
     saveFuelLogs([newLog, ...fuelLogs]);
     setShowAddFuelModal(false);
+    toast.success(`Fuel entry saved (${driven} KM, ${calculatedMileage} KM/L).`);
   };
 
   // Helper to compute expiry days
@@ -212,10 +246,14 @@ export const BusFleetLogbookModal: React.FC<Props> = ({ school, onClose }) => {
     ? (totalKmDriven / fuelLogs.reduce((sum, l) => sum + l.quantityUnits, 0)).toFixed(1)
     : "4.5";
 
-  const handleSendRenewalAlert = (bus: VehicleFitnessRecord, docName: string, expiryDate: string) => {
+  const handleSendRenewalAlert = async (bus: VehicleFitnessRecord, docName: string, expiryDate: string) => {
     const msg = `🚨 *URGENT TRANSPORT DOCUMENT RENEWAL ALERT*\nSchool: ${school?.name || "School"}\nVehicle: ${bus.vehicleNumber}\nDocument: ${docName}\nExpiry Date: ${expiryDate}\nPlease renew immediately with RTO / Insurance Company to prevent traffic fines or route stoppage.\n- Admin Office`;
-    const url = `https://wa.me/?text=${encodeURIComponent(msg)}`;
-    window.open(url, "_blank");
+    try {
+      await navigator.clipboard?.writeText(msg);
+      toast.success(`Renewal alert for ${bus.vehicleNumber} copied to clipboard!`);
+    } catch {
+      toast.info(`Renewal alert ready for ${bus.vehicleNumber} (${docName}).`);
+    }
   };
 
   return (
@@ -341,40 +379,83 @@ export const BusFleetLogbookModal: React.FC<Props> = ({ school, onClose }) => {
                     </p>
 
                     <div className="space-y-2 text-xs pt-1">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2">
                         <span className="text-slate-400">RTO Fitness:</span>
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-black border ${fitStatus.color}`}>
-                          {fitStatus.label}
-                        </span>
+                        {editingBusId === bus.id ? (
+                          <input
+                            type="date"
+                            value={bus.fitnessExpiryDate || ""}
+                            onChange={(e) => handleUpdateExpiryField(bus.id, "fitnessExpiryDate", e.target.value)}
+                            className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-[10px] text-white"
+                          />
+                        ) : (
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-black border ${fitStatus.color}`}>
+                            {fitStatus.label}
+                          </span>
+                        )}
                       </div>
 
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2">
                         <span className="text-slate-400">Vehicle Insurance:</span>
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-black border ${insStatus.color}`}>
-                          {insStatus.label}
-                        </span>
+                        {editingBusId === bus.id ? (
+                          <input
+                            type="date"
+                            value={bus.insuranceExpiryDate || ""}
+                            onChange={(e) => handleUpdateExpiryField(bus.id, "insuranceExpiryDate", e.target.value)}
+                            className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-[10px] text-white"
+                          />
+                        ) : (
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-black border ${insStatus.color}`}>
+                            {insStatus.label}
+                          </span>
+                        )}
                       </div>
 
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2">
                         <span className="text-slate-400">Pollution (PUC):</span>
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-black border ${pucStatus.color}`}>
-                          {pucStatus.label}
-                        </span>
+                        {editingBusId === bus.id ? (
+                          <input
+                            type="date"
+                            value={bus.pollutionPucExpiryDate || ""}
+                            onChange={(e) => handleUpdateExpiryField(bus.id, "pollutionPucExpiryDate", e.target.value)}
+                            className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-[10px] text-white"
+                          />
+                        ) : (
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-black border ${pucStatus.color}`}>
+                            {pucStatus.label}
+                          </span>
+                        )}
                       </div>
 
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2">
                         <span className="text-slate-400">Road Tax Expiry:</span>
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-black border ${taxStatus.color}`}>
-                          {taxStatus.label}
-                        </span>
+                        {editingBusId === bus.id ? (
+                          <input
+                            type="date"
+                            value={bus.roadTaxExpiryDate || ""}
+                            onChange={(e) => handleUpdateExpiryField(bus.id, "roadTaxExpiryDate", e.target.value)}
+                            className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-[10px] text-white"
+                          />
+                        ) : (
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-black border ${taxStatus.color}`}>
+                            {taxStatus.label}
+                          </span>
+                        )}
                       </div>
                     </div>
 
-                    <div className="pt-2 border-t border-slate-800">
+                    <div className="pt-2 border-t border-slate-800 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setEditingBusId(editingBusId === bus.id ? null : bus.id)}
+                        className="px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 font-bold text-[11px] cursor-pointer"
+                      >
+                        {editingBusId === bus.id ? "Done" : "Edit Dates"}
+                      </button>
                       <button
                         type="button"
                         onClick={() => handleSendRenewalAlert(bus, "Fitness / Insurance", bus.insuranceExpiryDate)}
-                        className="w-full py-1.5 rounded-xl bg-slate-800 hover:bg-amber-600 text-slate-200 hover:text-slate-950 font-black text-[11px] transition cursor-pointer flex items-center justify-center gap-1.5 shadow"
+                        className="flex-1 py-1.5 rounded-xl bg-slate-800 hover:bg-amber-600 text-slate-200 hover:text-slate-950 font-black text-[11px] transition cursor-pointer flex items-center justify-center gap-1.5 shadow"
                       >
                         <Share2 className="w-3.5 h-3.5" />
                         <span>Share Expiry Alert</span>

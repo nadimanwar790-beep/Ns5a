@@ -1,5 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { toast } from "sonner";
 import {
   ShieldAlert, Calendar, Users, Phone, PhoneCall, Bell, Send, AlertTriangle,
   AlertCircle, CheckCircle2, MessageCircle, ChevronLeft, Filter, Clock,
@@ -68,6 +69,7 @@ export const AbsenteeActionPage: React.FC<AbsenteeActionPageProps> = ({
 
   const [broadcasting, setBroadcasting] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [confirmEndLeaveId, setConfirmEndLeaveId] = useState<string | null>(null);
 
   // Leave recording modal state
   const [leaveModalStudent, setLeaveModalStudent] = useState<SchoolStudent | null>(null);
@@ -243,7 +245,7 @@ export const AbsenteeActionPage: React.FC<AbsenteeActionPageProps> = ({
   // Broadcast alert to unexcused absentees
   const handleBroadcastToAllAbsentees = async () => {
     if (absentStudents.length === 0) {
-      alert("Chune gaye segment me koi anupasthit chhatra nahi hai.");
+      toast.error("चयनित सेगमेंट में कोई अनुपस्थित छात्र नहीं है।");
       return;
     }
     setBroadcasting(true);
@@ -263,9 +265,10 @@ export const AbsenteeActionPage: React.FC<AbsenteeActionPageProps> = ({
 
       const msg = `✅ ${targetIds.length} अनुपस्थित छात्रों के पेरेंट्स को Lock-screen Push Notification भेज दिया गया! (Delivered: ${pushRes.delivered})`;
       setToastMessage(msg);
+      toast.success(msg);
       setTimeout(() => setToastMessage(null), 5000);
     } catch {
-      alert("Notification भेजने में समस्या आई। Kripya punah prayas karein.");
+      toast.error("Notification भेजने में समस्या आई। कृपया पुनः प्रयास करें।");
     } finally {
       setBroadcasting(false);
     }
@@ -284,10 +287,11 @@ export const AbsenteeActionPage: React.FC<AbsenteeActionPageProps> = ({
         urgent: true,
       });
 
-      setToastMessage(`✅ ${student.name} ke parents ko Push Alert bhej diya gaya!`);
+      setToastMessage(`✅ ${student.name} के पेरेंट्स को Push Alert भेज दिया गया!`);
+      toast.success(`${student.name} के पेरेंट्स को Push Alert भेजा गया!`);
       setTimeout(() => setToastMessage(null), 3000);
     } catch {
-      alert("Push alert bhejte samay samasya aayi.");
+      toast.error("Push alert भेजते समय समस्या आई।");
     }
   };
 
@@ -295,7 +299,7 @@ export const AbsenteeActionPage: React.FC<AbsenteeActionPageProps> = ({
   const handleSendWhatsApp = (student: SchoolStudent) => {
     const phone = student.phone || (student as any).whatsappNo || (student as any).fatherPhone || "";
     if (!phone) {
-      alert("Is chhatra ka mobile number uplabdh nahi hai.");
+      toast.error("इस छात्र का मोबाइल नंबर उपलब्ध नहीं है।");
       return;
     }
 
@@ -312,8 +316,10 @@ export const AbsenteeActionPage: React.FC<AbsenteeActionPageProps> = ({
 सादर,
 ${schoolName} प्रशासन`;
 
-    const waUrl = `https://wa.me/${fullPhone}?text=${encodeURIComponent(msg)}`;
-    window.open(waUrl, "_blank");
+    navigator.clipboard?.writeText(`+${fullPhone}\n\n${msg}`).catch(() => {});
+    toast.success(`WhatsApp संदेश और नंबर (+${fullPhone}) क्लिपबोर्ड पर कॉपी हो गया!`);
+    setToastMessage(`📋 ${student.name} के अभिभावक (+${fullPhone}) के लिए WhatsApp संदेश कॉपी किया गया!`);
+    setTimeout(() => setToastMessage(null), 4000);
   };
 
   // Open Leave Recording Modal
@@ -337,7 +343,7 @@ ${schoolName} प्रशासन`;
   const handleSaveLeave = async () => {
     if (!leaveModalStudent) return;
     if (!leaveForm.expectedReturnDate) {
-      alert("कृपया छात्र के स्कूल लौटने की संभावित तारीख (Expected Return Date) चुनें।");
+      toast.error("कृपया छात्र के स्कूल लौटने की संभावित तारीख (Expected Return Date) चुनें।");
       return;
     }
 
@@ -374,13 +380,16 @@ ${schoolName} प्रशासन`;
   };
 
   // Delete / Mark Leave as Completed
-  const handleDeleteLeave = async (leaveId: string, studentName?: string) => {
-    if (!confirm(`क्या आप ${studentName || "इस छात्र"} की छुट्टी समाप्त या रद्द करना चाहते हैं?`)) {
+  const handleDeleteLeave = async (leaveId: string) => {
+    if (confirmEndLeaveId !== leaveId) {
+      setConfirmEndLeaveId(leaveId);
       return;
     }
+    setConfirmEndLeaveId(null);
     await deleteStudentAcknowledgedLeave(schoolId, leaveId);
     setAcknowledgedLeaves((prev) => prev.filter((l) => l.id !== leaveId));
     setToastMessage(`✅ छुट्टी रिकॉर्ड हटा दिया गया।`);
+    toast.success("छुट्टी रिकॉर्ड समाप्त कर दिया गया।");
     setTimeout(() => setToastMessage(null), 3000);
   };
 
@@ -1033,14 +1042,33 @@ ${schoolName} प्रशासन`;
                           <span>तारीख / कारण बदलें</span>
                         </button>
 
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteLeave(leave.id, st.name)}
-                          className="px-3.5 py-2 rounded-xl bg-rose-600/15 hover:bg-rose-600/25 border border-rose-500/30 text-rose-600 dark:text-rose-300 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
-                        >
-                          <UserCheck className="w-3.5 h-3.5" />
-                          <span>स्कूल वापस आ गए (समाप्त)</span>
-                        </button>
+                        {confirmEndLeaveId === leave.id ? (
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteLeave(leave.id)}
+                              className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black transition cursor-pointer"
+                            >
+                              Confirm समाप्त
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmEndLeaveId(null)}
+                              className="px-2.5 py-2 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold cursor-pointer"
+                            >
+                              रद्द
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteLeave(leave.id)}
+                            className="px-3.5 py-2 rounded-xl bg-rose-600/15 hover:bg-rose-600/25 border border-rose-500/30 text-rose-600 dark:text-rose-300 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                          >
+                            <UserCheck className="w-3.5 h-3.5" />
+                            <span>स्कूल वापस आ गए (समाप्त)</span>
+                          </button>
+                        )}
                       </div>
                     </div>
                   );

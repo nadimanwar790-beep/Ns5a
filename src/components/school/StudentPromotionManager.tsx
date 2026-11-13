@@ -22,6 +22,7 @@ import {
   IndianRupee,
   GraduationCap
 } from "lucide-react";
+import { toast } from "sonner";
 import { speakNotification } from "../../utils/voiceNotifyEngine";
 
 interface Props {
@@ -212,7 +213,7 @@ export const StudentPromotionManager: React.FC<Props> = ({
       onRefreshData?.();
     } catch (err: any) {
       console.error("Promotion error:", err);
-      alert("Error promoting students: " + (err?.message || "Unknown error"));
+      toast.error("Error promoting students: " + (err?.message || "Unknown error"));
     } finally {
       setPromoting(false);
       setPromoteProgress("");

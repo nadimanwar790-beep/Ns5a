@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
+import { toast } from "sonner";
 import {
   Users,
   Building2,
@@ -1372,24 +1373,24 @@ export const NstaMessengerSuite: React.FC<Props> = ({
 
     // Quota check for teacher chat (only applies to students, not school admin or teachers)
     if (activeTab === "teacher" && currentUserRole === "STUDENT" && isTeacherQuotaExceeded) {
-      alert(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
+      toast.error(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
       return;
     }
 
     // Permission check for Class Group & School Desk
     if (currentUserRole === "STUDENT") {
       if (activeTab === "class") {
-        alert("Class Group me keval Teachers aur School Admin hi sandesh bhej sakte hain.");
+        toast.error("Class Group me keval Teachers aur School Admin hi sandesh bhej sakte hain.");
         return;
       }
       if (activeTab === "school") {
-        alert("School Desk par keval School Admin hi official sandesh bhej sakte hain.");
+        toast.error("School Desk par keval School Admin hi official sandesh bhej sakte hain.");
         return;
       }
     }
 
     if (activeTab === "school" && currentUserRole !== "ADMIN") {
-      alert("School Desk par keval School Admin hi sandesh bhej sakte hain.");
+      toast.error("School Desk par keval School Admin hi sandesh bhej sakte hain.");
       return;
     }
 
@@ -1566,11 +1567,11 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith("image/")) {
-      alert("Kripya ek valid photo file select karein.");
+      toast.error("Kripya ek valid photo file select karein.");
       return;
     }
     if (file.size > 25 * 1024 * 1024) {
-      alert("Photo ka size 25MB se kam hona chahiye.");
+      toast.error("Photo ka size 25MB se kam hona chahiye.");
       return;
     }
 
@@ -1586,11 +1587,11 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith("video/") && !/\.(mp4|webm|mov|m4v|mkv)$/i.test(file.name)) {
-      alert("Kripya ek valid video file (MP4/WebM) select karein.");
+      toast.error("Kripya ek valid video file (MP4/WebM) select karein.");
       return;
     }
     if (file.size > 75 * 1024 * 1024) {
-      alert("Video ka size 75MB se kam hona chahiye.");
+      toast.error("Video ka size 75MB se kam hona chahiye.");
       return;
     }
 
@@ -1606,17 +1607,17 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     if (!selectedImageFile || isUploadingMedia) return;
 
     if (activeTab === "teacher" && isTeacherQuotaExceeded) {
-      alert(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
+      toast.error(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
       return;
     }
 
     if (currentUserRole === "STUDENT" && activeTab !== "teacher") {
-      alert("Keval Teachers aur School Admin hi is tab me media bhej sakte hain.");
+      toast.error("Keval Teachers aur School Admin hi is tab me media bhej sakte hain.");
       return;
     }
 
     if (activeTab === "school" && currentUserRole !== "ADMIN") {
-      alert("School Desk par keval School Admin hi photo bhej sakte hain.");
+      toast.error("School Desk par keval School Admin hi photo bhej sakte hain.");
       return;
     }
 
@@ -1671,7 +1672,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       setImagePreviewUrl(null);
       setImageCaption("");
     } catch (err: any) {
-      alert(err?.message || "Photo bhejne me samasya aayi. Kripya punah prayas karein.");
+      toast.error(err?.message || "Photo bhejne me samasya aayi. Kripya punah prayas karein.");
     } finally {
       setIsUploadingMedia(false);
       setMediaUploadProgress(0);
@@ -1683,17 +1684,17 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     if (!selectedVideoFile || isUploadingMedia) return;
 
     if (activeTab === "teacher" && isTeacherQuotaExceeded) {
-      alert(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
+      toast.error(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
       return;
     }
 
     if (currentUserRole === "STUDENT" && activeTab !== "teacher") {
-      alert("Keval Teachers aur School Admin hi is tab me media bhej sakte hain.");
+      toast.error("Keval Teachers aur School Admin hi is tab me media bhej sakte hain.");
       return;
     }
 
     if (activeTab === "school" && currentUserRole !== "ADMIN") {
-      alert("School Desk par keval School Admin hi video bhej sakte hain.");
+      toast.error("School Desk par keval School Admin hi video bhej sakte hain.");
       return;
     }
 
@@ -1737,7 +1738,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       setVideoPreviewUrl(null);
       setVideoCaption("");
     } catch (err: any) {
-      alert(err?.message || "Video upload nahi ho saka. Kripya punah prayas karein.");
+      toast.error(err?.message || "Video upload nahi ho saka. Kripya punah prayas karein.");
     } finally {
       setIsUploadingMedia(false);
       setMediaUploadProgress(0);
@@ -1753,22 +1754,22 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     if (!file) return;
 
     if (activeTab === "teacher" && isTeacherQuotaExceeded) {
-      alert(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
+      toast.error(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
       return;
     }
 
     if (currentUserRole === "STUDENT" && activeTab !== "teacher") {
-      alert("Keval Teachers aur School Admin hi is tab me documents/files bhej sakte hain.");
+      toast.error("Keval Teachers aur School Admin hi is tab me documents/files bhej sakte hain.");
       return;
     }
 
     if (activeTab === "school" && currentUserRole !== "ADMIN") {
-      alert("School Desk par keval School Admin hi files bhej sakte hain.");
+      toast.error("School Desk par keval School Admin hi files bhej sakte hain.");
       return;
     }
 
     if (file.size > 75 * 1024 * 1024) {
-      alert("File ka size 75MB se kam hona chahiye.");
+      toast.error("File ka size 75MB se kam hona chahiye.");
       return;
     }
 
@@ -1830,7 +1831,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
 
       dispatchMessengerPush(newMsg, undefined, `📄 ${file.name} bheja gaya hai`);
     } catch (err: any) {
-      alert(err?.message || "File upload nahi ho saki. Kripya punah prayas karein.");
+      toast.error(err?.message || "File upload nahi ho saki. Kripya punah prayas karein.");
     } finally {
       setIsUploadingMedia(false);
       setMediaUploadProgress(0);
@@ -1895,7 +1896,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
 
       dispatchMessengerPush(newMsg, undefined, noteLabel || "🎙️ Ek naya voice message bheja gaya hai");
     } catch (err: any) {
-      alert(err?.message || "Voice note bhejne me samasya aayi.");
+      toast.error(err?.message || "Voice note bhejne me samasya aayi.");
     } finally {
       setIsSending(false);
       handleCancelVoiceRecording();
@@ -1904,17 +1905,17 @@ export const NstaMessengerSuite: React.FC<Props> = ({
 
   const handleStartVoiceRecording = async () => {
     if (activeTab === "teacher" && isTeacherQuotaExceeded) {
-      alert(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
+      toast.error(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
       return;
     }
 
     if (currentUserRole === "STUDENT" && activeTab !== "teacher") {
-      alert("Keval Teachers aur School Admin hi is tab me voice note bhej sakte hain.");
+      toast.error("Keval Teachers aur School Admin hi is tab me voice note bhej sakte hain.");
       return;
     }
 
     if (activeTab === "school" && currentUserRole !== "ADMIN") {
-      alert("School Desk par keval School Admin hi voice note bhej sakte hain.");
+      toast.error("School Desk par keval School Admin hi voice note bhej sakte hain.");
       return;
     }
 
@@ -1995,17 +1996,17 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     if (!file) return;
 
     if (activeTab === "teacher" && isTeacherQuotaExceeded) {
-      alert(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
+      toast.error(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
       return;
     }
 
     if (currentUserRole === "STUDENT" && activeTab !== "teacher") {
-      alert("Keval Teachers aur School Admin hi is tab me voice note bhej sakte hain.");
+      toast.error("Keval Teachers aur School Admin hi is tab me voice note bhej sakte hain.");
       return;
     }
 
     if (activeTab === "school" && currentUserRole !== "ADMIN") {
-      alert("School Desk par keval School Admin hi voice note bhej sakte hain.");
+      toast.error("School Desk par keval School Admin hi voice note bhej sakte hain.");
       return;
     }
 
@@ -2057,7 +2058,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
 
       dispatchMessengerPush(newMsg, `🎙️ Audio Note: ${newMsg.senderName}`, "🎙️ Ek naya audio message bheja gaya hai");
     } catch (err: any) {
-      alert("Audio message bhejne me samasya aayi. Kripya punah prayas karein.");
+      toast.error("Audio message bhejne me samasya aayi. Kripya punah prayas karein.");
     } finally {
       setIsSending(false);
       e.target.value = "";
@@ -2201,15 +2202,15 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     photoUrl?: string;
   }) => {
     if (activeTab === "teacher" && isTeacherQuotaExceeded) {
-      alert(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
+      toast.error(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
       return;
     }
     if (currentUserRole === "STUDENT" && activeTab !== "teacher") {
-      alert("Class group me keval Teachers aur School Admin hi contact bhej sakte hain.");
+      toast.error("Class group me keval Teachers aur School Admin hi contact bhej sakte hain.");
       return;
     }
     if (activeTab === "school" && currentUserRole !== "ADMIN") {
-      alert("School Desk par keval School Admin hi contact bhej sakte hain.");
+      toast.error("School Desk par keval School Admin hi contact bhej sakte hain.");
       return;
     }
 
@@ -2253,15 +2254,15 @@ export const NstaMessengerSuite: React.FC<Props> = ({
   // 9. Location Sharing Handler
   const handleSendLocation = async (locName: string, locAddress: string, lat: number, lng: number) => {
     if (activeTab === "teacher" && isTeacherQuotaExceeded) {
-      alert(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
+      toast.error(`Daily message limit (${dailyTeacherStudentLimit} messages) poora ho chuka hai. Agla message kal bhej sakenge!`);
       return;
     }
     if (currentUserRole === "STUDENT" && activeTab !== "teacher") {
-      alert("Class group me keval Teachers aur Admin location bhej sakte hain.");
+      toast.error("Class group me keval Teachers aur Admin location bhej sakte hain.");
       return;
     }
     if (activeTab === "school" && currentUserRole !== "ADMIN") {
-      alert("School Desk par keval School Admin hi location bhej sakte hain.");
+      toast.error("School Desk par keval School Admin hi location bhej sakte hain.");
       return;
     }
 

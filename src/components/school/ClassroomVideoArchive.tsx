@@ -1,5 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect, useMemo } from "react";
+import { toast } from "sonner";
 import {
   Youtube, Calendar, BookOpen, Clock, User, Plus, Trash2, Edit3,
   Search, Play, ChevronLeft, ChevronRight, Video, Sparkles, Filter,
@@ -104,6 +105,8 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
   const [formSendPush, setFormSendPush] = useState(true);
   const [saving, setSaving] = useState(false);
   const [formNotice, setFormNotice] = useState<string | null>(null);
+  const [confirmEndLiveId, setConfirmEndLiveId] = useState<string | null>(null);
+  const [confirmDeleteLectureId, setConfirmDeleteLectureId] = useState<string | null>(null);
 
   // Load lectures
   const loadLectures = async () => {
@@ -227,9 +230,11 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
 
   // End live stream and move to recorded archive
   const handleEndLiveStream = async (lec: DailyClassLecture) => {
-    if (!confirm(`क्या आप "${lec.topic || lec.subjectName}" का लाइव प्रसारण समाप्त करके इसे रिकॉर्डेड वीडियो में सहेजना चाहते हैं?`)) {
+    if (confirmEndLiveId !== lec.id) {
+      setConfirmEndLiveId(lec.id);
       return;
     }
+    setConfirmEndLiveId(null);
 
     try {
       const updated: DailyClassLecture = {
@@ -239,9 +244,9 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
       };
       await saveClassLecture(updated);
       await loadLectures();
-      alert("✅ लाइव सेशन समाप्त हुआ! यह वीडियो अब रिकॉर्डेड लेक्चर्स में सुरक्षित हो गया है।");
+      toast.success("✅ लाइव सेशन समाप्त हुआ! यह वीडियो अब रिकॉर्डेड लेक्चर्स में सुरक्षित हो गया है।");
     } catch (e: any) {
-      alert("Error: " + (e?.message || "Failed to end live stream"));
+      toast.error("Error: " + (e?.message || "Failed to end live stream"));
     }
   };
 
@@ -347,12 +352,18 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
   };
 
   const handleDelete = async (lecId: string) => {
-    if (!confirm("क्या आप इस वीडियो को हटाना चाहते हैं?")) return;
+    if (confirmDeleteLectureId !== lecId) {
+      setConfirmDeleteLectureId(lecId);
+      return;
+    }
+    setConfirmDeleteLectureId(null);
     try {
       await deleteClassLecture(school.id, lecId);
       await loadLectures();
+      toast.success("वीडियो हटा दिया गया।");
     } catch (e) {
       console.warn("Delete error:", e);
+      toast.error("वीडियो हटाने में समस्या आई।");
     }
   };
 
@@ -664,15 +675,34 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
                         </button>
 
                         {canEdit && (
-                          <button
-                            type="button"
-                            onClick={() => handleEndLiveStream(lec)}
-                            title="लाइव समाप्त करें और रिकॉर्डेड वीडियो में सहेजें"
-                            className="px-3.5 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 hover:text-amber-200 font-bold text-xs border border-slate-700 flex items-center gap-1.5 cursor-pointer shrink-0"
-                          >
-                            <StopCircle className="w-4 h-4 text-amber-400" />
-                            <span className="hidden sm:inline">लाइव समाप्त करें</span>
-                          </button>
+                          confirmEndLiveId === lec.id ? (
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => handleEndLiveStream(lec)}
+                                className="px-3 py-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-black text-xs cursor-pointer"
+                              >
+                                Confirm समाप्त
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmEndLiveId(null)}
+                                className="px-2.5 py-3 rounded-xl bg-slate-800 text-slate-300 font-bold text-xs cursor-pointer"
+                              >
+                                रद्द
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleEndLiveStream(lec)}
+                              title="लाइव समाप्त करें और रिकॉर्डेड वीडियो में सहेजें"
+                              className="px-3.5 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 hover:text-amber-200 font-bold text-xs border border-slate-700 flex items-center gap-1.5 cursor-pointer shrink-0"
+                            >
+                              <StopCircle className="w-4 h-4 text-amber-400" />
+                              <span className="hidden sm:inline">लाइव समाप्त करें</span>
+                            </button>
+                          )
                         )}
                       </div>
                     </div>
@@ -845,14 +875,33 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
                               >
                                 <Edit3 className="w-3.5 h-3.5" />
                               </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDelete(lec.id)}
-                                className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg cursor-pointer"
-                                title="Delete"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
+                              {confirmDeleteLectureId === lec.id ? (
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDelete(lec.id)}
+                                    className="px-2 py-1 rounded-lg bg-rose-600 text-white text-[10px] font-black cursor-pointer"
+                                  >
+                                    Confirm
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmDeleteLectureId(null)}
+                                    className="px-1.5 py-1 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-[10px] font-bold cursor-pointer"
+                                  >
+                                    रद्द
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDelete(lec.id)}
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg cursor-pointer"
+                                  title="Delete"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                             </div>
                           )}
                         </div>
@@ -962,14 +1011,33 @@ export const ClassroomVideoArchive: React.FC<Props> = ({
                             >
                               <Edit3 className="w-3.5 h-3.5" />
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDelete(lec.id)}
-                              className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg cursor-pointer"
-                              title="Delete"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            {confirmDeleteLectureId === lec.id ? (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleDelete(lec.id)}
+                                  className="px-2 py-1 rounded-lg bg-rose-600 text-white text-[10px] font-black cursor-pointer"
+                                >
+                                  Confirm
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteLectureId(null)}
+                                  className="px-1.5 py-1 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-[10px] font-bold cursor-pointer"
+                                >
+                                  रद्द
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleDelete(lec.id)}
+                                className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg cursor-pointer"
+                                title="Delete"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>

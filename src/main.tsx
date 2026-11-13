@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
 import './app.css';
+import { Toaster } from 'sonner';
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -100,6 +101,7 @@ if (rootElement) {
     <React.StrictMode>
       <RootErrorBoundary>
         <App />
+        <Toaster richColors position="top-center" />
       </RootErrorBoundary>
     </React.StrictMode>
   );

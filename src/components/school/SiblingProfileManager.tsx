@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { toast } from "sonner";
 import {
   Users,
   Search,
@@ -52,6 +53,7 @@ export const SiblingProfileManager: React.FC<Props> = ({
   const [linkTargetFamily, setLinkTargetFamily] = useState<SiblingFamilyGroup | null>(null);
   const [linkSearchQuery, setLinkSearchQuery] = useState("");
   const [linkingLoading, setLinkingLoading] = useState(false);
+  const [confirmActionKey, setConfirmActionKey] = useState<string | null>(null);
 
   // Group all students automatically using the intelligent engine
   const { families, singleStudents, stats } = useMemo(() => {
@@ -155,7 +157,7 @@ export const SiblingProfileManager: React.FC<Props> = ({
       setTimeout(() => setSaveSuccessStudentId(null), 2500);
     } catch (err) {
       console.error("Failed to update student sibling concession:", err);
-      alert("छूट अपडेट करने में त्रुटि हुई। कृपया पुनः प्रयास करें।");
+      toast.error("छूट अपडेट करने में त्रुटि हुई। कृपया पुनः प्रयास करें।");
     } finally {
       setSavingStudentId(null);
     }
@@ -163,10 +165,12 @@ export const SiblingProfileManager: React.FC<Props> = ({
 
   // 1-Tap Smart Preset: 1st Child Normal, 2nd Child 50% Off, 3rd Child 100% Free
   const handleApplyFamilyStandardPreset = async (family: SiblingFamilyGroup) => {
-    if (!window.confirm(`क्या आप ${family.familyName} के लिए मानक छूट लागू करना चाहते हैं?\n• पहला बच्चा: सामान्य फीस\n• दूसरा बच्चा: 50% छूट\n• तीसरा व आगे का बच्चा: 100% नि:शुल्क शिक्षा`)) {
+    const key = `preset:${family.id}`;
+    if (confirmActionKey !== key) {
+      setConfirmActionKey(key);
       return;
     }
-
+    setConfirmActionKey(null);
     for (let idx = 0; idx < family.students.length; idx++) {
       const st = family.students[idx];
       if (idx === 0) {
@@ -177,36 +181,45 @@ export const SiblingProfileManager: React.FC<Props> = ({
         await handleUpdateStudentDiscount(st, "FREE", undefined, family.id);
       }
     }
+    toast.success(`${family.familyName} पर मानक छूट नियम लागू किया गया!`);
   };
 
   // 1-Tap Make All 100% Free
   const handleMakeAllSiblingsFree = async (family: SiblingFamilyGroup) => {
-    if (!window.confirm(`क्या आप ${family.familyName} के सभी ${family.students.length} बच्चों को 100% नि:शुल्क (Free Education) करना चाहते हैं?`)) {
+    const key = `free:${family.id}`;
+    if (confirmActionKey !== key) {
+      setConfirmActionKey(key);
       return;
     }
-
+    setConfirmActionKey(null);
     for (const st of family.students) {
       await handleUpdateStudentDiscount(st, "FREE", undefined, family.id);
     }
+    toast.success(`${family.familyName} के सभी बच्चों को 100% नि:शुल्क किया गया!`);
   };
 
   // 1-Tap Reset to Normal
   const handleResetFamilyToNormal = async (family: SiblingFamilyGroup) => {
-    if (!window.confirm(`क्या आप ${family.familyName} के सभी बच्चों की छूट हटाकर सामान्य फीस करना चाहते हैं?`)) {
+    const key = `reset:${family.id}`;
+    if (confirmActionKey !== key) {
+      setConfirmActionKey(key);
       return;
     }
-
+    setConfirmActionKey(null);
     for (const st of family.students) {
       await handleUpdateStudentDiscount(st, "NONE", undefined, family.id);
     }
+    toast.success(`${family.familyName} की फीस सामान्य कर दी गई।`);
   };
 
   // Unlink a student from a family group
   const handleUnlinkStudent = async (student: SchoolStudent) => {
-    if (!window.confirm(`क्या आप ${student.name} को इस भाई-बहन परिवार से अलग (Unlink) करना चाहते हैं?`)) {
+    const key = `unlink:${student.id}`;
+    if (confirmActionKey !== key) {
+      setConfirmActionKey(key);
       return;
     }
-
+    setConfirmActionKey(null);
     try {
       const unlinkPayload: Partial<SchoolStudent> = {
         isSiblingMarked: false,
@@ -224,9 +237,10 @@ export const SiblingProfileManager: React.FC<Props> = ({
       if (onUpdateStudent) {
         onUpdateStudent({ ...student, ...unlinkPayload });
       }
+      toast.success(`${student.name} को परिवार समूह से अलग किया गया।`);
     } catch (err) {
       console.error("Failed to unlink student:", err);
-      alert("छात्र को अलग करने में त्रुटि हुई।");
+      toast.error("छात्र को अलग करने में त्रुटि हुई।");
     } finally {
       setSavingStudentId(null);
     }
@@ -268,9 +282,10 @@ export const SiblingProfileManager: React.FC<Props> = ({
 
       setLinkTargetFamily(null);
       setLinkSearchQuery("");
+      toast.success(`${studentToLink.name} को ${targetFamily.familyName} में जोड़ा गया!`);
     } catch (err) {
       console.error("Failed to link student:", err);
-      alert("छात्र को लिंक करने में त्रुटि हुई।");
+      toast.error("छात्र को लिंक करने में त्रुटि हुई।");
     } finally {
       setLinkingLoading(false);
     }
@@ -618,34 +633,91 @@ export const SiblingProfileManager: React.FC<Props> = ({
 
                   {/* 1-Tap Family Preset Actions */}
                   <div className="flex items-center gap-1.5 flex-wrap shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => handleApplyFamilyStandardPreset(family)}
-                      className="px-2.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] shadow-sm transition flex items-center gap-1 cursor-pointer"
-                      title="पहला बच्चा सामान्य, दूसरा 50% छूट, तीसरा 100% फ्री"
-                    >
-                      <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                      <span>मानक नियम (2nd: 50%, 3rd+: Free)</span>
-                    </button>
+                    {confirmActionKey === `preset:${family.id}` ? (
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleApplyFamilyStandardPreset(family)}
+                          className="px-2.5 py-1.5 rounded-xl bg-indigo-500 text-white font-black text-[11px] cursor-pointer"
+                        >
+                          Confirm मानक नियम
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmActionKey(null)}
+                          className="px-2 py-1.5 rounded-xl bg-slate-800 text-slate-300 font-bold text-[11px] cursor-pointer"
+                        >
+                          रद्द
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleApplyFamilyStandardPreset(family)}
+                        className="px-2.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] shadow-sm transition flex items-center gap-1 cursor-pointer"
+                        title="पहला बच्चा सामान्य, दूसरा 50% छूट, तीसरा 100% फ्री"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                        <span>मानक नियम (2nd: 50%, 3rd+: Free)</span>
+                      </button>
+                    )}
 
-                    <button
-                      type="button"
-                      onClick={() => handleMakeAllSiblingsFree(family)}
-                      className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] shadow-sm transition flex items-center gap-1 cursor-pointer"
-                      title="परिवार के सभी बच्चों को 100% फ्री करें"
-                    >
-                      <HeartHandshake className="w-3.5 h-3.5" />
-                      <span>सभी 100% फ्री</span>
-                    </button>
+                    {confirmActionKey === `free:${family.id}` ? (
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleMakeAllSiblingsFree(family)}
+                          className="px-2.5 py-1.5 rounded-xl bg-emerald-500 text-slate-950 font-black text-[11px] cursor-pointer"
+                        >
+                          Confirm सभी 100% फ्री
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmActionKey(null)}
+                          className="px-2 py-1.5 rounded-xl bg-slate-800 text-slate-300 font-bold text-[11px] cursor-pointer"
+                        >
+                          रद्द
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleMakeAllSiblingsFree(family)}
+                        className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] shadow-sm transition flex items-center gap-1 cursor-pointer"
+                        title="परिवार के सभी बच्चों को 100% फ्री करें"
+                      >
+                        <HeartHandshake className="w-3.5 h-3.5" />
+                        <span>सभी 100% फ्री</span>
+                      </button>
+                    )}
 
-                    <button
-                      type="button"
-                      onClick={() => handleResetFamilyToNormal(family)}
-                      className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-bold text-[11px] transition flex items-center gap-1 cursor-pointer"
-                      title="सभी बच्चों की छूट हटाकर सामान्य फीस करें"
-                    >
-                      <span>रीसेट</span>
-                    </button>
+                    {confirmActionKey === `reset:${family.id}` ? (
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleResetFamilyToNormal(family)}
+                          className="px-2.5 py-1.5 rounded-xl bg-amber-600 text-white font-black text-[11px] cursor-pointer"
+                        >
+                          Confirm रीसेट
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmActionKey(null)}
+                          className="px-2 py-1.5 rounded-xl bg-slate-800 text-slate-300 font-bold text-[11px] cursor-pointer"
+                        >
+                          रद्द
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleResetFamilyToNormal(family)}
+                        className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-bold text-[11px] transition flex items-center gap-1 cursor-pointer"
+                        title="सभी बच्चों की छूट हटाकर सामान्य फीस करें"
+                      >
+                        <span>रीसेट</span>
+                      </button>
+                    )}
 
                     <button
                       type="button"
@@ -715,14 +787,33 @@ export const SiblingProfileManager: React.FC<Props> = ({
                               </div>
                             </div>
 
-                            <button
-                              type="button"
-                              onClick={() => handleUnlinkStudent(student)}
-                              className="text-slate-500 hover:text-rose-400 p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
-                              title="इस छात्र को परिवार से अलग करें"
-                            >
-                              <UserMinus className="w-3.5 h-3.5" />
-                            </button>
+                            {confirmActionKey === `unlink:${student.id}` ? (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleUnlinkStudent(student)}
+                                  className="px-2 py-1 rounded-lg bg-rose-600 text-white text-[10px] font-black cursor-pointer"
+                                >
+                                  Confirm Unlink
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmActionKey(null)}
+                                  className="px-1.5 py-1 rounded-lg bg-slate-800 text-slate-300 text-[10px] font-bold cursor-pointer"
+                                >
+                                  रद्द
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleUnlinkStudent(student)}
+                                className="text-slate-500 hover:text-rose-400 p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
+                                title="इस छात्र को परिवार से अलग करें"
+                              >
+                                <UserMinus className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
 
                           {/* Fee Status Strip */}

@@ -15,7 +15,9 @@ import {
   FileText,
   BadgeAlert
 } from "lucide-react";
+import { toast } from "sonner";
 import { School, SchoolStudent } from "../../school-types";
+import { loadSchoolSubcollection, syncSchoolSubcollection } from "../../utils/schoolCloudSync";
 
 export interface StudentLeaveApplication {
   id: string;
@@ -100,6 +102,17 @@ export const ParentLeaveManager: React.FC<Props> = ({
   const [filterStatus, setFilterStatus] = useState<"ALL" | "PENDING" | "APPROVED" | "REJECTED">("ALL");
   const [searchQuery, setSearchQuery] = useState("");
 
+  useEffect(() => {
+    if (!school?.id) return;
+    let active = true;
+    loadSchoolSubcollection<StudentLeaveApplication>(school.id, "student_leaves", leavesStorageKey)
+      .then((cloud) => {
+        if (active && cloud.length > 0) setLeaves(cloud);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [school?.id, leavesStorageKey]);
+
   const saveLeaves = (updated: StudentLeaveApplication[]) => {
     setLeaves(updated);
     try {
@@ -107,6 +120,7 @@ export const ParentLeaveManager: React.FC<Props> = ({
     } catch (e) {
       console.warn("Leaves save error:", e);
     }
+    void syncSchoolSubcollection(school?.id, "student_leaves", updated);
   };
 
   // Filtered leaves list
@@ -133,7 +147,7 @@ export const ParentLeaveManager: React.FC<Props> = ({
   const handleApplyLeave = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formReasonText.trim()) {
-      alert("कृपया छुट्टी का विवरण लिखें!");
+      toast.error("कृपया छुट्टी का विवरण लिखें!");
       return;
     }
 
@@ -162,7 +176,7 @@ export const ParentLeaveManager: React.FC<Props> = ({
     saveLeaves([newApp, ...leaves]);
     setShowApplyModal(false);
     setFormReasonText("");
-    alert("छुट्टी का आवेदन क्लास टीचर के पास भेज दिया गया है!");
+    toast.success("छुट्टी का आवेदन क्लास टीचर के पास भेज दिया गया है!");
     onLeaveUpdated?.();
   };
 

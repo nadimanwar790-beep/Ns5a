@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import type { School } from "../../school-types";
 import { getSavedSchoolLogo, cleanLogoUrl, formatAcademicSession } from "./feeReceiptUtils";
+import { printElementInIframe } from "./AdmissionFormPrintModal";
 
 interface Props {
   isOpen: boolean;
@@ -77,7 +78,7 @@ export const AdminIdCardModal: React.FC<Props> = ({
   };
 
   const handlePrint = () => {
-    window.print();
+    printElementInIframe(printAreaRef.current, `${principalName} - Admin ID Card`);
   };
 
   const handleShareWhatsApp = () => {

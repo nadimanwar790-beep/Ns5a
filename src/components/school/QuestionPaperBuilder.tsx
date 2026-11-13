@@ -23,6 +23,7 @@ import {
   X,
   BookOpen
 } from "lucide-react";
+import { toast } from "sonner";
 import { School, SchoolSession } from "../../school-types";
 
 export interface ExamQuestion {
@@ -135,6 +136,8 @@ export const QuestionPaperBuilder: React.FC<Props> = ({ school, activeSession })
 
   // Active Print / Preview View
   const [activePrintView, setActivePrintView] = useState<"QUESTION_PAPER" | "MARKING_SCHEME" | null>(null);
+  const [confirmDeleteQId, setConfirmDeleteQId] = useState<string | null>(null);
+  const [confirmResetBank, setConfirmResetBank] = useState(false);
 
   // Add / Edit Modal State
   const [editingQuestion, setEditingQuestion] = useState<ExamQuestion | null>(null);
@@ -272,15 +275,19 @@ export const QuestionPaperBuilder: React.FC<Props> = ({ school, activeSession })
     setIsQuestionModalOpen(false);
   };
 
-  // Delete Question
+  // Delete Question (Two-step inline confirm)
   const handleDeleteQuestion = (id: string) => {
-    if (window.confirm("क्या आप इस प्रश्न को हटाना चाहते हैं?")) {
-      setQuestions((prev) => {
-        const filtered = prev.filter((q) => q.id !== id);
-        // Re-number questions sequentially
-        return filtered.map((q, idx) => ({ ...q, qNo: idx + 1 }));
-      });
+    if (confirmDeleteQId !== id) {
+      setConfirmDeleteQId(id);
+      toast.info("हटाने के लिए दोबारा डिलीट बटन दबाएँ");
+      return;
     }
+    setQuestions((prev) => {
+      const filtered = prev.filter((q) => q.id !== id);
+      return filtered.map((q, idx) => ({ ...q, qNo: idx + 1 }));
+    });
+    setConfirmDeleteQId(null);
+    toast.success("प्रश्न हटाया गया");
   };
 
   // Duplicate Question
@@ -316,15 +323,20 @@ export const QuestionPaperBuilder: React.FC<Props> = ({ school, activeSession })
     );
   };
 
-  // Reset to Default Bank
+  // Reset to Default Bank (Two-step inline confirm)
   const handleResetToDefaultBank = () => {
-    if (window.confirm("क्या आप इस विषय के सभी प्रश्नों को डिफ़ॉल्ट CBSE ब्लूप्रिंट में रीसेट करना चाहते हैं?")) {
-      if (selectedSubject === "Mathematics") {
-        setQuestions(INITIAL_MATHS_QUESTIONS);
-      } else {
-        setQuestions(INITIAL_SCIENCE_QUESTIONS);
-      }
+    if (!confirmResetBank) {
+      setConfirmResetBank(true);
+      toast.info("डिफ़ॉल्ट CBSE ब्लूप्रिंट में रीसेट करने के लिए दोबारा दबाएँ");
+      return;
     }
+    if (selectedSubject === "Mathematics") {
+      setQuestions(INITIAL_MATHS_QUESTIONS);
+    } else {
+      setQuestions(INITIAL_SCIENCE_QUESTIONS);
+    }
+    setConfirmResetBank(false);
+    toast.success("CBSE डिफ़ॉल्ट प्रश्न बैंक लोड हो गया");
   };
 
   // Group questions by section
@@ -372,9 +384,9 @@ export const QuestionPaperBuilder: React.FC<Props> = ({ school, activeSession })
   const density = getDensityClasses();
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto pb-16">
+    <div className="space-y-6 max-w-7xl mx-auto pb-16 print:pb-0 print:space-y-0">
       {/* ── TOP HERO BANNER ── */}
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 print:hidden">
         <div className="flex items-center gap-3.5">
           <div className="w-12 h-12 rounded-2xl bg-purple-500/20 border border-purple-500/40 text-purple-400 flex items-center justify-center shrink-0 shadow-lg">
             <FileText className="w-6 h-6" />
@@ -423,7 +435,7 @@ export const QuestionPaperBuilder: React.FC<Props> = ({ school, activeSession })
 
       {/* ── SCHOOL HEADER & EXAM DETAILS CARD (EXPANDABLE) ── */}
       {showHeaderSettings && (
-        <div className="bg-slate-900 border border-purple-500/30 rounded-3xl p-5 shadow-xl space-y-4 animate-in fade-in duration-200">
+        <div className="bg-slate-900 border border-purple-500/30 rounded-3xl p-5 shadow-xl space-y-4 animate-in fade-in duration-200 print:hidden">
           <div className="flex items-center justify-between pb-3 border-b border-slate-800">
             <div className="flex items-center gap-2">
               <Settings2 className="w-4 h-4 text-purple-400" />
@@ -509,7 +521,7 @@ export const QuestionPaperBuilder: React.FC<Props> = ({ school, activeSession })
       )}
 
       {/* ── EXAM CONFIGURATION & FULL MARKS (FM) CONTROLLER ── */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 shadow-xl space-y-4">
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 shadow-xl space-y-4 print:hidden">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
           {/* Class Selector */}
           <div>
@@ -736,7 +748,7 @@ export const QuestionPaperBuilder: React.FC<Props> = ({ school, activeSession })
       </div>
 
       {/* ── QUESTION ACTIONS & ADD BUTTONS ── */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 print:hidden">
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => handleOpenAddModal("A")}
@@ -762,16 +774,21 @@ export const QuestionPaperBuilder: React.FC<Props> = ({ school, activeSession })
         <div className="flex items-center gap-2">
           <button
             onClick={handleResetToDefaultBank}
-            className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 text-xs font-bold border border-slate-800 flex items-center gap-1.5 cursor-pointer transition"
+            onBlur={() => setConfirmResetBank(false)}
+            className={`px-3 py-2 rounded-xl text-xs font-bold border flex items-center gap-1.5 cursor-pointer transition ${
+              confirmResetBank
+                ? "bg-rose-600 hover:bg-rose-500 text-white border-rose-500"
+                : "bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border-slate-800"
+            }`}
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            <span>CBSE बैंक रीसेट</span>
+            <span>{confirmResetBank ? "पक्का रीसेट करें?" : "CBSE बैंक रीसेट"}</span>
           </button>
         </div>
       </div>
 
       {/* ── QUESTIONS LIST GROUPED BY SECTION ── */}
-      <div className="space-y-5">
+      <div className="space-y-5 print:hidden">
         {(["A", "B", "C", "D", "E"] as const).map((sec) => {
           const secQuestions = questionsBySection[sec] || [];
           const secMeta = SECTION_METADATA[sec];
@@ -899,10 +916,16 @@ export const QuestionPaperBuilder: React.FC<Props> = ({ school, activeSession })
                             <button
                               type="button"
                               onClick={() => handleDeleteQuestion(q.id)}
-                              className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 cursor-pointer"
+                              onBlur={() => setConfirmDeleteQId((prev) => (prev === q.id ? null : prev))}
+                              className={`p-1.5 rounded-lg border cursor-pointer flex items-center gap-1 text-[10px] font-bold ${
+                                confirmDeleteQId === q.id
+                                  ? "bg-rose-600 text-white border-rose-500 px-2"
+                                  : "bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border-rose-500/20"
+                              }`}
                               title="डिलीट करें"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
+                              {confirmDeleteQId === q.id && <span>Confirm</span>}
                             </button>
                           </div>
                         </div>
@@ -1160,10 +1183,10 @@ export const QuestionPaperBuilder: React.FC<Props> = ({ school, activeSession })
 
       {/* ── PRINT & PREVIEW MODAL (A4 1-2 PAGE PACKING) ── */}
       {activePrintView && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-2 sm:p-4 bg-black/90 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-slate-700 text-slate-950 rounded-3xl w-full max-w-5xl shadow-2xl flex flex-col max-h-[96vh] overflow-hidden">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-2 sm:p-4 bg-black/90 backdrop-blur-sm print:static print:inset-auto print:block print:bg-white print:p-0">
+          <div className="bg-slate-900 border border-slate-700 text-slate-950 rounded-3xl w-full max-w-5xl shadow-2xl flex flex-col max-h-[96vh] overflow-hidden print:max-h-none print:overflow-visible print:border-0 print:shadow-none print:rounded-none print:bg-white print:block">
             {/* Modal Controls Header (no-print) */}
-            <div className="p-4 bg-slate-950 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3 text-white no-print">
+            <div className="p-4 bg-slate-950 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3 text-white no-print print:hidden">
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-xl bg-purple-500/20 text-purple-400 flex items-center justify-center font-bold">
                   <Printer className="w-5 h-5" />
@@ -1223,12 +1246,11 @@ export const QuestionPaperBuilder: React.FC<Props> = ({ school, activeSession })
             </div>
 
             {/* Print Document Viewport (Clean White A4 Sheet Format) */}
-            <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-slate-800/60 flex justify-center">
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-slate-800/60 flex justify-center print:overflow-visible print:p-0 print:bg-white print:block">
               <div
                 id="exam-question-paper-print"
-                className="bg-white text-slate-950 w-full max-w-[210mm] p-6 sm:p-8 rounded-2xl shadow-2xl print-only-container"
+                className="bg-white text-slate-950 w-full max-w-[210mm] p-6 sm:p-8 rounded-2xl shadow-2xl print-only-container print:shadow-none print:rounded-none print:p-2 print:max-w-none print:min-h-0"
                 style={{
-                  minHeight: "297mm",
                   boxSizing: "border-box",
                 }}
               >

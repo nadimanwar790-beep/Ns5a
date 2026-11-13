@@ -28,12 +28,14 @@
     display: none !important;
   }
 
-  /* Force display of the print-only container */
+  /* Force display of the print-only container (supports multi-page documents) */
   .print-only-container {
     display: block !important;
-    width: 210mm !important;
-    height: 297mm !important;
-    max-height: 297mm !important;
+    width: 100% !important;
+    max-width: 210mm !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
     padding: 0 !important;
     margin: 0 auto !important;
     box-sizing: border-box !important;

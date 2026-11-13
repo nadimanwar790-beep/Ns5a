@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import type { SchoolClass, SchoolStudent } from "../../school-types";
 import { updateClassFeeStructure, updateStudent } from "../../school-firebase";
+import { toast } from "sonner";
 import { AdminBusFleetRadar } from "./AdminBusFleetRadar";
 import { DriverTripConsole } from "./DriverTripConsole";
 
@@ -195,7 +196,7 @@ export const BusTransportModal: React.FC<Props> = ({
       }, 3500);
     } catch (err: any) {
       console.error("Error saving bus details:", err);
-      alert("Bus settings save karne me error aaya: " + (err?.message || "Please retry"));
+      toast.error("Bus settings save karne me error aaya: " + (err?.message || "Please retry"));
     } finally {
       setSaving(false);
     }

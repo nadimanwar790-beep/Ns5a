@@ -14,9 +14,7 @@ import {
 } from "lucide-react";
 import {
   saveFaceDescriptor,
-  extractDescriptorFromCanvas,
   extractNeuralDescriptor,
-  estimateEyeNoseLandmarks,
   playAttendanceSuccessChime,
   FaceDescriptorRecord,
 } from "../../utils/faceRecognitionEngine";
@@ -140,19 +138,15 @@ export const StudentFaceIdModal: React.FC<Props> = ({
         height: canvas.height * 0.72,
       };
 
-      const landmarks = estimateEyeNoseLandmarks(canvas, box);
       const neural = await extractNeuralDescriptor(canvas);
-      const is512 = Boolean(neural?.descriptor && neural.descriptor.length === 512);
-      const is128 = Boolean(neural?.descriptor && neural.descriptor.length === 128);
-      const descriptor = (is512 || is128)
-        ? neural!.descriptor
-        : extractDescriptorFromCanvas(canvas, box, false, landmarks);
-      const source = is512
-        ? "arcface_512d"
-        : is128
-        ? "face_api_neural"
-        : "student_self_update";
+      const has512 = Boolean(neural?.arcfaceDescriptor && neural.arcfaceDescriptor.length === 512);
 
+      if (!has512) {
+        setCameraError("⚠️ ArcFace 512-D बायोमेट्रिक वेक्टर तैयार नहीं हो सका। कृपया पर्याप्त रोशनी में चेहरा सीधा रखें और पुनः प्रयास करें।");
+        return;
+      }
+
+      const descriptor = neural!.arcfaceDescriptor!;
       const nowIso = new Date().toISOString();
       const stId = student?.id || student?.studentId || "student";
 
@@ -165,12 +159,13 @@ export const StudentFaceIdModal: React.FC<Props> = ({
         className: student?.className || "",
         photoUrl: photoDataUrl,
         descriptor,
-        arcfaceDescriptor: is512 ? descriptor : undefined,
+        arcfaceDescriptor: descriptor,
         enrolledAt: nowIso,
-        source
+        source: "arcface_512d",
+        preprocessOrder: "RGB"
       };
 
-      // 1. Save biometric 128-D descriptor in IndexedDB + LocalStorage
+      // 1. Save strict 512-D ArcFace descriptor
       await saveFaceDescriptor(record);
 
       // 2. Update Student photo & timestamp in school database

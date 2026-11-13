@@ -1,5 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect } from "react";
+import { toast } from "sonner";
 import {
   Building2,
   Plus,
@@ -21,6 +22,7 @@ import {
   Sparkles
 } from "lucide-react";
 import type { School, SchoolBranch, SchoolStudent, SchoolClass } from "../../school-types";
+import { loadSchoolSubcollection, syncSchoolSubcollection, saveSchoolSubdoc } from "../../utils/schoolCloudSync";
 
 interface Props {
   school: School;
@@ -129,16 +131,30 @@ export const MultiBranchManager: React.FC<Props> = ({
   const [transferReason, setTransferReason] = useState("Family Relocation to City Center");
   const [transferSuccess, setTransferSuccess] = useState(false);
 
+  useEffect(() => {
+    let active = true;
+    const sid = school?.id;
+    if (!sid) return;
+    loadSchoolSubcollection<SchoolBranch>(sid, "school_branches", `school_branches_${sid || "demo"}`).then((data) => {
+      if (active && data.length > 0) setBranches(data);
+    });
+    return () => { active = false; };
+  }, [school?.id]);
+
   const saveBranches = (updated: SchoolBranch[]) => {
     setBranches(updated);
     try {
       localStorage.setItem(`school_branches_${school?.id || "demo"}`, JSON.stringify(updated));
     } catch {}
+    syncSchoolSubcollection(school?.id, "school_branches", updated);
   };
 
   const handleCreateBranch = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newBranchName.trim()) return;
+    if (!newBranchName.trim()) {
+      toast.error("Please enter a branch name.");
+      return;
+    }
 
     const newId = `branch_${Date.now()}`;
     const newRecord: SchoolBranch = {
@@ -165,6 +181,7 @@ export const MultiBranchManager: React.FC<Props> = ({
     setNewBranchCity("");
     setNewBranchPhone("");
     setNewBranchPrincipal("");
+    toast.success(`Branch "${newRecord.name}" activated!`);
   };
 
   // Consolidated statistics
@@ -172,11 +189,31 @@ export const MultiBranchManager: React.FC<Props> = ({
   const totalCombinedTeachers = branches.reduce((sum, b) => sum + (b.totalTeachers || 0), 0);
   const totalCombinedRevenue = branches.reduce((sum, b) => sum + (b.monthlyRevenue || 0), 0);
 
-  const handleExecuteTransfer = (e: React.FormEvent) => {
+  const handleExecuteTransfer = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!transferStudentName.trim()) return;
+    if (!transferStudentName.trim()) {
+      toast.error("Please enter student name or admission number.");
+      return;
+    }
+
+    const transferRecord = {
+      id: `trf_${Date.now()}`,
+      schoolId: school?.id || "demo",
+      studentNameOrAdm: transferStudentName.trim(),
+      fromBranchId: transferFromBranch,
+      toBranchId: transferToBranch,
+      reason: transferReason.trim(),
+      transferredAt: new Date().toISOString(),
+    };
+    try {
+      const key = `branch_transfers_${school?.id || "demo"}`;
+      const prev = JSON.parse(localStorage.getItem(key) || "[]");
+      localStorage.setItem(key, JSON.stringify([transferRecord, ...prev]));
+    } catch {}
+    await saveSchoolSubdoc(school?.id, "branch_transfers", transferRecord);
 
     setTransferSuccess(true);
+    toast.success(`Transfer logged for ${transferStudentName.trim()}.`);
     setTimeout(() => {
       setTransferSuccess(false);
       setTransferStudentName("");

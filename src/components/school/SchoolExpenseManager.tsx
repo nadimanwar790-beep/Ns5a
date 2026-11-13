@@ -23,7 +23,11 @@ import {
   Wrench,
   BookOpen
 } from "lucide-react";
-import { School, SchoolSession } from "../../school-types";
+import { School, SchoolSession, MonthlyFee } from "../../school-types";
+import { toast } from "sonner";
+import { getSchoolFeeHistory, getLocalFees } from "../../school-firebase";
+import { loadSchoolSubcollection, saveSchoolSubdoc, deleteSchoolSubdoc } from "../../utils/schoolCloudSync";
+import { printHtmlInIframe } from "./AdmissionFormPrintModal";
 
 export interface SchoolExpense {
   id: string;
@@ -61,6 +65,7 @@ interface Props {
 
 export const SchoolExpenseManager: React.FC<Props> = ({ school, activeSession }) => {
   const schoolId = school?.id || "SCH-001";
+  const isDemo = Boolean(schoolId === "demo_school" || schoolId.startsWith("demo_"));
   const storageKey = `school_expenses_${schoolId}`;
 
   const [expenses, setExpenses] = useState<SchoolExpense[]>(() => {
@@ -68,7 +73,7 @@ export const SchoolExpenseManager: React.FC<Props> = ({ school, activeSession })
       const raw = localStorage.getItem(storageKey);
       if (raw) return JSON.parse(raw);
     } catch {}
-    // Initial sample seed if completely empty
+    if (!isDemo) return [];
     const today = new Date().toISOString().slice(0, 10);
     return [
       {
@@ -104,11 +109,26 @@ export const SchoolExpenseManager: React.FC<Props> = ({ school, activeSession })
     ];
   });
 
+  const [feeRecords, setFeeRecords] = useState<MonthlyFee[]>(() => getLocalFees(schoolId));
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedVoucherForPrint, setSelectedVoucherForPrint] = useState<SchoolExpense | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterCategory, setFilterCategory] = useState("ALL");
   const [filterDate, setFilterDate] = useState(() => new Date().toISOString().slice(0, 10));
+
+  useEffect(() => {
+    let active = true;
+    loadSchoolSubcollection<SchoolExpense>(schoolId, "expenses", storageKey).then((items) => {
+      if (active && items.length > 0) setExpenses(items);
+    });
+    getSchoolFeeHistory(schoolId, activeSession?.id)
+      .then((fees) => {
+        if (active && Array.isArray(fees)) setFeeRecords(fees);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [schoolId, storageKey, activeSession?.id]);
 
   // Form State
   const [formCategory, setFormCategory] = useState(DEFAULT_CATEGORIES[0].name);
@@ -119,7 +139,7 @@ export const SchoolExpenseManager: React.FC<Props> = ({ school, activeSession })
   const [formNotes, setFormNotes] = useState("");
   const [formDate, setFormDate] = useState(() => new Date().toISOString().slice(0, 10));
 
-  // Save changes to localStorage
+  // Save changes to localStorage + Cloud
   const saveExpenses = (updated: SchoolExpense[]) => {
     setExpenses(updated);
     try {
@@ -129,28 +149,22 @@ export const SchoolExpenseManager: React.FC<Props> = ({ school, activeSession })
     }
   };
 
-  // Get Today's Fee Inflow from Fee Manager records to calculate Net Daily Cashbook
+  // Get Today's REAL Fee Inflow from Fee Manager records (never fake ₹18,500)
   const todayFeeInflow = useMemo(() => {
-    try {
-      const rawFees = localStorage.getItem(`school_fee_records_${schoolId}`);
-      if (!rawFees) return { cash: 18500, online: 12000, total: 30500 };
-      const parsed = JSON.parse(rawFees);
-      if (!Array.isArray(parsed)) return { cash: 18500, online: 12000, total: 30500 };
-      const targetDate = filterDate || new Date().toISOString().slice(0, 10);
-      let cash = 0;
-      let online = 0;
-      for (const f of parsed) {
-        if (f.paidDate === targetDate || (f.updatedAt && f.updatedAt.slice(0, 10) === targetDate)) {
-          const amt = Number(f.paidAmount || f.amount || 0);
-          if (f.paymentMode === "CASH" || !f.paymentMode) cash += amt;
-          else online += amt;
-        }
+    const targetDate = filterDate || new Date().toISOString().slice(0, 10);
+    let cash = 0;
+    let online = 0;
+    for (const f of feeRecords) {
+      if (f.cancelled || (f.status !== "paid" && f.status !== "partial")) continue;
+      const feeDate = f.paidDate || (f.updatedAt ? String(f.updatedAt).slice(0, 10) : "");
+      if (feeDate === targetDate) {
+        const amt = Number(f.paidAmount ?? f.amount ?? 0);
+        if (f.paymentMode === "CASH" || !f.paymentMode) cash += amt;
+        else online += amt;
       }
-      return { cash: cash || 18500, online: online || 12000, total: (cash + online) || 30500 };
-    } catch {
-      return { cash: 18500, online: 12000, total: 30500 };
     }
-  }, [schoolId, filterDate]);
+    return { cash, online, total: cash + online };
+  }, [feeRecords, filterDate]);
 
   // Expenses calculations for selected date
   const dateExpensesSummary = useMemo(() => {
@@ -189,11 +203,11 @@ export const SchoolExpenseManager: React.FC<Props> = ({ school, activeSession })
     e.preventDefault();
     const amt = parseFloat(formAmount);
     if (!amt || amt <= 0) {
-      alert("कृपया मान्य राशि दर्ज करें!");
+      toast.error("कृपया मान्य राशि दर्ज करें!");
       return;
     }
     if (!formPayee.trim()) {
-      alert("कृपया प्राप्तकर्ता का नाम दर्ज करें!");
+      toast.error("कृपया प्राप्तकर्ता का नाम दर्ज करें!");
       return;
     }
 
@@ -215,6 +229,8 @@ export const SchoolExpenseManager: React.FC<Props> = ({ school, activeSession })
     };
 
     saveExpenses([newExp, ...expenses]);
+    saveSchoolSubdoc(schoolId, "expenses", newExp);
+    toast.success(`वाउचर ${newExp.voucherNo} सुरक्षित हो गया!`);
     setShowAddModal(false);
     // Reset Form
     setFormAmount("");
@@ -224,9 +240,44 @@ export const SchoolExpenseManager: React.FC<Props> = ({ school, activeSession })
   };
 
   const handleDeleteExpense = (id: string) => {
-    if (window.confirm("क्या आप वाकई इस खर्च वाउचर को हटाना चाहते हैं?")) {
-      saveExpenses(expenses.filter((e) => e.id !== id));
+    if (confirmDeleteId !== id) {
+      setConfirmDeleteId(id);
+      toast.info("हटाने की पुष्टि करने के लिए पुनः डिलीट दबाएं");
+      setTimeout(() => setConfirmDeleteId((prev) => (prev === id ? null : prev)), 4000);
+      return;
     }
+    saveExpenses(expenses.filter((e) => e.id !== id));
+    deleteSchoolSubdoc(schoolId, "expenses", id);
+    setConfirmDeleteId(null);
+    toast.success("वाउचर हटा दिया गया");
+  };
+
+  const printDebitVoucher = (v: SchoolExpense) => {
+    const html = `<!doctype html><html><head><meta charset="utf-8" /><title>Voucher ${v.voucherNo}</title>
+      <style>
+        @page { size: A5 landscape; margin: 8mm; }
+        body { font-family: system-ui, -apple-system, sans-serif; color: #0f172a; margin: 0; padding: 12px; background: #fff; }
+        .box { border: 2px solid #0f172a; border-radius: 10px; padding: 16px; max-width: 520px; margin: 0 auto; }
+        .hdr { text-align: center; border-bottom: 1px solid #cbd5e1; padding-bottom: 8px; margin-bottom: 12px; }
+        .row { display: flex; justify-content: space-between; border-bottom: 1px solid #e2e8f0; padding: 6px 0; font-size: 12px; }
+        .tot { display: flex; justify-content: space-between; font-size: 16px; font-weight: 900; padding-top: 10px; border-top: 2px solid #0f172a; margin-top: 8px; }
+        .sigs { display: flex; justify-content: space-between; margin-top: 36px; font-size: 11px; color: #475569; }
+      </style></head><body>
+      <div class="box">
+        <div class="hdr">
+          <div style="font-size:17px;font-weight:900;text-transform:uppercase;">${school?.name || "SCHOOL"}</div>
+          <div style="font-size:10px;color:#64748b;">DEBIT VOUCHER / PAYMENT SLIP • ${v.voucherNo}</div>
+        </div>
+        <div class="row"><span>Date &amp; Time:</span><strong>${v.date} • ${v.time}</strong></div>
+        <div class="row"><span>Paid To:</span><strong>${v.payeeName}</strong></div>
+        <div class="row"><span>Category:</span><strong>${v.category}</strong></div>
+        <div class="row"><span>Payment Mode:</span><strong>${v.paymentMode}</strong></div>
+        ${v.referenceNo ? `<div class="row"><span>Ref / Bill No:</span><strong>${v.referenceNo}</strong></div>` : ""}
+        ${v.notes ? `<div style="margin-top:8px;font-size:11px;background:#f8fafc;padding:6px;border-radius:6px;">Notes: ${v.notes}</div>` : ""}
+        <div class="tot"><span>Total Paid:</span><span>₹${v.amount.toLocaleString("en-IN")}</span></div>
+        <div class="sigs"><div style="border-top:1px solid #94a3b8;padding-top:4px;">Receiver Signature</div><div style="border-top:1px solid #94a3b8;padding-top:4px;">Authorized Signatory</div></div>
+      </div></body></html>`;
+    printHtmlInIframe(html, `Voucher_${v.voucherNo}`);
   };
 
   return (
@@ -635,8 +686,8 @@ export const SchoolExpenseManager: React.FC<Props> = ({ school, activeSession })
 
             <div className="flex items-center gap-2 pt-3 no-print">
               <button
-                onClick={() => window.print()}
-                className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow"
+                onClick={() => printDebitVoucher(selectedVoucherForPrint)}
+                className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow cursor-pointer"
               >
                 <Printer className="w-4 h-4" />
                 प्रिंट निकालें (Print)

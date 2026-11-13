@@ -1882,7 +1882,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             setIsSidebarHidden(false);
             try { localStorage.setItem("school_erp_sidebar_hidden", "false"); } catch {}
           }}
-          className={`${isSidebarDefault ? "flex" : "hidden md:flex"} flex-col items-center justify-between w-2.5 sm:w-3 hover:w-6 bg-slate-900 border-r border-slate-800/80 shrink-0 h-screen sticky top-0 cursor-pointer transition-all duration-300 z-30 select-none shadow-lg group hover:bg-slate-850`}
+          className={`${isSidebarDefault ? "flex" : "hidden md:flex"} print:hidden flex-col items-center justify-between w-2.5 sm:w-3 hover:w-6 bg-slate-900 border-r border-slate-800/80 shrink-0 h-screen sticky top-0 cursor-pointer transition-all duration-300 z-30 select-none shadow-lg group hover:bg-slate-850`}
           title="Swipe Right या क्लिक करके मेनू खोलें (1% Visible)"
         >
           <div className="w-1 h-20 rounded-full bg-gradient-to-b from-indigo-500 via-amber-400 to-indigo-500 my-auto opacity-70 group-hover:opacity-100 group-hover:h-32 transition-all shadow-[0_0_8px_rgba(99,102,241,0.6)]" />
@@ -1891,7 +1891,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     }
 
     return (
-      <aside className={`${isSidebarDefault ? "flex" : "hidden md:flex"} flex-col w-52 lg:w-56 bg-slate-900 border-r border-slate-800 shrink-0 h-screen h-[100dvh] max-h-screen overflow-hidden select-none z-30 text-slate-100 shadow-xl transition-all duration-200 animate-in slide-in-from-left duration-200`}>
+      <aside className={`${isSidebarDefault ? "flex" : "hidden md:flex"} print:hidden flex-col w-52 lg:w-56 bg-slate-900 border-r border-slate-800 shrink-0 h-screen h-[100dvh] max-h-screen overflow-hidden select-none z-30 text-slate-100 shadow-xl transition-all duration-200 animate-in slide-in-from-left duration-200`}>
         {/* Brand Header with Collapse Button (Fixed at top of sidebar) */}
         <div className="p-3 border-b border-slate-800 bg-slate-950/90 flex items-center justify-between gap-2 shrink-0">
           <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -2074,7 +2074,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const renderMobileSidebarDrawer = () => {
     const displaySchoolLogo = school ? getSavedSchoolLogo(school.logoUrl, schoolId) : "";
     return (
-      <div className="fixed inset-0 z-50 md:hidden flex animate-in fade-in duration-200">
+      <div className="fixed inset-0 z-50 md:hidden print:hidden flex animate-in fade-in duration-200">
         {/* Clear backdrop: App behind stays 100% sharp, bright & visible with NO blur or darkening */}
         <div
           className="fixed inset-0 bg-transparent transition-opacity cursor-pointer"
@@ -2269,7 +2269,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const renderTopHeader = () => {
     return (
       <>
-        <header className="sticky top-0 z-20 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 py-2.5 flex items-center justify-between gap-2.5 shadow-xs">
+        <header className="sticky top-0 z-20 print:hidden bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 py-2.5 flex items-center justify-between gap-2.5 shadow-xs">
           {/* Left: View Title, Home & Academic Session (Session moved to left side) */}
           <div className="flex items-center gap-2 min-w-0">
             {view !== "dashboard" && (
@@ -2654,7 +2654,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             matchedSessions.length;
 
           return (showCompactSearch || Boolean(qRaw)) ? (
-            <div className="bg-white/95 dark:bg-slate-900/95 border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 py-2 shrink-0 relative z-20 animate-in fade-in duration-150">
+            <div className="print:hidden bg-white/95 dark:bg-slate-900/95 border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 py-2 shrink-0 relative z-20 animate-in fade-in duration-150">
               <div className="max-w-7xl mx-auto">
                 <div className="relative flex items-center">
                   <Search className="w-4 h-4 text-blue-500 absolute left-3.5 pointer-events-none" />
@@ -5064,7 +5064,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           const hoursLeft = Math.ceil(msLeft / 3600000);
           const daysLeft  = Math.ceil(msLeft / 86400000);
           return (
-            <div className="fixed inset-0 z-[9999] flex items-end justify-center p-4 pb-8" style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)' }}>
+            <div className="fixed inset-0 z-[9999] print:hidden flex items-end justify-center p-4 pb-8" style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)' }}>
               <div className={`w-full max-w-sm rounded-3xl shadow-2xl overflow-hidden ${expiryPopupExpired ? 'bg-red-600' : 'bg-amber-500'}`}>
                 <div className="px-5 pt-6 pb-4 text-white">
                   <div className="flex items-start gap-4">
@@ -5913,7 +5913,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   // ── MASTER ERP SHELL (LEFT SIDEBAR ON COMPUTER/LANDSCAPE, DRAWER ON MOBILE PORTRAIT) ────
   const renderErpShell = (content: React.ReactNode) => {
     return (
-      <div className={`h-screen h-[100dvh] max-h-screen overflow-hidden flex transition-colors duration-200 admin-theme-${appTheme} app-theme-${appTheme} ${
+      <div className={`h-screen h-[100dvh] max-h-screen overflow-hidden flex print:h-auto print:min-h-0 print:max-h-none print:overflow-visible print:block print:bg-white transition-colors duration-200 admin-theme-${appTheme} app-theme-${appTheme} ${
         appTheme === "white"
           ? "bg-slate-100 text-slate-900"
           : appTheme === "black"
@@ -5930,7 +5930,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         {!isEffectiveLandscape && !isSidebarOpen && (
           <div
             onClick={() => setIsSidebarOpen(true)}
-            className="fixed left-0 top-1/2 -translate-y-1/2 w-2.5 h-20 rounded-r-full bg-gradient-to-b from-indigo-500 via-amber-400 to-indigo-500 opacity-60 hover:opacity-100 hover:w-3.5 transition-all z-30 cursor-pointer shadow-[0_0_10px_rgba(99,102,241,0.5)] flex items-center justify-center group"
+            className="fixed left-0 top-1/2 -translate-y-1/2 w-2.5 h-20 rounded-r-full bg-gradient-to-b from-indigo-500 via-amber-400 to-indigo-500 opacity-60 hover:opacity-100 hover:w-3.5 transition-all z-30 cursor-pointer shadow-[0_0_10px_rgba(99,102,241,0.5)] flex items-center justify-center group print:hidden"
             title="Swipe Right करके मेनू खोलें (1% Visible)"
           >
             <ChevronRight className="w-2.5 h-2.5 text-slate-950 font-bold group-hover:translate-x-0.5 transition-transform" />
@@ -5938,11 +5938,11 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         )}
 
         {/* Main Content Area (Independent scroll container - page cards scroll smoothly while menu stays fixed) */}
-        <div className={`flex-1 flex flex-col min-w-0 h-screen h-[100dvh] max-h-screen overflow-y-auto ${
+        <div className={`flex-1 flex flex-col min-w-0 h-screen h-[100dvh] max-h-screen overflow-y-auto print:h-auto print:min-h-0 print:max-h-none print:overflow-visible print:block ${
           isEffectiveLandscape ? "overflow-x-auto" : "overflow-x-hidden"
         }`}>
           {renderTopHeader()}
-          <main className={`flex-1 p-2 sm:p-4 lg:p-5 w-full mx-auto pb-16 md:pb-12 ${
+          <main className={`flex-1 p-2 sm:p-4 lg:p-5 w-full mx-auto pb-16 md:pb-12 print:p-0 print:m-0 print:max-w-none print:min-w-0 ${
             isEffectiveLandscape ? "min-w-[980px] sm:min-w-0 max-w-7xl" : "max-w-7xl"
           }`}>
             {content}
@@ -5951,7 +5951,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
         {/* Floating guidance banner when rotate is requested but phone needs to be turned */}
         {showRotatePrompt && (
-          <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 text-white border border-cyan-400/40 px-4 py-2.5 rounded-2xl shadow-2xl flex items-center gap-3 backdrop-blur-md animate-in slide-in-from-bottom-4 duration-300 max-w-sm text-center">
+          <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 print:hidden bg-slate-900/95 text-white border border-cyan-400/40 px-4 py-2.5 rounded-2xl shadow-2xl flex items-center gap-3 backdrop-blur-md animate-in slide-in-from-bottom-4 duration-300 max-w-sm text-center">
             <Laptop className="w-5 h-5 text-cyan-400 shrink-0" />
             <p className="text-xs font-bold text-cyan-200">
               💻 Laptop (Desktop) मोड सक्रिय है! आप फोन को आड़ा (Landscape) करके पूरे लैपटॉप व्यू का उपयोग कर सकते हैं।
@@ -7009,7 +7009,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
   if (view === "marksheet_hub") {
     return renderErpShell(
-      <div className="pb-12 w-full max-w-full overflow-x-hidden">
+      <div className="pb-12 w-full max-w-full overflow-x-hidden print:p-0 print:pb-0 print:overflow-visible">
         <MarksheetGenerator
           school={school!}
           classes={classes}

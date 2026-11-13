@@ -6,6 +6,7 @@ import {
 import type { SchoolLesson, LessonMCQ } from "../../school-types";
 import { Plus, Trash2, Save, ChevronLeft, BookOpen, Edit3, FileText, Layers, CheckSquare, Eye, EyeOff, HelpCircle, Check, X, ChevronDown, ChevronUp, Upload, AlignLeft, ListChecks, Settings2, Star } from "lucide-react";
 import { parseMCQText, normalizeMcqPaste } from "../../utils/mcqParser";
+import { toast } from "sonner";
 import { ChunkedNotesReader } from "../ChunkedNotesReader";
 import { DirectUploadButton } from "../DirectUploadButton";
 
@@ -333,6 +334,7 @@ export const ContentManager: React.FC<Props> = ({
   const [saving, setSaving] = useState(false);
   const [editTab, setEditTab] = useState<EditTab>("general");
   const [showPreview, setShowPreview] = useState(false);
+  const [confirmDeleteLessonId, setConfirmDeleteLessonId] = useState<string | null>(null);
 
   useEffect(() => {
     const unsub = subscribeToLessons(schoolId, subjectId, setLessons);
@@ -371,8 +373,9 @@ export const ContentManager: React.FC<Props> = ({
   };
 
   const handleDelete = async (lessonId: string) => {
-    if (!window.confirm("Delete this lesson?")) return;
+    setConfirmDeleteLessonId(null);
     await deleteLesson(schoolId, lessonId);
+    toast.success("Lesson delete kar diya gaya.");
   };
 
   const toggleFeature = (key: keyof SchoolLesson["features"]) => {
@@ -692,13 +695,30 @@ export const ContentManager: React.FC<Props> = ({
                   )}
                 </div>
               </div>
-              <div className="flex gap-1">
+              <div className="flex items-center gap-1">
                 <button onClick={() => startEdit(lesson)} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700">
                   <Edit3 className="w-4 h-4 text-slate-500" />
                 </button>
-                <button onClick={() => handleDelete(lesson.id)} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700">
-                  <Trash2 className="w-4 h-4 text-red-400" />
-                </button>
+                {confirmDeleteLessonId === lesson.id ? (
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => handleDelete(lesson.id)}
+                      className="px-2 py-1 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700"
+                    >
+                      Delete
+                    </button>
+                    <button
+                      onClick={() => setConfirmDeleteLessonId(null)}
+                      className="px-2 py-1 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button onClick={() => setConfirmDeleteLessonId(lesson.id)} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700">
+                    <Trash2 className="w-4 h-4 text-red-400" />
+                  </button>
+                )}
               </div>
             </div>
           </div>

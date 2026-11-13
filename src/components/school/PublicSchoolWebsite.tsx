@@ -7,6 +7,7 @@ import {
   Search, FileSpreadsheet, CreditCard, Sparkles, Send, X, ExternalLink, ChevronLeft
 } from "lucide-react";
 import { saveSchoolPublicInquiry, generateId } from "../../school-firebase";
+import { toast } from "sonner";
 import { cleanLogoUrl, getSavedSchoolLogo, isAppLogo } from "./feeReceiptUtils";
 
 interface Props {
@@ -74,7 +75,7 @@ export const PublicSchoolWebsite: React.FC<Props> = ({
       setInquiryPhone("");
       setInquiryMessage("");
     } catch {
-      alert("Failed to send message. Please contact via phone.");
+      toast.error("Failed to send message. Please contact via phone.");
     } finally {
       setInquirySending(false);
     }

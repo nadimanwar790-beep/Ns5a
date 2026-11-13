@@ -1,5 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef, useEffect, useCallback } from "react";
+import { toast } from "sonner";
 import {
   X,
   UserPlus,
@@ -56,6 +57,7 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
   const [countdown, setCountdown] = useState<number | null>(null);
   const [captureSuccess, setCaptureSuccess] = useState<boolean>(false);
   const streamRef = useRef<MediaStream | null>(null);
+  const [confirmDeleteStudentId, setConfirmDeleteStudentId] = useState<string | null>(null);
 
   // Start Live Capture Camera
   const startLiveStudioCamera = async (overrideMode?: "user" | "environment") => {
@@ -141,16 +143,12 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
     };
 
     const neural = await extractNeuralDescriptor(canvas);
-    const is512 = Boolean(neural?.descriptor && neural.descriptor.length === 512);
-    const is128 = Boolean(neural?.descriptor && neural.descriptor.length === 128);
-    const descriptor = (is512 || is128)
-      ? neural!.descriptor
-      : extractDescriptorFromCanvas(canvas, box);
-    const source = is512
-      ? "arcface_512d"
-      : is128
-      ? "face_api_neural"
-      : "live_kiosk";
+    const has512 = Boolean(neural?.arcfaceDescriptor && neural.arcfaceDescriptor.length === 512);
+
+    if (!has512) {
+      toast.error("⚠️ चेहरे के 5 मुख्य बिंदु (आँखें, नाक, होंठ) स्पष्ट नहीं दिखे। कृपया सीधी रोशनी में सामने देखकर दोबारा फ़ोटो लें।");
+      return;
+    }
 
     const record: FaceDescriptorRecord = {
       studentId: liveCaptureTarget.id,
@@ -160,10 +158,11 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
       classId: liveCaptureTarget.classId,
       className: liveCaptureTarget.className,
       photoUrl: photoDataUrl,
-      descriptor,
-      arcfaceDescriptor: is512 ? descriptor : undefined,
+      descriptor: neural!.arcfaceDescriptor!,
+      arcfaceDescriptor: neural!.arcfaceDescriptor!,
       enrolledAt: new Date().toISOString(),
-      source
+      source: "arcface_512d",
+      preprocessOrder: "RGB"
     };
 
     await saveFaceDescriptor(record);
@@ -214,10 +213,14 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
 
   // Delete Descriptor
   const handleDeleteDescriptor = async (studentId: string) => {
-    if (window.confirm("क्या आप इस छात्र का फेस बायोमेट्रिक हटाना चाहते हैं?")) {
-      await deleteFaceDescriptor(studentId, schoolId);
-      if (onEnrollmentUpdated) onEnrollmentUpdated();
+    if (confirmDeleteStudentId !== studentId) {
+      setConfirmDeleteStudentId(studentId);
+      return;
     }
+    setConfirmDeleteStudentId(null);
+    await deleteFaceDescriptor(studentId, schoolId);
+    toast.success("छात्र का फेस बायोमेट्रिक डेटा हटाया गया।");
+    if (onEnrollmentUpdated) onEnrollmentUpdated();
   };
 
   if (!isOpen) return null;
@@ -398,7 +401,7 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
                         <span>•</span>
                         <span className={enrolled ? "text-emerald-400 font-bold" : "text-amber-400 font-medium"}>
                           {enrolled
-                            ? (enrolled.source === "3d_multi_angle" || enrolled.descriptors3D ? "🌐 3D Biometrics Enrolled" : "✅ Biometrics Enrolled")
+                            ? ((enrolled.source === "3d_multi_angle" || enrolled.multiAngleDescriptors || enrolled.descriptors3D) ? "🌐 Multi-Angle Biometrics Enrolled" : "✅ Biometrics Enrolled")
                             : st.photoUrl ? "📷 Ready to Vectorize" : "⚠️ Photo Missing"}
                         </span>
                       </div>
@@ -430,14 +433,33 @@ export const FaceEnrollmentModal: React.FC<FaceEnrollmentModalProps> = ({
                     </button>
 
                     {enrolled && (
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteDescriptor(st.id)}
-                        className="w-8 h-8 rounded-xl bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 flex items-center justify-center transition border border-slate-700 cursor-pointer"
-                        title="Remove Face Biometric"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      confirmDeleteStudentId === st.id ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteDescriptor(st.id)}
+                            className="px-2 py-1.5 rounded-xl bg-rose-600 text-white text-[10px] font-black cursor-pointer"
+                          >
+                            Confirm
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteStudentId(null)}
+                            className="px-2 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-[10px] font-bold cursor-pointer"
+                          >
+                            रद्द
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteDescriptor(st.id)}
+                          className="w-8 h-8 rounded-xl bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 flex items-center justify-center transition border border-slate-700 cursor-pointer"
+                          title="Remove Face Biometric"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )
                     )}
                   </div>
                 </div>

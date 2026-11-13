@@ -717,19 +717,20 @@ export const IdCardManager: React.FC<Props> = ({
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 pb-16">
+    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 pb-16 print:min-h-0 print:pb-0 print:bg-white">
       {/* Print Safe CSS: prevents clipping, keeps QR code & student picture within page margins */}
       <style>{`
         @media print {
           @page {
-            size: A4 portrait;
-            margin: 0mm;
+            size: auto;
+            margin: 5mm;
           }
           html, body {
             margin: 0 !important;
             padding: 0 !important;
             background: white !important;
             color: black !important;
+            height: auto !important;
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
           }
@@ -745,14 +746,16 @@ export const IdCardManager: React.FC<Props> = ({
             transform-origin: center center !important;
           }
           .idcard-page {
-            width: 210mm !important;
-            height: 297mm !important;
-            padding: 8mm !important;
+            width: 100% !important;
+            max-width: 198mm !important;
+            height: auto !important;
+            max-height: none !important;
+            padding: 2mm !important;
             margin: 0 auto !important;
             box-sizing: border-box !important;
             display: grid !important;
             grid-template-columns: repeat(2, 1fr) !important;
-            grid-template-rows: repeat(${cardsPerPage === 4 ? 2 : 4}, 1fr) !important;
+            grid-template-rows: repeat(${cardsPerPage === 4 ? 2 : 4}, auto) !important;
             gap: 3mm !important;
             align-items: center !important;
             justify-items: center !important;
@@ -1298,7 +1301,7 @@ export const IdCardManager: React.FC<Props> = ({
             </div>
 
             {/* Right Column: Live Printable Preview */}
-            <div className="md:col-span-7 flex flex-col items-center justify-center p-6 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-700">
+            <div className="md:col-span-7 flex flex-col items-center justify-center p-6 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-700 print:border-0 print:bg-white print:p-0 print:rounded-none">
               <div className="mb-4 text-center print:hidden flex items-center gap-2 flex-wrap justify-center">
                 <span className="text-xs font-black text-indigo-600 bg-indigo-50 dark:bg-indigo-900/40 px-3 py-1 rounded-full uppercase tracking-wider">
                   Live Card Preview (CR80 Standard Dimensions)
@@ -1310,7 +1313,7 @@ export const IdCardManager: React.FC<Props> = ({
 
               {(activeTab === "students" ? selectedStudent : selectedStaff) ? (
                 <>
-                  <div className="p-3 bg-white/70 dark:bg-slate-900/50 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700">
+                  <div className="p-3 bg-white/70 dark:bg-slate-900/50 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 print:border-0 print:bg-white print:p-0 print:rounded-none">
                     {renderCard(activeTab === "students" ? selectedStudent : selectedStaff, activeTab === "staff")}
                   </div>
 

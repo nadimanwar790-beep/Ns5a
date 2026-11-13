@@ -9,6 +9,7 @@ import { ref, get, set } from "firebase/database";
 import { doc, setDoc, getDoc } from "firebase/firestore";
 import { rtdb, db, saveUserToLive } from "../../firebase";
 import { addSubscription, recalculateSubscriptionStatus } from "../../utils/subscriptionUtils";
+import { toast } from "sonner";
 import type { School } from "../../school-types";
 
 // ── TYPES ─────────────────────────────────────────────────────────────────────
@@ -289,7 +290,7 @@ export const SchoolSubscriptionManager: React.FC<Props> = ({ schoolId, adminUid,
 
       setGeneratedCode(code);
     } catch (e: any) {
-      alert("Code generate karne mein error: " + e?.message);
+      toast.error("Code generate karne mein error: " + (e?.message || "Unknown error"));
     }
     setGeneratingCode(false);
   };

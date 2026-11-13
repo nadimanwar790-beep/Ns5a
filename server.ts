@@ -4,6 +4,7 @@ import os from "os";
 import path from "path";
 import crypto from "crypto";
 import webpush from "web-push";
+import JSZip from "jszip";
 
 // Prevent transient socket resets (e.g. pre-warmer closing connections early)
 // or background async errors from terminating the dev/prod server process.
@@ -1091,6 +1092,73 @@ async function startServer() {
     const token = String(req.query?.token || process.env.TELEGRAM_BOT_TOKEN || process.env.VITE_TELEGRAM_BOT_TOKEN || "").trim();
     if (!filePath || !token) return res.status(400).json({ error: "Missing path or token" });
     return res.redirect(302, `https://api.telegram.org/file/bot${token}/${filePath}`);
+  });
+
+  // Dev-only Source Code ZIP export endpoint
+  app.get("/api/export-source-zip", async (req, res) => {
+    if (isProduction) {
+      return res.status(403).json({ error: "Source export is disabled in production" });
+    }
+    try {
+      const includeModels = req.query?.includeModels !== "0";
+      const includeWasm = req.query?.includeWasm === "1";
+      const zip = new JSZip();
+
+      const excludedDirs = new Set([
+        "node_modules",
+        ".git",
+        ".aistudio",
+        "dist",
+        ".vite",
+      ]);
+      const excludedFiles = new Set([
+        ".env",
+        ".env.local",
+        ".env.production",
+        ".vapid-keys.json",
+        ".push-subscriptions.json",
+      ]);
+
+      const walkDir = (dir: string, relBase = "") => {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const relPath = relBase ? `${relBase}/${entry.name}` : entry.name;
+          const fullPath = path.join(dir, entry.name);
+
+          if (entry.isDirectory()) {
+            if (excludedDirs.has(entry.name)) continue;
+            if (relPath === "public/assets/aistudio") continue;
+            if (!includeModels && relPath === "public/models") continue;
+            if (!includeWasm && relPath === "public/onnx-wasm") continue;
+            walkDir(fullPath, relPath);
+          } else if (entry.isFile()) {
+            if (excludedFiles.has(entry.name) || entry.name.endsWith(".log")) continue;
+            zip.file(relPath, fs.readFileSync(fullPath));
+          }
+        }
+      };
+
+      walkDir(ROOT_DIR);
+
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="nsta-app-source-${new Date().toISOString().slice(0, 10)}.zip"`
+      );
+
+      const stream = zip.generateNodeStream({
+        type: "nodebuffer",
+        streamFiles: true,
+        compression: "DEFLATE",
+        compressionOptions: { level: 6 },
+      });
+      stream.pipe(res);
+    } catch (err: any) {
+      console.error("[Server] Source ZIP export failed:", err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: err?.message || "Failed to generate source ZIP" });
+      }
+    }
   });
 
   // Periodic background scheduler (checks every 15 minutes for new month's pending fee alerts)

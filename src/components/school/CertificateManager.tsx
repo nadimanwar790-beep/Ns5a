@@ -264,22 +264,23 @@ export const CertificateManager: React.FC<Props> = ({
   const currentTheme = themeStyles[certTheme];
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 pb-20">
+    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 pb-20 print:min-h-0 print:pb-0 print:bg-white">
       <style>{`
         @media print {
-          @page { size: A4 portrait; margin: 8mm; }
+          @page { size: auto; margin: 6mm; }
           html, body, #root {
-            width: 194mm !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important;
+            width: 100% !important; height: auto !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important;
+            background: #ffffff !important;
             -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important;
           }
           .certificate-print-container {
-            display: block !important; width: 194mm !important; height: 281mm !important;
-            max-width: none !important; margin: 0 !important; padding: 0 !important;
+            display: block !important; width: 100% !important; max-width: 196mm !important; height: auto !important;
+            margin: 0 auto !important; padding: 0 !important;
           }
           .certificate-print-sheet {
-            width: 194mm !important; height: 281mm !important; min-height: 281mm !important; max-height: 281mm !important;
+            width: 100% !important; height: auto !important; min-height: 235mm !important; max-height: none !important;
             box-sizing: border-box !important; margin: 0 auto !important; padding: 6mm !important;
-            overflow: hidden !important; border-width: 1mm !important; border-radius: 0 !important; transform: none !important;
+            overflow: visible !important; border-width: 1mm !important; border-radius: 0 !important; transform: none !important;
             box-shadow: none !important; display: flex !important; flex-direction: column !important;
             break-inside: avoid-page !important; page-break-inside: avoid !important;
           }
@@ -615,30 +616,6 @@ export const CertificateManager: React.FC<Props> = ({
         </div>
 
         {/* PRINTABLE CERTIFICATE SHEET */}
-        <style>{`
-          @media print {
-            @page {
-              size: A4 portrait;
-              margin: 0mm;
-            }
-            html, body {
-              margin: 0 !important;
-              padding: 0 !important;
-              background: #ffffff !important;
-            }
-            .certificate-print-container {
-              width: 210mm !important;
-              height: 297mm !important;
-              padding: 14mm 12mm !important;
-              margin: 0 auto !important;
-              box-sizing: border-box !important;
-              display: flex !important;
-              align-items: center !important;
-              justify-content: center !important;
-              background: #ffffff !important;
-            }
-          }
-        `}</style>
         <div className="certificate-print-container flex justify-center">
           <div
             className={`certificate-print-sheet w-full max-w-[860px] bg-[#fffefc] rounded-2xl border-[10px] border-double ${currentTheme.border} p-8 sm:p-12 shadow-2xl relative overflow-hidden print:shadow-none print:m-0 print:border-[6px] print:w-full print:max-w-none print:rounded-none`}

@@ -1099,7 +1099,7 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
         {/* TAB 8: 1-YEAR NOTICES ARCHIVE WITH MONTH-WISE FILTER */}
         {activeTab === "notices" && (
           <NoticeBoardManager
-            schoolId="demo_school"
+            schoolId={activeSchool?.id || "demo_school"}
             adminUid="admin"
             isAdmin={true}
             onBack={() => setActiveTab("dashboard")}

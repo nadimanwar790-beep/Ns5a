@@ -1389,9 +1389,9 @@ export const MarksheetGenerator: React.FC<Props> = ({
     const shouldRenderSingleSlip = marksheetStyle === "single_slip" || (isSingleExam && marksheetStyle !== "classic_table" && marksheetStyle !== "visual_charts" && marksheetStyle !== "portrait");
     if (shouldRenderSingleSlip) {
       return (
-        <div key={targetStudent?.id || "single"} className="marksheet-print-page w-full flex justify-center">
+        <div key={targetStudent?.id || "single"} className="marksheet-print-page w-full flex justify-center print:block">
           <div
-            className="marksheet-sheet-box w-full min-w-[760px] max-w-[1080px] bg-white rounded-xl border-4 border-slate-900 shadow-2xl p-5 text-slate-900 print:shadow-none print:m-0 print:border-2 print:border-black print:max-w-none print:min-w-0 print:p-3 relative overflow-hidden flex flex-col justify-between"
+            className="marksheet-sheet-box w-full min-w-[760px] max-w-[1080px] bg-white rounded-xl border-4 border-slate-900 shadow-2xl p-5 text-slate-900 print:shadow-none print:m-0 print:border-2 print:border-black print:max-w-none print:min-w-0 print:p-3 print:rounded-none print:overflow-visible relative overflow-hidden flex flex-col justify-between"
             style={{ fontFamily: "'Inter', sans-serif" }}
           >
             {/* Watermark */}
@@ -1641,9 +1641,9 @@ export const MarksheetGenerator: React.FC<Props> = ({
     const isLandscapeView = marksheetStyle !== "portrait" && (marksheetStyle === "visual_charts" || marksheetStyle === "classic_table" || layoutMode === "landscape_wide");
 
     return (
-      <div key={targetStudent?.id || "single"} className="marksheet-print-page w-full flex justify-center">
+      <div key={targetStudent?.id || "single"} className="marksheet-print-page w-full flex justify-center print:block">
         <div
-          className={`marksheet-sheet-box w-full ${isLandscapeView ? "min-w-[880px] max-w-[1100px]" : "min-w-[720px] max-w-[840px]"} bg-white rounded-xl border-4 border-slate-900 shadow-2xl ${isCompact ? "p-4" : "p-6"} text-slate-900 print:shadow-none print:m-0 print:border-2 print:border-black print:max-w-none print:min-w-0 print:p-4 print:rounded-none relative overflow-hidden flex flex-col justify-between`}
+          className={`marksheet-sheet-box w-full ${isLandscapeView ? "min-w-[880px] max-w-[1100px]" : "min-w-[720px] max-w-[840px]"} bg-white rounded-xl border-4 border-slate-900 shadow-2xl ${isCompact ? "p-4" : "p-6"} text-slate-900 print:shadow-none print:m-0 print:border-2 print:border-black print:max-w-none print:min-w-0 print:p-4 print:rounded-none print:overflow-visible relative overflow-hidden flex flex-col justify-between`}
           style={{ fontFamily: "'Inter', sans-serif" }}
         >
           {/* Decorative Watermark */}
@@ -1659,7 +1659,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                LEFT SIDE (50%): Cumulative Multi-Term Exams & Attendance Correlation
                RIGHT SIDE (50%): Official Level-Appropriate Final Marksheet
                ══════════════════════════════════════════════════════════════════ */
-            <div className="grid grid-cols-12 gap-5 w-full h-full">
+            <div className="marksheet-landscape-split grid grid-cols-12 gap-5 w-full h-full print:h-auto">
               {/* LEFT COLUMN: Cumulative Academic & Term Attendance Progress */}
               <div className="col-span-6 flex flex-col justify-between border-r-2 border-slate-800 pr-5">
                 <div>
@@ -2538,7 +2538,9 @@ export const MarksheetGenerator: React.FC<Props> = ({
     );
   };
 
-    const isPrintLandscape = marksheetStyle !== "portrait" && layoutMode !== "portrait_compact";
+    const isOuterSingleExam = currentExamOption.category === "pa" || currentExamOption.category === "custom";
+    const isOuterSingleSlip = marksheetStyle === "single_slip" || (isOuterSingleExam && marksheetStyle !== "classic_table" && marksheetStyle !== "visual_charts" && marksheetStyle !== "portrait");
+    const isPrintLandscape = !isOuterSingleSlip && isLandscapeView;
     const outerSession = sessionName || "2026-27";
     const outerBoardYear = (() => {
       const parts = outerSession.trim().split("-");
@@ -2575,50 +2577,92 @@ export const MarksheetGenerator: React.FC<Props> = ({
     })();
 
     return (
-      <div className="min-h-screen bg-slate-100 dark:bg-slate-900 pb-16 print:min-h-0 print:pb-0 print:bg-white w-full max-w-full overflow-x-hidden print:overflow-visible">
+      <div className="marksheet-print-shell min-h-screen bg-slate-100 dark:bg-slate-900 pb-16 print:min-h-0 print:pb-0 print:bg-white print:block w-full max-w-full overflow-x-hidden print:overflow-visible">
         <style>{`
           @media print {
             @page {
               size: ${isPrintLandscape ? "A4 landscape" : "A4 portrait"};
-              margin: 0mm;
+              margin: 6mm;
             }
-            html, body {
+            html, body, #root {
+              width: 100% !important;
+              height: auto !important;
+              min-height: 0 !important;
+              max-height: none !important;
+              overflow: visible !important;
               margin: 0 !important;
               padding: 0 !important;
               background: #ffffff !important;
             }
+            .marksheet-print-shell {
+              width: 100% !important;
+              max-width: 100% !important;
+              height: auto !important;
+              min-height: 0 !important;
+              margin: 0 !important;
+              padding: 0 !important;
+              overflow: visible !important;
+              background: #ffffff !important;
+              display: block !important;
+            }
             .marksheet-print-page {
-              width: ${isPrintLandscape ? "297mm" : "210mm"} !important;
-              height: ${isPrintLandscape ? "210mm" : "297mm"} !important;
-              padding: ${isPrintLandscape ? "10mm 12mm" : "12mm"} !important;
-            margin: 0 auto !important;
-            box-sizing: border-box !important;
-            display: flex !important;
-            flex-direction: column !important;
-            align-items: center !important;
-            justify-content: center !important;
-            page-break-after: always !important;
-            break-after: page !important;
-            page-break-inside: avoid !important;
-            break-inside: avoid !important;
-            background: #ffffff !important;
+              width: 100% !important;
+              max-width: 100% !important;
+              height: auto !important;
+              min-height: 0 !important;
+              max-height: none !important;
+              padding: 0 !important;
+              margin: 0 auto !important;
+              box-sizing: border-box !important;
+              display: block !important;
+              overflow: visible !important;
+              background: #ffffff !important;
+              page-break-inside: avoid !important;
+              break-inside: avoid-page !important;
+              ${bulkMode ? "page-break-after: always !important; break-after: page !important;" : "page-break-after: auto !important; break-after: auto !important;"}
+            }
+            .marksheet-print-page:last-child {
+              page-break-after: auto !important;
+              break-after: auto !important;
+            }
+            .marksheet-sheet-box {
+              width: 100% !important;
+              min-width: 0 !important;
+              max-width: 100% !important;
+              height: auto !important;
+              max-height: none !important;
+              margin: 0 !important;
+              padding: ${isPrintLandscape ? "3.5mm" : "4mm"} !important;
+              box-sizing: border-box !important;
+              overflow: visible !important;
+              display: flex !important;
+              flex-direction: column !important;
+              justify-content: flex-start !important;
+              box-shadow: none !important;
+              border-radius: 0 !important;
+            }
+            .marksheet-sheet-box table {
+              width: 100% !important;
+              table-layout: auto !important;
+            }
+            .marksheet-sheet-box th,
+            .marksheet-sheet-box td {
+              width: auto !important;
+            }
           }
-          .marksheet-print-page:last-child {
-            page-break-after: auto !important;
-            break-after: auto !important;
+          @media print and (orientation: portrait) {
+            .marksheet-landscape-split {
+              grid-template-columns: 1fr !important;
+              gap: 10px !important;
+            }
+            .marksheet-landscape-split > div:first-child {
+              border-right: none !important;
+              padding-right: 0 !important;
+              border-bottom: 2px solid #1e293b !important;
+              padding-bottom: 10px !important;
+            }
           }
-          .marksheet-sheet-box {
-            width: 100% !important;
-            height: 100% !important;
-            max-height: 100% !important;
-            margin: 0 !important;
-            box-sizing: border-box !important;
-            display: flex !important;
-            flex-direction: column !important;
-            justify-content: space-between !important;
-          }
-        }
-      `}</style>
+        `}</style>
       {/* Top Navbar */}
       <div className="bg-slate-950/95 backdrop-blur-md px-3 sm:px-4 py-2 text-white shadow-xl sticky top-0 z-30 print:hidden border-b border-white/10 w-full">
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-2 w-full">
@@ -2689,7 +2733,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
         </div>
       </div>
 
-      <div className="max-w-6xl mx-auto px-4 py-4 print:p-0">
+      <div className="max-w-6xl mx-auto px-4 py-4 print:p-0 print:m-0 print:max-w-none print:w-full">
         {promotionNotice && (
           <div className="mb-3 p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-500/30 rounded-2xl flex items-center gap-2 text-emerald-900 dark:text-emerald-200 text-xs font-bold print:hidden">
             <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
@@ -3610,12 +3654,12 @@ export const MarksheetGenerator: React.FC<Props> = ({
         </div>
 
         {/* Display Marksheet Preview (Print-ready) */}
-        <div className="w-full max-w-full my-6 print:my-0">
+        <div className="w-full max-w-full my-6 print:my-0 print:m-0">
           <div className="flex items-center justify-between gap-2 mb-2.5 px-1 print:hidden">
             <div className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
               <span className="text-xs font-black text-slate-800 dark:text-slate-200 uppercase tracking-wider">
-                A4 Marksheet Live Preview ({isLandscapeView ? "A4 Landscape 297×210mm" : "A4 Portrait 210×297mm"})
+                A4 Marksheet Live Preview ({isPrintLandscape ? "A4 Landscape 297×210mm" : "A4 Portrait 210×297mm"})
               </span>
             </div>
             <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold bg-slate-200/70 dark:bg-slate-800 px-2.5 py-0.5 rounded-full">
@@ -3623,9 +3667,9 @@ export const MarksheetGenerator: React.FC<Props> = ({
             </span>
           </div>
 
-          <div className="w-full max-w-full overflow-x-auto pb-6 pt-1 px-1 rounded-2xl scrollbar-thin bg-slate-200/40 dark:bg-slate-950/40 border border-slate-300/60 dark:border-slate-800 shadow-inner print:bg-transparent print:border-none print:p-0 print:overflow-visible">
+          <div className="w-full max-w-full overflow-x-auto pb-6 pt-1 px-1 rounded-2xl scrollbar-thin bg-slate-200/40 dark:bg-slate-950/40 border border-slate-300/60 dark:border-slate-800 shadow-inner print:bg-transparent print:border-none print:shadow-none print:rounded-none print:p-0 print:m-0 print:overflow-visible">
             {bulkMode ? (
-              <div className="space-y-8 print:space-y-0 min-w-fit flex flex-col items-center">
+              <div className="space-y-8 print:space-y-0 min-w-fit print:min-w-0 flex flex-col items-center print:block">
                 <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-200 p-3 rounded-xl text-xs text-amber-900 dark:text-amber-200 print:hidden flex items-center justify-between w-full max-w-[1100px]">
                   <span>Bulk Class Mode: Poore <strong>{currentClass?.name}</strong> ke sabhi {classStudents.length} bacchon ki marksheet print hogi.</span>
                   <span className="font-bold">Total: {classStudents.length} Students</span>
@@ -3633,7 +3677,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                 {classStudents.map(student => renderMarksheetSheet(student))}
               </div>
             ) : (
-              <div className="min-w-fit flex justify-center print:block mx-auto">
+              <div className="min-w-fit print:min-w-0 print:w-full flex justify-center print:block mx-auto print:m-0">
                 {renderMarksheetSheet(currentStudent || undefined)}
               </div>
             )}
@@ -3669,7 +3713,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
 
       {/* 1-CLICK NEXT SESSION PROMOTION MODAL */}
       {showPromotionModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+        <div className="fixed inset-0 z-50 print:hidden bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
           <div className="bg-white dark:bg-slate-800 rounded-3xl max-w-2xl w-full p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-slate-700 space-y-4 my-auto">
             {/* Modal Header */}
             <div className="border-b border-slate-200 dark:border-slate-700 pb-3 flex items-start justify-between gap-3">
@@ -3854,7 +3898,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
 
       {/* ADD CUSTOM EXAM MODAL */}
       {showAddExamModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+        <div className="fixed inset-0 z-50 print:hidden bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
           <div className="bg-white dark:bg-slate-800 rounded-3xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-slate-700 space-y-4 my-auto">
             <div className="border-b border-slate-200 dark:border-slate-700 pb-3 flex items-start justify-between gap-3">
               <div>

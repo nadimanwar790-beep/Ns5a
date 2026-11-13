@@ -442,26 +442,26 @@ export const AdmitCardManager: React.FC<Props> = ({
       <style>{`
         @media print {
           @page {
-            size: A4 portrait;
-            margin: 0mm;
+            size: auto;
+            margin: 6mm;
           }
           html, body {
             margin: 0 !important;
             padding: 0 !important;
             background: #ffffff !important;
+            height: auto !important;
           }
           .admitcard-print-page {
-            width: 210mm !important;
-            height: 297mm !important;
-            padding: 14mm 12mm !important;
+            width: 100% !important;
+            max-width: 196mm !important;
+            height: auto !important;
+            min-height: 0 !important;
+            padding: 0 !important;
             margin: 0 auto !important;
             box-sizing: border-box !important;
-            display: flex !important;
-            flex-direction: column !important;
-            align-items: center !important;
-            justify-content: center !important;
-            page-break-after: always !important;
-            break-after: page !important;
+            display: block !important;
+            page-break-after: ${bulkMode ? "always" : "auto"} !important;
+            break-after: ${bulkMode ? "page" : "auto"} !important;
             page-break-inside: avoid !important;
             break-inside: avoid !important;
             background: #ffffff !important;

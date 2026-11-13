@@ -1,5 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect } from "react";
+import { toast } from "sonner";
 import {
   getStudents, saveExam, getExams, deleteExam, generateId,
   getSubjects, saveSubject
@@ -94,6 +95,10 @@ export const MarksManager: React.FC<Props> = ({
   const [extraSubjectInput, setExtraSubjectInput] = useState("");
   const [saveToClassPermanent, setSaveToClassPermanent] = useState(true);
   const [addingSubject, setAddingSubject] = useState(false);
+  const [confirmDeleteExamId, setConfirmDeleteExamId] = useState<string | null>(null);
+  const [showCustomExamModal, setShowCustomExamModal] = useState(false);
+  const [customExamNameInput, setCustomExamNameInput] = useState("");
+  const [customExamMaxInput, setCustomExamMaxInput] = useState("40");
 
   // Multi-Subject Master Sheet State
   const [masterExamName, setMasterExamName] = useState<string>(COMMON_EXAM_PRESETS[0].name);
@@ -245,11 +250,11 @@ export const MarksManager: React.FC<Props> = ({
   // Save Single Exam Entry
   const saveNewExam = async () => {
     if (!examName.trim()) {
-      alert("Please enter Exam Name (e.g. PA 1 or Half Yearly)");
+      toast.error("Please enter Exam Name (e.g. PA 1 or Half Yearly)");
       return;
     }
     if (!examSubjectName.trim()) {
-      alert("Please select or enter Subject / Book name");
+      toast.error("Please select or enter Subject / Book name");
       return;
     }
 
@@ -320,7 +325,7 @@ export const MarksManager: React.FC<Props> = ({
   // Save All-in-One Multi-Subject Master Sheet
   const saveMasterSheetMarks = async () => {
     if (!masterExamName.trim()) {
-      alert("Please select or enter Exam Name for Master Sheet");
+      toast.error("Please select or enter Exam Name for Master Sheet");
       return;
     }
 
@@ -379,17 +384,22 @@ export const MarksManager: React.FC<Props> = ({
       setSaveSuccessNotice(`🎉 Sabhi ${subjects.length} Books ke Marks ek saath save ho gaye!`);
     } catch (err) {
       console.error("Error saving master sheet:", err);
-      alert("Failed to save master sheet. Please check connection.");
+      toast.error("Failed to save master sheet. Please check connection.");
     } finally {
       setSaving(false);
     }
   };
 
   const handleDeleteExam = async (examId: string) => {
-    if (!window.confirm("Are you sure you want to delete this exam record?")) return;
+    if (confirmDeleteExamId !== examId) {
+      setConfirmDeleteExamId(examId);
+      return;
+    }
+    setConfirmDeleteExamId(null);
     await deleteExam(schoolId, examId);
     setExams(prev => prev.filter(e => e.id !== examId));
     setSaveSuccessNotice("Exam record deleted.");
+    toast.success("Exam record deleted.");
   };
 
   const downloadExamReport = (exam: ExamEntry) => {
@@ -486,14 +496,9 @@ export const MarksManager: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => {
-                  const customName = prompt("Naya Extra Exam / Test ka naam daalein (e.g. Unit Test 1, Class Test, Weekly Test):");
-                  if (customName && customName.trim()) {
-                    setExamName(customName.trim());
-                    const m = prompt("Is exam ka Full Marks (Max Marks / पूर्णांक) kitna hai?", "40");
-                    if (m && Number(m) > 0) {
-                      setMaxMarks(Number(m));
-                    }
-                  }
+                  setCustomExamNameInput("");
+                  setCustomExamMaxInput(String(maxMarks || 40));
+                  setShowCustomExamModal(true);
                 }}
                 className="px-3 py-2 rounded-xl text-xs font-black border border-dashed border-amber-400 dark:border-amber-600 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 hover:bg-amber-100 transition cursor-pointer flex flex-col justify-center items-center text-center"
               >
@@ -504,6 +509,57 @@ export const MarksManager: React.FC<Props> = ({
                 <span className="text-[10px] text-amber-600 dark:text-amber-400">Custom Test / Exam</span>
               </button>
             </div>
+            {showCustomExamModal && (
+              <div className="mt-2.5 p-3 rounded-2xl bg-amber-50/80 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-700 grid grid-cols-1 sm:grid-cols-12 gap-2 items-end">
+                <div className="sm:col-span-6">
+                  <label className="text-[10px] font-bold text-amber-900 dark:text-amber-200 block mb-1">Custom Exam / Test Name *</label>
+                  <input
+                    type="text"
+                    value={customExamNameInput}
+                    onChange={(e) => setCustomExamNameInput(e.target.value)}
+                    placeholder="e.g. Unit Test 1, Weekly Test"
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-900 dark:text-white"
+                  />
+                </div>
+                <div className="sm:col-span-3">
+                  <label className="text-[10px] font-bold text-amber-900 dark:text-amber-200 block mb-1">Full Marks</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={1000}
+                    value={customExamMaxInput}
+                    onChange={(e) => setCustomExamMaxInput(e.target.value)}
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-900 dark:text-white"
+                  />
+                </div>
+                <div className="sm:col-span-3 flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!customExamNameInput.trim()) {
+                        toast.error("कृपया Extra Exam का नाम लिखें।");
+                        return;
+                      }
+                      setExamName(customExamNameInput.trim());
+                      const mNum = Number(customExamMaxInput);
+                      if (mNum > 0) setMaxMarks(mNum);
+                      setShowCustomExamModal(false);
+                      toast.success(`Custom Exam "${customExamNameInput.trim()}" सेट किया गया!`);
+                    }}
+                    className="flex-1 py-1.5 px-2.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-black cursor-pointer"
+                  >
+                    Apply
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowCustomExamModal(false)}
+                    className="py-1.5 px-2 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold cursor-pointer"
+                  >
+                    रद्द
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Subject / Book Selector - Dynamic showing ALL 9, 10, or 20 books */}
@@ -1344,14 +1400,33 @@ export const MarksManager: React.FC<Props> = ({
                           >
                             <BookOpen className="w-4 h-4" />
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteExam(exam.id)}
-                            className="p-2 rounded-xl hover:bg-red-50 dark:hover:bg-red-950/40 text-red-500 transition cursor-pointer"
-                            title="Delete Exam Record"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {confirmDeleteExamId === exam.id ? (
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteExam(exam.id)}
+                                className="px-2 py-1 rounded-lg bg-red-600 text-white text-[10px] font-black cursor-pointer"
+                              >
+                                Confirm
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteExamId(null)}
+                                className="px-2 py-1 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-[10px] font-bold cursor-pointer"
+                              >
+                                रद्द
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteExam(exam.id)}
+                              className="p-2 rounded-xl hover:bg-red-50 dark:hover:bg-red-950/40 text-red-500 transition cursor-pointer"
+                              title="Delete Exam Record"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>

@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import type { School, SchoolTeacher, StaffEmployee } from "../../school-types";
 import { getSavedSchoolLogo, cleanLogoUrl, formatAcademicSession } from "./feeReceiptUtils";
+import { printElementInIframe } from "./AdmissionFormPrintModal";
 
 interface Props {
   isOpen: boolean;
@@ -81,7 +82,7 @@ export const TeacherIdCardModal: React.FC<Props> = ({
   };
 
   const handlePrint = () => {
-    window.print();
+    printElementInIframe(printAreaRef.current, `${teacherName} - Teacher ID Card`);
   };
 
   const handleShareWhatsApp = () => {

@@ -11,6 +11,7 @@ import {
   CheckCircle2, MessageCircle, ShieldAlert, Sparkles, PhoneOutgoing, Loader2,
   Cake, Gift, Heart, Wifi, WifiOff, Cloud, CloudOff, RefreshCw, Volume2, Clock
 } from "lucide-react";
+import { toast } from "sonner";
 import { speakNotification } from "../../utils/voiceNotifyEngine";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 import { QrAttendanceScannerModal } from "./QrAttendanceScannerModal";
@@ -193,7 +194,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
       setBirthdayNoticeToast(`🎉 ${student.name} को जन्मदिन की बधाई व शुभाशीर्वाद भेजा गया!`);
       setTimeout(() => setBirthdayNoticeToast(null), 4000);
     } catch (e: any) {
-      alert("Birthday wish error: " + (e?.message || "Error"));
+      toast.error("Birthday wish error: " + (e?.message || "Error"));
     } finally {
       setWishingBirthdayId(null);
     }
@@ -217,7 +218,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
       setBirthdayNoticeToast(`🎉 सभी ${list.length} छात्रों को जन्मदिन की शुभकामनाएं प्रेषित की गईं!`);
       setTimeout(() => setBirthdayNoticeToast(null), 4000);
     } catch (e: any) {
-      alert("Birthday wish error: " + (e?.message || "Error"));
+      toast.error("Birthday wish error: " + (e?.message || "Error"));
     } finally {
       setWishingClassBirthdays(false);
     }
@@ -375,7 +376,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
   // 1-Click Broadcast Absentee Notices
   const handleBroadcastAbsenteeNotices = async () => {
     if (absentStudents.length === 0) {
-      alert("आज कोई भी छात्र अनुपस्थित नहीं है।");
+      toast.info("आज कोई भी छात्र अनुपस्थित नहीं है।");
       return;
     }
     setBroadcastingAbsentees(true);
@@ -395,7 +396,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
       setAbsenteeBroadcastToast(`✅ ${studentIds.length} अनुपस्थित छात्रों के अभिभावकों को पुश नोटिफिकेशन भेज दिया गया! (Delivered: ${pushRes.delivered})`);
       setTimeout(() => setAbsenteeBroadcastToast(null), 4000);
     } catch {
-      alert("Notification भेजने में समस्या आई।");
+      toast.error("Notification भेजने में समस्या आई।");
     } finally {
       setBroadcastingAbsentees(false);
     }
@@ -417,7 +418,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
       setAbsenteeBroadcastToast(`✅ ${student.name} के पेरेंट्स को अनुपस्थिति अलर्ट भेजा गया!`);
       setTimeout(() => setAbsenteeBroadcastToast(null), 3500);
     } catch {
-      alert("अलर्ट भेजने में समस्या आई।");
+      toast.error("अलर्ट भेजने में समस्या आई।");
     }
   };
 
@@ -432,7 +433,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
     if (cleanPhone) {
       window.open(`https://wa.me/91${cleanPhone.slice(-10)}?text=${encodeURIComponent(msg)}`, "_blank");
     } else {
-      alert("इस छात्र के पेरेंट्स का फोन नंबर उपलब्ध नहीं है।");
+      toast.error("इस छात्र के पेरेंट्स का फोन नंबर उपलब्ध नहीं है।");
     }
   };
 
@@ -503,9 +504,25 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
   if (loading) return <div className="flex items-center justify-center h-48 text-slate-400">Loading students...</div>;
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 print:min-h-0 print:bg-white">
+      <style>{`
+        @media print {
+          @page { size: landscape; margin: 5mm; }
+          .attendance-matrix-table th,
+          .attendance-matrix-table td {
+            padding: 2px 3px !important;
+            font-size: 8.5px !important;
+            min-width: 0 !important;
+            position: static !important;
+          }
+          .attendance-matrix-table {
+            width: 100% !important;
+            table-layout: auto !important;
+          }
+        }
+      `}</style>
       {/* Header */}
-      <div className="bg-white dark:bg-slate-800 border-b dark:border-slate-700 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+      <div className="bg-white dark:bg-slate-800 border-b dark:border-slate-700 px-4 py-3 flex flex-wrap items-center justify-between gap-3 print:hidden">
         <div className="flex items-center gap-3">
           {onBack && <button onClick={onBack} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer"><ChevronLeft className="w-5 h-5" /></button>}
           <div>
@@ -1195,9 +1212,15 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
         </div>
       ) : viewMode === "matrix" ? (
         /* 31-DAY MONTHLY ATTENDANCE MATRIX */
-        <div className="p-3 sm:p-4 space-y-4 max-w-full overflow-hidden">
+        <div className="p-3 sm:p-4 space-y-4 max-w-full overflow-hidden print:overflow-visible print:p-0 print:space-y-2">
+          <div className="hidden print:block text-center border-b border-slate-300 pb-2 mb-2">
+            <h2 className="text-base font-black text-slate-900">{className} — Monthly Attendance Matrix</h2>
+            <p className="text-xs text-slate-600">
+              {new Date(selectedMonth + "-01").toLocaleString("default", { month: "long", year: "numeric" })} • {students.length} Students
+            </p>
+          </div>
           {/* Month selector & actions */}
-          <div className="bg-white dark:bg-slate-800 rounded-xl p-3 sm:p-4 flex flex-wrap items-center justify-between gap-3 shadow-xs border border-slate-200 dark:border-slate-700">
+          <div className="bg-white dark:bg-slate-800 rounded-xl p-3 sm:p-4 flex flex-wrap items-center justify-between gap-3 shadow-xs border border-slate-200 dark:border-slate-700 print:hidden">
             <div className="flex items-center gap-2">
               <button onClick={() => changeMonth(-1)} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700"><ChevronLeft className="w-4 h-4" /></button>
               <span className="font-bold text-slate-800 dark:text-white text-base">
@@ -1219,7 +1242,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
           </div>
 
           {/* Legend */}
-          <div className="flex flex-wrap items-center gap-3 text-xs bg-slate-100 dark:bg-slate-800/60 p-3 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300">
+          <div className="flex flex-wrap items-center gap-3 text-xs bg-slate-100 dark:bg-slate-800/60 p-3 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 print:hidden">
             <span className="font-bold text-slate-800 dark:text-white">Legend:</span>
             <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-emerald-500 text-white font-black text-[10px] flex items-center justify-center">P</span> Present</span>
             <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-amber-500 text-white font-black text-[10px] flex items-center justify-center">L</span> Late Arrival</span>
@@ -1240,8 +1263,8 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
             const daysArr = Array.from({ length: daysInMonth }, (_, i) => i + 1);
 
             return (
-              <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xs border border-slate-200 dark:border-slate-700 overflow-x-auto">
-                <table className="w-full text-xs border-collapse">
+              <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xs border border-slate-200 dark:border-slate-700 overflow-x-auto print:overflow-visible print:border-0 print:rounded-none">
+                <table className="attendance-matrix-table w-full text-xs border-collapse">
                   <thead>
                     <tr className="bg-slate-800 text-white text-[11px]">
                       <th className="sticky left-0 z-20 bg-slate-800 px-2.5 py-2.5 text-left min-w-[50px] border-r border-slate-700">Roll</th>

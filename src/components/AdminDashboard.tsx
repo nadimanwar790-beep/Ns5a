@@ -19602,6 +19602,76 @@ const AdminDashboardInner: React.FC<Props> = ({ onNavigate, settings, onUpdateSe
                       <p id="iic-json-status" className="text-[10px] text-slate-300 font-mono min-h-[16px] text-center"></p>
                   </div>
 
+                  {/* ── App Source Code ZIP Export (Dev Preview Only) ── */}
+                  <div className="mt-4 p-4 bg-indigo-950/70 border border-indigo-700/60 rounded-xl space-y-2.5">
+                      <div className="flex items-center gap-2">
+                          <Code2 size={18} className="text-indigo-400 shrink-0" />
+                          <div>
+                              <p className="text-[11px] font-black text-white uppercase tracking-widest">App Source Code (ZIP)</p>
+                              <p className="text-[9px] text-indigo-200/80">Poore app ka React + Server code seedha ZIP file me download karein</p>
+                          </div>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <button
+                              onClick={async () => {
+                                  const statusEl = document.getElementById('iic-src-zip-status');
+                                  if (statusEl) statusEl.textContent = '⏳ Source Code ZIP ban raha hai (~5 MB)...';
+                                  try {
+                                      const res = await fetch('/api/export-source-zip?includeModels=0');
+                                      if (!res.ok) {
+                                          const errData = await res.json().catch(() => ({}));
+                                          throw new Error(errData?.error || `HTTP ${res.status}`);
+                                      }
+                                      const blob = await res.blob();
+                                      const url = URL.createObjectURL(blob);
+                                      const a = document.createElement('a');
+                                      a.href = url;
+                                      a.download = `nsta-app-source-${new Date().toISOString().slice(0, 10)}.zip`;
+                                      document.body.appendChild(a);
+                                      a.click();
+                                      a.remove();
+                                      setTimeout(() => URL.revokeObjectURL(url), 5000);
+                                      if (statusEl) statusEl.textContent = `✅ ZIP download shuru ho gayi (${(blob.size / (1024 * 1024)).toFixed(2)} MB)!`;
+                                  } catch (e: any) {
+                                      if (statusEl) statusEl.textContent = `❌ ${e?.message || 'Download failed (Dev preview URL par hi chalta hai)'}`;
+                                  }
+                              }}
+                              className="w-full py-2.5 px-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl flex items-center justify-center gap-2 text-xs active:scale-95 transition-all cursor-pointer"
+                          >
+                              <Download size={15} /> Code ZIP (~5 MB)
+                          </button>
+                          <button
+                              onClick={async () => {
+                                  const statusEl = document.getElementById('iic-src-zip-status');
+                                  if (statusEl) statusEl.textContent = '⏳ Code + Face Models ZIP ban raha hai (~22 MB)...';
+                                  try {
+                                      const res = await fetch('/api/export-source-zip?includeModels=1');
+                                      if (!res.ok) {
+                                          const errData = await res.json().catch(() => ({}));
+                                          throw new Error(errData?.error || `HTTP ${res.status}`);
+                                      }
+                                      const blob = await res.blob();
+                                      const url = URL.createObjectURL(blob);
+                                      const a = document.createElement('a');
+                                      a.href = url;
+                                      a.download = `nsta-app-full-${new Date().toISOString().slice(0, 10)}.zip`;
+                                      document.body.appendChild(a);
+                                      a.click();
+                                      a.remove();
+                                      setTimeout(() => URL.revokeObjectURL(url), 5000);
+                                      if (statusEl) statusEl.textContent = `✅ Full ZIP download shuru ho gayi (${(blob.size / (1024 * 1024)).toFixed(2)} MB)!`;
+                                  } catch (e: any) {
+                                      if (statusEl) statusEl.textContent = `❌ ${e?.message || 'Download failed (Dev preview URL par hi chalta hai)'}`;
+                                  }
+                              }}
+                              className="w-full py-2.5 px-3 bg-slate-700 hover:bg-slate-600 text-white font-bold rounded-xl flex items-center justify-center gap-2 text-xs active:scale-95 transition-all border border-slate-600 cursor-pointer"
+                          >
+                              <Download size={15} /> Code + Face Models (~22 MB)
+                          </button>
+                      </div>
+                      <p id="iic-src-zip-status" className="text-[10px] text-indigo-200 font-mono min-h-[16px] text-center"></p>
+                  </div>
+
                   {/* ── Force Refresh: Clear stale cache so Firebase data shows up ── */}
                   <div className="mt-4 p-4 bg-orange-50 border border-orange-300 rounded-xl">
                       <h4 className="text-orange-800 font-black mb-1 flex items-center gap-2 text-sm">🔄 Data Firebase Mein Hai But App Mein Nahi Dikh Raha?</h4>

@@ -1,5 +1,6 @@
 // @ts-nocheck
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
+import { toast } from "sonner";
 import QRCode from "react-qr-code";
 import {
   Shield,
@@ -22,6 +23,8 @@ import {
   User
 } from "lucide-react";
 import type { School, SecurityVisitorPass, StudentEarlyGatePass, SchoolStudent, SchoolClass } from "../../school-types";
+import { loadSchoolSubcollection, syncSchoolSubcollection } from "../../utils/schoolCloudSync";
+import { printElementInIframe } from "./AdmissionFormPrintModal";
 
 interface Props {
   school: School;
@@ -142,6 +145,21 @@ export const VisitorGateSecurityManager: React.FC<Props> = ({
 
   const [searchQuery, setSearchQuery] = useState("");
   const [printPass, setPrintPass] = useState<SecurityVisitorPass | StudentEarlyGatePass | null>(null);
+  const gateSlipRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    const sid = school?.id;
+    if (!sid) return;
+    const suffix = sid || "demo";
+    loadSchoolSubcollection<SecurityVisitorPass>(sid, "gate_visitors", `gate_visitors_${suffix}`).then((data) => {
+      if (active && data.length > 0) setVisitors(data);
+    });
+    loadSchoolSubcollection<StudentEarlyGatePass>(sid, "gate_early_passes", `gate_early_passes_${suffix}`).then((data) => {
+      if (active && data.length > 0) setEarlyPasses(data);
+    });
+    return () => { active = false; };
+  }, [school?.id]);
 
   // New Visitor Form State
   const [showAddVisitorModal, setShowAddVisitorModal] = useState(false);
@@ -169,6 +187,7 @@ export const VisitorGateSecurityManager: React.FC<Props> = ({
     try {
       localStorage.setItem(`gate_visitors_${school?.id || "demo"}`, JSON.stringify(updated));
     } catch {}
+    syncSchoolSubcollection(school?.id, "gate_visitors", updated);
   };
 
   const saveEarlyPasses = (updated: StudentEarlyGatePass[]) => {
@@ -176,6 +195,7 @@ export const VisitorGateSecurityManager: React.FC<Props> = ({
     try {
       localStorage.setItem(`gate_early_passes_${school?.id || "demo"}`, JSON.stringify(updated));
     } catch {}
+    syncSchoolSubcollection(school?.id, "gate_early_passes", updated);
   };
 
   const handleCreateVisitor = (e: React.FormEvent) => {
@@ -209,6 +229,7 @@ export const VisitorGateSecurityManager: React.FC<Props> = ({
     setVName("");
     setVPhone("");
     setPrintPass(newPass);
+    toast.success(`Visitor Pass ${newPass.passNumber} issued.`);
   };
 
   const handleCheckoutVisitor = (id: string) => {
@@ -224,11 +245,15 @@ export const VisitorGateSecurityManager: React.FC<Props> = ({
       return v;
     });
     saveVisitors(updated);
+    toast.success("Visitor checked out.");
   };
 
   const handleCreateEarlyPass = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!eStudentName.trim()) return;
+    if (!eStudentName.trim()) {
+      toast.error("Please enter student name.");
+      return;
+    }
 
     const passNo = `EGP-2026-${Math.floor(100 + Math.random() * 900)}`;
     const nowTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -253,6 +278,7 @@ export const VisitorGateSecurityManager: React.FC<Props> = ({
     setShowAddEarlyModal(false);
     setEStudentName("");
     setPrintPass(newEarly);
+    toast.success(`Early Exit Pass ${newEarly.passNumber} authorized.`);
   };
 
   const handleConfirmExit = (id: string) => {
@@ -264,6 +290,7 @@ export const VisitorGateSecurityManager: React.FC<Props> = ({
       return p;
     });
     saveEarlyPasses(updated);
+    toast.success("Gate exit confirmed.");
   };
 
   const checkedInCount = visitors.filter((v) => v.status === "CHECKED_IN").length;
@@ -761,7 +788,7 @@ export const VisitorGateSecurityManager: React.FC<Props> = ({
       {/* PRINTABLE GATE PASS SLIP MODAL */}
       {printPass && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="w-full max-w-sm bg-white text-slate-900 rounded-3xl p-6 shadow-2xl space-y-4 text-center border-4 border-slate-900 animate-in zoom-in-95">
+          <div ref={gateSlipRef} className="w-full max-w-sm bg-white text-slate-900 rounded-3xl p-6 shadow-2xl space-y-4 text-center border-4 border-slate-900 animate-in zoom-in-95">
             <div className="border-b-2 border-slate-900 pb-3">
               <h3 className="font-black text-lg text-slate-950 uppercase">{school?.name || "School"}</h3>
               <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
@@ -818,10 +845,18 @@ export const VisitorGateSecurityManager: React.FC<Props> = ({
               <span>Guard Stamp Verified</span>
             </div>
 
-            <div className="flex items-center justify-center gap-2 pt-2">
+            <div className="flex items-center justify-center gap-2 pt-2 no-print print:hidden">
               <button
                 type="button"
-                onClick={() => window.print()}
+                onClick={() => {
+                  if (gateSlipRef.current) {
+                    printElementInIframe(
+                      gateSlipRef.current,
+                      `Gate Pass - ${printPass.passNumber}`,
+                      `.no-print { display: none !important; }`
+                    );
+                  }
+                }}
                 className="px-4 py-2 rounded-xl bg-slate-950 hover:bg-slate-800 text-white font-black text-xs shadow cursor-pointer flex items-center gap-1.5"
               >
                 <Printer className="w-3.5 h-3.5" /> Print Gate Slip

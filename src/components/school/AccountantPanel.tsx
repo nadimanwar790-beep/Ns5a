@@ -83,6 +83,7 @@ import { OnlineAdmissionManager } from "./OnlineAdmissionManager";
 import { AbsenteeActionPage } from "./AbsenteeActionPage";
 import { SiblingProfileManager } from "./SiblingProfileManager";
 import { NstaMessengerSuite } from "./NstaMessengerSuite";
+import { printHtmlInIframe } from "./AdmissionFormPrintModal";
 import {
   printPosSlipDirect,
   printA6SlipDirect,
@@ -463,18 +464,18 @@ export const AccountantPanel: React.FC<Props> = ({
     }
   };
 
-  // Quick print expense voucher
+  // Quick print expense voucher (iframe-safe, never blocked by popup blockers)
   const handlePrintExpenseVoucher = (voucher: SchoolExpenseVoucher) => {
     const schoolLogo = getSavedSchoolLogo() || cleanLogoUrl(school?.logoUrl || "");
-    const win = window.open("", "_blank");
-    if (!win) return;
-    win.document.write(`
+    const htmlDoc = `
       <!DOCTYPE html>
       <html>
       <head>
+        <meta charset="utf-8" />
         <title>Expense Voucher - ${voucher.voucherNo}</title>
         <style>
-          body { font-family: system-ui, -apple-system, sans-serif; margin: 20px; color: #1e293b; }
+          @page { size: A5 landscape; margin: 8mm; }
+          body { font-family: system-ui, -apple-system, sans-serif; margin: 16px; color: #1e293b; background: #fff; }
           .voucher-box { border: 2px solid #0f172a; border-radius: 8px; padding: 20px; max-width: 600px; margin: auto; }
           .header { text-align: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px; margin-bottom: 16px; }
           .school-name { font-size: 20px; font-weight: 800; color: #0f172a; text-transform: uppercase; }
@@ -519,13 +520,10 @@ export const AccountantPanel: React.FC<Props> = ({
             <div>Principal / Admin Seal</div>
           </div>
         </div>
-        <script>
-          window.print();
-        </script>
       </body>
       </html>
-    `);
-    win.document.close();
+    `;
+    printHtmlInIframe(htmlDoc, `Expense_Voucher_${voucher.voucherNo}`);
   };
 
   return (

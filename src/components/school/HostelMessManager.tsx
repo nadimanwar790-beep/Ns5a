@@ -1,5 +1,6 @@
 // @ts-nocheck
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
+import { toast } from "sonner";
 import {
   Home,
   Bed,
@@ -31,6 +32,13 @@ import type {
   SchoolStudent,
   SchoolClass
 } from "../../school-types";
+import {
+  loadSchoolSubcollection,
+  syncSchoolSubcollection,
+  loadSchoolSettingBlob,
+  saveSchoolSettingBlob
+} from "../../utils/schoolCloudSync";
+import { printElementInIframe } from "./AdmissionFormPrintModal";
 
 interface Props {
   school: School;
@@ -175,6 +183,42 @@ export const HostelMessManager: React.FC<Props> = ({
 
   const [attendanceDate, setAttendanceDate] = useState(() => new Date().toISOString().split("T")[0]);
   const [attendanceRecords, setAttendanceRecords] = useState<Record<string, "PRESENT" | "NIGHT_OUT" | "LEAVE" | "ABSENT">>({});
+  const messMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    const sid = school?.id;
+    if (!sid) return;
+    const cacheSuffix = sid || "demo";
+    loadSchoolSubcollection<HostelBuilding>(sid, "hostel_buildings", `hostel_bld_${cacheSuffix}`).then((data) => {
+      if (active && data.length > 0) setBuildings(data);
+    });
+    loadSchoolSubcollection<HostelRoom>(sid, "hostel_rooms", `hostel_rooms_${cacheSuffix}`).then((data) => {
+      if (active && data.length > 0) setRooms(data);
+    });
+    loadSchoolSubcollection<HostelBedAllocation>(sid, "hostel_allocations", `hostel_alloc_${cacheSuffix}`).then((data) => {
+      if (active && data.length > 0) setAllocations(data);
+    });
+    loadSchoolSettingBlob<MessMenuDay[]>(sid, "hostel_mess_menu", `hostel_menu_${cacheSuffix}`, DEFAULT_MESS_MENU).then((menu) => {
+      if (active && Array.isArray(menu) && menu.length > 0) setMessMenu(menu);
+    });
+    return () => { active = false; };
+  }, [school?.id]);
+
+  useEffect(() => {
+    let active = true;
+    const sid = school?.id;
+    if (!sid) return;
+    loadSchoolSettingBlob<Record<string, "PRESENT" | "NIGHT_OUT" | "LEAVE" | "ABSENT">>(
+      sid,
+      `hostel_rollcall_${attendanceDate}`,
+      `hostel_rollcall_${sid || "demo"}_${attendanceDate}`,
+      {}
+    ).then((rec) => {
+      if (active && rec && typeof rec === "object") setAttendanceRecords(rec);
+    });
+    return () => { active = false; };
+  }, [school?.id, attendanceDate]);
 
   // Add Room Modal State
   const [showAddRoomModal, setShowAddRoomModal] = useState(false);
@@ -198,6 +242,7 @@ export const HostelMessManager: React.FC<Props> = ({
     try {
       localStorage.setItem(`hostel_rooms_${school?.id || "demo"}`, JSON.stringify(updated));
     } catch {}
+    syncSchoolSubcollection(school?.id, "hostel_rooms", updated);
   };
 
   const saveAllocations = (updated: HostelBedAllocation[]) => {
@@ -205,11 +250,15 @@ export const HostelMessManager: React.FC<Props> = ({
     try {
       localStorage.setItem(`hostel_alloc_${school?.id || "demo"}`, JSON.stringify(updated));
     } catch {}
+    syncSchoolSubcollection(school?.id, "hostel_allocations", updated);
   };
 
   const handleAddRoom = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newRoomNumber.trim()) return;
+    if (!newRoomNumber.trim()) {
+      toast.error("Please enter a room number.");
+      return;
+    }
 
     const newRecord: HostelRoom = {
       id: `rm_${Date.now()}`,
@@ -224,11 +273,15 @@ export const HostelMessManager: React.FC<Props> = ({
     saveRooms([...rooms, newRecord]);
     setShowAddRoomModal(false);
     setNewRoomNumber("");
+    toast.success(`Room ${newRecord.roomNumber} added to hostel inventory.`);
   };
 
   const handleCreateAllocation = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!allocStudentName.trim()) return;
+    if (!allocStudentName.trim()) {
+      toast.error("Please enter student name.");
+      return;
+    }
 
     const selectedRoom = rooms.find((r) => r.id === allocRoomId);
     const selectedBld = buildings.find((b) => b.id === selectedRoom?.buildingId);
@@ -253,6 +306,7 @@ export const HostelMessManager: React.FC<Props> = ({
     saveAllocations([...allocations, newAlloc]);
     setShowAllocateModal(false);
     setAllocStudentName("");
+    toast.success(`Bed allocated to ${newAlloc.studentName}.`);
   };
 
   const handleToggleAttendance = (studentId: string, currentStatus: string) => {
@@ -263,7 +317,16 @@ export const HostelMessManager: React.FC<Props> = ({
       ABSENT: "PRESENT",
     };
     const next = cycle[currentStatus || "PRESENT"] || "PRESENT";
-    setAttendanceRecords((prev) => ({ ...prev, [studentId]: next }));
+    setAttendanceRecords((prev) => {
+      const nextRecords = { ...prev, [studentId]: next };
+      saveSchoolSettingBlob(
+        school?.id,
+        `hostel_rollcall_${attendanceDate}`,
+        `hostel_rollcall_${school?.id || "demo"}_${attendanceDate}`,
+        nextRecords
+      );
+      return nextRecords;
+    });
   };
 
   const totalBedsCapacity = rooms.reduce((sum, r) => sum + r.capacity, 0);
@@ -500,6 +563,7 @@ export const HostelMessManager: React.FC<Props> = ({
                         onClick={() => {
                           const updated = allocations.filter((item) => item.id !== a.id);
                           saveAllocations(updated);
+                          toast.success(`Bed vacated for ${a.studentName}.`);
                         }}
                         className="px-2 py-1 rounded bg-rose-500/20 text-rose-300 hover:bg-rose-500/30 text-[10px] font-bold cursor-pointer"
                       >
@@ -524,7 +588,20 @@ export const HostelMessManager: React.FC<Props> = ({
             </h3>
             <button
               type="button"
-              onClick={() => window.print()}
+              onClick={() => {
+                if (messMenuRef.current) {
+                  printElementInIframe(
+                    messMenuRef.current,
+                    `Weekly Mess Menu - ${school?.name || "Hostel"}`,
+                    `
+                      body { color: #0f172a !important; background: #fff !important; }
+                      .mess-menu-grid { display: grid !important; grid-template-columns: repeat(2, 1fr) !important; gap: 10px !important; }
+                      .mess-menu-card { background: #fff !important; border: 1px solid #cbd5e1 !important; color: #0f172a !important; page-break-inside: avoid; }
+                      .mess-menu-card * { color: #1e293b !important; }
+                    `
+                  );
+                }
+              }}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold cursor-pointer shadow"
             >
               <Printer className="w-3.5 h-3.5" />
@@ -532,9 +609,9 @@ export const HostelMessManager: React.FC<Props> = ({
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+          <div ref={messMenuRef} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5 mess-menu-grid">
             {messMenu.map((m, idx) => (
-              <div key={idx} className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-2">
+              <div key={idx} className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-2 mess-menu-card">
                 <div className="flex items-center justify-between pb-2 border-b border-slate-800">
                   <span className="font-black text-sm text-amber-400">{m.day}</span>
                   {m.specialDiet && (

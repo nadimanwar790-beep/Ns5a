@@ -179,6 +179,54 @@ export function printHtmlInIframe(htmlDocument: string, title = "Print Document"
   }, 1400);
 }
 
+/**
+ * Clones active stylesheets and prints a specific DOM element cleanly inside an isolated iframe.
+ */
+export function printElementInIframe(
+  element: HTMLElement | null,
+  title = "Print Document",
+  extraCss = ""
+): void {
+  if (!element || typeof document === "undefined") return;
+  const styles = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
+    .map((node) => node.outerHTML)
+    .join("\n");
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(title)}</title>
+  ${styles}
+  <style>
+    @page { size: auto; margin: 8mm; }
+    html, body {
+      margin: 0 !important;
+      padding: 8px !important;
+      background: #ffffff !important;
+      color: #0f172a !important;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
+    .print-center-stage {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      width: 100%;
+    }
+    .print\\:hidden, .no-print { display: none !important; }
+    ${extraCss}
+  </style>
+</head>
+<body>
+  <div class="print-center-stage">${element.outerHTML}</div>
+</body>
+</html>`;
+
+  printHtmlInIframe(html, title);
+}
+
 const ADMISSION_PRINT_CSS = `
   @page { size: A4 portrait; margin: 6mm 7mm; }
   * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
@@ -847,8 +895,8 @@ export const AdmissionFormPrintModal: React.FC<Props> = ({
       const siblings = Array.isArray(rawSiblingList) ? rawSiblingList : [];
       const isOnlyChildVal = !isBlankForm ? ((student as any)?.isOnlyChild ?? (application as any)?.isOnlyChild ?? (siblings.length === 0 ? null : false)) : null;
 
-      const schoolDisplayName = school?.name || "LIFE MAKER PUBLIC SCHOOL";
-      const schoolDisplayAddr = school?.address || "Near Affour Yogi Baba Petrol Pump, Affour Nagra";
+      const schoolDisplayName = school?.name || "School Administration";
+      const schoolDisplayAddr = school?.address || "";
 
       // PAGE 1 OF CLASSIC BOX GRID
       if (pageNum === 1) {

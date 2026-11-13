@@ -1,5 +1,6 @@
 // @ts-nocheck
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { toast } from "sonner";
 import {
   BookOpen,
   CheckCircle2,
@@ -19,6 +20,7 @@ import {
   Award
 } from "lucide-react";
 import type { School, SchoolClass, SubjectSyllabusPacing, SyllabusChapter } from "../../school-types";
+import { loadSchoolSubcollection, syncSchoolSubcollection } from "../../utils/schoolCloudSync";
 
 interface Props {
   school: School;
@@ -135,6 +137,19 @@ export const SyllabusPacingTracker: React.FC<Props> = ({
   const [selectedPacingId, setSelectedPacingId] = useState<string>(pacingList[0]?.id || "");
   const [filterStatus, setFilterStatus] = useState<"ALL" | "ON_TRACK" | "LAGGING" | "CRITICAL_DELAY">("ALL");
 
+  useEffect(() => {
+    let active = true;
+    const sid = school?.id;
+    if (!sid) return;
+    loadSchoolSubcollection<SubjectSyllabusPacing>(sid, "syllabus_pacing", `syllabus_pacing_${sid || "demo"}`).then((data) => {
+      if (active && data.length > 0) {
+        setPacingList(data);
+        setSelectedPacingId((prev) => prev || data[0]?.id || "");
+      }
+    });
+    return () => { active = false; };
+  }, [school?.id]);
+
   const activePacing = pacingList.find((p) => p.id === selectedPacingId) || pacingList[0];
 
   const savePacingList = (updated: SubjectSyllabusPacing[]) => {
@@ -142,6 +157,7 @@ export const SyllabusPacingTracker: React.FC<Props> = ({
     try {
       localStorage.setItem(`syllabus_pacing_${school?.id || "demo"}`, JSON.stringify(updated));
     } catch {}
+    syncSchoolSubcollection(school?.id, "syllabus_pacing", updated);
   };
 
   const handleToggleChapterStatus = (pacingId: string, chapterNo: number) => {
@@ -177,6 +193,7 @@ export const SyllabusPacingTracker: React.FC<Props> = ({
     });
 
     savePacingList(updated);
+    toast.success(`Chapter #${chapterNo} status updated.`);
   };
 
   const completedChapters = activePacing?.chapters.filter((c) => c.status === "COMPLETED").length || 0;
@@ -189,36 +206,40 @@ export const SyllabusPacingTracker: React.FC<Props> = ({
     return p.pacingStatus === filterStatus;
   });
 
-  const handleSendPacingNotice = (pacing: SubjectSyllabusPacing) => {
+  const handleSendPacingNotice = async (pacing: SubjectSyllabusPacing) => {
     const msg = `⚠️ *NSTA SYLLABUS PACING NOTICE*\nRespected ${pacing.teacherName},\nRegarding: ${pacing.className} ${pacing.subject}\nCurrently completed: ${completedChapters}/${pacing.totalChapters} chapters (${completionPercentage}%).\nExpected completion deadline is ${pacing.targetCompletionDate}.\nPlease expedite the pending chapters or schedule an extra class.\n- Principal, ${school?.name || "School"}`;
-    const url = `https://wa.me/?text=${encodeURIComponent(msg)}`;
-    window.open(url, "_blank");
+    try {
+      await navigator.clipboard?.writeText(msg);
+      toast.success(`Notice for ${pacing.teacherName} copied to clipboard!`);
+    } catch {
+      toast.info(`Reminder prepared for ${pacing.teacherName} (${pacing.subject}).`);
+    }
   };
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-6 text-white shadow-2xl space-y-6">
+    <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-6 text-white shadow-2xl space-y-6 print:bg-white print:text-slate-900 print:border-slate-300 print:shadow-none print:rounded-none print:p-2">
       {/* Top Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-800 print:border-slate-300">
         <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20">
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20 print:hidden">
             <BookOpen className="w-6 h-6" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-xl sm:text-2xl font-black text-white">
+              <h2 className="text-xl sm:text-2xl font-black text-white print:text-slate-900">
                 Syllabus Pacing &amp; Academic Progress Tracker
               </h2>
-              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-black bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-black bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 print:hidden">
                 Principal Academic HUD
               </span>
             </div>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Subject chapter completion velocity, target deadline tracking &amp; backlog warnings
+            <p className="text-xs text-slate-400 mt-0.5 print:text-slate-600">
+              {school?.name || "School"} — Subject chapter completion velocity, target deadline tracking &amp; backlog warnings
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 print:hidden">
           <button
             type="button"
             onClick={() => window.print()}
@@ -240,9 +261,9 @@ export const SyllabusPacingTracker: React.FC<Props> = ({
       </div>
 
       {/* Main Grid: Left Side Subjects Selector / Right Side Pacing Details */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 print:block">
         {/* LEFT COLUMN: SUBJECTS LIST & STATUS SUMMARY */}
-        <div className="space-y-4">
+        <div className="space-y-4 print:hidden">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
               Classes &amp; Subjects ({pacingList.length})
@@ -342,21 +363,21 @@ export const SyllabusPacingTracker: React.FC<Props> = ({
           {activePacing && (
             <div className="space-y-4">
               {/* Detailed Progress Card */}
-              <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-slate-950 to-indigo-950/60 border border-indigo-500/30 space-y-4">
+              <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-slate-950 to-indigo-950/60 border border-indigo-500/30 space-y-4 print:bg-none print:bg-white print:border-slate-300 print:text-slate-900">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
-                    <span className="px-2.5 py-0.5 rounded-md text-[10px] font-black bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                    <span className="px-2.5 py-0.5 rounded-md text-[10px] font-black bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 print:bg-slate-100 print:text-slate-800 print:border-slate-300">
                       {activePacing.className}
                     </span>
-                    <h3 className="text-lg sm:text-xl font-black text-white mt-1">
+                    <h3 className="text-lg sm:text-xl font-black text-white mt-1 print:text-slate-900">
                       {activePacing.subject}
                     </h3>
-                    <p className="text-xs text-slate-300 mt-0.5">
-                      Teacher Incharge: <b className="text-amber-400">{activePacing.teacherName}</b> &bull; Target Finish: <b className="text-white">{activePacing.targetCompletionDate}</b>
+                    <p className="text-xs text-slate-300 mt-0.5 print:text-slate-700">
+                      Teacher Incharge: <b className="text-amber-400 print:text-slate-900">{activePacing.teacherName}</b> &bull; Target Finish: <b className="text-white print:text-slate-900">{activePacing.targetCompletionDate}</b>
                     </p>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 print:hidden">
                     <button
                       type="button"
                       onClick={() => handleSendPacingNotice(activePacing)}
@@ -369,16 +390,16 @@ export const SyllabusPacingTracker: React.FC<Props> = ({
                 </div>
 
                 {/* Big Velocity Bar */}
-                <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 space-y-2">
+                <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 space-y-2 print:bg-slate-50 print:border-slate-300">
                   <div className="flex items-center justify-between text-xs font-black">
-                    <span className="flex items-center gap-1 text-slate-300">
-                      <TrendingUp className="w-4 h-4 text-emerald-400" />
+                    <span className="flex items-center gap-1 text-slate-300 print:text-slate-700">
+                      <TrendingUp className="w-4 h-4 text-emerald-400 print:text-emerald-700" />
                       <span>Syllabus Completion Meter</span>
                     </span>
-                    <span className="text-base text-emerald-400">{completionPercentage}% Completed</span>
+                    <span className="text-base text-emerald-400 print:text-emerald-700">{completionPercentage}% Completed</span>
                   </div>
 
-                  <div className="w-full h-3 rounded-full bg-slate-800 overflow-hidden p-0.5 border border-slate-700">
+                  <div className="w-full h-3 rounded-full bg-slate-800 overflow-hidden p-0.5 border border-slate-700 print:bg-slate-200 print:border-slate-300">
                     <div
                       className="h-full rounded-full bg-gradient-to-r from-indigo-500 via-blue-500 to-emerald-400 transition-all duration-500"
                       style={{ width: `${completionPercentage}%` }}
@@ -386,15 +407,15 @@ export const SyllabusPacingTracker: React.FC<Props> = ({
                   </div>
 
                   <div className="grid grid-cols-3 gap-2 text-center text-xs pt-1 font-bold">
-                    <div className="text-emerald-400">
-                      <span className="block text-[10px] text-slate-400">Completed</span>
+                    <div className="text-emerald-400 print:text-emerald-700">
+                      <span className="block text-[10px] text-slate-400 print:text-slate-500">Completed</span>
                       <span>{completedChapters} Chapters</span>
                     </div>
-                    <div className="text-amber-400">
-                      <span className="block text-[10px] text-slate-400">In Progress</span>
+                    <div className="text-amber-400 print:text-amber-700">
+                      <span className="block text-[10px] text-slate-400 print:text-slate-500">In Progress</span>
                       <span>{inProgressChapters} Chapters</span>
                     </div>
-                    <div className="text-slate-400">
+                    <div className="text-slate-400 print:text-slate-700">
                       <span className="block text-[10px] text-slate-500">Pending</span>
                       <span>{pendingChapters} Chapters</span>
                     </div>
@@ -403,34 +424,34 @@ export const SyllabusPacingTracker: React.FC<Props> = ({
               </div>
 
               {/* Chapters Checklist */}
-              <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-4 sm:p-5">
-                <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
-                  <h4 className="text-sm font-black text-white flex items-center gap-2">
-                    <Layers className="w-4 h-4 text-indigo-400" />
+              <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-4 sm:p-5 print:bg-white print:border-slate-300 print:text-slate-900">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3 print:border-slate-300">
+                  <h4 className="text-sm font-black text-white flex items-center gap-2 print:text-slate-900">
+                    <Layers className="w-4 h-4 text-indigo-400 print:text-indigo-700" />
                     <span>Chapter Milestone Checklist</span>
                   </h4>
-                  <span className="text-xs text-slate-400">Tap status button to update</span>
+                  <span className="text-xs text-slate-400 print:hidden">Tap status button to update</span>
                 </div>
 
-                <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+                <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1 print:max-h-none print:overflow-visible">
                   {activePacing.chapters.map((ch) => {
                     return (
                       <div
                         key={ch.chapterNo}
-                        className="p-3 rounded-xl bg-slate-900 border border-slate-800/80 flex items-center justify-between gap-3 hover:border-slate-700 transition"
+                        className="p-3 rounded-xl bg-slate-900 border border-slate-800/80 flex items-center justify-between gap-3 hover:border-slate-700 transition print:bg-white print:border-slate-300"
                       >
                         <div className="flex items-start gap-3 min-w-0">
-                          <span className="w-6 h-6 rounded-lg bg-indigo-500/20 text-indigo-300 font-black text-xs flex items-center justify-center shrink-0 mt-0.5">
+                          <span className="w-6 h-6 rounded-lg bg-indigo-500/20 text-indigo-300 font-black text-xs flex items-center justify-center shrink-0 mt-0.5 print:bg-slate-100 print:text-slate-800">
                             {ch.chapterNo}
                           </span>
                           <div className="min-w-0">
-                            <p className="text-xs font-bold text-white truncate leading-tight">
+                            <p className="text-xs font-bold text-white truncate leading-tight print:text-slate-900">
                               {ch.title}
                             </p>
-                            <p className="text-[10px] text-slate-400 flex items-center gap-2 mt-0.5">
+                            <p className="text-[10px] text-slate-400 flex items-center gap-2 mt-0.5 print:text-slate-600">
                               <span>Target: <b>{ch.targetMonth}</b></span>
                               {ch.completedDate && (
-                                <span className="text-emerald-400 font-semibold">&bull; Finished: {ch.completedDate}</span>
+                                <span className="text-emerald-400 font-semibold print:text-emerald-700">&bull; Finished: {ch.completedDate}</span>
                               )}
                             </p>
                           </div>

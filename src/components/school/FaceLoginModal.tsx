@@ -27,6 +27,9 @@ import {
   FaceDescriptorRecord,
   enrollStudentFromPhotoUrl,
   getDeletedFaceIds,
+  ARCFACE_MATCH_THRESHOLD,
+  ARCFACE_MAX_DISTANCE,
+  isActiveRosterPerson,
 } from "../../utils/faceRecognitionEngine";
 import { getLocalStudents } from "../../school-firebase";
 import { speakNotification } from "../../utils/voiceNotifyEngine";
@@ -70,8 +73,9 @@ export const FaceLoginModal: React.FC<Props> = ({
       const realStudents = rawLocalStudents.filter((s: any) => {
         if (!s || !s.id) return false;
         const idLower = String(s.id).toLowerCase();
-        // Exclude hardcoded dummy ids
+        // Exclude hardcoded dummy ids and inactive/deleted/TC students
         if (idLower.startsWith("std-") || idLower.startsWith("demo_") || (s as any).isDemo) return false;
+        if (!isActiveRosterPerson(s)) return false;
         return true;
       });
 
@@ -96,10 +100,10 @@ export const FaceLoginModal: React.FC<Props> = ({
         cleanMap[stId] = rec;
       });
 
-      // 4. If any real students have photoUrl but not yet enrolled in descriptors, auto-generate descriptors (skipping deleted)
+      // 4. If any active real students have photoUrl but not yet enrolled in descriptors, auto-generate descriptors (skipping deleted)
       const deletedFaceIds = getDeletedFaceIds(schoolId || "default");
       const pendingEnroll = realStudents.filter(
-        (s: any) => s && s.photoUrl && !cleanMap[s.id] && !deletedFaceIds.has(s.id)
+        (s: any) => s && isActiveRosterPerson(s) && s.photoUrl && !cleanMap[s.id] && !deletedFaceIds.has(s.id)
       );
 
       for (const st of pendingEnroll.slice(0, 10)) {
@@ -112,6 +116,10 @@ export const FaceLoginModal: React.FC<Props> = ({
             classId: st.classId,
             className: st.className,
             photoUrl: st.photoUrl,
+            active: st.active,
+            isDeleted: st.isDeleted,
+            status: st.status,
+            tcIssued: st.tcIssued,
           });
           if (rec) {
             cleanMap[st.id] = rec;
@@ -201,7 +209,7 @@ export const FaceLoginModal: React.FC<Props> = ({
     isMatchingRef.current = true;
     setScanStatus("matched");
     setMatchedStudentInfo(matched);
-    setConfidencePct(matched.confidencePercent || 94.5);
+    setConfidencePct(matched.similarityPercent || 0);
 
     playAttendanceSuccessChime();
     try {
@@ -240,9 +248,12 @@ export const FaceLoginModal: React.FC<Props> = ({
 
         try {
           const video = videoRef.current;
-          const detectedBoxes = await detectFacesInFrame(video, enrolledMap);
+          const detectedBoxes = await detectFacesInFrame(video, enrolledMap, { schoolId });
 
-          if (detectedBoxes.length > 0) {
+          if (detectedBoxes.length > 1) {
+            setCandidateStudent(null);
+            setScanStatus("detected");
+          } else if (detectedBoxes.length > 0) {
             const primaryBox = detectedBoxes[0];
 
             // Run Biometric Eye Blink Tracker on the detected face
@@ -252,27 +263,29 @@ export const FaceLoginModal: React.FC<Props> = ({
               setBlinkVerified(true);
             }
 
-            // Check if any face matches an enrolled student
+            // Check if face matches an enrolled student
             const matchedBox = detectedBoxes.find((b) => b.matchedStudent);
 
             if (matchedBox && matchedBox.matchedStudent) {
               const matched = matchedBox.matchedStudent;
               setCandidateStudent(matched);
-              setConfidencePct(matched.confidencePercent);
+              setConfidencePct(matched.similarityPercent);
 
-              // ── STRICT RULE: REQUIRE >= 90% MATCH FOR APP LOGIN ──
-              if (matched.confidencePercent >= 90.0) {
-                // ── STRICT RULE: REQUIRE EYE BLINK LIVENESS CHECK ──
+              const minSim = ARCFACE_MATCH_THRESHOLD;
+              const maxDist = ARCFACE_MAX_DISTANCE;
+              const simVal = matched.similarity ?? (matched.similarityPercent / 100);
+              if (
+                matchedBox.isArcFaceActive &&
+                simVal >= minSim &&
+                (matched.distance === undefined || matched.distance <= maxDist)
+              ) {
                 if (hasBlinked) {
-                  // Both 90%+ match and eye blink verified!
                   completeLogin(matched);
                   return;
                 } else {
-                  // 90%+ face matched, but waiting for student to blink!
                   setScanStatus("waiting_blink");
                 }
               } else {
-                // Match exists but below 90% threshold (e.g. 65% - 89%)
                 setScanStatus("low_confidence");
               }
             } else {

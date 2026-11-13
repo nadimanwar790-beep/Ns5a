@@ -1,11 +1,12 @@
 // @ts-nocheck
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import QRCode from "react-qr-code";
 import {
   X, QrCode, Calendar, Clock, School, Download, Maximize2,
   Minimize2, CheckCircle, Sparkles, Printer, Share2, Copy, Check
 } from "lucide-react";
 import { todayStr } from "../../school-firebase";
+import { printElementInIframe } from "./AdmissionFormPrintModal";
 
 interface Props {
   isOpen: boolean;
@@ -30,6 +31,7 @@ export const ClassQrCodeModal: React.FC<Props> = ({
 }) => {
   const [fullscreen, setFullscreen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const printAreaRef = useRef<HTMLDivElement>(null);
   const today = todayStr();
 
   if (!isOpen) return null;
@@ -53,7 +55,7 @@ export const ClassQrCodeModal: React.FC<Props> = ({
   };
 
   const handlePrint = () => {
-    window.print();
+    printElementInIframe(printAreaRef.current, `${className} Attendance QR`);
   };
 
   return (
@@ -95,12 +97,16 @@ export const ClassQrCodeModal: React.FC<Props> = ({
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6 flex flex-col items-center justify-center text-center">
+        <div ref={printAreaRef} className="flex-1 overflow-y-auto p-6 flex flex-col items-center justify-center text-center bg-white dark:bg-slate-900">
+          <div className="mb-3 text-center">
+            <h4 className="font-black text-base text-slate-900 dark:text-white">{schoolName}</h4>
+            <p className="text-xs font-bold text-indigo-600">{className} — Smart Attendance QR</p>
+          </div>
           {/* Date pill */}
           <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 text-indigo-700 dark:text-indigo-300 text-xs font-bold mb-4">
             <Calendar size={13} />
             <span>Today: {today}</span>
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping print:hidden" />
           </div>
 
           {/* Big high contrast QR Code display */}

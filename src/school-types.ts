@@ -227,9 +227,12 @@ export interface StaffDailyAttendanceEntry {
   employeeId?: string;
   inTime?: string;
   outTime?: string;
+  inTimestamp?: number;
+  outTimestamp?: number;
   stayDuration?: string;
   present: boolean;
   status: "present" | "absent" | "late" | "half_day" | "leave";
+  scanType?: "in" | "out";
   locationStatus?: string;
 }
 
@@ -694,6 +697,8 @@ export interface AttendanceRecord {
       note?: string;
       inTime?: string; // e.g. "08:15:30 AM"
       outTime?: string; // e.g. "02:30:15 PM"
+      inTimestamp?: number; // Epoch ms for reliable multi-day duration & gap math
+      outTimestamp?: number; // Epoch ms
       stayDuration?: string; // e.g. "6h 15m"
       status?: "present" | "late" | "half_day" | "absent" | "leave" | "bunk";
       scanType?: "in" | "out";

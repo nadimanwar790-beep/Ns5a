@@ -47,6 +47,7 @@ import {
   Calendar,
   ArrowRight,
 } from "lucide-react";
+import { toast } from "sonner";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 import type {
   School,
@@ -1092,7 +1093,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > 12 * 1024 * 1024) {
-      alert("फ़ाइल 12MB से कम होनी चाहिए।");
+      toast.error("फ़ाइल 12MB से कम होनी चाहिए।");
       return;
     }
     const reader = new FileReader();
@@ -1127,7 +1128,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > 12 * 1024 * 1024) {
-      alert("स्क्रीनशॉट फ़ाइल 12MB से कम होनी चाहिए।");
+      toast.error("स्क्रीनशॉट फ़ाइल 12MB से कम होनी चाहिए।");
       return;
     }
     const reader = new FileReader();
@@ -2430,7 +2431,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
       setQuickVerifyConfirmApp(null);
       fetchApplications();
     } catch (err: any) {
-      alert("एडमिशन कन्फर्म करने में त्रुटि: " + (err?.message || "पुनः प्रयास करें"));
+      toast.error("एडमिशन कन्फर्म करने में त्रुटि: " + (err?.message || "पुनः प्रयास करें"));
     } finally {
       setQuickConfirming(false);
     }

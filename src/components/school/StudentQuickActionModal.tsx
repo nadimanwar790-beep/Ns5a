@@ -153,6 +153,7 @@ export const StudentQuickActionModal: React.FC<Props> = ({
   const [tcReason, setTcReason] = useState("Higher Education / Relocation");
   const [issuingTc, setIssuingTc] = useState(false);
   const [tcSuccessToast, setTcSuccessToast] = useState(false);
+  const [confirmAdminAction, setConfirmAdminAction] = useState<"promote" | "tc" | "toggle_active" | null>(null);
 
   useEffect(() => {
     setActiveStudent(student);
@@ -186,15 +187,15 @@ export const StudentQuickActionModal: React.FC<Props> = ({
 
       setTransportForm({
         usesBus: Boolean(student.usesBus || student.busFee || student.busRoute),
-        busNumber: (student as any).busNumber || "BR-04-P-4215",
+        busNumber: (student as any).busNumber || "",
         busRoute: student.busRoute || "",
         busStop: (student as any).busStop || student.address || "",
         busFee: student.busFee || 0,
-        driverName: (student as any).driverName || "रामेश्वर सिंह (Rameshwar)",
-        driverPhone: (student as any).driverPhone || "9835012345",
-        conductorName: (student as any).conductorName || "दिलीप कुमार (Dilip)",
-        conductorPhone: (student as any).conductorPhone || "9431098765",
-        transportDistanceKm: String((student as any).transportDistanceKm || "4.5"),
+        driverName: (student as any).driverName || "",
+        driverPhone: (student as any).driverPhone || "",
+        conductorName: (student as any).conductorName || "",
+        conductorPhone: (student as any).conductorPhone || "",
+        transportDistanceKm: String((student as any).transportDistanceKm || ""),
         transportModeIfNo: (student as any).transportModeIfNo || "Walking",
       });
 
@@ -386,10 +387,11 @@ export const StudentQuickActionModal: React.FC<Props> = ({
 
   const handlePromoteStudent = async () => {
     if (!school?.id || !activeStudent?.id || !promoteClassId) return;
-    const targetClass = classes.find(c => c.id === promoteClassId);
-    if (!window.confirm(`क्या आप वाकई ${activeStudent.name} को अगली कक्षा (${targetClass?.name || promoteClassId}) में प्रमोट करना चाहते हैं?`)) {
+    if (confirmAdminAction !== "promote") {
+      setConfirmAdminAction("promote");
       return;
     }
+    const targetClass = classes.find(c => c.id === promoteClassId);
     setPromotingStudent(true);
     try {
       await updateStudent(school.id, activeStudent.id, {
@@ -398,10 +400,13 @@ export const StudentQuickActionModal: React.FC<Props> = ({
       });
       setActiveStudent(prev => prev ? { ...prev, classId: promoteClassId, className: targetClass?.name || promoteClassId } : prev);
       setPromoteSuccessToast(true);
+      setConfirmAdminAction(null);
+      toast.success(`${activeStudent.name} को ${targetClass?.name || promoteClassId} में प्रमोट कर दिया गया!`);
       setTimeout(() => setPromoteSuccessToast(false), 3000);
       if (onFeeUpdated) onFeeUpdated();
     } catch (err) {
       console.error("Failed to promote student:", err);
+      toast.error("प्रमोट करने में त्रुटि हुई।");
     } finally {
       setPromotingStudent(false);
     }
@@ -409,7 +414,8 @@ export const StudentQuickActionModal: React.FC<Props> = ({
 
   const handleIssueTc = async () => {
     if (!school?.id || !activeStudent?.id) return;
-    if (!window.confirm(`क्या आप ${activeStudent.name} के लिए टीसी जारी करके छात्र को आर्काइव (Inactive) करना चाहते हैं?`)) {
+    if (confirmAdminAction !== "tc") {
+      setConfirmAdminAction("tc");
       return;
     }
     setIssuingTc(true);
@@ -423,10 +429,13 @@ export const StudentQuickActionModal: React.FC<Props> = ({
       });
       setActiveStudent(prev => prev ? { ...prev, active: false, tcIssued: true, tcNumber: tcNumber.trim(), tcDate: todayStr } : prev);
       setTcSuccessToast(true);
+      setConfirmAdminAction(null);
+      toast.success(`${activeStudent.name} के लिए TC (${tcNumber.trim()}) जारी की गई।`);
       setTimeout(() => setTcSuccessToast(false), 3000);
       if (onFeeUpdated) onFeeUpdated();
     } catch (err) {
       console.error("Failed to issue TC:", err);
+      toast.error("TC जारी करने में त्रुटि हुई।");
     } finally {
       setIssuingTc(false);
     }
@@ -434,16 +443,20 @@ export const StudentQuickActionModal: React.FC<Props> = ({
 
   const handleToggleActiveStatus = async () => {
     if (!school?.id || !activeStudent?.id) return;
-    const newStatus = !(activeStudent.active !== false);
-    if (!window.confirm(`क्या आप छात्र को ${newStatus ? 'सक्रिय (Active)' : 'निष्क्रिय (Inactive)'} करना चाहते हैं?`)) {
+    if (confirmAdminAction !== "toggle_active") {
+      setConfirmAdminAction("toggle_active");
       return;
     }
+    const newStatus = !(activeStudent.active !== false);
     try {
       await updateStudent(school.id, activeStudent.id, { active: newStatus });
       setActiveStudent(prev => prev ? { ...prev, active: newStatus } : prev);
+      setConfirmAdminAction(null);
+      toast.success(`छात्र की स्थिति ${newStatus ? "सक्रिय (Active)" : "निष्क्रिय (Inactive)"} की गई।`);
       if (onFeeUpdated) onFeeUpdated();
     } catch (err) {
       console.error("Failed to update active status:", err);
+      toast.error("स्थिति बदलने में त्रुटि हुई।");
     }
   };
 
@@ -600,7 +613,7 @@ export const StudentQuickActionModal: React.FC<Props> = ({
             <div class="header">
               <div>
                 <div class="school-title">${escapeHtml(schoolName)}</div>
-                <div class="school-sub">Affour Yogi Baba Petrol Pump, Affour Nagra</div>
+                ${school?.address ? `<div class="school-sub">${escapeHtml(school.address)}</div>` : ""}
               </div>
               <div class="id-badge">STUDENT</div>
             </div>
@@ -622,8 +635,8 @@ export const StudentQuickActionModal: React.FC<Props> = ({
               </div>
             </div>
             <div class="footer">
-              <span>Helpline: ${schoolPhone || "9835012345"}</span>
-              <span>Session: 2026-27</span>
+              <span>${schoolPhone ? `Helpline: ${escapeHtml(schoolPhone)}` : escapeHtml(schoolName)}</span>
+              <span>Session: ${escapeHtml((cur as any).sessionId || "Active")}</span>
             </div>
           </div>
         </body>
@@ -669,10 +682,10 @@ export const StudentQuickActionModal: React.FC<Props> = ({
           <meta charset="utf-8" />
           <title>Academic Report Card - ${escapeHtml(cur.name)}</title>
           <style>
-            @page { size: A4 portrait; margin: 12mm; }
+            @page { size: A4 portrait; margin: 8mm; }
             * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
             body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; color: #1e293b; background: #ffffff; }
-            .report-card { border: 2.5px solid #1e3a8a; border-radius: 12px; padding: 18px 22px; background: #ffffff; min-height: 265mm; position: relative; }
+            .report-card { border: 2.5px solid #1e3a8a; border-radius: 10px; padding: 16px 20px; background: #ffffff; position: relative; }
             .header { text-align: center; border-bottom: 2px solid #1e3a8a; padding-bottom: 12px; margin-bottom: 14px; }
             .school-name { font-size: 22pt; font-weight: 900; color: #1e3a8a; text-transform: uppercase; margin: 0; letter-spacing: 0.5px; }
             .school-sub { font-size: 9.5pt; color: #475569; margin: 3px 0 0; }
@@ -695,8 +708,8 @@ export const StudentQuickActionModal: React.FC<Props> = ({
           <div class="report-card">
             <div class="header">
               <h1 class="school-name">${escapeHtml(schoolName)}</h1>
-              <p class="school-sub">${escapeHtml(school?.address || "Near Affour Yogi Baba Petrol Pump, Affour Nagra")}</p>
-              <div class="doc-title">Official Student Progress Report • Session 2026-27</div>
+              ${school?.address ? `<p class="school-sub">${escapeHtml(school.address)}</p>` : ""}
+              <div class="doc-title">Official Student Progress Report • Session ${escapeHtml((cur as any).sessionId || "Active")}</div>
             </div>
 
             <div class="student-info">
@@ -774,11 +787,15 @@ export const StudentQuickActionModal: React.FC<Props> = ({
 
   const handleWhatsAppMessage = (text: string) => {
     const raw = cur.whatsappNo || cur.phone;
-    if (!raw) return;
+    if (!raw) {
+      toast.error("अभिभावक का WhatsApp नंबर उपलब्ध नहीं है।");
+      return;
+    }
     const digits = String(raw).replace(/\D/g, "");
     if (!digits) return;
     const phoneNum = digits.length === 10 ? `91${digits}` : digits;
-    window.open(`https://wa.me/${phoneNum}?text=${encodeURIComponent(text)}`, "_blank", "noopener,noreferrer");
+    navigator.clipboard?.writeText(`+` + phoneNum + `\n` + text).catch(() => {});
+    toast.success(`WhatsApp संदेश और नंबर (+${phoneNum}) क्लिपबोर्ड पर कॉपी हो गया!`);
   };
 
   return (
@@ -1730,7 +1747,7 @@ export const StudentQuickActionModal: React.FC<Props> = ({
                 <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-blue-800 text-white p-3 flex items-center justify-between">
                   <div>
                     <h5 className="font-black text-xs uppercase tracking-wider">{schoolName}</h5>
-                    <p className="text-[9px] text-blue-200">Affour Yogi Baba Petrol Pump, Affour Nagra</p>
+                    {school?.address && <p className="text-[9px] text-blue-200">{school.address}</p>}
                   </div>
                   <span className="px-2 py-0.5 rounded bg-amber-400 text-slate-950 font-black text-[9px]">STUDENT ID</span>
                 </div>
@@ -1775,8 +1792,8 @@ export const StudentQuickActionModal: React.FC<Props> = ({
 
                 {/* ID Footer */}
                 <div className="bg-slate-100 dark:bg-slate-700/60 p-2 border-t text-[10px] flex justify-between items-center text-slate-600 dark:text-slate-300">
-                  <span>Helpline: {schoolPhone || "9835012345"}</span>
-                  <span className="font-bold">Session 2026-27</span>
+                  <span>{schoolPhone ? `Helpline: ${schoolPhone}` : schoolName}</span>
+                  <span className="font-bold">Session {(cur as any).sessionId || "Active"}</span>
                 </div>
               </div>
 
@@ -2353,14 +2370,34 @@ export const StudentQuickActionModal: React.FC<Props> = ({
                     ))}
                   </select>
 
-                  <button
-                    type="button"
-                    onClick={handlePromoteStudent}
-                    disabled={!promoteClassId || promotingStudent}
-                    className="w-full sm:w-auto px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold cursor-pointer transition disabled:opacity-50 shrink-0"
-                  >
-                    {promotingStudent ? "Promoting..." : "Promote Student"}
-                  </button>
+                  {confirmAdminAction === "promote" ? (
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={handlePromoteStudent}
+                        disabled={!promoteClassId || promotingStudent}
+                        className="px-4 py-2 bg-purple-700 hover:bg-purple-800 text-white rounded-xl font-black cursor-pointer transition disabled:opacity-50"
+                      >
+                        {promotingStudent ? "Promoting..." : "Confirm Promote"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmAdminAction(null)}
+                        className="px-3 py-2 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl font-bold cursor-pointer"
+                      >
+                        रद्द
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handlePromoteStudent}
+                      disabled={!promoteClassId || promotingStudent}
+                      className="w-full sm:w-auto px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold cursor-pointer transition disabled:opacity-50 shrink-0"
+                    >
+                      {promotingStudent ? "Promoting..." : "Promote Student"}
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -2398,23 +2435,62 @@ export const StudentQuickActionModal: React.FC<Props> = ({
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between pt-2 border-t border-rose-200 dark:border-rose-800 gap-2">
-                  <button
-                    type="button"
-                    onClick={handleToggleActiveStatus}
-                    className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 text-xs font-bold hover:bg-slate-100 cursor-pointer"
-                  >
-                    {cur.active !== false ? "Mark Inactive / Archive" : "Re-Activate Student"}
-                  </button>
+                <div className="flex flex-wrap items-center justify-between pt-2 border-t border-rose-200 dark:border-rose-800 gap-2">
+                  {confirmAdminAction === "toggle_active" ? (
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={handleToggleActiveStatus}
+                        className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-black cursor-pointer"
+                      >
+                        Confirm {cur.active !== false ? "Archive" : "Activate"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmAdminAction(null)}
+                        className="px-2.5 py-1.5 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold cursor-pointer"
+                      >
+                        रद्द
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleToggleActiveStatus}
+                      className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 text-xs font-bold hover:bg-slate-100 cursor-pointer"
+                    >
+                      {cur.active !== false ? "Mark Inactive / Archive" : "Re-Activate Student"}
+                    </button>
+                  )}
 
-                  <button
-                    type="button"
-                    onClick={handleIssueTc}
-                    disabled={issuingTc || cur.tcIssued}
-                    className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold cursor-pointer disabled:opacity-50"
-                  >
-                    {cur.tcIssued ? "TC Already Issued" : issuingTc ? "Issuing..." : "Issue TC & Archive"}
-                  </button>
+                  {confirmAdminAction === "tc" ? (
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={handleIssueTc}
+                        disabled={issuingTc || cur.tcIssued}
+                        className="px-4 py-1.5 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-black cursor-pointer disabled:opacity-50"
+                      >
+                        {issuingTc ? "Issuing..." : "Confirm Issue TC"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmAdminAction(null)}
+                        className="px-2.5 py-1.5 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold cursor-pointer"
+                      >
+                        रद्द
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleIssueTc}
+                      disabled={issuingTc || cur.tcIssued}
+                      className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold cursor-pointer disabled:opacity-50"
+                    >
+                      {cur.tcIssued ? "TC Already Issued" : issuingTc ? "Issuing..." : "Issue TC & Archive"}
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
