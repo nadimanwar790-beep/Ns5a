@@ -16,11 +16,57 @@
 
 import * as ort from "onnxruntime-web/wasm";
 
+function getLocalOnnxWasmBase(): string {
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return `${window.location.origin}/onnx-wasm/`;
+  }
+  return "/onnx-wasm/";
+}
+
+const CDN_ONNX_WASM_BASES = [
+  "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/",
+  "https://unpkg.com/onnxruntime-web@1.31.1/dist/",
+];
+
+async function isWasmAssetBaseReachable(base: string): Promise<boolean> {
+  try {
+    const mjsRes = await fetch(`${base}ort-wasm-simd-threaded.mjs`, { method: "HEAD" }).catch(() =>
+      fetch(`${base}ort-wasm-simd-threaded.mjs`, { method: "GET" })
+    );
+    const mjsCt = (mjsRes.headers.get("content-type") || "").toLowerCase();
+    if (!mjsRes.ok || mjsCt.includes("text/html")) {
+      return false;
+    }
+
+    const wasmRes = await fetch(`${base}ort-wasm-simd-threaded.wasm`, { method: "HEAD" }).catch(() => null);
+    if (wasmRes) {
+      const wasmCt = (wasmRes.headers.get("content-type") || "").toLowerCase();
+      if (!wasmRes.ok || wasmCt.includes("text/html")) {
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveWorkingWasmBase(): Promise<string> {
+  const localBase = getLocalOnnxWasmBase();
+  const candidates = [localBase, ...CDN_ONNX_WASM_BASES];
+  for (const base of candidates) {
+    if (await isWasmAssetBaseReachable(base)) {
+      return base;
+    }
+  }
+  return localBase;
+}
+
 // Ensure single-thread wasm execution to avoid COOP/COEP SharedArrayBuffer restrictions in iframe/browser
 try {
   if (typeof window !== "undefined") {
     ort.env.wasm.numThreads = 1;
-    ort.env.wasm.wasmPaths = "/onnx-wasm/";
+    ort.env.wasm.wasmPaths = getLocalOnnxWasmBase();
     ort.env.wasm.simd = true;
     (ort.env.wasm as any).proxy = false;
   }
@@ -65,36 +111,50 @@ export async function initArcFaceEngine(): Promise<boolean> {
   initPromise = (async () => {
     isInitializing = true;
     try {
-      console.log("[ArcFace 512D] Loading MobileFaceNet ONNX model from:", ARCFACE_MODEL_PATH);
+      const modelUrl =
+        typeof window !== "undefined" && window.location?.origin
+          ? `${window.location.origin}${ARCFACE_MODEL_PATH}`
+          : ARCFACE_MODEL_PATH;
+
+      console.log("[ArcFace 512D] Loading MobileFaceNet ONNX model from:", modelUrl);
 
       lastArcFaceError = null;
       // Fetch ONNX model bytes directly once for ultra-reliable WASM loading across mobile/WebView
-      let modelSource: string | Uint8Array = ARCFACE_MODEL_PATH;
+      let modelSource: string | Uint8Array = modelUrl;
       try {
-        const res = await fetch(ARCFACE_MODEL_PATH);
-        if (res.ok) {
-          modelSource = new Uint8Array(await res.arrayBuffer());
+        const res = await fetch(modelUrl);
+        const ct = (res.headers.get("content-type") || "").toLowerCase();
+        if (res.ok && !ct.includes("text/html")) {
+          const buf = await res.arrayBuffer();
+          if (buf.byteLength > 100000) {
+            modelSource = new Uint8Array(buf);
+          }
         }
       } catch {}
 
-      // Attempt loading session via pure WASM (universal across desktop, Android Chrome, and iframes)
+      // Pre-flight probe local /onnx-wasm/ vs CDN BEFORE invoking ort.InferenceSession.create,
+      // because onnxruntime-web latches its internal WASM initialization state on first call.
+      const workingWasmBase = await resolveWorkingWasmBase();
+
       try {
         ort.env.wasm.numThreads = 1;
+        ort.env.wasm.simd = true;
         (ort.env.wasm as any).proxy = false;
-        ort.env.wasm.wasmPaths = "/onnx-wasm/";
+        ort.env.wasm.wasmPaths = workingWasmBase;
         arcfaceSession = await ort.InferenceSession.create(modelSource as any, {
           executionProviders: ["wasm"],
           graphOptimizationLevel: "all",
         });
       } catch (wasmErr: any) {
-        console.warn("[ArcFace 512D] Local WASM failed, trying CDN WASM fallback:", wasmErr);
+        console.warn("[ArcFace 512D] Primary WASM session init failed, retrying basic graph optimization:", wasmErr);
         try {
-          ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/";
+          ort.env.wasm.wasmPaths = workingWasmBase;
           arcfaceSession = await ort.InferenceSession.create(modelSource as any, {
             executionProviders: ["wasm"],
+            graphOptimizationLevel: "basic",
           });
-        } catch (cdnErr: any) {
-          lastArcFaceError = cdnErr?.message || wasmErr?.message || "ONNX WASM failed to initialize";
+        } catch (fallbackErr: any) {
+          lastArcFaceError = fallbackErr?.message || wasmErr?.message || "ONNX WASM failed to initialize";
           console.error("[ArcFace 512D] ONNX WASM unavailable:", lastArcFaceError);
           arcfaceSession = null;
         }
