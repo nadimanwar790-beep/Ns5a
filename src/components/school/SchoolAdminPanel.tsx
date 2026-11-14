@@ -93,7 +93,7 @@ import { DirectAdmissionModal } from "./DirectAdmissionModal";
 import { AdmissionFormPrintModal } from "./AdmissionFormPrintModal";
 import { BusTransportModal } from "./BusTransportModal";
 import { ClassCurriculumNotesManager } from "./ClassCurriculumNotesManager";
-import { isSchoolEliteCurriculum } from "../../school-types";
+import { isSchoolEliteCurriculum, hasFaceAttendanceAccess } from "../../school-types";
 import { SchoolBirthdayCalendar } from "./SchoolBirthdayCalendar";
 import { UniversalAttendanceDesk } from "./UniversalAttendanceDesk";
 import { UniversalAttendanceScannerModal } from "./UniversalAttendanceScannerModal";
@@ -3460,10 +3460,18 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => setShowFaceKioskModal(true)}
-                className="flex-1 py-1.5 px-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-black text-[11px] transition cursor-pointer text-center flex items-center justify-center gap-1 shadow-xs active:scale-95"
+                className={`flex-1 py-1.5 px-2 rounded-xl font-black text-[11px] transition cursor-pointer text-center flex items-center justify-center gap-1 shadow-xs active:scale-95 ${
+                  hasFaceAttendanceAccess(school)
+                    ? "bg-purple-600 hover:bg-purple-500 text-white"
+                    : "bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40"
+                }`}
+                title={hasFaceAttendanceAccess(school) ? "AI Face Kiosk" : "👑 Elite Plan Only — AI Face Attendance"}
               >
-                <Camera className="w-3.5 h-3.5" />
+                {hasFaceAttendanceAccess(school) ? <Camera className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5 text-amber-400" />}
                 <span>AI Face Kiosk</span>
+                {!hasFaceAttendanceAccess(school) && (
+                  <span className="px-1 py-0.2 rounded bg-amber-500 text-slate-950 text-[9px] font-black">👑 Elite</span>
+                )}
               </button>
               <button
                 type="button"
@@ -3676,14 +3684,27 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               type="button"
               onClick={() => setShowFaceKioskModal(true)}
               className="p-2.5 rounded-xl bg-gradient-to-br from-purple-900/60 to-purple-950/80 hover:from-purple-800/80 hover:to-purple-900 border border-purple-500/40 text-left transition cursor-pointer group active:scale-95 flex flex-col justify-between min-h-[74px]"
+              title={hasFaceAttendanceAccess(school) ? "AI Face Kiosk" : "👑 Elite Plan Only — AI Face Attendance"}
             >
               <div className="flex items-center justify-between w-full">
-                <Camera className="w-5 h-5 text-purple-300 group-hover:scale-110 transition-transform" />
-                <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-purple-500/30 text-purple-200">0.2s</span>
+                {hasFaceAttendanceAccess(school) ? (
+                  <Camera className="w-5 h-5 text-purple-300 group-hover:scale-110 transition-transform" />
+                ) : (
+                  <Lock className="w-5 h-5 text-amber-400 group-hover:scale-110 transition-transform" />
+                )}
+                <span className={`text-[9px] font-black px-1.5 py-0.2 rounded ${
+                  hasFaceAttendanceAccess(school)
+                    ? "bg-purple-500/30 text-purple-200"
+                    : "bg-amber-500 text-slate-950"
+                }`}>
+                  {hasFaceAttendanceAccess(school) ? "0.2s" : "👑 Elite"}
+                </span>
               </div>
               <div>
                 <p className="text-xs font-black text-white leading-tight">AI Face Kiosk</p>
-                <p className="text-[9.5px] text-purple-300/80 truncate">कैमरा हाजिरी</p>
+                <p className="text-[9.5px] text-purple-300/80 truncate">
+                  {hasFaceAttendanceAccess(school) ? "कैमरा हाजिरी" : "Elite Subscription"}
+                </p>
               </div>
             </button>
 
@@ -3787,8 +3808,12 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                   </p>
                 </div>
               </div>
-              <span className="px-2 py-0.5 rounded-full bg-purple-50 dark:bg-purple-950 text-purple-700 dark:text-purple-300 text-[10px] font-bold shrink-0">
-                KYC AI
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
+                hasFaceAttendanceAccess(school)
+                  ? "bg-purple-50 dark:bg-purple-950 text-purple-700 dark:text-purple-300"
+                  : "bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700"
+              }`}>
+                {hasFaceAttendanceAccess(school) ? "KYC AI" : "👑 Elite Only"}
               </span>
             </div>
 
@@ -3798,7 +3823,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                 <span>{enrolledFaceCount} फेस आईडी सक्रिय</span>
               </span>
               <span className="text-[10px] font-semibold text-purple-700 dark:text-purple-300">
-                Auto-Match
+                {hasFaceAttendanceAccess(school) ? "Auto-Match" : "🔒 Elite Lock"}
               </span>
             </div>
 
@@ -3806,17 +3831,25 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => setShowFaceKioskModal(true)}
-                className="flex-1 py-1.5 px-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-black text-[11px] transition cursor-pointer text-center flex items-center justify-center gap-1 shadow-xs"
+                className={`flex-1 py-1.5 px-2 rounded-xl font-black text-[11px] transition cursor-pointer text-center flex items-center justify-center gap-1 shadow-xs ${
+                  hasFaceAttendanceAccess(school)
+                    ? "bg-purple-600 hover:bg-purple-500 text-white"
+                    : "bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40"
+                }`}
               >
-                <Camera className="w-3.5 h-3.5" />
+                {hasFaceAttendanceAccess(school) ? <Camera className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5 text-amber-400" />}
                 <span>AI Face Kiosk</span>
+                {!hasFaceAttendanceAccess(school) && (
+                  <span className="px-1 py-0.2 rounded bg-amber-500 text-slate-950 text-[9px] font-black">👑</span>
+                )}
               </button>
               <button
                 type="button"
                 onClick={() => setShowFaceStudioModal(true)}
-                className="py-1.5 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold text-[11px] transition cursor-pointer shrink-0"
-                title="लाइव फेस आईडी स्टुडियो"
+                className="py-1.5 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold text-[11px] transition cursor-pointer shrink-0 flex items-center gap-1"
+                title={hasFaceAttendanceAccess(school) ? "लाइव फेस आईडी स्टुडियो" : "👑 Elite Plan Only"}
               >
+                {!hasFaceAttendanceAccess(school) && <Lock className="w-3 h-3 text-amber-500" />}
                 <span>स्टुडियो</span>
               </button>
             </div>
@@ -3839,7 +3872,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                 </div>
               </div>
               <span className="px-2 py-0.5 rounded-full bg-sky-50 dark:bg-sky-950 text-sky-700 dark:text-sky-300 text-[10px] font-bold shrink-0">
-                QR / ID
+                {hasFaceAttendanceAccess(school) ? "QR / ID" : "⚡ Lite ✓"}
               </span>
             </div>
 
@@ -3933,17 +3966,25 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => setShowFaceKioskModal(true)}
-                className="flex-1 py-1.5 px-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-black text-[11px] transition cursor-pointer text-center flex items-center justify-center gap-1 shadow-xs"
+                className={`flex-1 py-1.5 px-2 rounded-xl font-black text-[11px] transition cursor-pointer text-center flex items-center justify-center gap-1 shadow-xs ${
+                  hasFaceAttendanceAccess(school)
+                    ? "bg-amber-600 hover:bg-amber-500 text-white"
+                    : "bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40"
+                }`}
               >
-                <Plus className="w-3.5 h-3.5 stroke-[3]" />
+                {hasFaceAttendanceAccess(school) ? <Plus className="w-3.5 h-3.5 stroke-[3]" /> : <Lock className="w-3.5 h-3.5 text-amber-400" />}
                 <span>+ चेहरा जोड़ें</span>
+                {!hasFaceAttendanceAccess(school) && (
+                  <span className="px-1 py-0.2 rounded bg-amber-500 text-slate-950 text-[9px] font-black">👑</span>
+                )}
               </button>
               <button
                 type="button"
                 onClick={() => setShowFaceStudioModal(true)}
-                className="py-1.5 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold text-[11px] transition cursor-pointer shrink-0"
-                title="लाइव फेस आईडी स्टुडियो"
+                className="py-1.5 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold text-[11px] transition cursor-pointer shrink-0 flex items-center gap-1"
+                title={hasFaceAttendanceAccess(school) ? "लाइव फेस आईडी स्टुडियो" : "👑 Elite Plan Only"}
               >
+                {!hasFaceAttendanceAccess(school) && <Lock className="w-3 h-3 text-amber-500" />}
                 <span>मैच टेस्ट</span>
               </button>
             </div>
@@ -5426,6 +5467,15 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               setFaceKioskInitialTestMode(false);
             }}
             initialTestMode={faceKioskInitialTestMode}
+            hasFaceAccess={hasFaceAttendanceAccess(school)}
+            onUpgradeToElite={() => {
+              setShowFaceKioskModal(false);
+              setView("plan");
+            }}
+            onOpenQrScanner={() => {
+              setShowFaceKioskModal(false);
+              setShowUniversalScannerModal(true);
+            }}
             schoolId={school.id}
             schoolName={school.name}
             classes={displayedClasses}
@@ -6154,6 +6204,15 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               setShowFaceStudioModal(false);
               setFaceStudioTargetPerson(null);
             }}
+            hasFaceAccess={hasFaceAttendanceAccess(school)}
+            onUpgradeToElite={() => {
+              setShowFaceStudioModal(false);
+              setView("plan");
+            }}
+            onOpenQrScanner={() => {
+              setShowFaceStudioModal(false);
+              setShowUniversalScannerModal(true);
+            }}
             schoolId={schoolId}
             students={displayedStudents}
             teachers={displayedTeachers}
@@ -6719,6 +6778,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             {activeClass ? (
               <AttendanceManager
                 schoolId={schoolId}
+                school={school}
+                onOpenPlanStore={() => setView("plan")}
                 classId={activeClass.id}
                 className={activeClass.name}
                 teacherId={adminUid}
@@ -6772,11 +6833,18 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                 <button
                   type="button"
                   onClick={() => setShowFaceKioskModal(true)}
-                  className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs flex items-center gap-1.5 shadow-md shadow-emerald-600/20 active:scale-95 transition cursor-pointer"
-                  title="लाइव कैमरे से शिक्षक हाजिरी लगाएं"
+                  className={`px-3.5 py-2 rounded-xl font-black text-xs flex items-center gap-1.5 active:scale-95 transition cursor-pointer ${
+                    hasFaceAttendanceAccess(school)
+                      ? "bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-md shadow-emerald-600/20"
+                      : "bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40"
+                  }`}
+                  title={hasFaceAttendanceAccess(school) ? "लाइव कैमरे से शिक्षक हाजिरी लगाएं" : "👑 Elite Plan Only — AI Face Attendance"}
                 >
-                  <Sparkles className="w-4 h-4 text-amber-300" />
+                  {hasFaceAttendanceAccess(school) ? <Sparkles className="w-4 h-4 text-amber-300" /> : <Lock className="w-3.5 h-3.5 text-amber-400" />}
                   <span>📷 AI Face Kiosk</span>
+                  {!hasFaceAttendanceAccess(school) && (
+                    <span className="px-1.5 py-0.2 rounded bg-amber-500 text-slate-950 text-[9px] font-black">👑 Elite</span>
+                  )}
                 </button>
 
                 <button
@@ -6786,11 +6854,18 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                     setFaceStudioTargetPerson(null);
                     setShowFaceStudioModal(true);
                   }}
-                  className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-black text-xs flex items-center gap-1.5 shadow-md shadow-purple-600/20 active:scale-95 transition cursor-pointer"
-                  title="सभी शिक्षकों का फेस आईडी रजिस्टर व मैनेज करें"
+                  className={`px-3.5 py-2 rounded-xl font-black text-xs flex items-center gap-1.5 active:scale-95 transition cursor-pointer ${
+                    hasFaceAttendanceAccess(school)
+                      ? "bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-md shadow-purple-600/20"
+                      : "bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40"
+                  }`}
+                  title={hasFaceAttendanceAccess(school) ? "सभी शिक्षकों का फेस आईडी रजिस्टर व मैनेज करें" : "👑 Elite Plan Only — Live Face ID Studio"}
                 >
-                  <Camera className="w-4 h-4 text-amber-200" />
+                  {hasFaceAttendanceAccess(school) ? <Camera className="w-4 h-4 text-amber-200" /> : <Lock className="w-3.5 h-3.5 text-amber-400" />}
                   <span>✨ शिक्षक फेस आईडी स्टूडियो</span>
+                  {!hasFaceAttendanceAccess(school) && (
+                    <span className="px-1.5 py-0.2 rounded bg-amber-500 text-slate-950 text-[9px] font-black">👑 Elite</span>
+                  )}
                 </button>
 
                 <button
@@ -8545,14 +8620,16 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         <div className="p-4 sm:p-6 space-y-4 max-w-4xl mx-auto">
           <div className="bg-gradient-to-r from-emerald-600 to-teal-700 text-white rounded-3xl p-6 sm:p-8 shadow-xl relative overflow-hidden">
             <div className="relative z-10 space-y-3">
-              <span className="px-3 py-1 bg-white/20 backdrop-blur-md rounded-full text-xs font-black uppercase tracking-wider">
-                Universal Live Biometric System
+              <span className="px-3 py-1 bg-white/20 backdrop-blur-md rounded-full text-xs font-black uppercase tracking-wider inline-flex items-center gap-1.5">
+                {hasFaceAttendanceAccess(school) ? "Universal Live Biometric System" : "👑 Elite Plan Exclusive Feature"}
               </span>
               <h2 className="text-2xl sm:text-3xl font-black">
                 📷 लाइव फेस आईडी स्टुडियो (Live Face ID Studio)
               </h2>
               <p className="text-sm text-emerald-100 max-w-xl">
-                2D फोटो अपलोड के बजाय लाइव कैमरे से हर छात्र व शिक्षक का चेहरा रजिस्टर करें। 128-पॉइंट बायोमेट्रिक लैंडमार्क्स क्लाउड व डिवाइस दोनों में सिंक रहते हैं और 0.58 कैलिब्रेटेड थ्रेशोल्ड पर तुरंत मैच होते हैं।
+                {hasFaceAttendanceAccess(school)
+                  ? "2D फोटो अपलोड के बजाय लाइव कैमरे से हर छात्र व शिक्षक का चेहरा रजिस्टर करें। 128-पॉइंट बायोमेट्रिक लैंडमार्क्स क्लाउड व डिवाइस दोनों में सिंक रहते हैं और 0.58 कैलिब्रेटेड थ्रेशोल्ड पर तुरंत मैच होते हैं।"
+                  : "🤖 AI Face Attendance aur Live Face ID Studio sirf 👑 Elite Subscription walon ke liye hai. Lite Plan mein 📷 QR Code Scan Attendance uplabdh hai."}
               </p>
               <div className="pt-2 flex flex-wrap gap-3">
                 <button
@@ -8560,8 +8637,12 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                   onClick={() => setShowFaceStudioModal(true)}
                   className="px-6 py-3 bg-white text-emerald-900 rounded-2xl font-black text-sm shadow-lg hover:bg-emerald-50 active:scale-95 transition cursor-pointer flex items-center gap-2"
                 >
-                  <Camera className="w-5 h-5 text-emerald-700" />
-                  <span>Open Face ID Studio (स्टुडियो खोलें)</span>
+                  {hasFaceAttendanceAccess(school) ? <Camera className="w-5 h-5 text-emerald-700" /> : <Lock className="w-5 h-5 text-amber-600" />}
+                  <span>
+                    {hasFaceAttendanceAccess(school)
+                      ? "Open Face ID Studio (स्टुडियो खोलें)"
+                      : "👑 Elite Plan Upgrade Karein"}
+                  </span>
                 </button>
                 <button
                   type="button"
@@ -9614,11 +9695,22 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                   setFaceStudioTargetPerson(null);
                   setShowFaceStudioModal(true);
                 }}
-                className="px-3.5 py-2.5 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 transition active:scale-95 cursor-pointer shadow-xs"
-                title="Register Live Face ID for Teachers"
+                className={`px-3.5 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 transition active:scale-95 cursor-pointer shadow-xs ${
+                  hasFaceAttendanceAccess(school)
+                    ? "bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300"
+                    : "bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-300"
+                }`}
+                title={hasFaceAttendanceAccess(school) ? "Register Live Face ID for Teachers" : "👑 Elite Plan Only — Live Face ID Studio"}
               >
-                <Camera className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                {hasFaceAttendanceAccess(school) ? (
+                  <Camera className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                ) : (
+                  <Lock className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                )}
                 <span>📷 शिक्षक फेस आईडी स्टुडियो</span>
+                {!hasFaceAttendanceAccess(school) && (
+                  <span className="px-1.5 py-0.2 rounded bg-amber-500 text-slate-950 text-[10px] font-black">👑 Elite</span>
+                )}
               </button>
               <button
                 type="button"
@@ -10428,11 +10520,18 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             <button
               type="button"
               onClick={() => setShowFaceStudioModal(true)}
-              className="py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-sm transition cursor-pointer text-sm shadow-emerald-500/20"
-              title="कैमरे से छात्र का लाइव फेस आईडी रजिस्टर करें व टेस्ट करें"
+              className={`py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-sm transition cursor-pointer text-sm ${
+                hasFaceAttendanceAccess(school)
+                  ? "bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white shadow-emerald-500/20"
+                  : "bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40"
+              }`}
+              title={hasFaceAttendanceAccess(school) ? "कैमरे से छात्र का लाइव फेस आईडी रजिस्टर करें व टेस्ट करें" : "👑 Elite Plan Only — Live Face ID Studio"}
             >
-              <Camera className="w-4 h-4" />
+              {hasFaceAttendanceAccess(school) ? <Camera className="w-4 h-4" /> : <Lock className="w-4 h-4 text-amber-400" />}
               <span>📷 लाइव फेस आईडी</span>
+              {!hasFaceAttendanceAccess(school) && (
+                <span className="px-1.5 py-0.2 rounded bg-amber-500 text-slate-950 text-[10px] font-black">👑 Elite</span>
+              )}
             </button>
           </div>
 

@@ -3,14 +3,15 @@ import React, { useState, useEffect, useCallback } from "react";
 import {
   saveAttendance, subscribeToAttendance, getAttendance, getMonthlyAttendance, getStudents, todayStr, currentMonthStr,
   isStudentBirthdayToday, dispatchOfficialSchoolBirthdayWish, getTeachers, getLocalTeachers,
-  markStudentQrAttendance, calculateStayDuration
+  markStudentQrAttendance, calculateStayDuration, getSchool
 } from "../../school-firebase";
-import type { SchoolStudent, AttendanceRecord } from "../../school-types";
+import { hasFaceAttendanceAccess, type School, type SchoolStudent, type AttendanceRecord } from "../../school-types";
 import {
   CheckCircle, XCircle, Download, Calendar, Users, ChevronLeft, ChevronRight,
   Camera, QrCode, Phone, PhoneCall, Bell, Send, AlertTriangle, AlertCircle,
   CheckCircle2, MessageCircle, ShieldAlert, Sparkles, PhoneOutgoing, Loader2,
-  Cake, Gift, Heart, Wifi, WifiOff, Cloud, CloudOff, RefreshCw, Volume2, Clock, LogOut
+  Cake, Gift, Heart, Wifi, WifiOff, Cloud, CloudOff, RefreshCw, Volume2, Clock, LogOut,
+  Crown, Lock
 } from "lucide-react";
 import { toast } from "sonner";
 import { safeOpenExternalUrl } from "../../utils/safeBrowserActions";
@@ -39,11 +40,27 @@ interface Props {
   classId: string;
   className: string;
   teacherId: string;
+  school?: School | null;
+  onOpenPlanStore?: () => void;
   onBack?: () => void;
 }
 
-export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, className, teacherId, onBack }) => {
+export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, className, teacherId, school, onOpenPlanStore, onBack }) => {
   const [students, setStudents] = useState<SchoolStudent[]>([]);
+  const [fetchedSchool, setFetchedSchool] = useState<School | null>(null);
+  const activeSchool = school || fetchedSchool;
+  const hasFaceAccess = activeSchool
+    ? hasFaceAttendanceAccess(activeSchool)
+    : (schoolId === "demo_school" || schoolId?.startsWith("demo") || schoolId?.includes("demo"));
+
+  useEffect(() => {
+    if (!school && schoolId) {
+      getSchool(schoolId).then((s) => {
+        if (s) setFetchedSchool(s);
+      }).catch(() => {});
+    }
+  }, [school, schoolId]);
+
   const [teachersList, setTeachersList] = useState<any[]>(() => {
     try {
       const local = getLocalTeachers(schoolId);
@@ -1124,7 +1141,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
             </div>
           )}
 
-          {/* Smart Attendance Actions: AI Face Kiosk, Face Match Test, Live Face Studio, Camera QR, and Class QR */}
+          {/* Smart Attendance Actions: AI Face Kiosk (Elite), Face Match Test (Elite), Live Face Studio (Elite), Camera QR (Lite), and Class QR (Lite) */}
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
             <button
               type="button"
@@ -1132,10 +1149,18 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
                 setFaceKioskTestMode(false);
                 setShowFaceKiosk(true);
               }}
-              className="py-2.5 px-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-95 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1 shadow-md shadow-emerald-600/20 transition cursor-pointer"
+              className={`py-2.5 px-2 active:scale-95 rounded-xl text-xs font-black flex items-center justify-center gap-1 transition cursor-pointer relative ${
+                hasFaceAccess
+                  ? "bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-md shadow-emerald-600/20"
+                  : "bg-slate-800/80 hover:bg-slate-800 text-amber-200 border border-amber-500/40"
+              }`}
+              title={hasFaceAccess ? "AI Face Attendance Kiosk" : "👑 Elite Plan Only — AI Face Attendance"}
             >
-              <Sparkles size={14} className="text-amber-300" />
+              {hasFaceAccess ? <Sparkles size={14} className="text-amber-300" /> : <Lock size={13} className="text-amber-400" />}
               <span>AI Face Kiosk</span>
+              {!hasFaceAccess && (
+                <span className="text-[9px] font-black px-1 py-0.2 rounded bg-amber-500 text-slate-950">👑</span>
+              )}
             </button>
             <button
               type="button"
@@ -1143,20 +1168,34 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
                 setFaceKioskTestMode(true);
                 setShowFaceKiosk(true);
               }}
-              className="py-2.5 px-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 active:scale-95 text-slate-950 rounded-xl text-xs font-black flex items-center justify-center gap-1 shadow-md shadow-amber-500/30 ring-1 ring-amber-300 transition cursor-pointer"
-              title="टेस्ट मोड: 1st स्कैन IN, 2nd स्कैन OUT और हर बार Student के मोबाइल पर Push नोटिफिकेशन"
+              className={`py-2.5 px-2 active:scale-95 rounded-xl text-xs font-black flex items-center justify-center gap-1 transition cursor-pointer ${
+                hasFaceAccess
+                  ? "bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-md shadow-amber-500/30 ring-1 ring-amber-300"
+                  : "bg-slate-800/80 hover:bg-slate-800 text-amber-200 border border-amber-500/40"
+              }`}
+              title={hasFaceAccess ? "टेस्ट मोड: 1st स्कैन IN, 2nd स्कैन OUT और हर बार Student के मोबाइल पर Push नोटिफिकेशन" : "👑 Elite Plan Only — AI Face Attendance"}
             >
-              <Volume2 size={14} className="text-slate-950" />
+              {hasFaceAccess ? <Volume2 size={14} className="text-slate-950" /> : <Lock size={13} className="text-amber-400" />}
               <span>🧪 फेस टेस्ट</span>
+              {!hasFaceAccess && (
+                <span className="text-[9px] font-black px-1 py-0.2 rounded bg-amber-500 text-slate-950">👑</span>
+              )}
             </button>
             <button
               type="button"
               onClick={() => setShowFaceStudio(true)}
-              className="py-2.5 px-2 bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-500 hover:to-cyan-500 active:scale-95 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1 shadow-md shadow-teal-600/20 transition cursor-pointer"
-              title="लाइव कैमरे से छात्र का चेहरा रजिस्टर व टेस्ट करें"
+              className={`py-2.5 px-2 active:scale-95 rounded-xl text-xs font-black flex items-center justify-center gap-1 transition cursor-pointer ${
+                hasFaceAccess
+                  ? "bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-500 hover:to-cyan-500 text-white shadow-md shadow-teal-600/20"
+                  : "bg-slate-800/80 hover:bg-slate-800 text-amber-200 border border-amber-500/40"
+              }`}
+              title={hasFaceAccess ? "लाइव कैमरे से छात्र का चेहरा रजिस्टर व टेस्ट करें" : "👑 Elite Plan Only — Live Face ID Studio"}
             >
-              <Camera size={14} className="text-amber-200" />
+              {hasFaceAccess ? <Camera size={14} className="text-amber-200" /> : <Lock size={13} className="text-amber-400" />}
               <span>📷 फेस आईडी</span>
+              {!hasFaceAccess && (
+                <span className="text-[9px] font-black px-1 py-0.2 rounded bg-amber-500 text-slate-950">👑</span>
+              )}
             </button>
             <button
               type="button"
@@ -1165,6 +1204,9 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
             >
               <Camera size={14} />
               <span>📷 QR Scan</span>
+              {!hasFaceAccess && (
+                <span className="text-[9px] font-black px-1 py-0.2 rounded bg-emerald-400 text-slate-950">Lite ✓</span>
+              )}
             </button>
             <button
               type="button"
@@ -1961,6 +2003,9 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
           setFaceKioskTestMode(false);
         }}
         initialTestMode={faceKioskTestMode}
+        hasFaceAccess={hasFaceAccess}
+        onUpgradeToElite={onOpenPlanStore}
+        onOpenQrScanner={() => setShowQrScanner(true)}
         schoolId={schoolId}
         schoolName={className ? `${className} Face Attendance` : "School Campus"}
         classId={classId}
@@ -1987,6 +2032,9 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
         <UniversalFaceIdStudioModal
           isOpen={showFaceStudio}
           onClose={() => setShowFaceStudio(false)}
+          hasFaceAccess={hasFaceAccess}
+          onUpgradeToElite={onOpenPlanStore}
+          onOpenQrScanner={() => setShowQrScanner(true)}
           schoolId={schoolId}
           students={students}
           teachers={teachersList}
@@ -2019,7 +2067,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
         isOpen={showClassQrModal}
         onClose={() => setShowClassQrModal(false)}
         schoolId={schoolId}
-        schoolName={schoolId}
+        schoolName={activeSchool?.name || schoolId}
         classId={classId}
         className={className}
         presentCount={presentCount}
@@ -2030,7 +2078,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
         isOpen={Boolean(selectedStudentForModal)}
         onClose={() => setSelectedStudentForModal(null)}
         student={selectedStudentForModal}
-        school={{ id: schoolId, name: schoolId } as any}
+        school={activeSchool || ({ id: schoolId, name: schoolId } as any)}
         classes={[{ id: classId, name: className } as any]}
         currentMonth={selectedMonth}
         adminUid={teacherId}

@@ -36,7 +36,7 @@ import {
   Sun, Moon, Palette,
   Cake, Gift,
   Smartphone, Laptop, Monitor,
-  Camera
+  Camera, Lock
 } from "lucide-react";
 import { TimetableManager } from "./TimetableManager";
 import { ClassroomVideoArchive } from "./ClassroomVideoArchive";
@@ -48,7 +48,7 @@ import { AbsenteeActionPage } from "./AbsenteeActionPage";
 import { OnlineAdmissionManager } from "./OnlineAdmissionManager";
 import { getSavedSchoolLogo } from "./feeReceiptUtils";
 import { ClassCurriculumNotesManager } from "./ClassCurriculumNotesManager";
-import { isSchoolEliteCurriculum } from "../../school-types";
+import { isSchoolEliteCurriculum, hasFaceAttendanceAccess } from "../../school-types";
 import { GroupStudyModal } from "../GroupStudyModal";
 import { ParentLeaveManager } from "./ParentLeaveManager";
 import { PtmSchedulerModal } from "./PtmSchedulerModal";
@@ -1320,6 +1320,7 @@ export const TeacherPanel: React.FC<Props> = ({
           )}
           <AttendanceManager
             schoolId={schoolId}
+            school={school}
             classId={activeClass.id}
             className={activeClass.name}
             teacherId={teacherId}
@@ -1779,10 +1780,18 @@ export const TeacherPanel: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => setShowFaceStudio(true)}
-                className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs shadow-sm flex items-center gap-1.5 transition cursor-pointer"
+                className={`px-3 py-1.5 rounded-xl font-bold text-xs shadow-sm flex items-center gap-1.5 transition cursor-pointer ${
+                  hasFaceAttendanceAccess(school)
+                    ? "bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white"
+                    : "bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40"
+                }`}
+                title={hasFaceAttendanceAccess(school) ? "लाइव फेस आईडी" : "👑 Elite Plan Only"}
               >
-                <Camera className="w-3.5 h-3.5" />
+                {hasFaceAttendanceAccess(school) ? <Camera className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5 text-amber-400" />}
                 <span>📷 लाइव फेस आईडी</span>
+                {!hasFaceAttendanceAccess(school) && (
+                  <span className="px-1 py-0.2 rounded bg-amber-500 text-slate-950 text-[9px] font-black">👑 Elite</span>
+                )}
               </button>
               <button
                 onClick={() => setView("classes")}
@@ -2395,17 +2404,33 @@ export const TeacherPanel: React.FC<Props> = ({
             <button
               type="button"
               onClick={() => setShowFaceStudio(true)}
-              className="bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-emerald-300 dark:border-emerald-800/60 flex flex-col justify-between gap-3 hover:shadow-md hover:border-emerald-500 transition text-left cursor-pointer"
+              className={`bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border flex flex-col justify-between gap-3 hover:shadow-md transition text-left cursor-pointer ${
+                hasFaceAttendanceAccess(school)
+                  ? "border-emerald-300 dark:border-emerald-800/60 hover:border-emerald-500"
+                  : "border-amber-300 dark:border-amber-700/60 hover:border-amber-500"
+              }`}
             >
               <div className="flex items-center justify-between w-full">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white flex items-center justify-center shadow-md">
-                  <Camera className="w-5 h-5" />
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center shadow-md ${
+                  hasFaceAttendanceAccess(school)
+                    ? "bg-gradient-to-br from-emerald-500 to-teal-600 text-white"
+                    : "bg-gradient-to-br from-amber-500 to-orange-500 text-slate-950"
+                }`}>
+                  {hasFaceAttendanceAccess(school) ? <Camera className="w-5 h-5" /> : <Lock className="w-5 h-5" />}
                 </div>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">Live 📷</span>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                  hasFaceAttendanceAccess(school)
+                    ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+                    : "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                }`}>
+                  {hasFaceAttendanceAccess(school) ? "Live 📷" : "👑 Elite Only"}
+                </span>
               </div>
               <div>
                 <p className="font-black text-slate-900 dark:text-white text-sm">Live Face ID</p>
-                <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">Enroll &amp; Match Test</p>
+                <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">
+                  {hasFaceAttendanceAccess(school) ? "Enroll & Match Test" : "Elite Subscription Required"}
+                </p>
               </div>
             </button>
 
@@ -2657,6 +2682,11 @@ export const TeacherPanel: React.FC<Props> = ({
         <UniversalFaceIdStudioModal
           isOpen={showFaceStudio}
           onClose={() => setShowFaceStudio(false)}
+          hasFaceAccess={hasFaceAttendanceAccess(school)}
+          onOpenQrScanner={() => {
+            setShowFaceStudio(false);
+            setView("attendance");
+          }}
           schoolId={schoolId}
           students={allStudents}
           teachers={currentTeacher ? [currentTeacher] : []}

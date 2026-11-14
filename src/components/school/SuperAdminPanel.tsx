@@ -437,9 +437,9 @@ const PlanAssigner: React.FC<{
           <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700 rounded-xl p-3 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2.5">
             <Crown className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
             <div>
-              <p className="font-black text-amber-900 dark:text-amber-100">👑 Elite Curriculum Feature Unlocked:</p>
+              <p className="font-black text-amber-900 dark:text-amber-100">👑 Elite Face Attendance &amp; Curriculum Unlocked:</p>
               <p className="text-[11px] text-amber-800 dark:text-amber-300 mt-0.5 leading-relaxed">
-                School ke pass <strong>Class 1 se 12</strong> tak ke Subject Notes, Coaching MCQs, Video Lectures, PDF Notes add karne ka exclusive manager aur Custom School Study Rooms ka full power active rahega.
+                School ke pass <strong>🤖 AI Face Attendance (0.2s Face Kiosk + Live Face ID Studio)</strong>, <strong>📷 QR Scan</strong> aur <strong>Class 1 se 12</strong> tak ke Notes, MCQs, Video Lectures व PDF Manager ka full power active rahega.
               </p>
             </div>
           </div>
@@ -505,7 +505,7 @@ const PlanAssigner: React.FC<{
             Valid till: {computeExpiry(duration)}
           </p>
           <p className={`text-[10px] font-bold mt-1 ${isElite ? "text-amber-600 dark:text-amber-400" : "text-slate-500"}`}>
-            {isElite ? "👑 Class 1-12 Notes, Video, PDF & MCQ Manager Included" : "Standard Student ERP & School Suite"}
+            {isElite ? "👑 AI Face Attendance (Kiosk & Face ID) + Class 1-12 Notes, Video & MCQ Included" : "⚡ QR Code Scan Attendance + Standard Student ERP (No Face Attendance)"}
           </p>
         </div>
         <div className="text-right">

@@ -4,6 +4,13 @@ import { getDatabase, ref, set, get, onValue, update, remove, query as rtdbQuery
 import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, signInAnonymously } from "firebase/auth";
 import { storage } from "./utils/storage";
 import { CLASS_10_FAKE_LESSONS } from "./constants/class10SeedLessons";
+import { enqueueOfflineSyncItem, isNetworkOfflineImmediate } from "./services/offlineSyncService";
+
+const withQuickTimeout = <T>(p: Promise<T>, ms = 3500): Promise<T> =>
+  Promise.race([
+    p,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`Operation timed out after ${ms}ms`)), ms)),
+  ]);
 
 // --- FIREBASE CONFIGURATION ---
 const firebaseConfig = {
@@ -223,7 +230,13 @@ export const sanitizeForFirestore = (obj: any): any => {
 let isFirebaseConnected = false;
 const connectedRef = ref(rtdb, ".info/connected");
 onValue(connectedRef, (snap) => {
-  isFirebaseConnected = !!snap.val();
+  const connected = !!snap.val();
+  isFirebaseConnected = connected;
+  if (connected && typeof window !== "undefined") {
+    try {
+      window.dispatchEvent(new CustomEvent("nst-firebase-connected"));
+    } catch {}
+  }
 });
 
 export const checkFirebaseConnection = () => {
@@ -717,22 +730,58 @@ export const deleteLucentEntry = async (id: string): Promise<void> => {
 export const saveLucentEntryDirect = async (entry: any): Promise<void> => {
   const id = entry.id as string;
   const payload = sanitizeForFirestore(entry);
-  await Promise.allSettled([
-    setDoc(doc(db, 'lucent_entries', id), payload),
-    set(ref(rtdb, `lucent_entries/${id}`), payload),
-    set(ref(rtdb, `__backup__/lucent_entries/${id}`), payload),
+  const enqueueLucent = () => {
+    enqueueOfflineSyncItem({
+      coalesceKey: `lucent:${id}`,
+      kind: "WRITE_PAIR",
+      category: "Notes/Study",
+      label: `Notes/Study: ${entry?.lessonTitle || entry?.title || id}`,
+      firestoreOp: { type: "set", path: `lucent_entries/${id}`, data: payload },
+      rtdbOp: { type: "set", path: `lucent_entries/${id}`, data: payload },
+      extraRtdbOps: [{ type: "set", path: `__backup__/lucent_entries/${id}`, data: payload }],
+    });
+  };
+  if (isNetworkOfflineImmediate()) {
+    enqueueLucent();
+    return;
+  }
+  const results = await Promise.allSettled([
+    withQuickTimeout(setDoc(doc(db, 'lucent_entries', id), payload), 3500),
+    withQuickTimeout(set(ref(rtdb, `lucent_entries/${id}`), payload), 3000),
+    withQuickTimeout(set(ref(rtdb, `__backup__/lucent_entries/${id}`), payload), 3000),
   ]);
+  if (!results.some(r => r.status === 'fulfilled')) {
+    enqueueLucent();
+  }
   console.log(`[IIC] saveLucentEntryDirect: ${id} saved`);
 };
 
 export const saveHomeworkEntryDirect = async (entry: any): Promise<void> => {
   const id = entry.id as string;
   const payload = sanitizeForFirestore(entry);
-  await Promise.allSettled([
-    setDoc(doc(db, 'homework_entries', id), payload),
-    set(ref(rtdb, `homework_entries/${id}`), payload),
-    set(ref(rtdb, `__backup__/homework_entries/${id}`), payload),
+  const enqueueHw = () => {
+    enqueueOfflineSyncItem({
+      coalesceKey: `hw_entry:${id}`,
+      kind: "WRITE_PAIR",
+      category: "Homework",
+      label: `Homework: ${entry?.title || entry?.subject || id}`,
+      firestoreOp: { type: "set", path: `homework_entries/${id}`, data: payload },
+      rtdbOp: { type: "set", path: `homework_entries/${id}`, data: payload },
+      extraRtdbOps: [{ type: "set", path: `__backup__/homework_entries/${id}`, data: payload }],
+    });
+  };
+  if (isNetworkOfflineImmediate()) {
+    enqueueHw();
+    return;
+  }
+  const results = await Promise.allSettled([
+    withQuickTimeout(setDoc(doc(db, 'homework_entries', id), payload), 3500),
+    withQuickTimeout(set(ref(rtdb, `homework_entries/${id}`), payload), 3000),
+    withQuickTimeout(set(ref(rtdb, `__backup__/homework_entries/${id}`), payload), 3000),
   ]);
+  if (!results.some(r => r.status === 'fulfilled')) {
+    enqueueHw();
+  }
   console.log(`[IIC] saveHomeworkEntryDirect: ${id} saved`);
 };
 
@@ -740,16 +789,33 @@ export const saveHomeworkEntryDirect = async (entry: any): Promise<void> => {
 export const saveMcqLesson = async (lesson: any): Promise<void> => {
   const id = lesson.id as string;
   const payload = sanitizeForFirestore(lesson);
-  await Promise.allSettled([
-    setDoc(doc(db, 'mcq_lessons', id), payload),
-    set(ref(rtdb, `mcq_lessons/${id}`), payload),
-  ]);
   try {
     const raw = localStorage.getItem('nst_mcq_lessons_cache');
     const existingMap: Record<string, any> = raw ? JSON.parse(raw) : {};
     existingMap[id] = payload;
     localStorage.setItem('nst_mcq_lessons_cache', JSON.stringify(existingMap));
   } catch (_) {}
+  const enqueueMcq = () => {
+    enqueueOfflineSyncItem({
+      coalesceKey: `mcq_lesson:${id}`,
+      kind: "WRITE_PAIR",
+      category: "Notes/Study",
+      label: `MCQ Lesson: ${lesson?.title || lesson?.lessonTitle || id}`,
+      firestoreOp: { type: "set", path: `mcq_lessons/${id}`, data: payload },
+      rtdbOp: { type: "set", path: `mcq_lessons/${id}`, data: payload },
+    });
+  };
+  if (isNetworkOfflineImmediate()) {
+    enqueueMcq();
+    return;
+  }
+  const results = await Promise.allSettled([
+    withQuickTimeout(setDoc(doc(db, 'mcq_lessons', id), payload), 3500),
+    withQuickTimeout(set(ref(rtdb, `mcq_lessons/${id}`), payload), 3000),
+  ]);
+  if (!results.some(r => r.status === 'fulfilled')) {
+    enqueueMcq();
+  }
   console.log(`[IIC] saveMcqLesson: ${id} saved (${lesson.mcqCount ?? (lesson.mcqs || []).length} MCQs)`);
 };
 
@@ -1284,7 +1350,16 @@ const _executeSaveUserToLive = async (user: any): Promise<boolean> => {
     }
     return true;
   } catch (error) {
-    console.warn("[saveUserToLive] Error saving user (data cached locally):", error);
+    console.warn("[saveUserToLive] Offline/Error saving user — queuing for auto-sync:", error);
+    if (user?.id) {
+      enqueueOfflineSyncItem({
+        coalesceKey: `user_live:${user.id}`,
+        kind: "CUSTOM_ACTION",
+        category: "General",
+        label: `User Profile Sync: ${user.name || user.id}`,
+        customAction: { type: "SAVE_USER_LIVE", payload: { user: sanitizeForFirestore(user) } },
+      });
+    }
     return false;
   }
 };
@@ -2383,18 +2458,45 @@ export const saveSystemSettings = async (settings: any) => {
       );
     }
 
-    const results = await Promise.allSettled(writes);
+    if (isNetworkOfflineImmediate()) {
+      try {
+        localStorage.setItem('nst_system_settings', JSON.stringify(settings));
+      } catch {}
+      enqueueOfflineSyncItem({
+        coalesceKey: 'system_settings',
+        kind: 'CUSTOM_ACTION',
+        category: 'General',
+        label: 'System Settings & Content Update',
+        customAction: { type: 'SAVE_SYSTEM_SETTINGS', payload: { settings: sanitizeForFirestore(settings) } },
+      });
+      return;
+    }
+
+    const results = await Promise.allSettled(writes.map(w => withQuickTimeout(w, 4500)));
     const anySuccess = results.some(r => r.status === 'fulfilled');
     const errors = results.filter(r => r.status === 'rejected').map((r: any) => r.reason);
 
     if (!anySuccess) {
-      throw new Error(errors.map(e => e.message).join(' | ') || "All writes failed");
+      enqueueOfflineSyncItem({
+        coalesceKey: 'system_settings',
+        kind: 'CUSTOM_ACTION',
+        category: 'General',
+        label: 'System Settings & Content Update',
+        customAction: { type: 'SAVE_SYSTEM_SETTINGS', payload: { settings: sanitizeForFirestore(settings) } },
+      });
+      return;
     } else if (errors.length > 0) {
       console.warn("Partial Save Warning:", errors);
     }
   } catch (error) {
-    console.error("Error saving settings:", error);
-    throw error;
+    console.warn("Offline/Error saving settings, queued for auto-sync:", error);
+    enqueueOfflineSyncItem({
+      coalesceKey: 'system_settings',
+      kind: 'CUSTOM_ACTION',
+      category: 'General',
+      label: 'System Settings & Content Update',
+      customAction: { type: 'SAVE_SYSTEM_SETTINGS', payload: { settings: sanitizeForFirestore(settings) } },
+    });
   }
 };
 
@@ -2665,19 +2767,44 @@ export const saveChapterData = async (key: string, data: any, _historyMeta?: { u
       }
     }
 
-    const results = await Promise.allSettled(promises);
+    if (isNetworkOfflineImmediate()) {
+      enqueueOfflineSyncItem({
+        coalesceKey: `chapter_data:${key}`,
+        kind: 'CUSTOM_ACTION',
+        category: 'Notes/Study',
+        label: `Chapter Content: ${sanitizedData?._meta?.subject || key}`,
+        customAction: { type: 'SAVE_CHAPTER_DATA', payload: { key, data: sanitizedData, historyMeta: _historyMeta } },
+      });
+      return true;
+    }
+
+    const results = await Promise.allSettled(promises.map(p => withQuickTimeout(p, 4500)));
     const anySuccess = results.some(r => r.status === 'fulfilled');
     const errors = results.filter(r => r.status === 'rejected').map((r: any) => r.reason);
 
     if (!anySuccess) {
-      throw new Error(errors.map(e => e.message).join(' | ') || "All chapter saves failed");
+      enqueueOfflineSyncItem({
+        coalesceKey: `chapter_data:${key}`,
+        kind: 'CUSTOM_ACTION',
+        category: 'Notes/Study',
+        label: `Chapter Content: ${sanitizedData?._meta?.subject || key}`,
+        customAction: { type: 'SAVE_CHAPTER_DATA', payload: { key, data: sanitizedData, historyMeta: _historyMeta } },
+      });
+      return true;
     } else if (errors.length > 0) {
       console.warn("Partial Chapter Save Warning:", errors);
     }
     return true;
   } catch (error) {
-    console.error("Error saving chapter data:", error);
-    throw error;
+    console.warn("Offline/Error saving chapter data — queued for sync:", error);
+    enqueueOfflineSyncItem({
+      coalesceKey: `chapter_data:${key}`,
+      kind: 'CUSTOM_ACTION',
+      category: 'Notes/Study',
+      label: `Chapter Content: ${key}`,
+      customAction: { type: 'SAVE_CHAPTER_DATA', payload: { key, data: sanitizeForFirestore(data), historyMeta: _historyMeta } },
+    });
+    return true;
   }
 };
 
@@ -2909,11 +3036,30 @@ export const saveTestResult = async (userId: string, attempt: any) => {
         localStorage.setItem(cacheKey, JSON.stringify(updated));
     } catch (_) {}
 
+    const enqueueTestResult = () => {
+        enqueueOfflineSyncItem({
+            coalesceKey: `test_result:${userId}:${docId}`,
+            kind: "WRITE_PAIR",
+            category: "Notes/Study",
+            label: `MCQ Test Result: ${attempt?.testName || attempt?.chapterTitle || "MCQ"}`,
+            firestoreOp: { type: "set", path: `users/${userId}/test_results/${docId}`, data: sanitizedAttempt },
+            rtdbOp: { type: "update", path: `users/${userId}/test_results/${docId}`, data: sanitizedAttempt },
+        });
+    };
+
+    if (isNetworkOfflineImmediate()) {
+        enqueueTestResult();
+        return;
+    }
+
+    let anySaved = false;
+
     // 2. Mirror to Realtime Database
     try {
         if (rtdb) {
-            await update(ref(rtdb, `users/${userId}/test_results/${docId}`), sanitizedAttempt);
-            await update(ref(rtdb, `users/${userId}/lastMcqPerformance`), {
+            await withQuickTimeout(update(ref(rtdb, `users/${userId}/test_results/${docId}`), sanitizedAttempt), 2500);
+            anySaved = true;
+            await withQuickTimeout(update(ref(rtdb, `users/${userId}/lastMcqPerformance`), {
                 testId: testIdentifier,
                 score: attempt?.score ?? attempt?.correctCount ?? 0,
                 total: attempt?.totalQuestions ?? attempt?.total ?? 0,
@@ -2921,7 +3067,7 @@ export const saveTestResult = async (userId: string, attempt: any) => {
                 topic: attempt?.topic || attempt?.chapterTitle || 'MCQ Practice',
                 date: attempt?.date || new Date().toISOString(),
                 timestamp: Date.now(),
-            });
+            }), 2000).catch(() => {});
         }
     } catch (e) {
         console.warn("[IIC] RTDB saveTestResult mirror failed:", e);
@@ -2930,10 +3076,15 @@ export const saveTestResult = async (userId: string, attempt: any) => {
     // 3. Write to Firestore in independent try-catch
     try {
         if (db) {
-            await setDoc(doc(db, "users", userId, "test_results", docId), sanitizedAttempt);
+            await withQuickTimeout(setDoc(doc(db, "users", userId, "test_results", docId), sanitizedAttempt), 3000);
+            anySaved = true;
         }
     } catch (e) {
         console.warn("[IIC] Firestore saveTestResult failed:", e);
+    }
+
+    if (!anySaved) {
+        enqueueTestResult();
     }
 };
 
@@ -2950,17 +3101,36 @@ export const saveUserHistory = async (userId: string, historyItem: any) => {
         localStorage.setItem(cacheKey, JSON.stringify(updated));
     } catch (_) {}
 
+    const enqueueHistory = () => {
+        enqueueOfflineSyncItem({
+            coalesceKey: `user_history:${userId}:${docId}`,
+            kind: "WRITE_PAIR",
+            category: "Notes/Study",
+            label: `Study History: ${historyItem?.title || historyItem?.name || "Revision"}`,
+            firestoreOp: { type: "set", path: `users/${userId}/history/${docId}`, data: sanitized },
+            rtdbOp: { type: "update", path: `users/${userId}/history/${docId}`, data: sanitized },
+        });
+    };
+
+    if (isNetworkOfflineImmediate()) {
+        enqueueHistory();
+        return;
+    }
+
+    let anySaved = false;
+
     // 2. Realtime Database mirror
     try {
         if (rtdb) {
-            await update(ref(rtdb, `users/${userId}/history/${docId}`), sanitized);
-            await update(ref(rtdb, `users/${userId}/lastHistoryItem`), {
+            await withQuickTimeout(update(ref(rtdb, `users/${userId}/history/${docId}`), sanitized), 2500);
+            anySaved = true;
+            await withQuickTimeout(update(ref(rtdb, `users/${userId}/lastHistoryItem`), {
                 id: docId,
                 title: historyItem?.title || historyItem?.name || historyItem?.chapterTitle || 'Revision Practice',
                 type: historyItem?.type || 'revision',
                 date: historyItem?.date || new Date().toISOString(),
                 timestamp: Date.now(),
-            });
+            }), 2000).catch(() => {});
         }
     } catch (e) {
         console.warn("[IIC] RTDB saveUserHistory mirror failed:", e);
@@ -2969,10 +3139,15 @@ export const saveUserHistory = async (userId: string, historyItem: any) => {
     // 3. Save to subcollection "history" under the user in Firestore
     try {
         if (db) {
-            await setDoc(doc(db, "users", userId, "history", docId), sanitized);
+            await withQuickTimeout(setDoc(doc(db, "users", userId, "history", docId), sanitized), 3000);
+            anySaved = true;
         }
     } catch (e) {
         console.warn("[IIC] Firestore saveUserHistory failed:", e);
+    }
+
+    if (!anySaved) {
+        enqueueHistory();
     }
 };
 

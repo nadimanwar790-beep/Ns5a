@@ -1,12 +1,14 @@
 // @ts-nocheck
 import React, { useEffect, useState } from "react";
-import { Building2, X, Save, CheckCircle2, Image as ImageIcon, Phone, Mail, MapPin, User, Award, ShieldCheck, Sparkles, PenTool } from "lucide-react";
+import { Building2, X, Save, CheckCircle2, Image as ImageIcon, Phone, Mail, MapPin, User, Award, ShieldCheck, Sparkles, PenTool, Smartphone, QrCode } from "lucide-react";
+import QRCode from "react-qr-code";
 import { DirectUploadButton } from "../DirectUploadButton";
 import { updateSchool } from "../../school-firebase";
 import { DigitalSignatureModal } from "./DigitalSignatureModal";
 import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo } from "./feeReceiptUtils";
 import { setSchoolLogoSync } from "../../utils/schoolIndexedDb";
 import { uploadImageToImgBB } from "../../services/imgbbService";
+import { DEFAULT_ERP_APP_DOWNLOAD_URL } from "./marksheetBacksideUtils";
 import {
   DEFAULT_SCHOOL_DOCUMENT_PRINT_FIELDS,
   type School,
@@ -32,6 +34,10 @@ export interface SchoolHeaderDetails {
   directorPhone?: string;
   principalSignatureUrl?: string;
   directorSignatureUrl?: string;
+  principalPhotoUrl?: string;
+  directorPhotoUrl?: string;
+  erpAppUrl?: string;
+  erpAppFeatures?: string[];
   upiId?: string;
   customFields?: SchoolProfileCustomField[];
   documentPrintFields?: SchoolDocumentPrintFields;
@@ -82,6 +88,10 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
       directorPhone: currentDetails?.directorPhone || initialDetails?.directorPhone || school?.directorPhone || "",
       principalSignatureUrl: currentDetails?.principalSignatureUrl || initialDetails?.principalSignatureUrl || school?.principalSignatureUrl || "",
       directorSignatureUrl: currentDetails?.directorSignatureUrl || initialDetails?.directorSignatureUrl || school?.directorSignatureUrl || "",
+      principalPhotoUrl: currentDetails?.principalPhotoUrl || initialDetails?.principalPhotoUrl || school?.principalPhotoUrl || "",
+      directorPhotoUrl: currentDetails?.directorPhotoUrl || initialDetails?.directorPhotoUrl || school?.directorPhotoUrl || "",
+      erpAppUrl: currentDetails?.erpAppUrl || initialDetails?.erpAppUrl || school?.erpAppUrl || DEFAULT_ERP_APP_DOWNLOAD_URL,
+      erpAppFeatures: currentDetails?.erpAppFeatures || initialDetails?.erpAppFeatures || school?.erpAppFeatures || [],
       upiId: currentDetails?.upiId || initialDetails?.upiId || school?.upiId || "",
       customFields: currentDetails?.customFields || initialDetails?.customFields || school?.customFields || [],
       documentPrintFields: currentDetails?.documentPrintFields || initialDetails?.documentPrintFields || school?.documentPrintFields || {},
@@ -141,6 +151,10 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
       directorPhone: dataToSave.directorPhone || "",
       principalSignatureUrl: dataToSave.principalSignatureUrl || "",
       directorSignatureUrl: dataToSave.directorSignatureUrl || "",
+      principalPhotoUrl: dataToSave.principalPhotoUrl || "",
+      directorPhotoUrl: dataToSave.directorPhotoUrl || "",
+      erpAppUrl: (dataToSave.erpAppUrl || "").trim(),
+      erpAppFeatures: dataToSave.erpAppFeatures || [],
       upiId: (dataToSave.upiId || "").trim(),
       customFields: dataToSave.customFields || [],
       documentPrintFields: dataToSave.documentPrintFields || {},
@@ -610,6 +624,46 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
                     + Add Sign
                   </button>
                 )}
+              </div>
+            </div>
+          </div>
+
+          {/* School ERP Mobile App Download Link & Live QR Code */}
+          <div className="p-4 bg-gradient-to-br from-emerald-50/90 via-teal-50/40 to-cyan-50/50 dark:from-emerald-950/35 dark:via-slate-900 dark:to-slate-900 rounded-2xl border border-emerald-200 dark:border-emerald-800/60 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+              <div className="flex-1 space-y-2">
+                <div className="flex items-center gap-1.5 text-xs font-black text-emerald-950 dark:text-emerald-200">
+                  <Smartphone className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                  <span>School ERP App Download Link &amp; QR Code</span>
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-snug">
+                  Yahan apne School ERP App (Play Store / APK / Web App) ka download link daalein — iska QR Code auto-generate hokar Marksheet Page-2 aur documents par dikhega.
+                </p>
+                <div>
+                  <label className="text-[10px] font-black uppercase tracking-wider text-emerald-900 dark:text-emerald-300 block mb-1">
+                    App Download URL (Play Store / APK / Portal Link)
+                  </label>
+                  <input
+                    type="url"
+                    value={details.erpAppUrl || ""}
+                    onChange={e => setDetails(p => ({ ...p, erpAppUrl: e.target.value }))}
+                    placeholder={DEFAULT_ERP_APP_DOWNLOAD_URL}
+                    className="w-full px-3 py-2 text-xs font-semibold rounded-xl border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500 outline-hidden"
+                  />
+                </div>
+                <p className="text-[10px] font-bold text-emerald-800 dark:text-emerald-300 bg-white/80 dark:bg-slate-800/70 px-2.5 py-1.5 rounded-lg border border-emerald-200/80 dark:border-emerald-800/60">
+                  📲 Scan QR → Download School ERP App → Create Account → Link Account using Student&apos;s ID Card QR Code
+                </p>
+              </div>
+              <div className="shrink-0 flex flex-col items-center justify-center p-2.5 bg-white rounded-xl border border-emerald-300 shadow-xs self-center sm:self-start">
+                <QRCode
+                  value={(details.erpAppUrl || "").trim() || DEFAULT_ERP_APP_DOWNLOAD_URL}
+                  size={68}
+                  level="M"
+                />
+                <span className="text-[8.5px] font-black uppercase tracking-wider text-emerald-900 mt-1 flex items-center gap-0.5">
+                  <QrCode className="w-2.5 h-2.5" /> App QR Live
+                </span>
               </div>
             </div>
           </div>

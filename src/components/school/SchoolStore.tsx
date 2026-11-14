@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState } from "react";
-import { ArrowLeft, CheckCircle2, MessageCircle, Users, BookOpen, Star, Crown, Lock, Shield, Sparkles } from "lucide-react";
+import { ArrowLeft, CheckCircle2, MessageCircle, Users, BookOpen, Star, Crown, Lock, Shield, Sparkles, Camera, QrCode } from "lucide-react";
 import type { School, SubscriptionTier } from "../../school-types";
 import { ADMIN_WHATSAPP_NUMBER } from "../../constants";
 import { safeOpenExternalUrl } from "../../utils/safeBrowserActions";
@@ -49,7 +49,7 @@ const STORE_TIERS: TierPlanConfig[] = [
       { text: "Upto 200 Students Records", included: true },
       { text: "Upto 10 Teachers & Staff Accounts", included: true },
       { text: "1 Master School Admin Account", included: true },
-      { text: "Daily Class Attendance Tracking", included: true },
+      { text: "Daily Class Attendance & QR Code Scan Attendance (Lite Included)", included: true },
       { text: "Basic Fee Collection & Due Register", included: true },
       { text: "Official Fee Receipts & 4-in-1 Slips", included: true },
       { text: "Manual WhatsApp Fee & Due Share", included: true },
@@ -82,7 +82,7 @@ const STORE_TIERS: TierPlanConfig[] = [
       { text: "Up to 3 Sub-Admins (Accountant, Vice Principal)", included: true },
       { text: "Full Monthly Dues + Pending Register", included: true },
       { text: "1-Click WhatsApp Dues & Fee Receipts", included: true },
-      { text: "Attendance + SMS/WhatsApp Alert Link", included: true },
+      { text: "QR Code Scan Attendance + SMS/WhatsApp Alert Link", included: true },
       { text: "Live QR Student ID Cards (Bulk Print)", included: true },
       { text: "Exam Admit Cards Hub & Roll Numbers", included: true },
       { text: "Online Admission Form + Approval Workflow", included: true },
@@ -114,7 +114,7 @@ const STORE_TIERS: TierPlanConfig[] = [
       { text: "Unlimited Role-based Multi Admins", included: true },
       { text: "Advance Fee Reports + Defaulter Analytics + Excel Export", included: true },
       { text: "Bulk WhatsApp Alerts & Custom Message Templates", included: true },
-      { text: "Monthly Attendance Summary + Late/Leave Register", included: true },
+      { text: "QR Code Scan Attendance + Monthly Summary & Leave Register", included: true },
       { text: "Online Admission Portal + Direct Roll/Class Auto-Assign", included: true },
       { text: "Full Payroll + Salary Slip + Attendance Deductions", included: true },
       { text: "Premium School Website with Custom Domain / Branding", included: true },
@@ -153,7 +153,9 @@ export const SchoolStore: React.FC<Props> = ({ school, onBack }) => {
     const basePrice = dur === "1_year" ? tier.prices["1_year"].price : tier.prices.monthly.price;
     const priceVal = isElite ? basePrice * 2 : basePrice;
     const priceStr = `₹${priceVal.toLocaleString("en-IN")}`;
-    const editionText = isElite ? "👑 Elite Plan (2× Price — Class 1 to 12 Notes, MCQ, PDF & Video Manager Included)" : "Standard Plan";
+    const editionText = isElite
+      ? "👑 Elite Plan (2× Price — AI Face Attendance + QR Scan + Class 1 to 12 Notes, MCQ, PDF & Video Included)"
+      : "⚡ Lite / Standard Plan (QR Code Scan Attendance Included)";
     const msg = encodeURIComponent(
       `Namaste! 🙏\n\nMain *${school.name}* ka School Admin hoon.\n\nMujhe *IIC School ${tier.name} (${tier.badge}) — ${editionText} — ${durName} (${priceStr})* subscription chahiye.\n\n📋 School Details:\n• School: ${school.name}\n• School Code: ${school.code}\n• Admin Email: ${school.adminEmail}\n\nKripya subscription activate karein. Dhanyawad!`
     );
@@ -221,6 +223,32 @@ export const SchoolStore: React.FC<Props> = ({ school, onBack }) => {
             </div>
           </div>
         )}
+
+        {/* Attendance Comparison Banner: Lite (QR Scan) vs Elite (AI Face Attendance) */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-2xl p-3.5 flex items-start gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0">
+              <QrCode className="w-4 h-4" />
+            </div>
+            <div>
+              <p className="text-xs font-black text-blue-900 dark:text-blue-200">⚡ Lite Plan: QR Code Scan</p>
+              <p className="text-[11px] text-blue-700 dark:text-blue-300 mt-0.5 leading-snug">
+                Lite &amp; Standard plans mein 📷 QR Code Scan Attendance shamil hai.
+              </p>
+            </div>
+          </div>
+          <div className="bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-950/40 dark:to-orange-950/30 border border-amber-300 dark:border-amber-700 rounded-2xl p-3.5 flex items-start gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center shrink-0">
+              <Camera className="w-4 h-4" />
+            </div>
+            <div>
+              <p className="text-xs font-black text-amber-950 dark:text-amber-200">👑 Elite Plan: AI Face Attendance</p>
+              <p className="text-[11px] text-amber-800 dark:text-amber-300 mt-0.5 leading-snug">
+                Sirf Elite subscription mein 🤖 0.2s Face Kiosk + Face ID Studio + Class 1–12 Notes milta hai!
+              </p>
+            </div>
+          </div>
+        </div>
 
         {/* ── 3 TIERS: BASIC (200), STANDARD (500), PRO (2000) ────────────────── */}
         {STORE_TIERS.map((tier) => {
@@ -347,7 +375,7 @@ export const SchoolStore: React.FC<Props> = ({ school, onBack }) => {
                   <div className="mt-2.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-xl p-2.5 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2">
                     <Sparkles size={15} className="text-amber-600 shrink-0 mt-0.5" />
                     <p className="text-[11px] font-bold leading-snug">
-                      <strong>👑 Elite Edition Feature:</strong> Class 1 se 12 tak ke Notes, Coaching MCQs, Video Lectures aur PDF Notes add karne ka exclusive manager unlock hoga.
+                      <strong>👑 Elite Edition Features:</strong> 🤖 AI Face Attendance (0.2s Kiosk + Live Face ID Studio), QR Scan aur Class 1 se 12 tak ke Notes, MCQs, Videos &amp; PDFs unlock honge.
                     </p>
                   </div>
                 )}
@@ -390,10 +418,21 @@ export const SchoolStore: React.FC<Props> = ({ school, onBack }) => {
                     </span>
                   </div>
                 ))}
-                {eliteMap[tier.key] && (
-                  <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 font-bold text-xs bg-amber-50 dark:bg-amber-950/20 p-1.5 rounded-lg border border-amber-200 dark:border-amber-900">
-                    <Sparkles size={14} className="shrink-0" />
-                    <span>Class 1 to 12 Notes, MCQ, PDF & Video Manager Included</span>
+                {eliteMap[tier.key] ? (
+                  <>
+                    <div className="flex items-center gap-2 text-amber-700 dark:text-amber-300 font-black text-xs bg-amber-50 dark:bg-amber-950/30 p-2 rounded-lg border border-amber-300 dark:border-amber-800">
+                      <Camera size={14} className="shrink-0 text-amber-600" />
+                      <span>👑 AI Face Attendance (0.2s Face Kiosk &amp; Live Face ID Studio) Included ✓</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 font-bold text-xs bg-amber-50 dark:bg-amber-950/20 p-1.5 rounded-lg border border-amber-200 dark:border-amber-900">
+                      <Sparkles size={14} className="shrink-0" />
+                      <span>Class 1 to 12 Notes, MCQ, PDF &amp; Video Manager Included ✓</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex items-center gap-2 text-slate-400 dark:text-slate-500 font-semibold text-xs bg-slate-50 dark:bg-slate-900/40 p-2 rounded-lg border border-slate-200 dark:border-slate-700">
+                    <Lock size={13} className="shrink-0 text-amber-500" />
+                    <span>🤖 AI Face Attendance (Face Kiosk &amp; Face ID) — 👑 Elite Plan Only</span>
                   </div>
                 )}
               </div>

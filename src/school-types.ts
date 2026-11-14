@@ -36,10 +36,10 @@ export const TIER_CONFIG: Record<SubscriptionTier, { name: string; maxStudents: 
     maxTeachers: 10,
     monthlyPrice: 999,
     sessionPrice: 9999,
-    eliteMonthlyPrice: 1999, // 2× price for Elite Custom Curriculum
+    eliteMonthlyPrice: 1999, // 2× price for Elite AI Face Attendance & Custom Curriculum
     eliteSessionPrice: 19999,
     badge: "BASIC 200",
-    desc: "Upto 200 Students • 10 Teachers • Core Student ERP & Fee Due Register"
+    desc: "Upto 200 Students • 10 Teachers • QR Code Scan Attendance & Core Student ERP"
   },
   growth_500: {
     name: "Standard Plan (500 Students)",
@@ -47,10 +47,10 @@ export const TIER_CONFIG: Record<SubscriptionTier, { name: string; maxStudents: 
     maxTeachers: 25,
     monthlyPrice: 1999,
     sessionPrice: 19999,
-    eliteMonthlyPrice: 3999, // 2× price for Elite Custom Curriculum
+    eliteMonthlyPrice: 3999, // 2× price for Elite AI Face Attendance & Custom Curriculum
     eliteSessionPrice: 39999,
     badge: "STANDARD 500",
-    desc: "Upto 500 Students • 25 Teachers • Sub-Admins, QR ID Cards & Admit Cards"
+    desc: "Upto 500 Students • 25 Teachers • Sub-Admins, QR Code Scan Attendance & Admit Cards"
   },
   enterprise_2000: {
     name: "Pro Plan (2000 Students)",
@@ -58,10 +58,10 @@ export const TIER_CONFIG: Record<SubscriptionTier, { name: string; maxStudents: 
     maxTeachers: 9999,
     monthlyPrice: 3999,
     sessionPrice: 39999,
-    eliteMonthlyPrice: 7999, // 2× price for Elite Custom Curriculum
+    eliteMonthlyPrice: 7999, // 2× price for Elite AI Face Attendance & Custom Curriculum
     eliteSessionPrice: 79999,
     badge: "PRO 2000",
-    desc: "Upto 2000 Students • Unlimited Staff • Multi-Admins, Full Payroll HRM, Advance Accounts & Website"
+    desc: "Upto 2000 Students • Unlimited Staff • QR Scan Attendance, Payroll HRM & Advance Accounts"
   },
   lite: {
     name: "Basic Plan (200 Students)",
@@ -72,7 +72,7 @@ export const TIER_CONFIG: Record<SubscriptionTier, { name: string; maxStudents: 
     eliteMonthlyPrice: 1999,
     eliteSessionPrice: 19999,
     badge: "BASIC 200",
-    desc: "Upto 200 Students • 10 Teachers • Core Student ERP & Fee Due Register"
+    desc: "Upto 200 Students • 10 Teachers • QR Code Scan Attendance & Core Student ERP"
   },
   full: {
     name: "Pro Plan (2000 Students)",
@@ -83,7 +83,7 @@ export const TIER_CONFIG: Record<SubscriptionTier, { name: string; maxStudents: 
     eliteMonthlyPrice: 7999,
     eliteSessionPrice: 79999,
     badge: "PRO 2000",
-    desc: "Upto 2000 Students • Unlimited Staff • Multi-Admins, Full Payroll HRM, Advance Accounts & Website"
+    desc: "Upto 2000 Students • Unlimited Staff • QR Scan Attendance, Payroll HRM & Advance Accounts"
   }
 };
 
@@ -111,6 +111,29 @@ export const isSchoolEliteCurriculum = (school?: School | null): boolean => {
     if (sub.paymentNotes?.toLowerCase()?.includes('elite')) return true;
   }
   return false;
+};
+
+export const isSchoolElitePlan = (school?: School | null): boolean =>
+  isSchoolEliteCurriculum(school);
+
+// AI Face Attendance (Face Kiosk + Live Face ID Studio) is exclusive to Elite subscription holders
+export const hasFaceAttendanceAccess = (school?: School | null): boolean => {
+  if (!school) return false;
+  return isSchoolEliteCurriculum(school);
+};
+
+// QR Code Scan Attendance is included for Lite, Standard, Pro, and Elite schools
+export const hasQrAttendanceAccess = (school?: School | null): boolean => {
+  if (!school) return true;
+  if (
+    school.id === 'demo_school' ||
+    school.id?.startsWith('demo') ||
+    school.id?.includes('demo') ||
+    (school as any).isDemo === true
+  ) {
+    return true;
+  }
+  return school.subscription?.status !== 'suspended';
 };
 
 export const getSchoolMaxStudents = (school?: School | null): number => {
@@ -176,6 +199,10 @@ export interface School {
   mobile?: string;
   principalSignatureUrl?: string; // Digital signature image of Principal (Base64 data URL or URL)
   directorSignatureUrl?: string; // Digital signature image of Director / Manager (Base64 data URL or URL)
+  principalPhotoUrl?: string; // Portrait/cutout photo of Principal for Marksheet Backside
+  directorPhotoUrl?: string; // Portrait/cutout photo of Director for Marksheet Backside
+  erpAppUrl?: string; // Official School ERP App Download URL (Play Store / APK / Portal)
+  erpAppFeatures?: string[]; // Highlighted benefits printed alongside the School ERP App QR
   customFields?: SchoolProfileCustomField[];
   documentPrintFields?: SchoolDocumentPrintFields;
   idCardFieldSettings?: Record<string, boolean>;
@@ -1208,6 +1235,8 @@ export interface AdmissionApplication {
   assignedSection?: string;
   paymentScreenshotUrl?: string;
   transactionRef?: string;
+  razorpayOrderId?: string;
+  razorpayPaymentId?: string;
   referredByTeacherId?: string;
   referredByTeacherName?: string;
   familyGroupId?: string;

@@ -4,11 +4,11 @@ import {
   ArrowLeft, Crown, Shield, Lock, CheckCircle2, XCircle,
   Calendar, AlertTriangle, MessageSquare, ChevronDown, ChevronUp,
   BookOpen, Users, FileText, ClipboardList, IndianRupee, Sparkles,
-  Zap, Copy, Check, ExternalLink, X, Flame, Clock
+  Zap, Copy, Check, ExternalLink, X, Flame, Clock, Camera, QrCode
 } from "lucide-react";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "../../firebase";
-import { TIER_CONFIG, type School, type SubscriptionTier } from "../../school-types";
+import { TIER_CONFIG, isSchoolEliteCurriculum, type School, type SubscriptionTier } from "../../school-types";
 import { ADMIN_WHATSAPP_NUMBER, SUPPORT_PHONE } from "../../constants";
 import { safeOpenExternalUrl } from "../../utils/safeBrowserActions";
 
@@ -21,20 +21,21 @@ interface Props {
 
 // ── Plan feature matrix ───────────────────────────────────────────────────────
 const FEATURES = [
-  { id: "students",     icon: <Users size={14} />, label: "Student Capacity",        basic: "200 Students", standard: "500 Students", pro: "2000 Students" },
-  { id: "teachers",     icon: <Users size={14} />, label: "Staff & Teachers Limit",  basic: "10 Teachers",  standard: "25 Teachers",  pro: "Unlimited Staff" },
-  { id: "subadmins",    icon: <Shield size={14} />, label: "Multi/Sub-Admins",       basic: "1 Admin Only", standard: "Up to 3 Admins", pro: "Unlimited Admins" },
-  { id: "notesmanager", icon: <Sparkles size={14} />, label: "Class 1–12 Notes & Media (Elite)", basic: "Elite Plan Only", standard: "Elite Plan Only", pro: "Elite Plan Only" },
-  { id: "fees",         icon: <IndianRupee size={14} />, label: "Fee & Due Register", basic: "Basic Register", standard: "Monthly Dues + Slip", pro: "Advance Analytics + Export" },
-  { id: "whatsapp",     icon: <MessageSquare size={14} />, label: "WhatsApp Alerts", basic: "Manual Share", standard: "1-Click Due/Receipt", pro: "Bulk Alerts & Templates" },
-  { id: "attendance",   icon: <ClipboardList size={14}/>, label: "Attendance Tracking", basic: "Daily Attendance", standard: "Attendance + SMS Link", pro: "Summary + Leave Register" },
-  { id: "admissions",   icon: <BookOpen size={14} />, label: "Online Admissions",    basic: "Basic Form", standard: "Form + Approval", pro: "Portal + Auto Roll/Class" },
-  { id: "idcards",      icon: <FileText size={14} />, label: "Live QR ID Cards & Admit", basic: false, standard: "QR Student Cards + Admit", pro: "Student + Staff Smart IDs" },
-  { id: "hrm",          icon: <Users size={14} />, label: "Staff HRM & Payroll",      basic: false, standard: "Salary Register", pro: "Full Payroll + Salary Slips" },
-  { id: "website",      icon: <BookOpen size={14} />, label: "School Public Website", basic: "Single Page", standard: "Website + Gallery", pro: "Premium Domain / Branding" },
-  { id: "referral",     icon: <Sparkles size={14} />, label: "Sibling Auto-Discount", basic: false, standard: true, pro: true },
-  { id: "certificates", icon: <FileText size={14} />, label: "Certificates (TC/Bonafide)", basic: false, standard: "TC Generator", pro: "Unlimited TC, Character & Bonafide" },
-  { id: "support",      icon: <Shield size={14} />, label: "Support & Cloud Backup", basic: "Standard Support", standard: "Priority WhatsApp (12h)", pro: "Dedicated VIP + Cloud Backup" },
+  { id: "students",       icon: <Users size={14} />, label: "Student Capacity",        basic: "200 Students", standard: "500 Students", pro: "2000 Students" },
+  { id: "teachers",       icon: <Users size={14} />, label: "Staff & Teachers Limit",  basic: "10 Teachers",  standard: "25 Teachers",  pro: "Unlimited Staff" },
+  { id: "subadmins",      icon: <Shield size={14} />, label: "Multi/Sub-Admins",       basic: "1 Admin Only", standard: "Up to 3 Admins", pro: "Unlimited Admins" },
+  { id: "attendance",     icon: <QrCode size={14} />, label: "QR Code Scan Attendance", basic: "⚡ Lite Included", standard: "⚡ Lite + SMS Link", pro: "⚡ Lite + Summary" },
+  { id: "faceattendance", icon: <Camera size={14} />, label: "🤖 AI Face Attendance (0.2s Kiosk & Face ID)", basic: "👑 Elite Only", standard: "👑 Elite Only", pro: "👑 Elite Only" },
+  { id: "notesmanager",   icon: <Sparkles size={14} />, label: "Class 1–12 Notes & Media (Elite)", basic: "👑 Elite Only", standard: "👑 Elite Only", pro: "👑 Elite Only" },
+  { id: "fees",           icon: <IndianRupee size={14} />, label: "Fee & Due Register", basic: "Basic Register", standard: "Monthly Dues + Slip", pro: "Advance Analytics + Export" },
+  { id: "whatsapp",       icon: <MessageSquare size={14} />, label: "WhatsApp Alerts", basic: "Manual Share", standard: "1-Click Due/Receipt", pro: "Bulk Alerts & Templates" },
+  { id: "admissions",     icon: <BookOpen size={14} />, label: "Online Admissions",    basic: "Basic Form", standard: "Form + Approval", pro: "Portal + Auto Roll/Class" },
+  { id: "idcards",        icon: <FileText size={14} />, label: "Live QR ID Cards & Admit", basic: false, standard: "QR Student Cards + Admit", pro: "Student + Staff Smart IDs" },
+  { id: "hrm",            icon: <Users size={14} />, label: "Staff HRM & Payroll",      basic: false, standard: "Salary Register", pro: "Full Payroll + Salary Slips" },
+  { id: "website",        icon: <BookOpen size={14} />, label: "School Public Website", basic: "Single Page", standard: "Website + Gallery", pro: "Premium Domain / Branding" },
+  { id: "referral",       icon: <Sparkles size={14} />, label: "Sibling Auto-Discount", basic: false, standard: true, pro: true },
+  { id: "certificates",   icon: <FileText size={14} />, label: "Certificates (TC/Bonafide)", basic: false, standard: "TC Generator", pro: "Unlimited TC, Character & Bonafide" },
+  { id: "support",        icon: <Shield size={14} />, label: "Support & Cloud Backup", basic: "Standard Support", standard: "Priority WhatsApp (12h)", pro: "Dedicated VIP + Cloud Backup" },
 ];
 
 const daysRemaining = (isoDate?: string): number => {
@@ -88,7 +89,7 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
   const sub            = school?.subscription;
   const isActive       = sub?.status === "active";
   const tier           = sub?.tier;
-  const isSchoolElite  = Boolean(sub?.isElite || sub?.customCurriculumEnabled || (sub?.monthlyAmount && sub.monthlyAmount >= 1999));
+  const isSchoolElite  = isSchoolEliteCurriculum(school);
   const planLevel: "none" | "basic" | "standard" | "pro" =
     !isActive ? "none" :
     tier === "starter_200" || tier === "lite" ? "basic" :
@@ -115,8 +116,8 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
       bg:    isSchoolElite ? "bg-amber-50/50 dark:bg-amber-950/20 border-amber-300 dark:border-amber-800" : "bg-blue-50/50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800",
       icon:  isSchoolElite ? <Crown size={20} className="text-amber-500" /> : <Shield size={20} className="text-blue-500" />,
       desc:  isSchoolElite
-        ? "200 Students · 10 Staff · Fee Due Register · 👑 Class 1–12 Notes & Lectures Active"
-        : "200 Students · 10 Staff · Fee Register · WhatsApp Alerts · Basic ERP",
+        ? "200 Students · 👑 AI Face Attendance (Kiosk + Face ID) + QR Scan + Class 1–12 Notes Active"
+        : "200 Students · 📷 QR Code Scan Attendance · Fee Register · WhatsApp Alerts (Face Attendance: Elite Only)",
     },
     standard: {
       label: isSchoolElite ? "Standard Elite (500 Students)" : "Standard Lite (500 Students)",
@@ -125,8 +126,8 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
       bg:    isSchoolElite ? "bg-amber-50/50 dark:bg-amber-950/20 border-amber-300 dark:border-amber-800" : "bg-indigo-50/50 dark:bg-indigo-950/20 border-indigo-200 dark:border-indigo-800",
       icon:  isSchoolElite ? <Crown size={20} className="text-amber-500" /> : <Users size={20} className="text-indigo-500" />,
       desc:  isSchoolElite
-        ? "500 Students · 25 Staff · QR ID Cards · 👑 Class 1–12 Notes & Video Manager Active"
-        : "500 Students · 25 Staff · Sub-Admins · QR ID Cards & Admit Cards",
+        ? "500 Students · 👑 AI Face Attendance (Kiosk + Face ID) + QR ID Cards + Class 1–12 Notes Active"
+        : "500 Students · 📷 QR Code Scan Attendance · Sub-Admins · QR ID Cards (Face Attendance: Elite Only)",
     },
     pro: {
       label: isSchoolElite ? "Pro Elite (2000 Students)" : "Pro Lite (2000 Students)",
@@ -135,8 +136,8 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
       bg:    "bg-amber-50/50 dark:bg-amber-950/20 border-amber-300 dark:border-amber-800",
       icon:  <Crown size={20} className="text-amber-500" />,
       desc:  isSchoolElite
-        ? "2000 Students · Unlimited Staff · Payroll HRM · 👑 Class 1–12 Notes & Curriculum Manager Active"
-        : "2000 Students · Unlimited Staff · Multi-Admins · Full Payroll HRM & School Website",
+        ? "2000 Students · 👑 AI Face Attendance (Kiosk + Face ID) + Payroll HRM + Class 1–12 Notes Active"
+        : "2000 Students · 📷 QR Code Scan Attendance · Payroll HRM · School Website (Face Attendance: Elite Only)",
     },
   }[planLevel];
 
@@ -194,7 +195,9 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
   const openWhatsAppCheckout = () => {
     if (!buyingPlan) return;
     const durLabel = buyingPlan.duration === "1_year" ? "1st Year Annual Session (10+2 Mo Free)" : "Monthly Subscription";
-    const eliteText = buyingPlan.isElite ? "👑 Elite Edition (Class 1-12 Notes, MCQ, Video & PDF Lectures Included)" : "⚡ Lite / Standard ERP Edition";
+    const eliteText = buyingPlan.isElite
+      ? "👑 Elite Edition (AI Face Attendance + QR Scan + Class 1-12 Notes, MCQ, Video & PDF Included)"
+      : "⚡ Lite ERP Edition (QR Code Scan Attendance Included)";
     const text = encodeURIComponent(
       `*School Plan Purchase Request*\n\n` +
       `🏫 *School:* ${school?.name || "School"}\n` +
@@ -396,6 +399,37 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
             </div>
           </div>
 
+          {/* ── ATTENDANCE PLAN COMPARISON HIGHLIGHT (LITE = QR SCAN, ELITE = AI FACE ATTENDANCE) ── */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div className="rounded-xl border border-blue-200 dark:border-blue-800/70 bg-blue-50/70 dark:bg-blue-950/25 p-2.5 flex items-start gap-2">
+              <div className="w-7 h-7 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0">
+                <QrCode size={14} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[11px] font-black text-blue-900 dark:text-blue-200 flex items-center gap-1">
+                  <span>⚡ Lite Plan: QR Code Scan Attendance</span>
+                </p>
+                <p className="text-[10px] text-blue-700/90 dark:text-blue-300/80 leading-snug mt-0.5">
+                  Lite subscription mein 📷 QR Code Scanner &amp; Class QR Attendance full access milega.
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-amber-300 dark:border-amber-700/80 bg-gradient-to-r from-amber-50 to-orange-50/70 dark:from-amber-950/35 dark:to-orange-950/25 p-2.5 flex items-start gap-2">
+              <div className="w-7 h-7 rounded-lg bg-amber-500 text-slate-950 flex items-center justify-center shrink-0 shadow-2xs">
+                <Camera size={14} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[11px] font-black text-amber-950 dark:text-amber-200 flex items-center gap-1">
+                  <span>👑 Elite Plan: AI Face Attendance</span>
+                </p>
+                <p className="text-[10px] text-amber-800 dark:text-amber-300/90 leading-snug mt-0.5">
+                  Sirf Elite walon ko 🤖 0.2s Face Attendance Kiosk, Live Face ID Studio + QR Scan + Class 1–12 Notes milenge!
+                </p>
+              </div>
+            </div>
+          </div>
+
           {/* ── TIER CARDS WITH 4 COMPACT BUTTONS ── */}
           {/* Order in each card: 1. Lite Monthly -> 2. Elite Monthly -> 3. Lite Yearly -> 4. Elite Yearly */}
           <div className="space-y-2.5">
@@ -447,9 +481,13 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
                   {/* Feature Subtext */}
                   <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight mb-2.5">
                     {cfg.desc}
-                    {sel.isElite && (
+                    {sel.isElite ? (
                       <span className="text-amber-600 dark:text-amber-400 font-bold ml-1">
-                        · 👑 Includes Class 1–12 Notes, MCQs & Video Lectures!
+                        · 👑 AI Face Attendance (Kiosk &amp; Face ID) + Class 1–12 Notes, MCQs &amp; Videos Included!
+                      </span>
+                    ) : (
+                      <span className="text-blue-600 dark:text-blue-400 font-bold ml-1">
+                        · ⚡ QR Code Scan Attendance Included (Face Attendance ke liye Elite chunein)
                       </span>
                     )}
                   </p>
@@ -600,7 +638,7 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
                   Kyu hai 👑 Elite Plan Schools ki Pehli Pasand?
                 </p>
                 <p className="text-[10px] text-amber-800/80 dark:text-amber-300/80 leading-snug">
-                  Full ERP + Class 1–12 ke Complete Notes, Question Bank, Chapter MCQs aur Video Lectures shamil hain.
+                  🤖 AI Face Attendance (0.2s Kiosk + Live Face ID Studio) + QR Scan + Class 1–12 Notes, MCQs aur Video Lectures shamil hain.
                 </p>
               </div>
             </div>
@@ -624,7 +662,7 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
                 Aapke Active Plan mein shamil suvidhayen:
               </p>
               <span className="text-[10px] font-mono font-bold text-slate-400">
-                14 Modules
+                {FEATURES.length} Modules
               </span>
             </div>
             <div className="divide-y divide-slate-100 dark:divide-slate-800/60 max-h-56 overflow-y-auto">
@@ -858,7 +896,7 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
                     <div className="flex justify-between items-center">
                       <span className="text-slate-500 dark:text-slate-400 font-medium text-[11px]">Edition:</span>
                       <span className={`font-black text-[11px] ${buyingPlan.isElite ? "text-amber-600 dark:text-amber-400" : "text-blue-600 dark:text-blue-400"}`}>
-                        {buyingPlan.isElite ? "👑 Elite (With Class 1-12 Notes)" : "⚡ Lite ERP"}
+                        {buyingPlan.isElite ? "👑 Elite (AI Face Attendance + Notes)" : "⚡ Lite ERP (QR Scan Attendance)"}
                       </span>
                     </div>
                     <div className="flex justify-between items-center">
@@ -875,13 +913,23 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
                     </div>
                   </div>
 
-                  {buyingPlan.isElite && (
+                  {buyingPlan.isElite ? (
                     <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 rounded-lg p-2.5 text-[11px] text-amber-900 dark:text-amber-200 flex items-start gap-1.5">
                       <Sparkles size={14} className="text-amber-600 shrink-0 mt-0.5" />
                       <div>
-                        <p className="font-black">👑 Elite Curriculum Feature Unlocked:</p>
+                        <p className="font-black">👑 Elite Face Attendance &amp; Curriculum Unlocked:</p>
                         <p className="text-[10px] mt-0.5 text-amber-800 dark:text-amber-300 font-medium">
-                          Class 1 se 12 tak ke Notes, Coaching MCQs, Video Lectures aur PDF Notes direct activate honge.
+                          🤖 AI Face Attendance (0.2s Kiosk + Live Face ID Studio), QR Scan aur Class 1–12 Notes/MCQs/Videos activate honge.
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-2.5 text-[11px] text-blue-900 dark:text-blue-200 flex items-start gap-1.5">
+                      <QrCode size={14} className="text-blue-600 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-black">⚡ Lite Plan — QR Code Scan Attendance:</p>
+                        <p className="text-[10px] mt-0.5 text-blue-800 dark:text-blue-300 font-medium">
+                          📷 QR Code Scan Attendance shamil hai. 🤖 AI Face Attendance ke liye 👑 Elite Plan chunein.
                         </p>
                       </div>
                     </div>

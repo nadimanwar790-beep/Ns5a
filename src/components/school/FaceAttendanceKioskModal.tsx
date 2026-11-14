@@ -23,7 +23,11 @@ import {
   Sun,
   Moon,
   Trash2,
-  ShieldAlert
+  ShieldAlert,
+  Crown,
+  Lock,
+  QrCode,
+  ArrowRight
 } from "lucide-react";
 import {
   detectFacesInFrame,
@@ -84,6 +88,9 @@ export interface FaceAttendanceKioskModalProps {
   teacherId?: string;
   onAttendanceUpdated?: () => void;
   initialTestMode?: boolean;
+  hasFaceAccess?: boolean;
+  onUpgradeToElite?: () => void;
+  onOpenQrScanner?: () => void;
 }
 
 interface RecentCheckIn {
@@ -112,7 +119,10 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
   teachers = [],
   teacherId = "teacher",
   onAttendanceUpdated,
-  initialTestMode = false
+  initialTestMode = false,
+  hasFaceAccess = true,
+  onUpgradeToElite,
+  onOpenQrScanner,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -465,7 +475,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
   }, [schoolId, students, teachers, classId, className]);
 
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && hasFaceAccess) {
       loadDescriptors();
       if (!isFaceApiLoaded()) {
         loadFaceApiModels()
@@ -475,7 +485,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
         setAiEngineStatus("ready");
       }
     }
-  }, [isOpen, loadDescriptors]);
+  }, [isOpen, hasFaceAccess, loadDescriptors]);
 
   // Start Camera Stream
   const startCamera = useCallback(async () => {
@@ -510,7 +520,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
   }, [facingMode]);
 
   useEffect(() => {
-    if (isOpen && !showEnrollmentModal) {
+    if (isOpen && hasFaceAccess && !showEnrollmentModal) {
       startCamera();
     } else {
       if (streamRef.current) {
@@ -524,7 +534,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
         streamRef.current = null;
       }
     };
-  }, [isOpen, showEnrollmentModal, startCamera]);
+  }, [isOpen, hasFaceAccess, showEnrollmentModal, startCamera]);
 
   // 1-Click Batch Auto-Vectorize whole class from existing photos in ~2 seconds
   const handle1ClickClassVectorize = async () => {
@@ -925,7 +935,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
 
   // Live Camera Detection Animation Loop (Throttled for battery efficiency)
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || !hasFaceAccess) return;
 
     let animId: number;
     let lastScanTime = 0;
@@ -1327,9 +1337,111 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
 
     animId = requestAnimationFrame(renderLoop);
     return () => cancelAnimationFrame(animId);
-  }, [isOpen, enrolledMap, facingMode, handleMarkAttendanceSuccess, pendingBlinkStudent, isFaceTestMode, announceFaceTestMatch, className, schoolId, schoolName]);
+  }, [isOpen, hasFaceAccess, enrolledMap, facingMode, handleMarkAttendanceSuccess, pendingBlinkStudent, isFaceTestMode, announceFaceTestMatch, className, schoolId, schoolName]);
 
   if (!isOpen) return null;
+
+  if (!hasFaceAccess) {
+    return (
+      <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
+        <div className="w-full max-w-md rounded-3xl bg-slate-900 border-2 border-amber-500/50 shadow-2xl overflow-hidden text-slate-100">
+          <div className="p-4 sm:p-5 bg-gradient-to-r from-amber-600 via-amber-500 to-orange-500 text-slate-950 flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="w-10 h-10 rounded-xl bg-slate-950/15 flex items-center justify-center shrink-0">
+                <Crown className="w-5 h-5" />
+              </div>
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-wider bg-slate-950/15 px-2 py-0.5 rounded-full">
+                  Elite Subscription Only
+                </span>
+                <h3 className="text-sm sm:text-base font-black leading-tight mt-0.5">
+                  🤖 AI Face Attendance Lock Hai
+                </h3>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 rounded-xl bg-slate-950/15 hover:bg-slate-950/25 text-slate-950 transition cursor-pointer"
+              title="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="p-5 space-y-4">
+            <div className="flex items-start gap-3 p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30">
+              <Lock className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+              <div className="text-xs leading-relaxed text-slate-200">
+                <p className="font-black text-amber-300 mb-1">
+                  Face Attendance sirf 👑 Elite Plan walon ko milega!
+                </p>
+                <p className="text-slate-300">
+                  Aapke current <strong>⚡ Lite Subscription</strong> mein <strong>📷 QR Code Scan Attendance</strong> puri tarah active hai. 0.2s AI Face Kiosk aur Live Face ID Studio unlock karne ke liye Elite Plan mein upgrade karein.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-2 text-xs">
+              <div className="flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-800/80 border border-slate-700">
+                <QrCode className="w-4 h-4 text-sky-400 shrink-0" />
+                <span className="flex-1 font-bold text-slate-200">⚡ Lite Plan: QR Code Scan &amp; Class QR</span>
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  Active ✓
+                </span>
+              </div>
+              <div className="flex items-center gap-2.5 p-2.5 rounded-xl bg-amber-950/30 border border-amber-500/30">
+                <Camera className="w-4 h-4 text-amber-400 shrink-0" />
+                <span className="flex-1 font-bold text-amber-200">👑 Elite Plan: AI Face Kiosk &amp; Face ID</span>
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                  🔒 Elite
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-2 pt-1">
+              {onUpgradeToElite && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onUpgradeToElite();
+                  }}
+                  className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-amber-500/25 transition active:scale-95 cursor-pointer"
+                >
+                  <Crown className="w-4 h-4" />
+                  <span>👑 Elite Plan Store Dekhein &amp; Upgrade Karein</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              )}
+
+              {onOpenQrScanner && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenQrScanner();
+                  }}
+                  className="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs flex items-center justify-center gap-2 transition active:scale-95 cursor-pointer"
+                >
+                  <QrCode className="w-4 h-4" />
+                  <span>📷 QR Code Scan Attendance Chalayein (Lite ✓)</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={onClose}
+                className="w-full py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition cursor-pointer"
+              >
+                Band Karein
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const enrolledCount = Object.keys(enrolledMap).length;
   const filteredStudents = manualSearchQuery.trim()
@@ -2708,6 +2820,9 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           schoolId={schoolId}
           students={students}
           classes={className ? [{ id: classId, name: className }] : []}
+          hasFaceAccess={hasFaceAccess}
+          onUpgradeToElite={onUpgradeToElite}
+          onOpenQrScanner={onOpenQrScanner}
           onEnrollmentUpdated={loadDescriptors}
         />
       )}

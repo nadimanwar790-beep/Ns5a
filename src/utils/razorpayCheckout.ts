@@ -374,3 +374,155 @@ export async function startStudentRazorpayStoreCheckout(
   }
 }
 
+export interface StartOnlineAdmissionCheckoutParams {
+  schoolId: string;
+  schoolName: string;
+  application: {
+    id: string;
+    applicationNo: string;
+    studentName: string;
+    classId?: string;
+    className?: string;
+    phone?: string;
+    email?: string;
+    sessionId?: string;
+  };
+  payableAmount: number;
+  feeItems?: any[];
+  onSuccess: (result: {
+    receiptNo: string;
+    paymentId: string;
+    orderId: string;
+  }) => void;
+  onError: (msg: string) => void;
+  onDismiss?: () => void;
+}
+
+export async function startOnlineAdmissionRazorpayCheckout(
+  params: StartOnlineAdmissionCheckoutParams
+): Promise<void> {
+  const {
+    schoolId,
+    schoolName,
+    application,
+    payableAmount,
+    feeItems,
+    onSuccess,
+    onError,
+    onDismiss,
+  } = params;
+
+  try {
+    const loaded = await loadRazorpayCheckoutScript();
+    if (!loaded || !(window as any).Razorpay) {
+      onError("Razorpay payment script load nahi ho paaya. Internet check karein.");
+      return;
+    }
+
+    const orderRes = await fetch("/api/razorpay/create-order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        purpose: "admission_fee",
+        schoolId,
+        schoolName,
+        studentId: application.id,
+        applicationId: application.id,
+        applicationNo: application.applicationNo,
+        studentName: application.studentName,
+        classId: application.classId || "",
+        className: application.className || "",
+        admissionNo: application.applicationNo,
+        phone: application.phone || "",
+        sessionId: application.sessionId || "",
+        month: new Date().toISOString().slice(0, 7),
+        monthLabel: "Online Admission Fee",
+        amount: payableAmount,
+        feeItems: Array.isArray(feeItems) ? feeItems : [],
+      }),
+    });
+
+    const orderData = await orderRes.json().catch(() => ({}));
+    if (!orderRes.ok || !orderData?.ok || !orderData?.orderId) {
+      onError(orderData?.error || "Admission payment order nahi ban paaya.");
+      return;
+    }
+
+    const RazorpayCtor = (window as any).Razorpay;
+    const rzp = new RazorpayCtor({
+      key: orderData.keyId,
+      amount: orderData.amount,
+      currency: orderData.currency || "INR",
+      name: schoolName || "Online Admission",
+      description: `Admission Fee • ${application.studentName} (${application.applicationNo})`,
+      order_id: orderData.orderId,
+      prefill: {
+        name: application.studentName || "",
+        contact: application.phone ? String(application.phone).replace(/\D/g, "").slice(-10) : "",
+        email: application.email || "",
+      },
+      notes: {
+        schoolId,
+        applicationId: application.id,
+        applicationNo: application.applicationNo,
+        purpose: "admission_fee",
+      },
+      theme: {
+        color: "#4f46e5",
+      },
+      modal: {
+        ondismiss: () => {
+          onDismiss?.();
+        },
+      },
+      handler: async (response: {
+        razorpay_order_id: string;
+        razorpay_payment_id: string;
+        razorpay_signature: string;
+      }) => {
+        try {
+          const verifyRes = await fetch("/api/razorpay/verify-payment", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              schoolId,
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+            }),
+          });
+          const verifyData = await verifyRes.json().catch(() => ({}));
+          if (!verifyRes.ok || !verifyData?.ok) {
+            onError(
+              verifyData?.error ||
+                "Payment hua par verification fail hua — kripya school admin se sampark karein."
+            );
+            return;
+          }
+
+          onSuccess({
+            receiptNo:
+              verifyData.receiptNo ||
+              `ADM-ONL-${response.razorpay_payment_id.slice(-6).toUpperCase()}`,
+            paymentId: response.razorpay_payment_id,
+            orderId: response.razorpay_order_id,
+          });
+        } catch (err: any) {
+          onError(err?.message || "Payment verification error");
+        }
+      },
+    });
+
+    rzp.on("payment.failed", (resp: any) => {
+      const reason =
+        resp?.error?.description || resp?.error?.reason || "Payment unsuccessful";
+      onError(reason);
+    });
+
+    rzp.open();
+  } catch (err: any) {
+    onError(err?.message || "Online payment start karne me truti aayi");
+  }
+}
+
+

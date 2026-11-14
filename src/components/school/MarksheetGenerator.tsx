@@ -6,13 +6,30 @@ import { getExams, promoteStudents, isStudentInClass, getMonthlyAttendance, curr
 import {
   FileSpreadsheet, Printer, ChevronLeft, Plus, Trash2, Award, Calendar,
   CheckCircle2, Sparkles, RefreshCw, User, BookOpen, Layers, Edit3, Shield,
-  Building2, UserPlus, Zap, TrendingUp, ArrowRight, CheckSquare, Square, AlertCircle
+  Building2, UserPlus, Zap, TrendingUp, ArrowRight, CheckSquare, Square, AlertCircle,
+  Wand2, Image as ImageIcon, Quote
 } from "lucide-react";
 import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeaderEditorModal";
 import { schoolPrintFieldEnabled, isBoardClass } from "../../school-types";
 import { QuickAddStudentModal } from "./QuickAddStudentModal";
 import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo, formatAcademicSession } from "./feeReceiptUtils";
-import { printHtmlInIframe } from "./AdmissionFormPrintModal";
+import { printHtmlInIframe, extractDocumentStylesHtml } from "./AdmissionFormPrintModal";
+import {
+  SchoolPosterHalfCard,
+  StudentThoughtBackHalfCard,
+  BacksideStudioModal,
+} from "./MarksheetBacksideComponents";
+import {
+  DEFAULT_ERP_APP_DOWNLOAD_URL,
+  loadSavedPosterConfig,
+  savePosterConfig,
+  loadSavedStudentThoughtsMap,
+  saveStudentThoughtsMap,
+  loadSavedCutoutsMap,
+  saveCutoutsMap,
+  type SchoolPosterConfig,
+  type StudentCutoutSettings,
+} from "./marksheetBacksideUtils";
 
 interface Props {
   school: School;
@@ -244,6 +261,10 @@ export const MarksheetGenerator: React.FC<Props> = ({
     directorPhone: school?.directorPhone || "",
     principalSignatureUrl: school?.principalSignatureUrl || "",
     directorSignatureUrl: school?.directorSignatureUrl || "",
+    principalPhotoUrl: school?.principalPhotoUrl || "",
+    directorPhotoUrl: school?.directorPhotoUrl || "",
+    erpAppUrl: school?.erpAppUrl || DEFAULT_ERP_APP_DOWNLOAD_URL,
+    erpAppFeatures: school?.erpAppFeatures || [],
     customFields: school?.customFields || [],
     documentPrintFields: school?.documentPrintFields || {},
   });
@@ -264,6 +285,10 @@ export const MarksheetGenerator: React.FC<Props> = ({
       directorPhone: school.directorPhone || "",
       principalSignatureUrl: school.principalSignatureUrl || "",
       directorSignatureUrl: school.directorSignatureUrl || "",
+      principalPhotoUrl: school.principalPhotoUrl || "",
+      directorPhotoUrl: school.directorPhotoUrl || "",
+      erpAppUrl: school.erpAppUrl || DEFAULT_ERP_APP_DOWNLOAD_URL,
+      erpAppFeatures: school.erpAppFeatures || [],
       customFields: school.customFields || [],
       documentPrintFields: school.documentPrintFields || {},
     }));
@@ -343,10 +368,48 @@ export const MarksheetGenerator: React.FC<Props> = ({
     return WING_PRESETS[detected]?.subjects || DEFAULT_SUBJECTS;
   });
 
-  // Bulk Mode & 2-up PA Pairing
+  // Bulk Mode & 2-up PA Pairing + 2-Part PDF (Part 1 Front Marks + Part 2 Backside)
   const [bulkMode, setBulkMode] = useState(false);
+  const [bulkScope, setBulkScope] = useState<"class" | "all_school">("class");
+  const [printPartMode, setPrintPartMode] = useState<"front" | "back" | "both">("front");
+  const [reverseBackOrder, setReverseBackOrder] = useState(false);
+  const [swapBackHalves, setSwapBackHalves] = useState(false);
+  const [paUnusedSlotMode, setPaUnusedSlotMode] = useState<"poster" | "blank">("poster");
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
   const [pairRightStudentId, setPairRightStudentId] = useState<string>("auto");
+  const [allSchoolDbExams, setAllSchoolDbExams] = useState<ExamEntry[]>([]);
+
+  // Page 2 Backside Studio States (School Poster + White-BG Body Cutout + Top 10->6 English Thoughts)
+  const [showBacksideStudio, setShowBacksideStudio] = useState(false);
+  const [posterConfig, setPosterConfig] = useState<SchoolPosterConfig>(() => loadSavedPosterConfig(school?.id || "default"));
+  const [studentThoughtsMap, setStudentThoughtsMap] = useState<Record<string, string[]>>(() => loadSavedStudentThoughtsMap(school?.id || "default"));
+  const [cutoutsMap, setCutoutsMap] = useState<Record<string, StudentCutoutSettings>>(() => loadSavedCutoutsMap(school?.id || "default"));
+
+  const updatePosterConfig = (next: SchoolPosterConfig) => {
+    setPosterConfig(next);
+    savePosterConfig(school?.id || "default", next);
+  };
+  const updateStudentThoughtsMap = (next: Record<string, string[]>) => {
+    setStudentThoughtsMap(next);
+    saveStudentThoughtsMap(school?.id || "default", next);
+  };
+  const updateCutoutsMap = (next: Record<string, StudentCutoutSettings>) => {
+    setCutoutsMap(next);
+    saveCutoutsMap(school?.id || "default", next);
+  };
+
+  useEffect(() => {
+    if (!school?.id) return;
+    setPosterConfig(loadSavedPosterConfig(school.id));
+    setStudentThoughtsMap(loadSavedStudentThoughtsMap(school.id));
+    setCutoutsMap(loadSavedCutoutsMap(school.id));
+    getExams(school.id)
+      .then(all => {
+        if (Array.isArray(all)) setAllSchoolDbExams(all);
+      })
+      .catch(() => {});
+  }, [school?.id]);
+
   const printContainerRef = useRef<HTMLDivElement>(null);
 
   // Automatically update wing, subject preset, and exam title when selected class changes
@@ -524,6 +587,85 @@ export const MarksheetGenerator: React.FC<Props> = ({
     return { classRanks, sectionRanks };
   }, [classStudents, dbExams, currentClass]);
 
+  // All-School ordered student list (Class order -> Roll No ascending) & per-class rankings
+  const bulkTargetStudents = useMemo(() => {
+    const sortByRoll = (arr: SchoolStudent[]) =>
+      [...arr].sort((a, b) => {
+        const ra = parseInt(a.rollNo || "9999", 10);
+        const rb = parseInt(b.rollNo || "9999", 10);
+        return (isNaN(ra) ? 9999 : ra) - (isNaN(rb) ? 9999 : rb);
+      });
+
+    if (bulkScope !== "all_school") {
+      return sortByRoll(classStudents);
+    }
+    const ordered: SchoolStudent[] = [];
+    const seen = new Set<string>();
+    classes.forEach(cls => {
+      const inCls = sortByRoll(studentList.filter(s => isStudentInClass(s, cls.id)));
+      inCls.forEach(st => {
+        if (!seen.has(st.id)) {
+          seen.add(st.id);
+          ordered.push(st);
+        }
+      });
+    });
+    sortByRoll(studentList).forEach(st => {
+      if (!seen.has(st.id)) {
+        seen.add(st.id);
+        ordered.push(st);
+      }
+    });
+    return ordered;
+  }, [bulkScope, classStudents, classes, studentList]);
+
+  const allSchoolRankMap = useMemo(() => {
+    const map = new Map<string, { classRank: number; classStrength: number; sectionRank: number; sectionStrength: number }>();
+    classes.forEach(cls => {
+      const members = studentList.filter(s => isStudentInClass(s, cls.id));
+      if (members.length === 0) return;
+      const clsExams = allSchoolDbExams.filter(e => !e.classId || e.classId === cls.id);
+      const scored = members.map(st => {
+        let totalMarks = 0;
+        let hasMarks = false;
+        clsExams.forEach(ex => {
+          const entry = ex.studentMarks?.[st.id];
+          if (entry && typeof entry.marks === "number") {
+            totalMarks += entry.marks;
+            hasMarks = true;
+          }
+        });
+        const rNum = parseInt(st.rollNo || "999", 10);
+        return {
+          id: st.id,
+          section: (st.section || cls.section || "A").trim().toUpperCase(),
+          scoreKey: hasMarks ? totalMarks : 10000 - (isNaN(rNum) ? 999 : rNum),
+        };
+      });
+      const sortedCls = [...scored].sort((a, b) => b.scoreKey - a.scoreKey);
+      const secGroups: Record<string, typeof scored> = {};
+      scored.forEach(item => {
+        if (!secGroups[item.section]) secGroups[item.section] = [];
+        secGroups[item.section].push(item);
+      });
+      const secRankLookup = new Map<string, { rank: number; len: number }>();
+      Object.values(secGroups).forEach(grp => {
+        const sGrp = [...grp].sort((a, b) => b.scoreKey - a.scoreKey);
+        sGrp.forEach((item, idx) => secRankLookup.set(item.id, { rank: idx + 1, len: sGrp.length }));
+      });
+      sortedCls.forEach((item, idx) => {
+        const secInfo = secRankLookup.get(item.id) || { rank: idx + 1, len: members.length };
+        map.set(item.id, {
+          classRank: idx + 1,
+          classStrength: members.length,
+          sectionRank: secInfo.rank,
+          sectionStrength: secInfo.len,
+        });
+      });
+    });
+    return map;
+  }, [classes, studentList, allSchoolDbExams]);
+
   // Synchronize student data on selection
   const syncStudentData = (target: SchoolStudent | null) => {
     if (target) {
@@ -697,7 +839,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
   };
 
   // Grand Totals (Computes stats for either the default subjects or a specific student's subjects)
-  const grandStats = (targetSubjects: MarksheetSubjectRow[] = subjects) => {
+  const grandStats = (targetSubjects: MarksheetSubjectRow[] = subjects, wingOverride?: SchoolLevelWing) => {
     let grandTotal = 0;
     let grandMax = 0;
     let totalPoints = 0;
@@ -713,7 +855,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
 
     const gpa = targetSubjects.length > 0 ? (totalPoints / targetSubjects.length).toFixed(2) : "0.00";
     const overallPct = grandMax > 0 ? ((grandTotal / grandMax) * 100).toFixed(1) : "0.0";
-    const isPrePrimary = activeWing === "pre_primary";
+    const isPrePrimary = (wingOverride || activeWing) === "pre_primary";
 
     let overallGrade = "F";
     if (isPrePrimary) {
@@ -766,7 +908,8 @@ export const MarksheetGenerator: React.FC<Props> = ({
     target: SchoolStudent | null | undefined,
     baseSubjects: MarksheetSubjectRow[],
     exams: ExamEntry[],
-    activeExamId: string
+    activeExamId: string,
+    wingOverride?: SchoolLevelWing
   ): MarksheetSubjectRow[] => {
     if (!target || !exams || exams.length === 0) {
       return baseSubjects;
@@ -875,11 +1018,12 @@ export const MarksheetGenerator: React.FC<Props> = ({
           row.name.toLowerCase().includes("practical") ||
           row.name.toLowerCase().includes("it");
 
-        if (activeWing === "pre_primary") {
+        const targetWing = wingOverride || activeWing;
+        if (targetWing === "pre_primary") {
           theory = Math.round(activeExamScore * 0.5);
           mcq = activeExamScore - theory;
           practical = 0;
-        } else if (activeWing === "primary") {
+        } else if (targetWing === "primary") {
           theory = Math.round(activeExamScore * 0.7);
           mcq = Math.round(activeExamScore * 0.15);
           practical = activeExamScore - theory - mcq;
@@ -961,21 +1105,25 @@ export const MarksheetGenerator: React.FC<Props> = ({
     );
   };
 
-  const handlePrint = () => {
+  const handlePrint = (partSuffix?: string) => {
     const container = printContainerRef.current;
     if (!container || typeof document === "undefined") {
       window.print();
       return;
     }
 
-    const styles = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
-      .map((node) => node.outerHTML)
-      .join("\n");
+    const styles = extractDocumentStylesHtml();
 
     const orientation = isPrintLandscape ? "A4 landscape" : "A4 portrait";
-    const sheetWidth = isPrintLandscape ? "289mm" : "202mm";
-    const sheetHeight = isPrintLandscape ? "201mm" : "auto";
-    const safeTitle = `${examTitle || "Marksheet"} - ${currentClass?.name || "Class"}`
+    const sheetWidth = isPrintLandscape ? "100%" : "200mm";
+    const scopeLabel = bulkMode && bulkScope === "all_school" ? "All-School" : (currentClass?.name || "Class");
+    const defaultSuffix =
+      printPartMode === "back"
+        ? "Part-2-Backside"
+        : printPartMode === "both"
+        ? "Complete-Front-And-Back"
+        : "Part-1-Front-Marks";
+    const safeTitle = `${examTitle || "Marksheet"} - ${scopeLabel} - ${partSuffix || defaultSuffix}`
       .replace(/[<>"'&]/g, "");
 
     const htmlDoc = `<!DOCTYPE html>
@@ -987,7 +1135,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
   <style>
     @page {
       size: ${orientation};
-      margin: 4mm;
+      margin: ${isPrintLandscape ? "13mm 5mm" : "10mm 6mm"};
     }
     html, body {
       margin: 0 !important;
@@ -1010,8 +1158,10 @@ export const MarksheetGenerator: React.FC<Props> = ({
     }
     .marksheet-print-page {
       width: ${sheetWidth} !important;
-      max-width: ${sheetWidth} !important;
-      ${isPrintLandscape ? `height: ${sheetHeight} !important; max-height: ${sheetHeight} !important; overflow: hidden !important;` : "height: auto !important; overflow: visible !important;"}
+      max-width: ${isPrintLandscape ? "100%" : "200mm"} !important;
+      height: auto !important;
+      min-height: 0 !important;
+      overflow: visible !important;
       margin: 0 auto !important;
       padding: 0 !important;
       box-sizing: border-box !important;
@@ -1030,9 +1180,9 @@ export const MarksheetGenerator: React.FC<Props> = ({
       width: 100% !important;
       min-width: 0 !important;
       max-width: 100% !important;
-      height: ${isPrintLandscape ? "100%" : "auto"} !important;
+      ${isPrintLandscape ? "height: 182mm !important; min-height: 182mm !important; max-height: 182mm !important;" : "height: auto !important; min-height: 268mm !important;"}
       margin: 0 !important;
-      padding: ${isPrintLandscape ? "2.5mm" : "4mm"} !important;
+      padding: ${isPrintLandscape ? "2mm" : "4mm"} !important;
       box-sizing: border-box !important;
       box-shadow: none !important;
       border-radius: 0 !important;
@@ -1045,20 +1195,35 @@ export const MarksheetGenerator: React.FC<Props> = ({
     }
     .marksheet-landscape-split {
       display: grid !important;
-      grid-template-columns: 1fr 1fr !important;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
       gap: 3mm !important;
       width: 100% !important;
+      flex: 1 1 auto !important;
       height: 100% !important;
+      min-height: 0 !important;
       align-items: stretch !important;
+    }
+    .marksheet-landscape-split > div {
+      grid-column: auto / span 1 !important;
+      min-width: 0 !important;
+      height: 100% !important;
+      min-height: 0 !important;
+    }
+    .marksheet-poster-card,
+    .marksheet-thought-card {
+      height: 100% !important;
+      min-height: 0 !important;
     }
     .marksheet-two-up-grid {
       display: grid !important;
-      grid-template-columns: 1fr 1fr !important;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
       gap: 2.5mm !important;
       width: 100% !important;
       min-width: 0 !important;
       max-width: 100% !important;
-      height: 100% !important;
+      height: 182mm !important;
+      min-height: 182mm !important;
+      max-height: 182mm !important;
       padding: 0 !important;
       margin: 0 !important;
       border: none !important;
@@ -1071,6 +1236,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
       width: 100% !important;
       height: 100% !important;
       min-width: 0 !important;
+      min-height: 0 !important;
       box-sizing: border-box !important;
       display: flex !important;
       flex-direction: column !important;
@@ -1085,6 +1251,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
     .marksheet-pa-half-card {
       width: 100% !important;
       height: 100% !important;
+      min-height: 0 !important;
       min-width: 0 !important;
       max-width: 100% !important;
       padding: 2.5mm !important;
@@ -1108,11 +1275,6 @@ export const MarksheetGenerator: React.FC<Props> = ({
       width: 100% !important;
       table-layout: auto !important;
     }
-    @media print {
-      .marksheet-print-page {
-        ${isPrintLandscape ? `height: ${sheetHeight} !important; max-height: ${sheetHeight} !important;` : ""}
-      }
-    }
   </style>
 </head>
 <body>
@@ -1125,19 +1287,50 @@ export const MarksheetGenerator: React.FC<Props> = ({
 
   const baseClassSubjects = subjects;
 
+  // Helper: print specific part cleanly after state commits
+  const handlePrintPart = (mode: "front" | "back" | "both") => {
+    setPrintPartMode(mode);
+    const suffix =
+      mode === "back"
+        ? "Part-2-Backside"
+        : mode === "both"
+        ? "Complete-Front-And-Back"
+        : "Part-1-Front-Marks";
+    requestAnimationFrame(() => {
+      setTimeout(() => handlePrint(suffix), 120);
+    });
+  };
+
   // Render a Single Marksheet Sheet (A4 Portrait/Landscape exact layout)
   const renderMarksheetSheet = (targetStudent?: SchoolStudent) => {
-    const isSingle = !bulkMode || !targetStudent || (currentStudent && targetStudent.id === currentStudent.id);
+    const isSingle = !bulkMode || !targetStudent || (bulkScope === "class" && currentStudent && targetStudent.id === currentStudent.id);
     const activeStudent = isSingle ? (currentStudent || targetStudent) : targetStudent;
-    const subjects = computeStudentSubjects(activeStudent, baseClassSubjects, dbExams, selectedExamId);
-    const totals = grandStats(subjects);
+    const targetClassObj =
+      (bulkMode && bulkScope === "all_school" && activeStudent
+        ? classes.find(c => isStudentInClass(activeStudent, c.id))
+        : currentClass) || currentClass;
+    const resolvedWing: SchoolLevelWing =
+      bulkMode && bulkScope === "all_school" && targetClassObj
+        ? detectClassWing(targetClassObj.name)
+        : activeWing;
+    const studentBaseSubjects =
+      bulkMode && bulkScope === "all_school"
+        ? (WING_PRESETS[resolvedWing]?.subjects || baseClassSubjects)
+        : baseClassSubjects;
+    const relevantExams =
+      bulkMode && bulkScope === "all_school" && allSchoolDbExams.length > 0
+        ? allSchoolDbExams.filter(e => !e.classId || !targetClassObj?.id || e.classId === targetClassObj.id)
+        : dbExams;
+
+    const subjects = computeStudentSubjects(activeStudent, studentBaseSubjects, relevantExams, selectedExamId, resolvedWing);
+    const totals = grandStats(subjects, resolvedWing);
 
     const sName = isSingle ? (studentName || activeStudent?.name || "Student Candidate") : (activeStudent?.name || "Student Candidate");
     const sRoll = isSingle ? (rollNo || activeStudent?.rollNo || "01") : (activeStudent?.rollNo || "01");
     const sReg = isSingle ? (regiNo || activeStudent?.admissionNo || `REG-${sRoll}`) : (activeStudent?.admissionNo || `REG-${sRoll}`);
     const sFather = isSingle ? (fatherName || activeStudent?.fatherName || "Shri Parent") : (activeStudent?.fatherName || "Shri Parent");
-    const cName = currentClass?.name || "Class 10";
-    const sSection = isSingle ? (sectionName || currentClass?.section || "A") : (currentClass?.section || "A");
+    const cName = targetClassObj?.name || currentClass?.name || "Class 10";
+    const sSection = isSingle ? (sectionName || targetClassObj?.section || "A") : (activeStudent?.section || targetClassObj?.section || "A");
     const sPhoto = isSingle ? (studentPhoto || (activeStudent as any)?.photoUrl || "") : ((activeStudent as any)?.photoUrl || "");
 
     const formatTwoDigit = (val: string | number) => {
@@ -1147,30 +1340,48 @@ export const MarksheetGenerator: React.FC<Props> = ({
     };
 
     const targetId = activeStudent?.id;
-    const computedClassRank = targetId && studentRankings.classRanks.has(targetId)
-      ? studentRankings.classRanks.get(targetId)!
-      : (parseInt(activeStudent?.rollNo || "1", 10) || 1);
+    const allSchRank = targetId ? allSchoolRankMap.get(targetId) : undefined;
+    const computedClassRank =
+      bulkMode && bulkScope === "all_school" && allSchRank
+        ? allSchRank.classRank
+        : targetId && studentRankings.classRanks.has(targetId)
+        ? studentRankings.classRanks.get(targetId)!
+        : (parseInt(activeStudent?.rollNo || "1", 10) || 1);
 
-    const computedSectionRank = targetId && studentRankings.sectionRanks.has(targetId)
-      ? studentRankings.sectionRanks.get(targetId)!
-      : computedClassRank;
+    const computedSectionRank =
+      bulkMode && bulkScope === "all_school" && allSchRank
+        ? allSchRank.sectionRank
+        : targetId && studentRankings.sectionRanks.has(targetId)
+        ? studentRankings.sectionRanks.get(targetId)!
+        : computedClassRank;
 
     const sClassRank = isSingle ? formatTwoDigit(classRank || computedClassRank) : formatTwoDigit(computedClassRank);
-    const sClassStrength = classStrength || (classStudents.length > 0 ? String(classStudents.length) : "85");
+    const sClassStrength =
+      bulkMode && bulkScope === "all_school" && allSchRank
+        ? String(allSchRank.classStrength)
+        : classStrength || (classStudents.length > 0 ? String(classStudents.length) : "85");
     const sSectionRank = isSingle ? formatTwoDigit(sectionRank || computedSectionRank) : formatTwoDigit(computedSectionRank);
-    const sSectionStrength = sectionStrength || "32";
+    const sSectionStrength =
+      bulkMode && bulkScope === "all_school" && allSchRank
+        ? String(allSchRank.sectionStrength)
+        : sectionStrength || "32";
 
-    const verifiedPayload = {
+    const safeQrPhotoUrl =
+      sPhoto && !sPhoto.startsWith("data:") && !sPhoto.startsWith("blob:") && sPhoto.length <= 220
+        ? sPhoto
+        : undefined;
+
+    const verifiedPayload: Record<string, unknown> = {
       type: "marksheet",
       officialVerified: true,
-      school: schoolDetails.schoolName || school?.name || "School",
-      schoolCode: schoolDetails.code || school?.code || "SCH-001",
-      student: sName,
-      fatherName: sFather,
-      roll: sRoll,
-      regNo: sReg,
-      class: cName,
-      session: sessionName,
+      school: (schoolDetails.schoolName || school?.name || "School").slice(0, 80),
+      schoolCode: (schoolDetails.code || school?.code || "SCH-001").slice(0, 32),
+      student: sName.slice(0, 60),
+      fatherName: sFather.slice(0, 60),
+      roll: sRoll.slice(0, 20),
+      regNo: sReg.slice(0, 32),
+      class: cName.slice(0, 32),
+      session: sessionName.slice(0, 24),
       classRank: `${sClassRank}/${sClassStrength}`,
       sectionRank: `${sSectionRank}/${sSectionStrength}`,
       total: `${totals.grandTotal}/${totals.grandMax}`,
@@ -1178,11 +1389,30 @@ export const MarksheetGenerator: React.FC<Props> = ({
       grade: totals.overallGrade,
       status: totals.resultStatus,
       date: publishDate,
-      photoUrl: sPhoto,
+      ...(safeQrPhotoUrl ? { photoUrl: safeQrPhotoUrl } : {}),
     };
 
-    // Live verification URL encoded in QR Code
-    const qrVerifyUrl = `${window.location.origin}/?verify=doc&type=marksheet&data=${encodeURIComponent(JSON.stringify(verifiedPayload))}`;
+    // Live verification URL encoded in QR Code (strict length guard to prevent QR version-40 overflow)
+    const originUrl = typeof window !== "undefined" ? window.location.origin : "https://school.portal";
+    let qrVerifyUrl = `${originUrl}/?verify=doc&type=marksheet&data=${encodeURIComponent(JSON.stringify(verifiedPayload))}`;
+    if (qrVerifyUrl.length > 1200) {
+      const compactPayload = {
+        type: "marksheet",
+        officialVerified: true,
+        school: (schoolDetails.schoolName || school?.name || "School").slice(0, 48),
+        student: sName.slice(0, 40),
+        roll: sRoll.slice(0, 16),
+        regNo: sReg.slice(0, 24),
+        class: cName.slice(0, 24),
+        total: `${totals.grandTotal}/${totals.grandMax}`,
+        grade: totals.overallGrade,
+        status: totals.resultStatus,
+      };
+      qrVerifyUrl = `${originUrl}/?verify=doc&type=marksheet&data=${encodeURIComponent(JSON.stringify(compactPayload))}`;
+    }
+    if (qrVerifyUrl.length > 1400) {
+      qrVerifyUrl = `${originUrl}/?verify=doc&type=marksheet&student=${encodeURIComponent(sName.slice(0, 40))}&roll=${encodeURIComponent(sRoll.slice(0, 16))}&grade=${encodeURIComponent(totals.overallGrade)}`;
+    }
 
     const isCompact = subjects.length > 8;
     const isVeryCompact = subjects.length > 12;
@@ -1311,7 +1541,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
 
     // Helper to render level-appropriate marks table for Pre-Primary, Primary, and Middle/Secondary wings
     const renderSubjectMarksTable = (isCompactTable: boolean, isVeryCompactTable: boolean, inLandscape: boolean) => {
-      if (activeWing === "pre_primary") {
+      if (resolvedWing === "pre_primary") {
         return (
           <div className="overflow-hidden border-2 border-slate-900 rounded-lg">
             <table className="w-full text-left text-xs border-collapse">
@@ -1336,7 +1566,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                   const pct = Math.round((total / max) * 100);
                   const stars = getStarRating(pct);
                   const grade = pct >= 85 ? "A+" : pct >= 70 ? "A" : pct >= 50 ? "B" : "C";
-                  const cellPad = isDenseSubjects ? "py-0.5 px-1" : inLandscape ? "py-1.5 px-1" : "p-1";
+                  const cellPad = isDenseSubjects ? "py-0.5 px-1" : inLandscape ? "py-1 px-1" : "p-1";
                   return (
                     <tr key={sub.id} className={idx % 2 === 0 ? "bg-white" : "bg-slate-50/70"}>
                       <td className={`${cellPad} text-center font-bold text-slate-500 border-r border-slate-300`}>{idx + 1}</td>
@@ -1372,7 +1602,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
         );
       }
 
-      if (activeWing === "primary") {
+      if (resolvedWing === "primary") {
         return (
           <div className="overflow-hidden border-2 border-slate-900 rounded-lg">
             <table className="w-full text-left text-xs border-collapse">
@@ -1392,7 +1622,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
               <tbody className={`divide-y divide-slate-300 font-medium ${isVeryCompactTable ? "text-[8px]" : "text-[9.5px]"}`}>
                 {subjects.map((sub, idx) => {
                   const stats = calculateSubjectStats(sub);
-                  const cellPad = isDenseSubjects ? "py-0.5 px-1" : inLandscape ? "py-1.5 px-1" : "p-1";
+                  const cellPad = isDenseSubjects ? "py-0.5 px-1" : inLandscape ? "py-1 px-1" : "p-1";
                   return (
                     <tr key={sub.id} className={idx % 2 === 0 ? "bg-white" : "bg-slate-50/70"}>
                       <td className={`${cellPad} text-center font-bold text-slate-500 border-r border-slate-300`}>{idx + 1}</td>
@@ -1454,7 +1684,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
             <tbody className={`divide-y divide-slate-300 font-medium ${isVeryCompactTable ? "text-[8px]" : "text-[9.5px]"}`}>
               {subjects.map((sub, idx) => {
                 const stats = calculateSubjectStats(sub);
-                const cellPad = isDenseSubjects ? "py-0.5 px-1" : inLandscape ? "py-1.5 px-1" : "p-1";
+                const cellPad = isDenseSubjects ? "py-0.5 px-1" : inLandscape ? "py-1 px-1" : "p-1";
                 return (
                   <tr key={sub.id} className={idx % 2 === 0 ? "bg-white" : "bg-slate-50/70"}>
                     <td className={`${cellPad} text-center font-bold text-slate-500 border-r border-slate-300`}>{idx + 1}</td>
@@ -1617,35 +1847,40 @@ export const MarksheetGenerator: React.FC<Props> = ({
               </div>
             </div>
 
-            {/* Candidate Details Grid */}
+            {/* Candidate Details Grid with Passport Photo */}
             <div className="bg-slate-50/90 rounded-md p-1.5 mb-1.5 border border-slate-300 text-[8.5px] font-medium">
-              <div className="grid grid-cols-12 gap-1.5 items-center">
-                <div className={`${showStudentPhoto ? "col-span-5" : "col-span-6"} space-y-0.5 min-w-0`}>
-                  <div className="truncate"><span className="text-slate-500 font-bold">Name: </span><span className="font-black text-slate-900 text-[9.5px]">{sName}</span></div>
-                  <div className="truncate"><span className="text-slate-500 font-bold">Father: </span><span className="font-bold text-slate-800">{sFather}</span></div>
-                  <div className="truncate"><span className="text-slate-500 font-bold">Class: </span><span className="font-black text-indigo-900">{cName} ({sSection})</span></div>
-                </div>
-                <div className={`${showStudentPhoto ? "col-span-5" : "col-span-6"} space-y-0.5 text-right`}>
-                  <div className="flex items-center justify-end gap-1.5 flex-wrap">
-                    <div><span className="text-slate-500 font-bold">Roll: </span><span className="font-black text-indigo-700 text-[10px]">{sRoll}</span></div>
-                    <div><span className="text-slate-500 font-bold">Adm: </span><span className="font-black text-slate-900">{sReg}</span></div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex-1 min-w-0 space-y-1">
+                  <div className="grid grid-cols-2 gap-1.5 items-baseline">
+                    <div className="truncate"><span className="text-slate-500 font-bold">Name: </span><span className="font-black text-slate-900 text-[9.5px]">{sName}</span></div>
+                    <div className="text-right truncate"><span className="text-slate-500 font-bold">Roll: </span><span className="font-black text-indigo-700 text-[10px]">{sRoll}</span></div>
                   </div>
-                  <div className="flex items-center justify-end gap-1 flex-wrap">
-                    <span className="px-1 py-0.2 rounded bg-amber-50 border border-amber-300 text-amber-950 font-black text-[7.5px]">
-                      🏅 C-Rank: <b>{sClassRank}</b>/{sClassStrength}
-                    </span>
-                    <span className="px-1 py-0.2 rounded bg-sky-50 border border-sky-300 text-sky-950 font-black text-[7.5px]">
-                      🎖️ S-Rank: <b>{sSectionRank}</b>/{sSectionStrength}
-                    </span>
+                  <div className="grid grid-cols-2 gap-1.5 items-baseline">
+                    <div className="truncate"><span className="text-slate-500 font-bold">Father: </span><span className="font-bold text-slate-800">{sFather}</span></div>
+                    <div className="text-right truncate"><span className="text-slate-500 font-bold">Adm: </span><span className="font-black text-slate-900">{sReg}</span></div>
+                  </div>
+                  <div className="flex items-center justify-between gap-1 flex-wrap pt-0.5">
+                    <div className="truncate"><span className="text-slate-500 font-bold">Class: </span><span className="font-black text-indigo-900">{cName} ({sSection})</span></div>
+                    <div className="flex items-center gap-1 flex-wrap">
+                      <span className="px-1 py-0.2 rounded bg-amber-50 border border-amber-300 text-amber-950 font-black text-[7.5px]">
+                        🏅 C-Rank: <b>{sClassRank}</b>/{sClassStrength}
+                      </span>
+                      <span className="px-1 py-0.2 rounded bg-sky-50 border border-sky-300 text-sky-950 font-black text-[7.5px]">
+                        🎖️ S-Rank: <b>{sSectionRank}</b>/{sSectionStrength}
+                      </span>
+                    </div>
                   </div>
                 </div>
                 {showStudentPhoto && (
-                  <div className="col-span-2 flex justify-end">
-                    <div className="w-[38px] h-[46px] rounded border border-slate-800 bg-white overflow-hidden flex items-center justify-center shrink-0">
+                  <div className="shrink-0 flex justify-end">
+                    <div className="w-[66px] h-[84px] p-0.5 rounded border-2 border-slate-800 bg-white overflow-hidden shadow-xs flex items-center justify-center">
                       {sPhoto ? (
-                        <img src={sPhoto} alt="Student" className="w-full h-full object-cover" />
+                        <img src={sPhoto} alt="Student" className="w-full h-full object-cover object-top" />
                       ) : (
-                        <User className="w-4 h-4 text-slate-400" />
+                        <div className="w-full h-full bg-slate-50 flex flex-col items-center justify-center gap-0.5">
+                          <User className="w-7 h-7 text-slate-400" />
+                          <span className="text-[6px] font-bold uppercase text-slate-400">Passport</span>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -1748,7 +1983,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
             {/* 3 Signatures */}
             <div className="pt-1.5 border-t border-slate-900 grid grid-cols-3 gap-2 items-end text-center text-[7.5px]">
               <div>
-                <div className="h-5 border-b border-slate-400 mb-0.5 flex items-end justify-center">
+                <div className="h-5 mb-0.5 flex items-end justify-center">
                   {teacherName && teacherName !== "Class Teacher" ? (
                     <span className="italic font-serif font-bold text-slate-800 text-[8px]">{teacherName}</span>
                   ) : null}
@@ -1756,7 +1991,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                 <p className="font-black text-slate-800 uppercase tracking-wider text-[7px]">Class Teacher</p>
               </div>
               <div>
-                <div className="h-5 border-b border-slate-400 mb-0.5 flex items-end justify-center">
+                <div className="h-5 mb-0.5 flex items-end justify-center">
                   {examControllerName && examControllerName !== "Exam Controller" ? (
                     <span className="italic font-serif font-bold text-slate-800 text-[8px]">{examControllerName}</span>
                   ) : null}
@@ -1764,7 +1999,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                 <p className="font-black text-slate-800 uppercase tracking-wider text-[7px]">Exam Controller</p>
               </div>
               <div>
-                <div className="h-5 border-b border-slate-400 mb-0.5 flex items-end justify-center">
+                <div className="h-5 mb-0.5 flex items-end justify-center">
                   {schoolDetails.principalSignatureUrl ? (
                     <img
                       src={schoolDetails.principalSignatureUrl}
@@ -1794,7 +2029,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
     return (
       <div key={targetStudent?.id || "single"} className="marksheet-print-page w-full flex justify-center print:block">
         <div
-          className={`marksheet-sheet-box ${isDenseSubjects ? "marksheet-dense-sheet" : ""} w-full ${isLandscapeView ? "min-w-[940px] max-w-[1120px]" : "min-w-[720px] max-w-[840px]"} bg-white rounded-xl border-4 border-slate-900 shadow-2xl ${isDenseSubjects ? "p-2.5" : isCompact ? "p-3" : "p-4"} text-slate-900 print:shadow-none print:m-0 print:border-2 print:border-black print:max-w-none print:min-w-0 print:p-2 print:rounded-none print:overflow-hidden relative overflow-hidden flex flex-col justify-between`}
+          className={`marksheet-sheet-box ${isDenseSubjects ? "marksheet-dense-sheet" : ""} w-full ${isLandscapeView ? "min-w-[940px] max-w-[1120px]" : "min-w-[720px] max-w-[840px]"} bg-white rounded-xl border-4 border-slate-900 shadow-2xl ${isDenseSubjects ? "p-2.5" : isCompact ? "p-3" : "p-4"} text-slate-900 print:shadow-none print:m-0 print:border-2 print:border-black print:max-w-none print:min-w-0 print:p-2 print:rounded-none print:overflow-visible relative overflow-hidden flex flex-col justify-between`}
           style={{ fontFamily: "'Inter', sans-serif" }}
         >
           {/* Decorative Watermark */}
@@ -1810,14 +2045,14 @@ export const MarksheetGenerator: React.FC<Props> = ({
                LEFT SIDE (50%): Cumulative Multi-Term Exams & Attendance Correlation
                RIGHT SIDE (50%): Official Level-Appropriate Final Marksheet
                ══════════════════════════════════════════════════════════════════ */
-            <div className={`marksheet-landscape-split grid grid-cols-12 ${isDenseSubjects ? "gap-2.5" : "gap-4"} w-full h-full`}>
+            <div className={`marksheet-landscape-split grid grid-cols-2 ${isDenseSubjects ? "gap-2.5" : "gap-4"} w-full h-full`}>
               {/* LEFT COLUMN: Cumulative Academic & Term Attendance Progress */}
-              <div className={`col-span-6 flex flex-col justify-between border-r-2 border-slate-800 ${isDenseSubjects ? "pr-2.5" : "pr-4"}`}>
+              <div className={`min-w-0 flex flex-col justify-between border-r-2 border-slate-800 ${isDenseSubjects ? "pr-2.5" : "pr-4"}`}>
                 <div>
                   {/* Left Header */}
-                  <div className="flex items-center justify-between border-b-2 border-slate-800 pb-2 mb-2">
+                  <div className="flex items-center justify-between border-b-2 border-slate-800 pb-1.5 mb-1.5">
                     <div className="flex items-center gap-2">
-                      <div className="w-8 h-8 rounded-lg bg-indigo-950 text-amber-300 flex items-center justify-center font-black text-sm shadow-xs">
+                      <div className="w-7 h-7 rounded-lg bg-indigo-950 text-amber-300 flex items-center justify-center font-black text-sm shadow-xs">
                         📊
                       </div>
                       <div>
@@ -1835,7 +2070,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                   </div>
 
                   {/* Multi-Term Examination Marks Matrix */}
-                  <div className="border-2 border-slate-900 rounded-lg overflow-hidden mb-2.5">
+                  <div className="border-2 border-slate-900 rounded-lg overflow-hidden mb-1.5">
                     <div className="bg-slate-900 text-white text-[9px] font-black px-2 py-1 flex items-center justify-between">
                       <span>{isHalfYearly ? "TERM-1 FORMATIVE MARKS MATRIX" : "TERM-WISE EXAMINATION MARKS MATRIX"}</span>
                       <span className="text-amber-300 font-mono text-[8px]">
@@ -1914,7 +2149,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                   </div>
 
                   {/* TERM ATTENDANCE VS EXAM MARKS CORRELATION BOX */}
-                  <div className="border-2 border-slate-900 rounded-lg overflow-hidden mb-2.5">
+                  <div className="border-2 border-slate-900 rounded-lg overflow-hidden mb-1.5">
                     <div className="bg-indigo-950 text-white text-[9px] font-black px-2 py-1 flex items-center justify-between">
                       <span className="flex items-center gap-1">
                         <span>📅 {isHalfYearly ? "TERM-1 ATTENDANCE VS SCORE CORRELATION" : "TERM-WISE ATTENDANCE VS EXAM MARKS CORRELATION"}</span>
@@ -1975,9 +2210,9 @@ export const MarksheetGenerator: React.FC<Props> = ({
 
                   {/* Bottom Insight Section: Smart Visual Charts OR Classic Notes */}
                   {marksheetStyle === "visual_charts" ? (
-                    <div className="grid grid-cols-12 gap-2 text-[8.5px]">
+                    <div className="grid grid-cols-12 gap-2 text-[8.5px] mb-1.5">
                       {/* CIRCLE DONUT: Subject Performance Distribution */}
-                      <div className="col-span-6 p-2 rounded-lg border-2 border-slate-900 bg-white flex flex-col justify-between">
+                      <div className="col-span-6 p-1.5 rounded-lg border-2 border-slate-900 bg-white flex flex-col justify-between">
                         <div className="flex items-center justify-between border-b border-slate-200 pb-1 mb-1">
                           <span className="font-black text-slate-900 text-[8.5px] uppercase tracking-wide flex items-center gap-1">
                             <span>⭕</span> विषय प्रवीणता चक्र (Subject Mastery)
@@ -2012,8 +2247,8 @@ export const MarksheetGenerator: React.FC<Props> = ({
                           return (
                             <div className="flex items-center gap-2">
                               {/* SVG Donut Circle */}
-                              <div className="relative w-14 h-14 shrink-0 flex items-center justify-center">
-                                <svg className="w-14 h-14 -rotate-90" viewBox="0 0 60 60">
+                              <div className="relative w-13 h-13 shrink-0 flex items-center justify-center">
+                                <svg className="w-13 h-13 -rotate-90" viewBox="0 0 60 60">
                                   <circle cx="30" cy="30" r="24" fill="none" stroke="#f1f5f9" strokeWidth="6" />
                                   <circle
                                     cx="30" cy="30" r="24" fill="none" stroke="#10b981" strokeWidth="6"
@@ -2029,7 +2264,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                                   />
                                 </svg>
                                 <div className="absolute inset-0 flex flex-col items-center justify-center text-center leading-none">
-                                  <span className="font-black text-slate-950 text-[9.5px]">{totals.overallPct}%</span>
+                                  <span className="font-black text-slate-950 text-[9px]">{totals.overallPct}%</span>
                                   <span className="text-[6px] font-bold text-slate-400 uppercase">SCORE</span>
                                 </div>
                               </div>
@@ -2058,7 +2293,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                       </div>
 
                       {/* TIMELINE PROGRESS BARS: Exam Growth Trend */}
-                      <div className="col-span-6 p-2 rounded-lg border-2 border-slate-900 bg-white flex flex-col justify-between">
+                      <div className="col-span-6 p-1.5 rounded-lg border-2 border-slate-900 bg-white flex flex-col justify-between">
                         <div className="flex items-center justify-between border-b border-slate-200 pb-1 mb-1">
                           <span className="font-black text-slate-900 text-[8.5px] uppercase tracking-wide flex items-center gap-1">
                             <span>📈</span> परीक्षा प्रगति ग्राफ़ (Score Timeline)
@@ -2069,7 +2304,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                         </div>
 
                         {/* Visual Bars */}
-                        <div className="flex items-end justify-between gap-1 pt-1 h-13">
+                        <div className="flex items-end justify-between gap-1 pt-1 h-12">
                           {(isHalfYearly
                             ? [
                                 { label: "PA-1", pct: 88, color: "bg-emerald-500" },
@@ -2087,7 +2322,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                           ).map((item, i) => (
                             <div key={i} className="flex-1 flex flex-col items-center gap-0.5 h-full justify-end">
                               <span className="font-mono text-[7px] font-black text-slate-700 leading-none">{item.pct}%</span>
-                              <div className="w-full bg-slate-100 rounded-t-xs h-7 flex items-end overflow-hidden border-b border-slate-300">
+                              <div className="w-full bg-slate-100 rounded-t-xs h-6 flex items-end overflow-hidden border-b border-slate-300">
                                 <div
                                   className={`w-full ${item.color} rounded-t-xs transition-all`}
                                   style={{ height: `${Math.round((item.pct / 100) * 100)}%` }}
@@ -2101,7 +2336,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                     </div>
                   ) : (
                     /* Classic Text Highlight Boxes */
-                    <div className="grid grid-cols-2 gap-2 text-[8.5px]">
+                    <div className="grid grid-cols-2 gap-2 text-[8.5px] mb-1.5">
                       <div className="p-1.5 rounded-lg border border-slate-300 bg-slate-50">
                         <span className="font-black text-slate-800 uppercase tracking-wide block mb-0.5 text-[8px]">
                           🌟 Strengths &amp; Top Achievement
@@ -2120,6 +2355,59 @@ export const MarksheetGenerator: React.FC<Props> = ({
                       </div>
                     </div>
                   )}
+
+                  {/* PART-B: CO-SCHOLASTIC & LIFE SKILLS (Moved to Left Column to balance Left & Right height on 1 page) */}
+                  {(() => {
+                    const scoreNum = parseFloat(totals.overallPct || "0");
+                    const g1 = scoreNum >= 80 ? "A+" : scoreNum >= 60 ? "A" : "B+";
+                    const g2 = scoreNum >= 75 ? "A" : "B+";
+                    const g3 = "A+";
+                    const g4 = attendancePercentage >= 75 ? "A+" : "B";
+                    const g5 = scoreNum >= 70 ? "A" : "B+";
+                    const g6 = scoreNum >= 75 ? "A+" : "A";
+                    return (
+                      <div className="border-2 border-slate-900 rounded-lg overflow-hidden mb-1">
+                        <div className="bg-slate-900 text-white text-[8.5px] font-black px-2 py-0.5 flex items-center justify-between">
+                          <span className="uppercase tracking-wider">
+                            {isHalfYearly
+                              ? "PART-B: TERM-1 CO-SCHOLASTIC & LIFE SKILLS (सह-शैक्षणिक व कौशल)"
+                              : "PART-B: ANNUAL CO-SCHOLASTIC & LIFE SKILLS (सह-शैक्षणिक व कौशल)"}
+                          </span>
+                          <span className="text-amber-300 font-mono text-[7.5px] font-black">Scale: A+, A, B</span>
+                        </div>
+                        <div className="grid grid-cols-2 divide-x divide-slate-300 bg-white text-[8px]">
+                          <div className="p-1 space-y-0.5">
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-slate-800 font-bold truncate">Work Education (कम्प्यूटर/कार्य)</span>
+                              <span className="font-black text-indigo-950 bg-indigo-50 border border-indigo-200 px-1 rounded text-[7.5px] font-mono shrink-0">{g1}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-slate-800 font-bold truncate">Art &amp; Craft (कला व शिल्प)</span>
+                              <span className="font-black text-indigo-950 bg-indigo-50 border border-indigo-200 px-1 rounded text-[7.5px] font-mono shrink-0">{g2}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-slate-800 font-bold truncate">Health, Yoga &amp; Sports (खेल/योग)</span>
+                              <span className="font-black text-indigo-950 bg-indigo-50 border border-indigo-200 px-1 rounded text-[7.5px] font-mono shrink-0">{g3}</span>
+                            </div>
+                          </div>
+                          <div className="p-1 space-y-0.5">
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-slate-800 font-bold truncate">Discipline &amp; Punctuality (अनुशासन)</span>
+                              <span className="font-black text-emerald-900 bg-emerald-50 border border-emerald-200 px-1 rounded text-[7.5px] font-mono shrink-0">{g4}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-slate-800 font-bold truncate">Attitude &amp; Values (सद्व्यवहार)</span>
+                              <span className="font-black text-emerald-900 bg-emerald-50 border border-emerald-200 px-1 rounded text-[7.5px] font-mono shrink-0">{g5}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-slate-800 font-bold truncate">Class Participation (कक्षा संवाद)</span>
+                              <span className="font-black text-indigo-950 bg-indigo-50 border border-indigo-200 px-1 rounded text-[7.5px] font-mono shrink-0">{g6}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Left Footer Sign */}
@@ -2135,20 +2423,20 @@ export const MarksheetGenerator: React.FC<Props> = ({
               </div>
 
               {/* RIGHT COLUMN: Official Final Marksheet */}
-              <div className="col-span-6 flex flex-col justify-between">
+              <div className="min-w-0 flex flex-col justify-between">
                 <div>
                   {/* School Header */}
-                  <div className="border-b-2 border-slate-900 pb-2 mb-2">
+                  <div className="border-b-2 border-slate-900 pb-1.5 mb-1.5">
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-center gap-2.5">
                         {getSavedSchoolLogo(schoolDetails.logoUrl, school?.id) ? (
                           <img
                             src={cleanLogoUrl(getSavedSchoolLogo(schoolDetails.logoUrl, school?.id))}
                             alt="School Logo"
-                            className="w-12 h-12 object-contain rounded-xl border border-slate-300 shadow-sm bg-white p-0.5"
+                            className="w-11 h-11 object-contain rounded-xl border border-slate-300 shadow-sm bg-white p-0.5"
                           />
                         ) : (
-                          <div className="w-12 h-12 rounded-xl bg-slate-900 text-amber-300 font-black text-lg flex items-center justify-center shadow-sm">
+                          <div className="w-11 h-11 rounded-xl bg-slate-900 text-amber-300 font-black text-lg flex items-center justify-center shadow-sm">
                             {(schoolDetails.schoolName || "SC").slice(0, 2).toUpperCase()}
                           </div>
                         )}
@@ -2170,54 +2458,75 @@ export const MarksheetGenerator: React.FC<Props> = ({
                       </span>
                     </div>
 
-                    <div className="text-center mt-1.5 pt-1 border-t border-slate-200">
-                      <span className="inline-block px-3 py-0.5 rounded-full bg-slate-900 text-white font-black text-[9.5px] uppercase tracking-widest">
+                    <div className="text-center mt-1 pt-1 border-t border-slate-200">
+                      <span className="inline-block px-3 py-0.5 rounded-full bg-slate-900 text-white font-black text-[9px] uppercase tracking-widest">
                         {isPreBoard || (isBoard && !isHalfYearly)
                           ? "PRE-BOARD EXAMINATION TRANSCRIPT & PROGRESS REPORT"
                           : isHalfYearly
                           ? "HALF-YEARLY ACADEMIC TRANSCRIPT & PROGRESS REPORT"
                           : "ACADEMIC TRANSCRIPT & PROGRESS REPORT"}
                       </span>
-                      <p className="text-[9.5px] font-bold text-indigo-950 mt-0.5 uppercase tracking-wider">
+                      <p className="text-[9px] font-bold text-indigo-950 mt-0.5 uppercase tracking-wider">
                         {cleanExamHeading} &bull; Session: {cleanSessionText}
                       </p>
                     </div>
                   </div>
 
-                  {/* Student Details with Photo */}
-                  <div className="bg-slate-50/90 rounded-lg p-2 mb-2 border border-slate-300 text-[10px] font-medium">
-                    <div className="grid grid-cols-12 gap-2 items-center">
-                      <div className={`${showStudentPhoto ? "col-span-5" : "col-span-6"} space-y-0.5`}>
-                        <div><span className="text-slate-500 font-bold">Candidate: </span><span className="font-black text-slate-900 text-[11px]">{sName}</span></div>
-                        <div><span className="text-slate-500 font-bold">Father: </span><span className="font-bold text-slate-800">{sFather}</span></div>
-                        <div><span className="text-slate-500 font-bold">Class: </span><span className="font-black text-indigo-900">{cName} (Sec: {sSection})</span></div>
-                      </div>
-                      <div className={`${showStudentPhoto ? "col-span-5" : "col-span-6"} space-y-1 text-right`}>
-                        <div className="flex items-center justify-end gap-2 flex-wrap">
-                          <div><span className="text-slate-500 font-bold">Roll No: </span><span className="font-black text-indigo-700 text-xs">{sRoll}</span></div>
-                          <div><span className="text-slate-500 font-bold">Adm / Reg: </span><span className="font-black text-slate-900">{sReg}</span></div>
+                  {/* Student Details with Passport-Size Photo */}
+                  <div className="bg-slate-50/90 rounded-lg p-1.5 mb-1.5 border border-slate-300 text-[10px] font-medium">
+                    <div className="flex items-center justify-between gap-2.5">
+                      <div className="flex-1 min-w-0 space-y-1.5">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <div className="min-w-0 truncate">
+                            <span className="text-slate-500 font-bold">Candidate: </span>
+                            <span className="font-black text-slate-900 text-[11px]">{sName}</span>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <div><span className="text-slate-500 font-bold">Roll No: </span><span className="font-black text-indigo-700 text-xs">{sRoll}</span></div>
+                            <div><span className="text-slate-500 font-bold">Adm / Reg: </span><span className="font-black text-slate-900">{sReg}</span></div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <div className="min-w-0 truncate">
+                            <span className="text-slate-500 font-bold">Father: </span>
+                            <span className="font-bold text-slate-800">{sFather}</span>
+                          </div>
+                          <div className="min-w-0 truncate">
+                            <span className="text-slate-500 font-bold">Class: </span>
+                            <span className="font-black text-indigo-900">{cName} (Sec: {sSection})</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-1.5 flex-wrap pt-0.5">
                           <span className={`font-black text-[9px] px-1.5 py-0.5 rounded ${totals.hasFail ? "bg-rose-100 text-rose-800" : "bg-emerald-100 text-emerald-800"}`}>
                             {isBoard && !totals.hasFail ? "QUALIFIED (Eligible for Board)" : totals.resultStatus}
                           </span>
-                        </div>
-                        <div className="flex items-center justify-end gap-1.5 flex-wrap pt-0.5">
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-50 border border-amber-300 text-amber-950 font-black text-[8.5px] shadow-2xs">
-                            <span className="text-[9.5px]">🏅</span>
-                            <span>Class Rank: <b className="text-amber-900 font-black">{sClassRank}</b> / {sClassStrength}</span>
-                          </span>
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-sky-50 border border-sky-300 text-sky-950 font-black text-[8.5px] shadow-2xs">
-                            <span className="text-[9.5px]">🎖️</span>
-                            <span>Section Rank: <b className="text-sky-900 font-black">{sSectionRank}</b> / {sSectionStrength}</span>
-                          </span>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-50 border border-amber-300 text-amber-950 font-black text-[8.5px] shadow-2xs">
+                              <span className="text-[9.5px]">🏅</span>
+                              <span>Class Rank: <b className="text-amber-900 font-black">{sClassRank}</b> / {sClassStrength}</span>
+                            </span>
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-sky-50 border border-sky-300 text-sky-950 font-black text-[8.5px] shadow-2xs">
+                              <span className="text-[9.5px]">🎖️</span>
+                              <span>Section Rank: <b className="text-sky-900 font-black">{sSectionRank}</b> / {sSectionStrength}</span>
+                            </span>
+                          </div>
                         </div>
                       </div>
+
                       {showStudentPhoto && (
-                        <div className="col-span-2 flex justify-center">
-                          <div className="w-[50px] h-[60px] rounded border border-slate-800 bg-white overflow-hidden shadow-xs flex items-center justify-center relative">
+                        <div className="shrink-0 flex justify-center">
+                          <div className="w-[84px] h-[108px] p-0.5 rounded-md border-2 border-slate-800 bg-white overflow-hidden shadow-xs flex items-center justify-center relative">
                             {sPhoto ? (
-                              <img src={sPhoto} alt="Student" className="w-full h-full object-cover" />
+                              <img src={sPhoto} alt="Student" className="w-full h-full object-cover object-top" />
                             ) : (
-                              <User className="w-5 h-5 text-slate-400" />
+                              <div className="w-full h-full bg-slate-50 flex flex-col items-center justify-center gap-1 text-slate-400">
+                                <User className="w-10 h-10 text-slate-400" />
+                                <span className="text-[6.5px] font-black uppercase tracking-tight text-slate-500">
+                                  Passport Photo
+                                </span>
+                              </div>
                             )}
                           </div>
                         </div>
@@ -2226,12 +2535,12 @@ export const MarksheetGenerator: React.FC<Props> = ({
                   </div>
 
                   {/* Level-Specific Subject Marks Table */}
-                  <div className="mb-2">
+                  <div className="mb-1.5">
                     {renderSubjectMarksTable(true, true, true)}
                   </div>
 
                   {/* Performance Summary & Live QR */}
-                  <div className="flex items-center justify-between gap-2 p-1.5 bg-indigo-50/70 border border-indigo-200 rounded-lg text-[9px] mb-2">
+                  <div className="flex items-center justify-between gap-2 p-1.5 bg-indigo-50/70 border border-indigo-200 rounded-lg text-[9px] mb-1.5">
                     <div>
                       <span className="text-slate-500 font-bold block text-[8px]">Overall Score</span>
                       <span className="text-xs font-black text-indigo-950">{totals.overallPct}%</span>
@@ -2241,7 +2550,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                       <span className="text-[9.5px] font-black text-indigo-950">
                         {isHalfYearly ? (
                           totals.hasFail ? "Supplementary (Re-Exam)" : "Qualified (Promoted to Term-2)"
-                        ) : activeWing === "pre_primary" ? "Promoted to Next Class 🎉" :
+                        ) : resolvedWing === "pre_primary" ? "Promoted to Next Class 🎉" :
                          totals.overallGrade === "A+" || totals.overallGrade === "A1" ? "First Division with Distinction" :
                          totals.overallGrade === "A" || totals.overallGrade === "A2" || totals.overallGrade === "B1" ? "First Division" :
                          totals.overallGrade === "F" ? "Supplementary" : "Second Division"}
@@ -2255,177 +2564,90 @@ export const MarksheetGenerator: React.FC<Props> = ({
                         </span>
                       </div>
                       <div className="p-0.5 bg-white border border-slate-400 rounded shadow-2xs">
-                        <QRCode value={qrVerifyUrl} size={32} level="M" />
+                        <QRCode value={qrVerifyUrl} size={30} level="M" />
                       </div>
                     </div>
                   </div>
 
-                  {/* ══════════════════════════════════════════════════════════════════
-                     PART-B: CO-SCHOLASTIC & LIFE SKILLS EVALUATION (CBSE 5.0 / 3-Point Scale)
-                     Fills right-side whitespace with mandatory official academic assessment
-                     ══════════════════════════════════════════════════════════════════ */}
-                  {(() => {
-                    const scoreNum = parseFloat(totals.overallPct || "0");
-                    const g1 = scoreNum >= 80 ? "A+" : scoreNum >= 60 ? "A" : "B+";
-                    const g2 = scoreNum >= 75 ? "A" : "B+";
-                    const g3 = "A+";
-                    const g4 = attendancePercentage >= 75 ? "A+" : "B";
-                    const g5 = scoreNum >= 70 ? "A" : "B+";
-                    const g6 = scoreNum >= 75 ? "A+" : "A";
+                  {/* Session Attendance Summary & Class Teacher's Holistic Assessment */}
+                  <div className="border-2 border-slate-900 rounded-lg p-1.5 bg-slate-50/90 mb-1.5 text-[8px]">
+                    {/* Row 1: Session Attendance Summary */}
+                    <div className="grid grid-cols-4 divide-x divide-slate-300 pb-1 mb-1 border-b border-slate-300 font-medium">
+                      <div className="px-1 flex items-center justify-between">
+                        <span className="text-slate-600 font-bold">School Days:</span>
+                        <span className="font-black text-slate-950 font-mono text-[8.5px]">{safeWorkingDays}</span>
+                      </div>
+                      <div className="px-1 flex items-center justify-between">
+                        <span className="text-slate-600 font-bold">Attended:</span>
+                        <span className="font-black text-indigo-900 font-mono text-[8.5px]">{safePresentDays}</span>
+                      </div>
+                      <div className="px-1 flex items-center justify-between">
+                        <span className="text-slate-600 font-bold">Attd %:</span>
+                        <span className={`font-black font-mono text-[8.5px] ${attendancePercentage >= 75 ? "text-emerald-700" : "text-rose-700"}`}>
+                          {attendancePercentage}%
+                        </span>
+                      </div>
+                      <div className="px-1 flex items-center justify-between">
+                        <span className="text-slate-600 font-bold">Regularity:</span>
+                        <span className={`font-black text-[7.5px] px-1 rounded ${attendancePercentage >= 75 ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-800"}`}>
+                          {attendancePercentage >= 75 ? "Regular" : "Low Attd"}
+                        </span>
+                      </div>
+                    </div>
 
-                    const nextSessionString = (() => {
-                      const parts = (sessionName || "2026-27").split("-");
-                      if (parts.length === 2) {
-                        const y1 = parseInt(parts[0], 10);
-                        const y2 = parseInt(parts[1], 10);
-                        if (!isNaN(y1) && !isNaN(y2)) {
-                          return `${y1 + 1}-${String(y2 + 1).padStart(2, "0")}`;
-                        }
-                      }
-                      return "2027-28";
-                    })();
-
-                    const nextClassString = (() => {
-                      const cn = cName || "";
-                      const numMatch = cn.match(/\d+/);
-                      if (numMatch) {
-                        const nextNum = parseInt(numMatch[0], 10) + 1;
-                        return cn.replace(numMatch[0], String(nextNum));
-                      }
-                      const lower = cn.toLowerCase();
-                      if (lower.includes("play")) return "Nursery";
-                      if (lower.includes("nursery") || lower.includes("nur")) return "LKG";
-                      if (lower.includes("lkg")) return "UKG";
-                      if (lower.includes("ukg") || lower.includes("prep")) return "Class 1";
-                      return "Next Standard";
-                    })();
-
-                    return (
-                      <>
-                        {/* Co-Scholastic & Life Skills Box */}
-                        <div className="border-2 border-slate-900 rounded-lg overflow-hidden mb-2">
-                          <div className="bg-slate-900 text-white text-[8.5px] font-black px-2 py-0.5 flex items-center justify-between">
-                            <span className="uppercase tracking-wider">
-                              {isHalfYearly
-                                ? "PART-B: TERM-1 CO-SCHOLASTIC & LIFE SKILLS (सह-शैक्षणिक व कौशल मूल्यांकन)"
-                                : "PART-B: ANNUAL CO-SCHOLASTIC & LIFE SKILLS (सह-शैक्षणिक व कौशल मूल्यांकन)"}
-                            </span>
-                            <span className="text-amber-300 font-mono text-[7.5px] font-black">Grade Scale: A+, A, B</span>
-                          </div>
-                          <div className="grid grid-cols-2 divide-x divide-slate-300 bg-white text-[8px]">
-                            <div className="p-1 space-y-0.5">
-                              <div className="flex items-center justify-between">
-                                <span className="text-slate-800 font-bold">Work Education (कम्प्यूटर व व्यावहारिक कार्य)</span>
-                                <span className="font-black text-indigo-950 bg-indigo-50 border border-indigo-200 px-1 rounded text-[7.5px] font-mono">{g1}</span>
-                              </div>
-                              <div className="flex items-center justify-between">
-                                <span className="text-slate-800 font-bold">Art &amp; Creative Craft (कला व रचनात्मक शिल्प)</span>
-                                <span className="font-black text-indigo-950 bg-indigo-50 border border-indigo-200 px-1 rounded text-[7.5px] font-mono">{g2}</span>
-                              </div>
-                              <div className="flex items-center justify-between">
-                                <span className="text-slate-800 font-bold">Health, Yoga &amp; Sports (शारीरिक व योग)</span>
-                                <span className="font-black text-indigo-950 bg-indigo-50 border border-indigo-200 px-1 rounded text-[7.5px] font-mono">{g3}</span>
-                              </div>
-                            </div>
-                            <div className="p-1 space-y-0.5">
-                              <div className="flex items-center justify-between">
-                                <span className="text-slate-800 font-bold">Discipline &amp; Punctuality (समयबद्धता व अनुशासन)</span>
-                                <span className="font-black text-emerald-900 bg-emerald-50 border border-emerald-200 px-1 rounded text-[7.5px] font-mono">{g4}</span>
-                              </div>
-                              <div className="flex items-center justify-between">
-                                <span className="text-slate-800 font-bold">Attitude &amp; Social Values (सद्व्यवहार व सहयोग)</span>
-                                <span className="font-black text-emerald-900 bg-emerald-50 border border-emerald-200 px-1 rounded text-[7.5px] font-mono">{g5}</span>
-                              </div>
-                              <div className="flex items-center justify-between">
-                                <span className="text-slate-800 font-bold">Class Participation (कक्षा संवाद व तत्परता)</span>
-                                <span className="font-black text-indigo-950 bg-indigo-50 border border-indigo-200 px-1 rounded text-[7.5px] font-mono">{g6}</span>
-                              </div>
-                            </div>
-                          </div>
+                    {/* Row 2: Teacher's Remark & Official Progression/Promotion Status */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1 mb-0.5">
+                          <span className="font-black text-slate-900 text-[8px] uppercase tracking-wide">
+                            ✍️ {isHalfYearly ? "कक्षा अध्यापक अर्धवार्षिक मूल्यांकन (Mid-Term Assessment):" : "कक्षा अध्यापक वार्षिक मूल्यांकन (Holistic Remark):"}
+                          </span>
                         </div>
+                        <p className="text-slate-700 italic leading-tight text-[8px]">
+                          "{teacherRemark || (
+                            isBoard
+                              ? (totals.hasFail
+                                  ? "विद्यार्थी को मुख्य विषयों में अतिरिक्त अभ्यास की आवश्यकता है। बोर्ड परीक्षा से पूर्व उपचारात्मक कक्षाओं में मार्गदर्शन अपेक्षित है।"
+                                  : `विद्यार्थी ने प्री-बोर्ड व आंतरिक मूल्यांकन में उत्कृष्ट प्रदर्शन किया है। आगामी CBSE/बोर्ड परीक्षा ${boardExamYear} में सर्वोच्च सफलता हेतु अग्रिम शुभकामनाएं!`)
+                              : isHalfYearly
+                              ? (totals.hasFail
+                                  ? "विद्यार्थी को मुख्य विषयों में अतिरिक्त अभ्यास की आवश्यकता है। दूसरे सत्र (Term-2) में नियमित उपस्थिति व मार्गदर्शन अपेक्षित है।"
+                                  : "विद्यार्थी की प्रथम सत्र में प्रगति सराहनीय है। कक्षा गतिविधियों व गृहकार्य में सक्रिय सहभागिता रही है।")
+                              : (totals.hasFail
+                                  ? "विद्यार्थी को पूरक परीक्षा (Re-Exam) में उत्तीर्ण होने के उपरांत ही अगली कक्षा में प्रवेश की अनुमति दी जाएगी।"
+                                  : "विद्यार्थी ने पूरे शैक्षणिक सत्र में उत्कृष्ट एकाग्रता, अनुशासन व बौद्धिक तत्परता का परिचय दिया है। उज्ज्वल भविष्य की शुभकामनाएं।")
+                          )}"
+                        </p>
+                      </div>
 
-                        {/* Session Attendance Summary & Class Teacher's Holistic Assessment */}
-                        <div className="border-2 border-slate-900 rounded-lg p-1.5 bg-slate-50/90 mb-2 text-[8px]">
-                          {/* Row 1: Session Attendance Summary */}
-                          <div className="grid grid-cols-4 divide-x divide-slate-300 pb-1 mb-1 border-b border-slate-300 font-medium">
-                            <div className="px-1 flex items-center justify-between">
-                              <span className="text-slate-600 font-bold">School Days:</span>
-                              <span className="font-black text-slate-950 font-mono text-[8.5px]">{safeWorkingDays}</span>
-                            </div>
-                            <div className="px-1 flex items-center justify-between">
-                              <span className="text-slate-600 font-bold">Attended:</span>
-                              <span className="font-black text-indigo-900 font-mono text-[8.5px]">{safePresentDays}</span>
-                            </div>
-                            <div className="px-1 flex items-center justify-between">
-                              <span className="text-slate-600 font-bold">Attd %:</span>
-                              <span className={`font-black font-mono text-[8.5px] ${attendancePercentage >= 75 ? "text-emerald-700" : "text-rose-700"}`}>
-                                {attendancePercentage}%
-                              </span>
-                            </div>
-                            <div className="px-1 flex items-center justify-between">
-                              <span className="text-slate-600 font-bold">Regularity:</span>
-                              <span className={`font-black text-[7.5px] px-1 rounded ${attendancePercentage >= 75 ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-800"}`}>
-                                {attendancePercentage >= 75 ? "Regular" : "Low Attd"}
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Row 2: Teacher's Remark & Official Progression/Promotion Status */}
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-1 mb-0.5">
-                                <span className="font-black text-slate-900 text-[8px] uppercase tracking-wide">
-                                  ✍️ {isHalfYearly ? "कक्षा अध्यापक अर्धवार्षिक मूल्यांकन (Mid-Term Assessment):" : "कक्षा अध्यापक वार्षिक मूल्यांकन (Holistic Remark):"}
-                                </span>
-                              </div>
-                              <p className="text-slate-700 italic leading-tight text-[8px]">
-                                "{teacherRemark || (
-                                  isBoard
-                                    ? (totals.hasFail
-                                        ? "विद्यार्थी को मुख्य विषयों में अतिरिक्त अभ्यास की आवश्यकता है। बोर्ड परीक्षा से पूर्व उपचारात्मक कक्षाओं में मार्गदर्शन अपेक्षित है।"
-                                        : `विद्यार्थी ने प्री-बोर्ड व आंतरिक मूल्यांकन में उत्कृष्ट प्रदर्शन किया है। आगामी CBSE/बोर्ड परीक्षा ${boardExamYear} में सर्वोच्च सफलता हेतु अग्रिम शुभकामनाएं!`)
-                                    : isHalfYearly
-                                    ? (totals.hasFail
-                                        ? "विद्यार्थी को मुख्य विषयों में अतिरिक्त अभ्यास की आवश्यकता है। दूसरे सत्र (Term-2) में नियमित उपस्थिति व मार्गदर्शन अपेक्षित है।"
-                                        : "विद्यार्थी की प्रथम सत्र में प्रगति सराहनीय है। कक्षा गतिविधियों व गृहकार्य में सक्रिय सहभागिता रही है।")
-                                    : (totals.hasFail
-                                        ? "विद्यार्थी को पूरक परीक्षा (Re-Exam) में उत्तीर्ण होने के उपरांत ही अगली कक्षा में प्रवेश की अनुमति दी जाएगी।"
-                                        : "विद्यार्थी ने पूरे शैक्षणिक सत्र में उत्कृष्ट एकाग्रता, अनुशासन व बौद्धिक तत्परता का परिचय दिया है। उज्ज्वल भविष्य की शुभकामनाएं।")
-                                )}"
-                              </p>
-                            </div>
-
-                            {/* Promotion / Progression Status Badge */}
-                            <div className="shrink-0 text-right pl-2 border-l border-slate-300">
-                              <span className="text-[7.5px] font-bold text-slate-500 uppercase block">
-                                {resolvedStatus.header}
-                              </span>
-                              <span className={`inline-block font-black text-[8.5px] px-2 py-0.5 rounded mt-0.5 ${
-                                totals.hasFail
-                                  ? "bg-rose-100 text-rose-900 border border-rose-300"
-                                  : isBoard
-                                  ? "bg-emerald-100 text-emerald-950 border border-emerald-400 shadow-2xs"
-                                  : "bg-emerald-100 text-emerald-900 border border-emerald-300"
-                              }`}>
-                                {resolvedStatus.badge}
-                              </span>
-                              {resolvedStatus.sub && (
-                                <span className={`text-[7px] block font-bold mt-0.5 font-mono ${isBoard ? "text-indigo-900 font-extrabold" : "text-slate-500"}`}>
-                                  {resolvedStatus.sub}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </>
-                    );
-                  })()}
+                      {/* Promotion / Progression Status Badge */}
+                      <div className="shrink-0 text-right pl-2 border-l border-slate-300">
+                        <span className="text-[7.5px] font-bold text-slate-500 uppercase block">
+                          {resolvedStatus.header}
+                        </span>
+                        <span className={`inline-block font-black text-[8.5px] px-2 py-0.5 rounded mt-0.5 ${
+                          totals.hasFail
+                            ? "bg-rose-100 text-rose-900 border border-rose-300"
+                            : isBoard
+                            ? "bg-emerald-100 text-emerald-950 border border-emerald-400 shadow-2xs"
+                            : "bg-emerald-100 text-emerald-900 border border-emerald-300"
+                        }`}>
+                          {resolvedStatus.badge}
+                        </span>
+                        {resolvedStatus.sub && (
+                          <span className={`text-[7px] block font-bold mt-0.5 font-mono ${isBoard ? "text-indigo-900 font-extrabold" : "text-slate-500"}`}>
+                            {resolvedStatus.sub}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 {/* 3 Official Signatures */}
-                <div className="pt-2 border-t-2 border-slate-900 grid grid-cols-3 gap-3 items-end text-center text-[9px]">
+                <div className="pt-1.5 border-t-2 border-slate-900 grid grid-cols-3 gap-3 items-end text-center text-[9px]">
                   <div>
-                    <div className="h-7 border-b border-slate-400 mb-0.5 flex items-end justify-center">
+                    <div className="h-6 mb-0.5 flex items-end justify-center">
                       {teacherName && teacherName !== "Class Teacher" ? (
                         <span className="italic font-serif font-bold text-slate-800 text-[9.5px] mb-0.5">{teacherName}</span>
                       ) : null}
@@ -2433,7 +2655,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                     <p className="font-black text-slate-800 uppercase tracking-wider text-[8.5px]">Class Teacher</p>
                   </div>
                   <div>
-                    <div className="h-7 border-b border-slate-400 mb-0.5 flex items-end justify-center">
+                    <div className="h-6 mb-0.5 flex items-end justify-center">
                       {examControllerName && examControllerName !== "Exam Controller" ? (
                         <span className="italic font-serif font-bold text-slate-800 text-[9.5px] mb-0.5">{examControllerName}</span>
                       ) : null}
@@ -2441,12 +2663,12 @@ export const MarksheetGenerator: React.FC<Props> = ({
                     <p className="font-black text-slate-800 uppercase tracking-wider text-[8.5px]">Exam Controller</p>
                   </div>
                   <div>
-                    <div className="h-7 border-b border-slate-400 mb-0.5 flex items-end justify-center">
+                    <div className="h-6 mb-0.5 flex items-end justify-center">
                       {schoolDetails.principalSignatureUrl ? (
                         <img
                           src={schoolDetails.principalSignatureUrl}
                           alt="Principal Signature"
-                          className="max-h-6 max-w-[90px] object-contain mb-0.5"
+                          className="max-h-5 max-w-[90px] object-contain mb-0.5"
                         />
                       ) : principalName ? (
                         <span className="italic font-serif font-black text-indigo-900 text-[9.5px] mb-0.5">{principalName}</span>
@@ -2532,49 +2754,51 @@ export const MarksheetGenerator: React.FC<Props> = ({
                 </div>
               </div>
 
-              {/* Student Details with Photo */}
+              {/* Student Details with Passport-Size Photo */}
               <div className={`bg-slate-50/90 rounded-xl ${isCompact ? "p-2 mb-2" : "p-3 mb-3.5"} border border-slate-300 text-xs font-medium`}>
-                <div className="grid grid-cols-12 gap-3 items-center">
-                  <div className={`${showStudentPhoto ? "col-span-6" : "col-span-8"} space-y-1`}>
-                    <div><span className="text-slate-500 font-bold">Result Date: </span><span className="font-black text-slate-900">{publishDate}</span></div>
-                    <div><span className="text-slate-500 font-bold">Student Name: </span><span className="font-black text-slate-900 text-sm">{sName}</span></div>
-                    <div><span className="text-slate-500 font-bold">Father's Name: </span><span className="font-bold text-slate-800">{sFather}</span></div>
-                    <div><span className="text-slate-500 font-bold">Class: </span><span className="font-black text-indigo-900">{cName}</span></div>
-                  </div>
-
-                  <div className={`${showStudentPhoto ? "col-span-4" : "col-span-4"} space-y-1 text-right`}>
-                    <div className="flex items-center justify-end gap-2 flex-wrap">
-                      <div><span className="text-slate-500 font-bold">Roll No: </span><span className="font-black text-indigo-700 text-sm">{sRoll}</span></div>
-                      <div><span className="text-slate-500 font-bold">Reg / Adm No: </span><span className="font-black text-slate-900">{sReg}</span></div>
-                      <span className={`font-black text-xs px-2 py-0.5 rounded ${totals.hasFail ? "bg-rose-100 text-rose-800" : "bg-emerald-100 text-emerald-800"}`}>
-                        {totals.resultStatus}
-                      </span>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex-1 grid grid-cols-12 gap-3 items-center min-w-0">
+                    <div className="col-span-6 space-y-1">
+                      <div><span className="text-slate-500 font-bold">Result Date: </span><span className="font-black text-slate-900">{publishDate}</span></div>
+                      <div><span className="text-slate-500 font-bold">Student Name: </span><span className="font-black text-slate-900 text-sm">{sName}</span></div>
+                      <div><span className="text-slate-500 font-bold">Father's Name: </span><span className="font-bold text-slate-800">{sFather}</span></div>
+                      <div><span className="text-slate-500 font-bold">Class: </span><span className="font-black text-indigo-900">{cName}</span></div>
                     </div>
-                    <div><span className="text-slate-500 font-bold">Section: </span><span className="font-black text-slate-900">{sSection}</span></div>
-                    <div className="flex items-center justify-end gap-1.5 flex-wrap pt-0.5">
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 border border-amber-300 text-amber-950 font-black text-[10px]">
-                        <span>🏅</span>
-                        <span>Class Rank: <b className="text-amber-900 font-black">{sClassRank}</b> / {sClassStrength}</span>
-                      </span>
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-50 border border-sky-300 text-sky-950 font-black text-[10px]">
-                        <span>🎖️</span>
-                        <span>Section Rank: <b className="text-sky-900 font-black">{sSectionRank}</b> / {sSectionStrength}</span>
-                      </span>
+
+                    <div className="col-span-6 space-y-1 text-right">
+                      <div className="flex items-center justify-end gap-2 flex-wrap">
+                        <div><span className="text-slate-500 font-bold">Roll No: </span><span className="font-black text-indigo-700 text-sm">{sRoll}</span></div>
+                        <div><span className="text-slate-500 font-bold">Reg / Adm No: </span><span className="font-black text-slate-900">{sReg}</span></div>
+                        <span className={`font-black text-xs px-2 py-0.5 rounded ${totals.hasFail ? "bg-rose-100 text-rose-800" : "bg-emerald-100 text-emerald-800"}`}>
+                          {totals.resultStatus}
+                        </span>
+                      </div>
+                      <div><span className="text-slate-500 font-bold">Section: </span><span className="font-black text-slate-900">{sSection}</span></div>
+                      <div className="flex items-center justify-end gap-1.5 flex-wrap pt-0.5">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 border border-amber-300 text-amber-950 font-black text-[10px]">
+                          <span>🏅</span>
+                          <span>Class Rank: <b className="text-amber-900 font-black">{sClassRank}</b> / {sClassStrength}</span>
+                        </span>
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-50 border border-sky-300 text-sky-950 font-black text-[10px]">
+                          <span>🎖️</span>
+                          <span>Section Rank: <b className="text-sky-900 font-black">{sSectionRank}</b> / {sSectionStrength}</span>
+                        </span>
+                      </div>
                     </div>
                   </div>
 
                   {showStudentPhoto && (
-                    <div className="col-span-2 flex flex-col items-center justify-center">
-                      <div className="w-[68px] h-[82px] rounded-lg border-2 border-slate-800 bg-white overflow-hidden shadow-xs flex items-center justify-center relative">
+                    <div className="shrink-0 flex flex-col items-center justify-center">
+                      <div className="w-[96px] h-[122px] p-0.5 rounded-lg border-2 border-slate-800 bg-white overflow-hidden shadow-xs flex items-center justify-center relative">
                         {sPhoto ? (
-                          <img src={sPhoto} alt="Student" className="w-full h-full object-cover" />
+                          <img src={sPhoto} alt="Student" className="w-full h-full object-cover object-top" />
                         ) : (
                           <div className="flex flex-col items-center justify-center text-slate-400 p-1">
-                            <User className="w-7 h-7 text-slate-400" />
-                            <span className="text-[6.5px] font-black uppercase tracking-tight text-slate-500 mt-0.5">Photo</span>
+                            <User className="w-11 h-11 text-slate-400" />
+                            <span className="text-[7px] font-black uppercase tracking-tight text-slate-500 mt-1">Passport Photo</span>
                           </div>
                         )}
-                        <div className="absolute bottom-0 inset-x-0 bg-slate-950/80 text-white text-[6px] font-black uppercase text-center py-0.5">
+                        <div className="absolute bottom-0 inset-x-0 bg-slate-950/80 text-white text-[6.5px] font-black uppercase text-center py-0.5">
                           Verified
                         </div>
                       </div>
@@ -2587,10 +2811,10 @@ export const MarksheetGenerator: React.FC<Props> = ({
               <div className={isCompact ? "mb-2" : "mb-3.5"}>
                 <div className="text-[11px] font-black uppercase tracking-wider text-slate-800 mb-1 flex items-center justify-between">
                   <span>
-                    Result Details ({subjects.length} {activeWing === "pre_primary" ? "Domains" : "Subjects"} - {activeWing === "pre_primary" ? "Pre-Primary" : activeWing === "primary" ? "Primary" : "Middle/Secondary"}):
+                    Result Details ({subjects.length} {resolvedWing === "pre_primary" ? "Domains" : "Subjects"} - {resolvedWing === "pre_primary" ? "Pre-Primary" : resolvedWing === "primary" ? "Primary" : "Middle/Secondary"}):
                   </span>
                   <span className="text-[9.5px] text-slate-500 lowercase font-normal italic">
-                    {activeWing === "pre_primary" ? "foundational oral & activity evaluation" : "theory, mcq & practical components"}
+                    {resolvedWing === "pre_primary" ? "foundational oral & activity evaluation" : "theory, mcq & practical components"}
                   </span>
                 </div>
                 {renderSubjectMarksTable(isCompact, isVeryCompact, false)}
@@ -2652,7 +2876,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
               {/* 3 Official Signatures */}
               <div className={`${isCompact ? "pt-2.5" : "pt-3.5"} border-t-2 border-slate-900 grid grid-cols-3 gap-6 items-end text-center text-xs`}>
                 <div>
-                  <div className="h-9 border-b border-slate-400 mb-1 flex items-end justify-center">
+                  <div className="h-9 mb-1 flex items-end justify-center">
                     {teacherName && teacherName !== "Class Teacher" ? (
                       <span className="italic font-serif font-bold text-slate-800 text-[11px] mb-0.5">{teacherName}</span>
                     ) : null}
@@ -2660,7 +2884,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                   <p className="font-black text-slate-800 uppercase tracking-wider text-[10.5px]">Class Teacher</p>
                 </div>
                 <div>
-                  <div className="h-9 border-b border-slate-400 mb-1 flex items-end justify-center">
+                  <div className="h-9 mb-1 flex items-end justify-center">
                     {examControllerName && examControllerName !== "Exam Controller" ? (
                       <span className="italic font-serif font-bold text-slate-800 text-[11px] mb-0.5">{examControllerName}</span>
                     ) : null}
@@ -2668,7 +2892,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                   <p className="font-black text-slate-800 uppercase tracking-wider text-[10.5px]">Exam Controller</p>
                 </div>
                 <div>
-                  <div className="h-9 border-b border-slate-400 mb-1 flex items-end justify-center">
+                  <div className="h-9 mb-1 flex items-end justify-center">
                     {schoolDetails.principalSignatureUrl ? (
                       <img
                         src={schoolDetails.principalSignatureUrl}
@@ -2694,30 +2918,192 @@ export const MarksheetGenerator: React.FC<Props> = ({
     const isOuterSingleExam = currentExamOption.category === "pa" || currentExamOption.category === "custom";
     const isOuterSingleSlip = marksheetStyle === "single_slip" || (isOuterSingleExam && marksheetStyle !== "classic_table" && marksheetStyle !== "visual_charts" && marksheetStyle !== "portrait");
     // Both 2-sided Half-Yearly/Annual AND 2-in-1 PA1-PA4/Single Slip print in A4 Landscape!
-    // Only explicit "portrait" style prints in A4 Portrait.
-    const isPrintLandscape = marksheetStyle !== "portrait" && (isOuterSingleSlip || isLandscapeView);
+    // Also Part 2 Backside (Poster + Student Cutout & Thoughts) always uses A4 Landscape 2-side split.
+    const isPrintLandscape = printPartMode === "back" || (marksheetStyle !== "portrait" && (isOuterSingleSlip || isLandscapeView));
 
-    // Helper: wrap 2 PA-1/PA-2/PA-3/PA-4 student cards side-by-side onto ONE A4 Landscape page
-    const renderTwoUpLandscapePage = (leftStudent?: SchoolStudent, rightStudent?: SchoolStudent | null, pageKey = "two-up-0") => (
-      <div key={pageKey} className="marksheet-print-page marksheet-two-up-page w-full flex justify-center print:block">
-        <div className="marksheet-two-up-grid grid grid-cols-2 gap-3 w-full min-w-[960px] max-w-[1140px] bg-white rounded-xl border-2 border-slate-400 p-3 shadow-2xl print:shadow-none print:border-none print:p-0 print:rounded-none print:min-w-0 print:max-w-none print:w-full items-stretch">
-          <div className="marksheet-half-slot pr-3 border-r-2 border-dashed border-slate-400 flex flex-col">
-            {renderMarksheetSheet(leftStudent)}
-          </div>
-          <div className="marksheet-half-slot pl-0.5 flex flex-col">
-            {rightStudent ? (
-              renderMarksheetSheet(rightStudent)
-            ) : (
-              <div className="h-full min-h-[420px] rounded-lg border-2 border-dashed border-slate-300 bg-slate-50/50 flex flex-col items-center justify-center text-slate-400 text-xs font-bold p-6 text-center print:bg-white print:border-slate-200">
-                <span className="text-xl mb-1">✂️</span>
-                <span>Blank Right Half (Cut Line)</span>
-                <span className="text-[10px] font-normal mt-1">Is page par Right side khali hai — Print karke beech se cut kar sakte hain</span>
-              </div>
-            )}
+    // Helper: compute student's summary metrics for Backside (Poster + White-BG Cutout + 6 English Thoughts)
+    const getStudentBacksideStats = (targetStudent?: SchoolStudent) => {
+      const isSingle = !bulkMode || !targetStudent || (bulkScope === "class" && currentStudent && targetStudent.id === currentStudent.id);
+      const activeStudent = isSingle ? (currentStudent || targetStudent) : targetStudent;
+      const targetClassObj =
+        (bulkMode && bulkScope === "all_school" && activeStudent
+          ? classes.find(c => isStudentInClass(activeStudent, c.id))
+          : currentClass) || currentClass;
+      const resolvedWing: SchoolLevelWing =
+        bulkMode && bulkScope === "all_school" && targetClassObj
+          ? detectClassWing(targetClassObj.name)
+          : activeWing;
+      const studentBaseSubjects =
+        bulkMode && bulkScope === "all_school"
+          ? (WING_PRESETS[resolvedWing]?.subjects || baseClassSubjects)
+          : baseClassSubjects;
+      const relevantExams =
+        bulkMode && bulkScope === "all_school" && allSchoolDbExams.length > 0
+          ? allSchoolDbExams.filter(e => !e.classId || !targetClassObj?.id || e.classId === targetClassObj.id)
+          : dbExams;
+      const subjs = computeStudentSubjects(activeStudent, studentBaseSubjects, relevantExams, selectedExamId, resolvedWing);
+      const t = grandStats(subjs, resolvedWing);
+
+      const sName = isSingle ? (studentName || activeStudent?.name || "Student Candidate") : (activeStudent?.name || "Student Candidate");
+      const sRoll = isSingle ? (rollNo || activeStudent?.rollNo || "01") : (activeStudent?.rollNo || "01");
+      const cName = targetClassObj?.name || currentClass?.name || "Class";
+      const sSection = isSingle ? (sectionName || targetClassObj?.section || "A") : (activeStudent?.section || targetClassObj?.section || "A");
+      const sPhoto = isSingle ? (studentPhoto || (activeStudent as any)?.photoUrl || "") : ((activeStudent as any)?.photoUrl || "");
+
+      const targetId = activeStudent?.id;
+      const allSchRank = targetId ? allSchoolRankMap.get(targetId) : undefined;
+      const computedClassRank =
+        bulkMode && bulkScope === "all_school" && allSchRank
+          ? allSchRank.classRank
+          : targetId && studentRankings.classRanks.has(targetId)
+          ? studentRankings.classRanks.get(targetId)!
+          : (parseInt(activeStudent?.rollNo || "1", 10) || 1);
+      const sRankNum = isSingle ? (parseInt(classRank || String(computedClassRank), 10) || computedClassRank) : computedClassRank;
+      const sRankText = sRankNum < 10 ? `0${sRankNum}` : String(sRankNum);
+
+      const safeWork = Math.max(1, Number(totalWorkingDays) || 220);
+      const safePres = Math.max(0, Math.min(safeWork, Number(studentAttendance) || 0));
+      const attdPct = Math.round((safePres / safeWork) * 100);
+      const stId = activeStudent?.id || "single_demo";
+
+      return {
+        studentId: stId,
+        sName,
+        cName,
+        sSection,
+        sRoll,
+        sPhoto,
+        overallPct: parseFloat(t.overallPct || "0") || 0,
+        classRankText: sRankText,
+        attendancePct: attdPct,
+        hasFail: t.hasFail,
+        cutoutSettings: cutoutsMap[stId],
+        selectedThoughtIds: studentThoughtsMap[stId],
+      };
+    };
+
+    // Helper: Half-Yearly / Yearly Page 2 Backside (Half = School Poster, Half = Student Cutout + 6 English Thoughts)
+    const renderHalfYearlyAnnualBackPage = (targetStudent?: SchoolStudent, pageKey = "back-0") => {
+      const info = getStudentBacksideStats(targetStudent);
+      const cleanSessionText = formatAcademicSession(sessionName);
+
+      const posterEl = (
+        <div className="min-w-0 flex flex-col h-full">
+          <SchoolPosterHalfCard
+            school={school}
+            schoolDetails={schoolDetails}
+            posterConfig={posterConfig}
+            sessionText={cleanSessionText}
+          />
+        </div>
+      );
+
+      const thoughtsEl = (
+        <div className="min-w-0 flex flex-col h-full">
+          <StudentThoughtBackHalfCard
+            studentName={info.sName}
+            classNameText={info.cName}
+            sectionName={info.sSection}
+            rollNo={info.sRoll}
+            sessionText={cleanSessionText}
+            overallPct={info.overallPct}
+            classRankText={info.classRankText}
+            attendancePct={info.attendancePct}
+            hasFail={info.hasFail}
+            photoUrl={info.sPhoto}
+            cutoutSettings={info.cutoutSettings}
+            selectedThoughtIds={info.selectedThoughtIds}
+            schoolName={schoolDetails.schoolName}
+            principalName={schoolDetails.principalName}
+            schoolId={school?.id}
+            schoolDetails={schoolDetails}
+            posterConfig={posterConfig}
+          />
+        </div>
+      );
+
+      return (
+        <div key={pageKey} className="marksheet-print-page w-full flex justify-center print:block">
+          <div className="marksheet-sheet-box w-full min-w-[940px] max-w-[1120px] bg-white rounded-xl border-4 border-slate-900 shadow-2xl p-3 text-slate-900 print:shadow-none print:m-0 print:border-2 print:border-black print:max-w-none print:min-w-0 print:p-2 print:rounded-none print:overflow-visible relative flex flex-col justify-between">
+            <div className="marksheet-landscape-split grid grid-cols-2 gap-3 w-full h-full items-stretch">
+              {swapBackHalves ? (
+                <>
+                  {posterEl}
+                  {thoughtsEl}
+                </>
+              ) : (
+                <>
+                  {thoughtsEl}
+                  {posterEl}
+                </>
+              )}
+            </div>
           </div>
         </div>
-      </div>
-    );
+      );
+    };
+
+    // Helper: PA 1-4 Backside Page (2 School Posters Left + Right with Cut Line — exact match to 2-up PA Front Page!)
+    const renderPaBackPosterPage = (pageKey = "pa-back-0") => {
+      const cleanSessionText = formatAcademicSession(sessionName);
+      return (
+        <div key={pageKey} className="marksheet-print-page marksheet-two-up-page w-full flex justify-center print:block">
+          <div className="marksheet-two-up-grid grid grid-cols-2 gap-3 w-full min-w-[960px] max-w-[1140px] bg-white rounded-xl border-2 border-slate-400 p-3 shadow-2xl print:shadow-none print:border-none print:p-0 print:rounded-none print:min-w-0 print:max-w-none print:w-full items-stretch">
+            <div className="marksheet-half-slot pr-3 border-r-2 border-dashed border-slate-400 flex flex-col">
+              <SchoolPosterHalfCard
+                school={school}
+                schoolDetails={schoolDetails}
+                posterConfig={posterConfig}
+                sessionText={cleanSessionText}
+                compactPaSize
+              />
+            </div>
+            <div className="marksheet-half-slot pl-0.5 flex flex-col">
+              <SchoolPosterHalfCard
+                school={school}
+                schoolDetails={schoolDetails}
+                posterConfig={posterConfig}
+                sessionText={cleanSessionText}
+                compactPaSize
+              />
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // Helper: wrap 2 PA-1/PA-2/PA-3/PA-4 student cards side-by-side onto ONE A4 Landscape page
+    const renderTwoUpLandscapePage = (leftStudent?: SchoolStudent, rightStudent?: SchoolStudent | null, pageKey = "two-up-0") => {
+      const cleanSessionText = formatAcademicSession(sessionName);
+      return (
+        <div key={pageKey} className="marksheet-print-page marksheet-two-up-page w-full flex justify-center print:block">
+          <div className="marksheet-two-up-grid grid grid-cols-2 gap-3 w-full min-w-[960px] max-w-[1140px] bg-white rounded-xl border-2 border-slate-400 p-3 shadow-2xl print:shadow-none print:border-none print:p-0 print:rounded-none print:min-w-0 print:max-w-none print:w-full items-stretch">
+            <div className="marksheet-half-slot pr-3 border-r-2 border-dashed border-slate-400 flex flex-col">
+              {renderMarksheetSheet(leftStudent)}
+            </div>
+            <div className="marksheet-half-slot pl-0.5 flex flex-col">
+              {rightStudent ? (
+                renderMarksheetSheet(rightStudent)
+              ) : paUnusedSlotMode === "poster" ? (
+                <SchoolPosterHalfCard
+                  school={school}
+                  schoolDetails={schoolDetails}
+                  posterConfig={posterConfig}
+                  sessionText={cleanSessionText}
+                  compactPaSize
+                />
+              ) : (
+                <div className="h-full min-h-[420px] rounded-lg border-2 border-dashed border-slate-300 bg-slate-50/50 flex flex-col items-center justify-center text-slate-400 text-xs font-bold p-6 text-center print:bg-white print:border-slate-200">
+                  <span className="text-xl mb-1">✂️</span>
+                  <span>Blank Right Half (Cut Line)</span>
+                  <span className="text-[10px] font-normal mt-1">Is page par Right side khali hai — Print karke beech se cut kar sakte hain</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    };
 
     const outerSession = sessionName || "2026-27";
     const outerBoardYear = (() => {
@@ -2760,7 +3146,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
           @media print {
             @page {
               size: ${isPrintLandscape ? "A4 landscape" : "A4 portrait"};
-              margin: 4mm;
+              margin: ${isPrintLandscape ? "13mm 5mm" : "10mm 6mm"};
             }
             html, body, #root {
               width: 100% !important;
@@ -2784,9 +3170,11 @@ export const MarksheetGenerator: React.FC<Props> = ({
               display: block !important;
             }
             .marksheet-print-page {
-              width: ${isPrintLandscape ? "289mm" : "202mm"} !important;
-              max-width: 100% !important;
-              ${isPrintLandscape ? "height: 201mm !important; max-height: 201mm !important; overflow: hidden !important;" : "height: auto !important; max-height: none !important; overflow: visible !important;"}
+              width: 100% !important;
+              max-width: ${isPrintLandscape ? "100%" : "200mm"} !important;
+              height: auto !important;
+              max-height: none !important;
+              overflow: visible !important;
               padding: 0 !important;
               margin: 0 auto !important;
               box-sizing: border-box !important;
@@ -2794,7 +3182,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
               background: #ffffff !important;
               page-break-inside: avoid !important;
               break-inside: avoid-page !important;
-              ${bulkMode ? "page-break-after: always !important; break-after: page !important;" : "page-break-after: auto !important; break-after: auto !important;"}
+              ${bulkMode || printPartMode === "both" ? "page-break-after: always !important; break-after: page !important;" : "page-break-after: auto !important; break-after: auto !important;"}
             }
             .marksheet-print-page:last-child {
               page-break-after: auto !important;
@@ -2804,9 +3192,9 @@ export const MarksheetGenerator: React.FC<Props> = ({
               width: 100% !important;
               min-width: 0 !important;
               max-width: 100% !important;
-              height: ${isPrintLandscape ? "100%" : "auto"} !important;
+              ${isPrintLandscape ? "height: 182mm !important; min-height: 182mm !important; max-height: 182mm !important;" : "height: auto !important; min-height: 268mm !important;"}
               margin: 0 !important;
-              padding: ${isPrintLandscape ? "2.5mm" : "4mm"} !important;
+              padding: ${isPrintLandscape ? "2mm" : "4mm"} !important;
               box-sizing: border-box !important;
               overflow: hidden !important;
               display: flex !important;
@@ -2817,20 +3205,35 @@ export const MarksheetGenerator: React.FC<Props> = ({
             }
             .marksheet-landscape-split {
               display: grid !important;
-              grid-template-columns: 1fr 1fr !important;
+              grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
               gap: 3mm !important;
               width: 100% !important;
+              flex: 1 1 auto !important;
               height: 100% !important;
+              min-height: 0 !important;
               align-items: stretch !important;
+            }
+            .marksheet-landscape-split > div {
+              grid-column: auto / span 1 !important;
+              min-width: 0 !important;
+              height: 100% !important;
+              min-height: 0 !important;
+            }
+            .marksheet-poster-card,
+            .marksheet-thought-card {
+              height: 100% !important;
+              min-height: 0 !important;
             }
             .marksheet-two-up-grid {
               display: grid !important;
-              grid-template-columns: 1fr 1fr !important;
+              grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
               gap: 2.5mm !important;
               width: 100% !important;
               min-width: 0 !important;
               max-width: 100% !important;
-              height: 100% !important;
+              height: 182mm !important;
+              min-height: 182mm !important;
+              max-height: 182mm !important;
               padding: 0 !important;
               margin: 0 !important;
               border: none !important;
@@ -2838,9 +3241,14 @@ export const MarksheetGenerator: React.FC<Props> = ({
               border-radius: 0 !important;
               align-items: stretch !important;
             }
+            .marksheet-half-slot {
+              height: 100% !important;
+              min-height: 0 !important;
+            }
             .marksheet-pa-half-card {
               width: 100% !important;
               height: 100% !important;
+              min-height: 0 !important;
               padding: 2.5mm !important;
               margin: 0 !important;
               border-radius: 0 !important;
@@ -2903,6 +3311,14 @@ export const MarksheetGenerator: React.FC<Props> = ({
               <span>Sample</span>
             </button>
             <button
+              onClick={() => setShowBacksideStudio(true)}
+              className="px-2 py-1 bg-fuchsia-600/25 hover:bg-fuchsia-600/40 text-fuchsia-200 border border-fuchsia-400/40 rounded-lg text-[11px] font-bold flex items-center gap-1 shrink-0 transition cursor-pointer"
+              title="Page 2 School Poster, White-BG Photo Cutout & English Thoughts"
+            >
+              <Wand2 className="w-3 h-3 text-fuchsia-300" />
+              <span>Page 2 Studio</span>
+            </button>
+            <button
               onClick={() => setBulkMode(!bulkMode)}
               className={`px-2 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 shrink-0 transition cursor-pointer border ${
                 bulkMode
@@ -2925,7 +3341,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
               <span>Next Session</span>
             </button>
             <button
-              onClick={handlePrint}
+              onClick={() => handlePrint()}
               className="px-2.5 py-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-lg text-[11px] font-extrabold flex items-center gap-1 shadow-sm shadow-emerald-500/20 active:scale-95 transition-transform cursor-pointer shrink-0"
             >
               <Printer className="w-3 h-3" />
@@ -3137,18 +3553,30 @@ export const MarksheetGenerator: React.FC<Props> = ({
               <div className="mt-2 p-2.5 rounded-xl bg-amber-50/80 dark:bg-amber-950/30 border border-amber-300/70 dark:border-amber-700 flex flex-wrap items-center justify-between gap-2 text-xs">
                 <div className="flex items-center gap-2">
                   <span className="font-black text-amber-950 dark:text-amber-200">
-                    ✂️ 2-in-1 A4 Landscape Mode (Left: {currentStudent?.name || "Student 1"} | Right: Student 2):
+                    ✂️ 2-in-1 A4 Landscape Mode (Left: {currentStudent?.name || "Student 1"} | Right: Student 2 / School Poster):
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <label className="text-[11px] font-bold text-amber-900 dark:text-amber-300">Right Half Student:</label>
+                  <label className="text-[11px] font-bold text-amber-900 dark:text-amber-300">Right Half:</label>
                   <select
-                    value={pairRightStudentId}
-                    onChange={e => setPairRightStudentId(e.target.value)}
+                    value={pairRightStudentId === "blank" && paUnusedSlotMode === "poster" ? "poster" : pairRightStudentId}
+                    onChange={e => {
+                      const v = e.target.value;
+                      if (v === "poster") {
+                        setPaUnusedSlotMode("poster");
+                        setPairRightStudentId("blank");
+                      } else if (v === "blank") {
+                        setPaUnusedSlotMode("blank");
+                        setPairRightStudentId("blank");
+                      } else {
+                        setPairRightStudentId(v);
+                      }
+                    }}
                     className="px-2.5 py-1 text-xs font-bold bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-lg border border-amber-300 dark:border-amber-600 outline-none"
                   >
                     <option value="auto">Auto Next Student in Class</option>
-                    <option value="blank">Blank Right Half (Sirf 1 Student)</option>
+                    <option value="poster">🏫 School Poster (1-Page Fold Card)</option>
+                    <option value="blank">✂️ Blank Right Half (Cut Only)</option>
                     {classStudents
                       .filter(s => s.id !== currentStudent?.id)
                       .map(s => (
@@ -3160,6 +3588,110 @@ export const MarksheetGenerator: React.FC<Props> = ({
                 </div>
               </div>
             )}
+
+            {/* 2-PART BULK PDF & BACKSIDE STUDIO BAR (Part 1 Front Marks + Part 2 Backside Poster & Student Cutout/Thoughts) */}
+            <div className="mt-2.5 p-3 rounded-2xl bg-gradient-to-r from-indigo-950 via-slate-900 to-fuchsia-950 text-white border border-indigo-500/40 shadow-md space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <span className="text-[10px] font-black uppercase tracking-widest text-amber-300 flex items-center gap-1">
+                    <Sparkles className="w-3 h-3" /> 2-Part Bulk PDF &amp; Backside System (Part 1 Front + Part 2 Same-Serial Back)
+                  </span>
+                  <p className="text-[11px] text-slate-200 mt-0.5">
+                    {isOuterSingleSlip
+                      ? "PA-1..4: Part 1 = 2 Students/Page (Front) • Part 2 = Matching School Posters (Back, cut in half)"
+                      : "Half-Yearly & Annual: Part 1 = Front Marks (1..N) • Part 2 = School Poster + White-BG Student Cutout & 6 English Thoughts (1..N)"}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowBacksideStudio(true)}
+                    className="px-3 py-1.5 rounded-xl bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs font-black flex items-center gap-1.5 shadow-sm cursor-pointer transition active:scale-95"
+                  >
+                    <Wand2 className="w-3.5 h-3.5" />
+                    <span>Poster, Cutout &amp; Top-10 Thoughts Studio</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/10 text-xs">
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* Bulk Toggle & Scope */}
+                  <div className="inline-flex rounded-xl bg-white/10 p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setBulkMode(false)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-black cursor-pointer transition ${!bulkMode ? "bg-amber-400 text-slate-950" : "text-slate-200 hover:text-white"}`}
+                    >
+                      Single Student
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBulkMode(true);
+                        setBulkScope("class");
+                      }}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-black cursor-pointer transition ${bulkMode && bulkScope === "class" ? "bg-amber-400 text-slate-950" : "text-slate-200 hover:text-white"}`}
+                    >
+                      Class Bulk ({classStudents.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBulkMode(true);
+                        setBulkScope("all_school");
+                      }}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-black cursor-pointer transition ${bulkMode && bulkScope === "all_school" ? "bg-amber-400 text-slate-950" : "text-slate-200 hover:text-white"}`}
+                    >
+                      🏫 All School Bulk ({studentList.length})
+                    </button>
+                  </div>
+
+                  {/* Printer Back Options */}
+                  <label className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-200 cursor-pointer bg-white/5 px-2 py-1 rounded-lg border border-white/10">
+                    <input
+                      type="checkbox"
+                      checked={reverseBackOrder}
+                      onChange={e => setReverseBackOrder(e.target.checked)}
+                      className="rounded accent-amber-400"
+                    />
+                    <span>Reverse Back Serial (N→1)</span>
+                  </label>
+                  {!isOuterSingleSlip && (
+                    <label className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-200 cursor-pointer bg-white/5 px-2 py-1 rounded-lg border border-white/10">
+                      <input
+                        type="checkbox"
+                        checked={swapBackHalves}
+                        onChange={e => setSwapBackHalves(e.target.checked)}
+                        className="rounded accent-amber-400"
+                      />
+                      <span>Swap Left/Right (Poster ↔ Profile)</span>
+                    </label>
+                  )}
+                </div>
+
+                {/* Direct 2-Part PDF / Print Buttons */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handlePrintPart("front")}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-sm cursor-pointer transition active:scale-95"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>Part 1 PDF (Front Marks)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handlePrintPart("back")}
+                    className="px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-sm cursor-pointer transition active:scale-95"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>Part 2 PDF (Same-Serial Back)</span>
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Exam Title & Promotion Status Controls (Pre-Board / Annual / Board Exam Eligibility) */}
@@ -3919,63 +4451,131 @@ export const MarksheetGenerator: React.FC<Props> = ({
 
         {/* Display Marksheet Preview (Print-ready) */}
         <div className="w-full max-w-full my-6 print:my-0 print:m-0">
-          <div className="flex items-center justify-between gap-2 mb-2.5 px-1 print:hidden">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5 px-1 print:hidden">
             <div className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
               <span className="text-xs font-black text-slate-800 dark:text-slate-200 uppercase tracking-wider">
-                {isOuterSingleSlip
-                  ? "A4 Landscape 2-in-1 Preview (Left Student 1 | Right Student 2 • 297×210mm)"
-                  : `A4 Marksheet Live Preview (${isPrintLandscape ? "A4 Landscape 1-Page Split 297×210mm" : "A4 Portrait 210×297mm"})`}
+                {printPartMode === "back"
+                  ? (isOuterSingleSlip
+                      ? "Part 2 Preview: Backside School Posters (2 per Page with Cut Line)"
+                      : "Part 2 Preview: School Poster + White-BG Student Cutout & 6 English Thoughts")
+                  : isOuterSingleSlip
+                  ? "Part 1 Preview: A4 Landscape 2-in-1 PA Slips (Left & Right)"
+                  : `Part 1 Preview: (${isPrintLandscape ? "A4 Landscape 1-Page Split" : "A4 Portrait"})`}
               </span>
             </div>
-            <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold bg-slate-200/70 dark:bg-slate-800 px-2.5 py-0.5 rounded-full">
-              📱 Swipe to inspect full sheet
-            </span>
+
+            <div className="flex items-center gap-1.5 bg-slate-200 dark:bg-slate-800 p-1 rounded-xl">
+              <button
+                type="button"
+                onClick={() => setPrintPartMode("front")}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-black cursor-pointer transition ${printPartMode === "front" ? "bg-indigo-600 text-white shadow-xs" : "text-slate-700 dark:text-slate-300"}`}
+              >
+                📄 Part 1 (Front)
+              </button>
+              <button
+                type="button"
+                onClick={() => setPrintPartMode("back")}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-black cursor-pointer transition ${printPartMode === "back" ? "bg-amber-500 text-slate-950 shadow-xs" : "text-slate-700 dark:text-slate-300"}`}
+              >
+                🎨 Part 2 (Back)
+              </button>
+              <button
+                type="button"
+                onClick={() => setPrintPartMode("both")}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-black cursor-pointer transition ${printPartMode === "both" ? "bg-emerald-600 text-white shadow-xs" : "text-slate-700 dark:text-slate-300"}`}
+              >
+                📑 Both
+              </button>
+            </div>
           </div>
 
           <div className="w-full max-w-full overflow-x-auto pb-6 pt-1 px-1 rounded-2xl scrollbar-thin bg-slate-200/40 dark:bg-slate-950/40 border border-slate-300/60 dark:border-slate-800 shadow-inner print:bg-transparent print:border-none print:shadow-none print:rounded-none print:p-0 print:m-0 print:overflow-visible">
             <div ref={printContainerRef} className="w-full print:w-full">
               {bulkMode ? (
                 <div className="space-y-8 print:space-y-0 min-w-fit print:min-w-0 flex flex-col items-center print:block">
-                  <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-200 p-3 rounded-xl text-xs text-amber-900 dark:text-amber-200 print:hidden flex items-center justify-between w-full max-w-[1100px]">
+                  <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-200 p-3 rounded-xl text-xs text-amber-900 dark:text-amber-200 print:hidden flex flex-wrap items-center justify-between gap-2 w-full max-w-[1100px]">
                     <span>
                       {isOuterSingleSlip
-                        ? `Bulk 2-in-1 Mode: Poore ${currentClass?.name} ke ${classStudents.length} bacchon ki marksheet (${Math.ceil(classStudents.length / 2)} Landscape pages, 2 students per page) print hogi.`
-                        : `Bulk Class Mode: Poore ${currentClass?.name} ke sabhi ${classStudents.length} bacchon ki marksheet (1 student per Landscape page) print hogi.`}
+                        ? `${bulkScope === "all_school" ? "All School" : currentClass?.name} Bulk (${bulkTargetStudents.length} Students): ${Math.ceil(bulkTargetStudents.length / 2)} Pages (${printPartMode === "back" ? "Part 2: School Posters Back" : printPartMode === "front" ? "Part 1: Front 2-in-1 PA Slips" : "Front + Back"}).`
+                        : `${bulkScope === "all_school" ? "All School" : currentClass?.name} Bulk (${bulkTargetStudents.length} Students): Serial 1→${bulkTargetStudents.length} (${printPartMode === "back" ? (reverseBackOrder ? "Part 2 Backside • Reversed N→1" : "Part 2 Backside • Same Serial 1→N") : printPartMode === "front" ? "Part 1 Front Marks" : "Both Front & Back"}).`}
                     </span>
                     <span className="font-bold">
                       {isOuterSingleSlip
-                        ? `${Math.ceil(classStudents.length / 2)} Pages (${classStudents.length} Students)`
-                        : `Total: ${classStudents.length} Students`}
+                        ? `${Math.ceil(bulkTargetStudents.length / 2)} Sheets (${bulkTargetStudents.length} Students)`
+                        : `${bulkTargetStudents.length} Students`}
                     </span>
                   </div>
-                  {isOuterSingleSlip
-                    ? Array.from({ length: Math.ceil(classStudents.length / 2) }, (_, pageIdx) => {
-                        const leftSt = classStudents[pageIdx * 2];
-                        const rightSt = classStudents[pageIdx * 2 + 1] || null;
+                  {isOuterSingleSlip ? (
+                    (() => {
+                      const pageCount = Math.ceil(bulkTargetStudents.length / 2);
+                      const frontPages = Array.from({ length: pageCount }, (_, pageIdx) => {
+                        const leftSt = bulkTargetStudents[pageIdx * 2];
+                        const rightSt = bulkTargetStudents[pageIdx * 2 + 1] || null;
                         return renderTwoUpLandscapePage(leftSt, rightSt, `bulk-pair-${pageIdx}`);
-                      })
-                    : classStudents.map(student => renderMarksheetSheet(student))}
+                      });
+                      const backPages = Array.from({ length: pageCount }, (_, pageIdx) =>
+                        renderPaBackPosterPage(`bulk-pa-back-${pageIdx}`)
+                      );
+                      if (printPartMode === "front") return frontPages;
+                      if (printPartMode === "back") return backPages;
+                      return frontPages.flatMap((fp, idx) => [fp, backPages[idx]]);
+                    })()
+                  ) : (
+                    (() => {
+                      const orderedBackStudents = reverseBackOrder
+                        ? [...bulkTargetStudents].reverse()
+                        : bulkTargetStudents;
+                      if (printPartMode === "front") {
+                        return bulkTargetStudents.map(student => renderMarksheetSheet(student));
+                      }
+                      if (printPartMode === "back") {
+                        return orderedBackStudents.map((student, idx) =>
+                          renderHalfYearlyAnnualBackPage(student, `bulk-back-${student.id}-${idx}`)
+                        );
+                      }
+                      return bulkTargetStudents.flatMap((student, idx) => [
+                        renderMarksheetSheet(student),
+                        renderHalfYearlyAnnualBackPage(student, `bulk-both-back-${student.id}-${idx}`),
+                      ]);
+                    })()
+                  )}
                 </div>
               ) : (
-                <div className="min-w-fit print:min-w-0 print:w-full flex justify-center print:block mx-auto print:m-0">
-                  {isOuterSingleSlip
-                    ? (() => {
-                        const curIdx = classStudents.findIndex(s => s.id === currentStudent?.id);
-                        let rightSt: SchoolStudent | null = null;
-                        if (pairRightStudentId === "blank") {
-                          rightSt = null;
-                        } else if (pairRightStudentId === "auto") {
-                          rightSt =
-                            classStudents.length > 1
-                              ? classStudents[(curIdx >= 0 ? curIdx + 1 : 1) % classStudents.length]
-                              : null;
-                        } else {
-                          rightSt = classStudents.find(s => s.id === pairRightStudentId) || null;
-                        }
-                        return renderTwoUpLandscapePage(currentStudent || undefined, rightSt, `single-pair-${currentStudent?.id || "0"}`);
-                      })()
-                    : renderMarksheetSheet(currentStudent || undefined)}
+                <div className="min-w-fit print:min-w-0 print:w-full flex flex-col items-center gap-6 print:gap-0 print:block mx-auto print:m-0">
+                  {isOuterSingleSlip ? (
+                    (() => {
+                      const curIdx = classStudents.findIndex(s => s.id === currentStudent?.id);
+                      let rightSt: SchoolStudent | null = null;
+                      if (pairRightStudentId === "blank") {
+                        rightSt = null;
+                      } else if (pairRightStudentId === "auto") {
+                        rightSt =
+                          classStudents.length > 1
+                            ? classStudents[(curIdx >= 0 ? curIdx + 1 : 1) % classStudents.length]
+                            : null;
+                      } else {
+                        rightSt = classStudents.find(s => s.id === pairRightStudentId) || null;
+                      }
+                      const frontPage = renderTwoUpLandscapePage(currentStudent || undefined, rightSt, `single-pair-${currentStudent?.id || "0"}`);
+                      const backPage = renderPaBackPosterPage(`single-pa-back-${currentStudent?.id || "0"}`);
+                      if (printPartMode === "front") return frontPage;
+                      if (printPartMode === "back") return backPage;
+                      return (
+                        <>
+                          {frontPage}
+                          {backPage}
+                        </>
+                      );
+                    })()
+                  ) : (
+                    <>
+                      {(printPartMode === "front" || printPartMode === "both") &&
+                        renderMarksheetSheet(currentStudent || undefined)}
+                      {(printPartMode === "back" || printPartMode === "both") &&
+                        renderHalfYearlyAnnualBackPage(currentStudent || undefined, `single-back-${currentStudent?.id || "0"}`)}
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -4297,6 +4897,32 @@ export const MarksheetGenerator: React.FC<Props> = ({
           </div>
         </div>
       )}
+      {/* Backside Studio Modal (School Poster + White-BG Body Cutout + Top 10 -> 6 English Thoughts) */}
+      <BacksideStudioModal
+        isOpen={showBacksideStudio}
+        onClose={() => setShowBacksideStudio(false)}
+        school={school}
+        schoolDetails={schoolDetails}
+        onUpdateSchoolDetails={setSchoolDetails}
+        sessionText={formatAcademicSession(sessionName)}
+        currentStudent={currentStudent}
+        studentName={studentName || currentStudent?.name || "Student Candidate"}
+        classNameText={currentClass?.name || "Class"}
+        sectionName={sectionName || currentClass?.section || "A"}
+        rollNo={rollNo || currentStudent?.rollNo || "01"}
+        overallPct={parseFloat(totals.overallPct || "0") || 0}
+        classRankText={classRank || "01"}
+        attendancePct={totalWorkingDays > 0 ? Math.round((studentAttendance / totalWorkingDays) * 100) : 90}
+        hasFail={totals.hasFail}
+        studentPhoto={studentPhoto}
+        allStudents={bulkScope === "all_school" ? bulkTargetStudents : classStudents}
+        posterConfig={posterConfig}
+        onSavePosterConfig={updatePosterConfig}
+        cutoutsMap={cutoutsMap}
+        onUpdateCutoutsMap={updateCutoutsMap}
+        studentThoughtsMap={studentThoughtsMap}
+        onUpdateThoughtsMap={updateStudentThoughtsMap}
+      />
     </div>
   );
 };

@@ -8,7 +8,7 @@ import {
   Users, Crown, UserCheck, ArrowRight, Volume2, LogIn,
   LogOut, Phone
 } from "lucide-react";
-import type { School, SchoolClass, SchoolStudent, SchoolTeacher } from "../../school-types";
+import { hasFaceAttendanceAccess, type School, type SchoolClass, type SchoolStudent, type SchoolTeacher } from "../../school-types";
 import {
   todayStr, getAdminAttendance, saveAdminAttendance,
   markStaffAttendanceAtomic, markStudentQrAttendance, calculateStayDuration
@@ -55,6 +55,7 @@ export const UniversalAttendanceScannerModal: React.FC<Props> = ({
   teachers = [],
   onOpenFaceKiosk,
 }) => {
+  const hasFaceAccess = hasFaceAttendanceAccess(school);
   const [scanMode, setScanMode] = useState<"auto" | "in" | "out">("auto");
   const [cameraFacing, setCameraFacing] = useState<"environment" | "user">("environment");
   const [torchOn, setTorchOn] = useState(false);
@@ -640,15 +641,26 @@ export const UniversalAttendanceScannerModal: React.FC<Props> = ({
 
           {/* Shortcut to AI Face Attendance Kiosk */}
           {onOpenFaceKiosk && (
-            <div className="w-full p-3.5 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 flex items-center justify-between gap-3">
+            <div className={`w-full p-3.5 rounded-2xl border flex items-center justify-between gap-3 ${
+              hasFaceAccess
+                ? "bg-indigo-50 dark:bg-indigo-950/40 border-indigo-200 dark:border-indigo-800"
+                : "bg-amber-50/70 dark:bg-amber-950/30 border-amber-300 dark:border-amber-800/70"
+            }`}>
               <div className="flex items-center gap-2">
-                <span className="text-xl">🤖</span>
+                <span className="text-xl">{hasFaceAccess ? "🤖" : "👑"}</span>
                 <div>
-                  <h5 className="font-bold text-xs text-indigo-950 dark:text-indigo-200">
-                    Face Attendance (चेहरा पहचान हाजिरी)
+                  <h5 className="font-bold text-xs text-indigo-950 dark:text-amber-100 flex items-center gap-1.5 flex-wrap">
+                    <span>Face Attendance (चेहरा पहचान हाजिरी)</span>
+                    {!hasFaceAccess && (
+                      <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-slate-950 text-[9px] font-black">
+                        🔒 Elite Only
+                      </span>
+                    )}
                   </h5>
-                  <p className="text-[10px] text-indigo-700/80 dark:text-indigo-300/80">
-                    AI फेस डिटेक्शन से बिना छुए 0.3 सेकंड में ऑटो हाजिरी
+                  <p className="text-[10px] text-indigo-700/80 dark:text-amber-200/80">
+                    {hasFaceAccess
+                      ? "AI फेस डिटेक्शन से बिना छुए 0.3 सेकंड में ऑटो हाजिरी"
+                      : "Lite Plan mein QR Scan active hai • AI Face Attendance ke liye Elite chunein"}
                   </p>
                 </div>
               </div>
@@ -659,9 +671,13 @@ export const UniversalAttendanceScannerModal: React.FC<Props> = ({
                   stopScanner();
                   onOpenFaceKiosk();
                 }}
-                className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs transition active:scale-95 cursor-pointer shrink-0 shadow-xs"
+                className={`px-3 py-1.5 rounded-xl font-black text-xs transition active:scale-95 cursor-pointer shrink-0 shadow-xs ${
+                  hasFaceAccess
+                    ? "bg-indigo-600 hover:bg-indigo-500 text-white"
+                    : "bg-amber-500 hover:bg-amber-400 text-slate-950"
+                }`}
               >
-                Face Kiosk →
+                {hasFaceAccess ? "Face Kiosk →" : "👑 Elite Plan →"}
               </button>
             </div>
           )}

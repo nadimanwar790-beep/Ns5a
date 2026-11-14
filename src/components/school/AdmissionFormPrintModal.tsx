@@ -100,8 +100,50 @@ const escapeHtml = (val?: string | number | null): string => {
 };
 
 /**
- * Prints an HTML document inside an invisible iframe so printing works
- * reliably inside preview iframes without window.open popups.
+ * Extracts all active stylesheets from the current document as synchronous inline <style> blocks
+ * (falling back to <link> tags only for cross-origin stylesheets), preventing unstyled prints.
+ */
+export function extractDocumentStylesHtml(): string {
+  if (typeof document === "undefined") return "";
+  const chunks: string[] = [];
+
+  try {
+    const sheets = Array.from(document.styleSheets || []);
+    for (const sheet of sheets) {
+      try {
+        const rules = sheet.cssRules || sheet.rules;
+        if (rules && rules.length > 0) {
+          const cssText = Array.from(rules)
+            .map((r) => r.cssText)
+            .join("\n");
+          if (cssText.trim()) {
+            chunks.push(`<style>${cssText}</style>`);
+            continue;
+          }
+        }
+      } catch {
+        // Cross-origin stylesheet — fall back to ownerNode below
+      }
+      const owner = sheet.ownerNode as HTMLElement | null;
+      if (owner?.outerHTML) {
+        chunks.push(owner.outerHTML);
+      }
+    }
+  } catch {
+    // Ignore stylesheet inspection errors
+  }
+
+  if (chunks.length === 0) {
+    return Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
+      .map((node) => node.outerHTML)
+      .join("\n");
+  }
+  return chunks.join("\n");
+}
+
+/**
+ * Prints an HTML document inside an invisible off-screen iframe so printing works
+ * reliably inside preview iframes and Android Print Spooler without window.open popups.
  */
 export function printHtmlInIframe(htmlDocument: string, title = "Print Document"): void {
   if (typeof document === "undefined") return;
@@ -114,11 +156,12 @@ export function printHtmlInIframe(htmlDocument: string, title = "Print Document"
   const iframe = document.createElement("iframe");
   iframe.id = "nst-hidden-print-iframe";
   iframe.title = title;
+  // Give real off-screen desktop/A4 dimensions so responsive Tailwind rules & grids never evaluate at 0px width
   iframe.style.position = "fixed";
-  iframe.style.right = "0";
-  iframe.style.bottom = "0";
-  iframe.style.width = "0";
-  iframe.style.height = "0";
+  iframe.style.left = "-12000px";
+  iframe.style.top = "0";
+  iframe.style.width = "1180px";
+  iframe.style.height = "840px";
   iframe.style.border = "0";
   iframe.style.opacity = "0";
   iframe.style.pointerEvents = "none";
@@ -131,52 +174,73 @@ export function printHtmlInIframe(htmlDocument: string, title = "Print Document"
   doc.write(htmlDocument);
   doc.close();
 
-  const triggerPrint = () => {
+  let printed = false;
+  const cleanup = () => {
     try {
-      iframe.contentWindow?.focus();
-      iframe.contentWindow?.print();
+      if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+    } catch {}
+  };
+
+  const triggerPrint = () => {
+    if (printed) return;
+    printed = true;
+    try {
+      if (iframe.contentWindow) {
+        iframe.contentWindow.onafterprint = () => {
+          setTimeout(cleanup, 500);
+        };
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+      }
     } catch (err) {
       console.warn("Iframe print error:", err);
     } finally {
-      setTimeout(() => {
-        if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
-      }, 4000);
+      setTimeout(cleanup, 60000);
     }
   };
 
-  // Wait briefly for images (logo, student photo, QR, signature) to load
-  const imgs = Array.from(doc.images || []);
-  if (imgs.length === 0) {
-    setTimeout(triggerPrint, 200);
-    return;
-  }
+  // Wait for stylesheets, fonts, and images (logo, student photo, QR, signature) to finish loading
+  const waitForResources = async () => {
+    const links = Array.from(doc.querySelectorAll('link[rel="stylesheet"]')) as HTMLLinkElement[];
+    const imgs = Array.from(doc.images || []);
 
-  let settled = 0;
-  let printed = false;
-  const checkDone = () => {
-    settled++;
-    if (!printed && settled >= imgs.length) {
-      printed = true;
-      setTimeout(triggerPrint, 150);
-    }
+    const linkPromises = links.map(
+      (link) =>
+        new Promise<void>((resolve) => {
+          if (link.sheet) {
+            resolve();
+            return;
+          }
+          link.addEventListener("load", () => resolve(), { once: true });
+          link.addEventListener("error", () => resolve(), { once: true });
+        })
+    );
+
+    const imgPromises = imgs.map(
+      (img) =>
+        new Promise<void>((resolve) => {
+          if (img.complete) {
+            resolve();
+            return;
+          }
+          img.addEventListener("load", () => resolve(), { once: true });
+          img.addEventListener("error", () => resolve(), { once: true });
+        })
+    );
+
+    const fontPromise = (doc as any).fonts?.ready
+      ? Promise.race([(doc as any).fonts.ready, new Promise((r) => setTimeout(r, 800))])
+      : Promise.resolve();
+
+    await Promise.race([
+      Promise.all([...linkPromises, ...imgPromises, fontPromise]),
+      new Promise<void>((resolve) => setTimeout(resolve, 2200)),
+    ]);
+
+    setTimeout(triggerPrint, 180);
   };
 
-  imgs.forEach((img) => {
-    if (img.complete) {
-      checkDone();
-    } else {
-      img.onload = checkDone;
-      img.onerror = checkDone;
-    }
-  });
-
-  // Safety timeout so slow external images never block printing
-  setTimeout(() => {
-    if (!printed) {
-      printed = true;
-      triggerPrint();
-    }
-  }, 1400);
+  void waitForResources();
 }
 
 /**
@@ -188,9 +252,7 @@ export function printElementInIframe(
   extraCss = ""
 ): void {
   if (!element || typeof document === "undefined") return;
-  const styles = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
-    .map((node) => node.outerHTML)
-    .join("\n");
+  const styles = extractDocumentStylesHtml();
 
   const html = `<!DOCTYPE html>
 <html>

@@ -17,11 +17,13 @@ export interface RazorpaySchoolConfig {
 
 export interface RazorpayOrderRecord {
   orderId: string;
-  purpose?: "fee_payment" | "store_order";
+  purpose?: "fee_payment" | "store_order" | "admission_fee";
   schoolId: string;
   schoolName?: string;
   studentId: string;
   studentName: string;
+  applicationId?: string;
+  applicationNo?: string;
   classId?: string;
   className?: string;
   rollNo?: string;
@@ -300,6 +302,8 @@ export async function createSchoolRazorpayOrder(input: {
   schoolName?: string;
   studentId: string;
   studentName: string;
+  applicationId?: string;
+  applicationNo?: string;
   classId?: string;
   className?: string;
   rollNo?: string;
@@ -311,14 +315,18 @@ export async function createSchoolRazorpayOrder(input: {
   amount: number;
   feeId?: string;
   feeItems?: any[];
-  purpose?: "fee_payment" | "store_order";
+  purpose?: "fee_payment" | "store_order" | "admission_fee";
   storeItems?: any[];
   reservationId?: string;
 }) {
   const schoolId = String(input.schoolId || "").trim();
   const studentId = String(input.studentId || "").trim();
-  const purpose: "fee_payment" | "store_order" =
-    input.purpose === "store_order" ? "store_order" : "fee_payment";
+  const purpose: "fee_payment" | "store_order" | "admission_fee" =
+    input.purpose === "store_order"
+      ? "store_order"
+      : input.purpose === "admission_fee"
+      ? "admission_fee"
+      : "fee_payment";
   const month = String(input.month || new Date().toISOString().slice(0, 7)).trim();
   const amount = Math.round(Number(input.amount || 0));
 
@@ -377,6 +385,8 @@ export async function createSchoolRazorpayOrder(input: {
   const receiptTag =
     purpose === "store_order"
       ? `NSTA-STR-${studentId.slice(-5)}-${Date.now().toString(36).slice(-5)}`.slice(0, 40)
+      : purpose === "admission_fee"
+      ? `NSTA-ADM-${(input.applicationNo || studentId).replace(/[^a-zA-Z0-9]/g, "").slice(-6)}-${Date.now().toString(36).slice(-4)}`.slice(0, 40)
       : `NSTA-${studentId.slice(-6)}-${month.replace(/[^0-9]/g, "")}-${Date.now()
           .toString(36)
           .slice(-4)}`.slice(0, 40);
@@ -400,8 +410,15 @@ export async function createSchoolRazorpayOrder(input: {
         studentId,
         studentName: String(input.studentName || "Student").slice(0, 80),
         purpose,
+        applicationId: input.applicationId || "",
+        applicationNo: input.applicationNo || "",
         month,
-        feeId: purpose === "store_order" ? (input.reservationId || receiptTag) : (input.feeId || feeKey),
+        feeId:
+          purpose === "store_order"
+            ? (input.reservationId || receiptTag)
+            : purpose === "admission_fee"
+            ? (input.applicationId || receiptTag)
+            : (input.feeId || feeKey),
         reservationId: input.reservationId || "",
         expectedPaise: String(expectedPaise),
       },
@@ -428,6 +445,8 @@ export async function createSchoolRazorpayOrder(input: {
     schoolName: input.schoolName || "",
     studentId,
     studentName: input.studentName || "Student",
+    applicationId: input.applicationId || undefined,
+    applicationNo: input.applicationNo || undefined,
     classId: input.classId || "",
     className: input.className || "",
     rollNo: input.rollNo || "",
@@ -435,8 +454,19 @@ export async function createSchoolRazorpayOrder(input: {
     phone: input.phone || "",
     sessionId: input.sessionId || "",
     month,
-    monthLabel: input.monthLabel || (purpose === "store_order" ? "School Store Order" : month),
-    feeId: purpose === "store_order" ? (input.reservationId || rzpOrder.id) : (input.feeId || feeKey),
+    monthLabel:
+      input.monthLabel ||
+      (purpose === "store_order"
+        ? "School Store Order"
+        : purpose === "admission_fee"
+        ? "Online Admission Fee"
+        : month),
+    feeId:
+      purpose === "store_order"
+        ? (input.reservationId || rzpOrder.id)
+        : purpose === "admission_fee"
+        ? (input.applicationId || rzpOrder.id)
+        : (input.feeId || feeKey),
     expectedAmount: amount,
     expectedPaise,
     feeItems: Array.isArray(input.feeItems) ? input.feeItems : undefined,
@@ -473,7 +503,7 @@ async function finalizeRazorpayOrderPaid(params: {
     amount: number;
     monthLabel: string;
     receiptNo: string;
-    purpose?: "fee_payment" | "store_order";
+    purpose?: "fee_payment" | "store_order" | "admission_fee";
   }) => Promise<void> | void;
 }): Promise<{ duplicate: boolean; receiptNo: string; fee?: any; sale?: any }> {
   const { order, paymentId, method, verifiedVia, onNotify } = params;
@@ -491,6 +521,12 @@ async function finalizeRazorpayOrderPaid(params: {
         sale: existingSale || undefined,
       };
     }
+    if (order.purpose === "admission_fee") {
+      return {
+        duplicate: true,
+        receiptNo: order.receiptNo || `ADM-ONL-${paymentId.replace(/^pay_/, "").slice(0, 8).toUpperCase()}`,
+      };
+    }
     const existingFee = await rtdbGet<any>(
       `schools/${safeSchool}/fees/${cleanRtdbKey(
         `${order.studentId}_${order.month}`
@@ -504,6 +540,67 @@ async function finalizeRazorpayOrderPaid(params: {
   }
 
   const paidAt = new Date().toISOString();
+
+  // ── BRANCH A0: ONLINE ADMISSION FEE PAYMENT (Auto-Approve Admission) ────
+  if (order.purpose === "admission_fee") {
+    const receiptNo = `ADM-ONL-${paymentId.replace(/^pay_/, "").slice(0, 8).toUpperCase()}`;
+    const admPayKey = cleanRtdbKey(order.applicationId || order.orderId);
+
+    await rtdbPut(`schools/${safeSchool}/admission_payments/${admPayKey}`, {
+      orderId: order.orderId,
+      paymentId,
+      receiptNo,
+      applicationId: order.applicationId || order.studentId,
+      applicationNo: order.applicationNo || order.admissionNo || "",
+      studentName: order.studentName,
+      classId: order.classId || "",
+      className: order.className || "",
+      amount: Number(order.expectedAmount || 0),
+      method: method || "online",
+      verifiedVia,
+      paidAt,
+    });
+
+    await rtdbPatch(`school_payment_orders/${safeOrderKey}`, {
+      status: "PAID",
+      paidAt,
+      paymentId,
+      receiptNo,
+      method: method || "online",
+      verifiedVia,
+    });
+
+    const msgId = `rzp-adm-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    await rtdbPut(`schools/${safeSchool}/nsta_messages/${msgId}`, {
+      id: msgId,
+      schoolId: order.schoolId,
+      threadType: "SCHOOL_DESK",
+      studentId: order.studentId,
+      studentName: order.studentName,
+      senderId: "school_admin",
+      senderName: "School Admissions & Online Fee Desk",
+      senderRole: "ADMIN",
+      text: `🎓 Online Admission Payment Received! ${order.studentName} (${order.className || "Class"}) — App No: ${order.applicationNo || order.studentId} ke ₹${Number(order.expectedAmount || 0).toLocaleString("en-IN")} Razorpay se verify ho gaye hain. Receipt: ${receiptNo}.`,
+      createdAt: paidAt,
+      status: "delivered",
+    });
+
+    if (onNotify) {
+      try {
+        await onNotify({
+          schoolId: order.schoolId,
+          studentId: order.studentId,
+          studentName: order.studentName,
+          amount: order.expectedAmount,
+          monthLabel: order.monthLabel || "Online Admission Fee",
+          receiptNo,
+          purpose: "admission_fee",
+        });
+      } catch {}
+    }
+
+    return { duplicate: false, receiptNo };
+  }
 
   // ── BRANCH A: SCHOOL STORE ORDER (Uniform / Books / Stationery) ────────
   if (order.purpose === "store_order") {

@@ -46,9 +46,17 @@ import {
   FolderOpen,
   Calendar,
   ArrowRight,
+  CreditCard,
+  ScanFace,
+  Link2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
+import {
+  fetchSchoolRazorpayConfig,
+  startOnlineAdmissionRazorpayCheckout,
+  type PublicRazorpayConfig,
+} from "../../utils/razorpayCheckout";
 import type {
   School,
   SchoolClass,
@@ -81,6 +89,7 @@ import {
   updateAdmissionStatus,
   saveStudent,
   updateStudent,
+  updateStudentPhoto,
   saveFee,
   generateId,
   generateNextAdmissionNo,
@@ -509,6 +518,7 @@ interface Props {
   isAdmin?: boolean;
   viewMode?: "all" | "admissions_only" | "fee_setup_only";
   onBack: () => void;
+  onStudentEnrolledAndLink?: (student: SchoolStudent) => void;
 }
 
 interface FeeItemRow {
@@ -525,6 +535,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
   isAdmin = true,
   viewMode = "all",
   onBack,
+  onStudentEnrolledAndLink,
 }) => {
   // Live classes list: strictly shows only classes created for this school, sorted Nursery to 12!
   const [classesList, setClassesList] = useState<SchoolClass[]>(() => {
@@ -683,9 +694,21 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
   const [enrollBusFee, setEnrollBusFee] = useState(0);
   const [enrollSubmittedDocs, setEnrollSubmittedDocs] = useState<string[]>([]);
 
-  // Live Camera Studio Modal for Admission Photo Capture (Optional)
+  // Live Camera Studio Modal for Admission Photo Capture
   const [showLiveCameraModal, setShowLiveCameraModal] = useState(false);
-  const [cameraTarget, setCameraTarget] = useState<"form" | "enroll">("form");
+  const [cameraTarget, setCameraTarget] = useState<"form" | "enroll" | "post_pay_photo">("form");
+
+  // Direct Razorpay Admission Payment + Mandatory Face ID Photo + User Account Link States
+  const [razorpayCfg, setRazorpayCfg] = useState<PublicRazorpayConfig | null>(null);
+  const [payingAdmissionAppId, setPayingAdmissionAppId] = useState<string | null>(null);
+  const [admissionPayError, setAdmissionPayError] = useState<string | null>(null);
+  const [postPayPhotoSaving, setPostPayPhotoSaving] = useState<boolean>(false);
+  const [accountLinkedDone, setAccountLinkedDone] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!school?.id) return;
+    fetchSchoolRazorpayConfig(school.id).then((cfg) => setRazorpayCfg(cfg)).catch(() => {});
+  }, [school?.id]);
 
   // Auto-Operator Identification (1–3s scan without open camera viewfinder)
   const [operatorCheckState, setOperatorCheckState] = useState<"VERIFYING" | "VERIFIED">("VERIFYING");
@@ -2138,6 +2161,405 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
       setScreenshotError("स्क्रीनशॉट सबमिट करने में त्रुटि: " + (err?.message || "पुनः प्रयास करें"));
     } finally {
       setSubmittingScreenshot(false);
+    }
+  };
+
+  // Auto-Accept & Auto-Enroll Admission Application immediately after Razorpay Payment succeeds
+  const autoEnrollPaidAdmission = async (
+    app: AdmissionApplication,
+    paymentMeta: {
+      receiptNo: string;
+      paymentId: string;
+      orderId: string;
+      totalPayable: number;
+    }
+  ) => {
+    const targetCls = classes.find((c) => c.id === app.classId);
+    const localStudents = getLocalStudents(school.id);
+    const clsStudents = localStudents.filter((s) =>
+      isStudentInClass(s, targetCls?.id || app.classId, targetCls?.name || app.className)
+    );
+    const maxRoll = clsStudents.reduce((m, s) => {
+      const n = parseInt(String(s.rollNo || "").replace(/\D/g, ""), 10);
+      return !isNaN(n) && n > m ? n : m;
+    }, 0);
+    const nextRollNo = String(maxRoll + 1);
+    const studentId = app.enrolledStudentId || generateId();
+    const paidIso = new Date().toISOString();
+
+    const usesBus = Boolean(app.usesBus && getClassFees(targetCls).busAvailable);
+    const busFeeAmt = usesBus ? Number(app.busFee ?? getClassFees(targetCls, { usesBus: true }).busFee ?? 0) : 0;
+    const rawFeeItems = buildDefaultFeeItems(targetCls, usesBus, busFeeAmt);
+    const finalItems = rawFeeItems.map((it, idx) => ({
+      id: it.id,
+      slNo: idx + 1,
+      description: it.description.trim(),
+      due: Number(it.due) || 0,
+      con: 0,
+      paid: Number(it.due) || 0,
+    }));
+
+    const netPayable = Math.max(
+      Number(paymentMeta.totalPayable || 0),
+      finalItems.reduce((sum, it) => sum + Number(it.due || 0), 0)
+    );
+    const monthlyTuition = Number(targetCls?.feeStructure?.tuitionFee ?? targetCls?.defaultFee ?? 0);
+
+    const newStudent: SchoolStudent = {
+      id: studentId,
+      schoolId: school.id,
+      sessionId: activeSession?.id || sessions[0]?.id || "2026-27",
+      classId: app.classId,
+      className: targetCls ? `${targetCls.name} ${targetCls.section || ""}`.trim() : app.className || "Class",
+      stream: app.stream,
+      name: app.studentName,
+      rollNo: nextRollNo,
+      admissionNo: app.applicationNo,
+      gender: app.gender,
+      category: app.category || "General",
+      religion: app.religion || "Hindu",
+      nationality: app.nationality || "Indian",
+      annualIncome: app.annualIncome,
+      emergencyContact: app.emergencyContact,
+      emergencyPhone: app.emergencyPhone,
+      emergencyRelation: app.emergencyRelation,
+      emergencyWhatsapp: app.emergencyWhatsapp,
+      identificationMark: app.identificationMark,
+      medicalHistory: app.medicalHistory,
+      admissionType: app.admissionType || "NEW",
+      apaarId: app.apaarId,
+      fatherName: app.fatherName,
+      fatherOccupation: app.fatherOccupation,
+      fatherPhone: app.fatherPhone,
+      fatherWhatsapp: app.fatherWhatsapp,
+      motherName: app.motherName,
+      motherOccupation: app.motherOccupation,
+      motherPhone: app.motherPhone,
+      motherWhatsapp: app.motherWhatsapp,
+      fatherQualification: app.fatherQualification,
+      motherQualification: app.motherQualification,
+      aadhaarNo: app.aadhaarNo,
+      fatherAadhaar: app.fatherAadhaar,
+      motherAadhaar: app.motherAadhaar,
+      phone: app.phone,
+      whatsappNo: app.whatsappNo || app.fatherWhatsapp || app.phone,
+      email: app.email,
+      dateOfBirth: app.dateOfBirth,
+      bloodGroup: app.bloodGroup,
+      address: app.address,
+      city: app.city,
+      pincode: app.pincode,
+      previousSchool: app.previousSchool,
+      previousMarks: app.previousMarks,
+      photoUrl: app.photoUrl || undefined,
+      usesBus,
+      busRoute: usesBus ? app.busRoute : undefined,
+      busFee: busFeeAmt,
+      submittedDocs: app.submittedDocs,
+      admissionReceiptNo: paymentMeta.receiptNo,
+      admissionTotalAmount: netPayable,
+      admissionPaidAmount: netPayable,
+      admissionDueBalance: 0,
+      advanceMonthlyFeePaid: false,
+      advanceMonthlyFeeDue: monthlyTuition,
+      advanceMonthlyFeeMonth: paidIso.slice(0, 7),
+      monthlyFee: monthlyTuition,
+      baseMonthlyFee: monthlyTuition,
+      joinDate: paidIso.slice(0, 10),
+      active: true,
+      createdAt: paidIso,
+    };
+
+    const savedStudent = await saveStudent(newStudent);
+
+    try {
+      const curLocals = getLocalStudents(school.id);
+      setLocalStudents(school.id, [savedStudent, ...curLocals.filter((s) => s.id !== savedStudent.id)]);
+
+      const safeSlug = (school.code || school.id || "school").toLowerCase().replace(/[^a-z0-9]/g, "") || "school";
+      const studentEmail =
+        app.email ||
+        `${savedStudent.admissionNo.toLowerCase().replace(/[^a-z0-9]/g, "")}@${safeSlug}.edu.in`;
+
+      await saveSchoolUserProfile({
+        uid: savedStudent.id,
+        schoolId: school.id,
+        role: "SCHOOL_STUDENT",
+        name: savedStudent.name,
+        email: studentEmail,
+        studentRef: savedStudent.id,
+        classId: app.classId,
+        sessionId: activeSession?.id || "2026-27",
+      }).catch(() => {});
+
+      saveUserToLive(
+        {
+          id: savedStudent.id,
+          uid: savedStudent.id,
+          displayId: `ROLL-${savedStudent.rollNo}`,
+          name: savedStudent.name,
+          email: studentEmail,
+          mobile: savedStudent.phone,
+          role: "STUDENT",
+          schoolId: school.id,
+          classLevel: app.classId,
+          stream: app.stream || "General",
+          credits: 100,
+          diamonds: 50,
+          streak: 1,
+          totalScore: 0,
+          profileCompleted: true,
+          subscriptionTier: "PRO",
+          provider: "qr_student_id",
+          isQrLogin: true,
+          admissionNo: savedStudent.admissionNo,
+          rollNo: savedStudent.rollNo,
+          fatherName: savedStudent.fatherName,
+          motherName: savedStudent.motherName,
+          bloodGroup: savedStudent.bloodGroup,
+          monthlyFee: savedStudent.monthlyFee,
+        },
+        { immediate: true }
+      ).catch(() => {});
+
+      if (savedStudent.photoUrl) {
+        enrollStudentFromPhotoUrl({
+          id: savedStudent.id,
+          schoolId: school.id,
+          name: savedStudent.name,
+          rollNo: String(savedStudent.rollNo || ""),
+          classId: savedStudent.classId,
+          className: savedStudent.className,
+          photoUrl: savedStudent.photoUrl,
+        }).catch(() => {});
+      }
+    } catch {}
+
+    const admissionFeeRecord: MonthlyFee = {
+      schoolId: school.id,
+      sessionId: activeSession?.id || "2026-27",
+      studentId: savedStudent.id,
+      studentName: savedStudent.name,
+      rollNo: savedStudent.rollNo,
+      classId: app.classId,
+      className: savedStudent.className,
+      month: paidIso.slice(0, 7),
+      amount: netPayable,
+      monthlyAmount: monthlyTuition,
+      paid: true,
+      paidDate: paidIso,
+      receiptNo: paymentMeta.receiptNo,
+      paidAmount: netPayable,
+      balanceDue: 0,
+      concession: 0,
+      feeType: "admission",
+      receiptCategory: "admission",
+      includeBusFee: usesBus,
+      busFeeAmount: busFeeAmt,
+      busRoute: usesBus ? app.busRoute : undefined,
+      payModeInfo: {
+        payMode: "Razorpay Online",
+        date: new Date().toLocaleDateString("en-GB"),
+        bank: "Razorpay",
+        number: paymentMeta.paymentId,
+      },
+      items: finalItems,
+    };
+
+    await saveFee(admissionFeeRecord);
+
+    const savedFeeDetails: AdmissionApplication["admissionFeeDetails"] = {
+      admissionFee: finalItems[0]?.due || 0,
+      registrationFee: finalItems[1]?.due || 0,
+      developmentFee: finalItems[2]?.due || 0,
+      idKitFee: finalItems[3]?.due || 0,
+      examFund: finalItems[4]?.due || 0,
+      concession: 0,
+      totalPayable: netPayable,
+      paidAmount: netPayable,
+      balanceDue: 0,
+      paymentMode: "Razorpay Online",
+      receiptNo: paymentMeta.receiptNo,
+      paidDate: paidIso,
+      items: finalItems,
+    };
+
+    await updateAdmissionStatus(school.id, app.id, "approved", {
+      enrolledStudentId: savedStudent.id,
+      assignedRollNo: savedStudent.rollNo,
+      classId: app.classId,
+      className: savedStudent.className,
+      photoUrl: savedStudent.photoUrl,
+      transactionRef: paymentMeta.paymentId,
+      paymentMode: "Razorpay Online",
+      razorpayOrderId: paymentMeta.orderId,
+      razorpayPaymentId: paymentMeta.paymentId,
+      admissionFeeDetails: savedFeeDetails,
+      remarks: `Auto-Approved via Razorpay Online Payment (Roll #${savedStudent.rollNo}). Receipt #${paymentMeta.receiptNo}`,
+    });
+
+    try {
+      await sendSchoolPushNotification({
+        schoolId: school.id,
+        title: `✅ Auto-Approved Online Admission: ${savedStudent.name}`,
+        body: `${savedStudent.name} (${savedStudent.className}) ne ₹${netPayable} Razorpay se pay kiya. Roll #${savedStudent.rollNo} auto-assign ho gaya (Receipt: ${paymentMeta.receiptNo}).`,
+        urgent: true,
+        type: "FEE_RECEIPT",
+      });
+    } catch {}
+
+    const approvedApp: AdmissionApplication = {
+      ...app,
+      status: "approved",
+      enrolledStudentId: savedStudent.id,
+      assignedRollNo: savedStudent.rollNo,
+      transactionRef: paymentMeta.paymentId,
+      razorpayOrderId: paymentMeta.orderId,
+      razorpayPaymentId: paymentMeta.paymentId,
+      admissionFeeDetails: savedFeeDetails,
+    };
+
+    setSubmittedApp(approvedApp);
+    setConfirmedAdmission({
+      student: savedStudent,
+      assignedRollNo: savedStudent.rollNo,
+      existingCount: clsStudents.length,
+      admissionCharge: finalItems[0]?.due || 0,
+      annualCharge: (finalItems[1]?.due || 0) + (finalItems[2]?.due || 0),
+      totalPayable: netPayable,
+      receiptNo: paymentMeta.receiptNo,
+      feeRecord: admissionFeeRecord,
+    });
+    setAccountLinkedDone(false);
+    setPaymentSubmittedNotice(false);
+    setAdmissionPayError(null);
+    toast.success(`🎉 Payment verified! Roll #${savedStudent.rollNo} auto-assigned.`);
+    fetchApplications();
+  };
+
+  const handleOnlineAdmissionRazorpayPay = async (app: AdmissionApplication) => {
+    setAdmissionPayError(null);
+    setPayingAdmissionAppId(app.id);
+
+    try {
+      let cfg = razorpayCfg;
+      if (!cfg) {
+        cfg = await fetchSchoolRazorpayConfig(school.id);
+        setRazorpayCfg(cfg);
+      }
+      if (!cfg?.enabled) {
+        setPayingAdmissionAppId(null);
+        setAdmissionPayError(
+          "Is school ka Razorpay online gateway abhi active nahi hai — कृपया WhatsApp/QR विकल्प का उपयोग करें।"
+        );
+        return;
+      }
+
+      const targetCls = classes.find((c) => c.id === app.classId);
+      const fees = getClassFees(targetCls, { usesBus: app.usesBus });
+      const totalPayable = Number(fees.totalPayable || 0);
+
+      if (totalPayable <= 0) {
+        await autoEnrollPaidAdmission(app, {
+          receiptNo: `ADM-FREE-${Date.now().toString(36).toUpperCase().slice(-5)}`,
+          paymentId: "ZERO_FEE_ONLINE",
+          orderId: "ZERO_FEE_ORDER",
+          totalPayable: 0,
+        });
+        setPayingAdmissionAppId(null);
+        return;
+      }
+
+      await startOnlineAdmissionRazorpayCheckout({
+        schoolId: school.id,
+        schoolName: school.name || "School Admission",
+        application: {
+          id: app.id,
+          applicationNo: app.applicationNo,
+          studentName: app.studentName,
+          classId: app.classId,
+          className: app.className,
+          phone: app.phone,
+          email: app.email,
+          sessionId: activeSession?.id || "2026-27",
+        },
+        payableAmount: totalPayable,
+        feeItems: fees.enabledHeads.map((h, i) => ({
+          id: h.key,
+          slNo: i + 1,
+          description: h.label,
+          due: h.amount,
+        })),
+        onSuccess: async (res) => {
+          try {
+            await autoEnrollPaidAdmission(app, {
+              receiptNo: res.receiptNo,
+              paymentId: res.paymentId,
+              orderId: res.orderId,
+              totalPayable,
+            });
+          } catch (err: any) {
+            setAdmissionPayError(
+              "Payment successful (" + res.paymentId + "), par auto-enrollment me error aaya: " + (err?.message || "Please retry")
+            );
+          } finally {
+            setPayingAdmissionAppId(null);
+          }
+        },
+        onError: (msg) => {
+          setAdmissionPayError(msg);
+          setPayingAdmissionAppId(null);
+        },
+        onDismiss: () => {
+          setPayingAdmissionAppId(null);
+        },
+      });
+    } catch (err: any) {
+      setAdmissionPayError(err?.message || "Payment start karne me error aaya");
+      setPayingAdmissionAppId(null);
+    }
+  };
+
+  const handlePostPayFaceIdPhotoSave = async (photoDataUrl: string, shouldLinkImmediately = true) => {
+    if (!confirmedAdmission?.student || !photoDataUrl) return;
+    setPostPayPhotoSaving(true);
+    try {
+      const targetStudent = confirmedAdmission.student;
+      const cloudUrl = await updateStudentPhoto(school.id, targetStudent.id, photoDataUrl);
+      const updatedStudent: SchoolStudent = { ...targetStudent, photoUrl: cloudUrl };
+
+      if (submittedApp?.id) {
+        await updateAdmissionStatus(school.id, submittedApp.id, "approved", {
+          photoUrl: cloudUrl,
+        }).catch(() => {});
+        setSubmittedApp((prev) => (prev ? { ...prev, photoUrl: cloudUrl } : prev));
+      }
+
+      setConfirmedAdmission((prev) =>
+        prev ? { ...prev, student: updatedStudent } : prev
+      );
+
+      // Register student face descriptor in Face Recognition Engine for Face ID Attendance
+      await enrollStudentFromPhotoUrl({
+        id: updatedStudent.id,
+        schoolId: school.id,
+        name: updatedStudent.name,
+        rollNo: String(updatedStudent.rollNo || ""),
+        classId: updatedStudent.classId,
+        className: updatedStudent.className,
+        photoUrl: cloudUrl,
+      }).catch(() => {});
+
+      toast.success("✅ Student Photo saved & Face ID Attendance enrolled!");
+
+      if (shouldLinkImmediately && onStudentEnrolledAndLink) {
+        setAccountLinkedDone(true);
+        onStudentEnrolledAndLink(updatedStudent);
+      }
+    } catch (err: any) {
+      toast.error("Photo save karne me error: " + (err?.message || "Retry"));
+    } finally {
+      setPostPayPhotoSaving(false);
     }
   };
 
@@ -3816,6 +4238,13 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                   </div>
                 </div>
 
+                {admissionPayError && (
+                  <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs font-bold flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                    <span>{admissionPayError}</span>
+                  </div>
+                )}
+
                 {/* Applications List */}
                 <div className="space-y-4">
                   {parentApplications.map((app) => (
@@ -3949,6 +4378,63 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
 
                       {/* Action buttons */}
                       <div className="flex flex-wrap items-center gap-2 pt-1">
+                        {app.status === "pending" && (
+                          <button
+                            type="button"
+                            disabled={payingAdmissionAppId === app.id}
+                            onClick={() => handleOnlineAdmissionRazorpayPay(app)}
+                            className="px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 disabled:opacity-60 text-white text-xs font-black flex items-center gap-1.5 shadow-md shadow-indigo-600/25 cursor-pointer"
+                          >
+                            <CreditCard className="w-3.5 h-3.5" />
+                            <span>
+                              {payingAdmissionAppId === app.id
+                                ? "Opening Razorpay..."
+                                : `💳 Pay ₹${getClassFees(classes.find((c) => c.id === app.classId), { usesBus: app.usesBus }).totalPayable} Online (Instant Admission)`}
+                            </span>
+                          </button>
+                        )}
+
+                        {app.status === "approved" && onStudentEnrolledAndLink && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const { student, fee } = resolveApplicationStudentAndFee(app);
+                              if (!student.photoUrl) {
+                                const targetCls = classes.find((c) => c.id === app.classId);
+                                const fees = getClassFees(targetCls, { usesBus: app.usesBus });
+                                setSubmittedApp(app);
+                                setConfirmedAdmission({
+                                  student,
+                                  assignedRollNo: app.assignedRollNo || student.rollNo || "1",
+                                  existingCount: 0,
+                                  totalPayable: fees.totalPayable,
+                                  admissionCharge: fees.admissionFee,
+                                  annualCharge: fees.annualCharges,
+                                  receiptNo: app.admissionFeeDetails?.receiptNo || fee?.receiptNo || "APPROVED",
+                                  feeRecord: fee,
+                                });
+                              } else {
+                                enrollStudentFromPhotoUrl({
+                                  id: student.id,
+                                  schoolId: school.id,
+                                  name: student.name,
+                                  rollNo: String(student.rollNo || ""),
+                                  classId: student.classId,
+                                  className: student.className,
+                                  photoUrl: student.photoUrl,
+                                }).catch(() => {});
+                                onStudentEnrolledAndLink(student);
+                              }
+                            }}
+                            className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-black flex items-center gap-1.5 shadow-md cursor-pointer"
+                          >
+                            <Link2 className="w-3.5 h-3.5" />
+                            <span>
+                              {app.photoUrl ? "🔗 My Account se Link karein" : "📸 Face ID Photo Add & Link"}
+                            </span>
+                          </button>
+                        )}
+
                         <button
                           type="button"
                           onClick={() =>
@@ -4193,6 +4679,100 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                         </div>
                       </div>
 
+                      {/* Step 3: Mandatory Student Photo for Face ID Attendance & Instant Account Link */}
+                      {!isAdmin && (
+                        <div className="p-5 rounded-3xl bg-gradient-to-br from-indigo-50 via-blue-50 to-emerald-50 dark:from-indigo-950/50 dark:via-slate-900 dark:to-emerald-950/30 border-2 border-indigo-400 dark:border-indigo-700 space-y-4 shadow-lg">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow">
+                                <ScanFace className="w-5 h-5" />
+                              </div>
+                              <div>
+                                <span className="px-2 py-0.5 rounded-full bg-indigo-600 text-white text-[10px] font-black uppercase tracking-wider">
+                                  अंतिम चरण • Mandatory for Face ID Attendance
+                                </span>
+                                <h3 className="text-sm sm:text-base font-black text-slate-900 dark:text-white mt-0.5">
+                                  Student Photo Add karein (Face ID Attendance + Account Link)
+                                </h3>
+                              </div>
+                            </div>
+                            {confirmedAdmission.student.photoUrl ? (
+                              <span className="px-3 py-1 rounded-full bg-emerald-600 text-white text-[11px] font-black flex items-center gap-1">
+                                <CheckCircle2 className="w-3.5 h-3.5" /> Photo Ready
+                              </span>
+                            ) : (
+                              <span className="px-3 py-1 rounded-full bg-amber-500 text-slate-950 text-[11px] font-black">
+                                Photo Required
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex flex-col sm:flex-row items-center gap-4 bg-white dark:bg-slate-800 p-4 rounded-2xl border border-indigo-200 dark:border-slate-700">
+                            <div className="w-24 h-28 rounded-2xl border-2 border-indigo-500 bg-slate-100 dark:bg-slate-900 overflow-hidden flex items-center justify-center shrink-0 shadow-sm">
+                              {confirmedAdmission.student.photoUrl ? (
+                                <img
+                                  src={confirmedAdmission.student.photoUrl}
+                                  alt={confirmedAdmission.student.name}
+                                  className="w-full h-full object-cover object-top"
+                                />
+                              ) : (
+                                <div className="text-center p-2 text-slate-400">
+                                  <Camera className="w-7 h-7 mx-auto mb-1 text-indigo-400" />
+                                  <span className="text-[10px] font-bold block">No Photo</span>
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="flex-1 space-y-2.5 text-center sm:text-left">
+                              <p className="text-xs font-bold text-slate-700 dark:text-slate-200 leading-relaxed">
+                                पेमेंट पूरा हो चुका है और आपका दाखिला पक्का हो गया है! अब <strong>Face ID Attendance</strong> चालू करने और <strong>Student Account को आपकी User ID से जोड़ने</strong> के लिए छात्र की स्पष्ट फोटो अपलोड करें या कैमरा से लें।
+                              </p>
+                              <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
+                                <button
+                                  type="button"
+                                  disabled={postPayPhotoSaving}
+                                  onClick={() => {
+                                    setCameraTarget("post_pay_photo");
+                                    setShowLiveCameraModal(true);
+                                  }}
+                                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white text-xs font-black flex items-center gap-1.5 shadow cursor-pointer disabled:opacity-50"
+                                >
+                                  <Camera className="w-4 h-4" />
+                                  <span>{confirmedAdmission.student.photoUrl ? "Retake Live Photo" : "📸 Camera se Photo lein"}</span>
+                                </button>
+
+                                <DirectUploadButton
+                                  kind="image"
+                                  compact
+                                  currentUrl={confirmedAdmission.student.photoUrl || ""}
+                                  onUploaded={(url) => {
+                                    void handlePostPayFaceIdPhotoSave(url, true);
+                                  }}
+                                />
+
+                                {confirmedAdmission.student.photoUrl && onStudentEnrolledAndLink && (
+                                  <button
+                                    type="button"
+                                    disabled={postPayPhotoSaving}
+                                    onClick={() => void handlePostPayFaceIdPhotoSave(confirmedAdmission.student.photoUrl!, true)}
+                                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-black flex items-center gap-1.5 shadow-md cursor-pointer disabled:opacity-50"
+                                  >
+                                    <Link2 className="w-4 h-4" />
+                                    <span>
+                                      {postPayPhotoSaving
+                                        ? "Saving & Linking..."
+                                        : accountLinkedDone
+                                        ? "✅ Linked! Open Student Portal"
+                                        : "✅ Save Face ID & Link Student Account"}
+                                    </span>
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
                       {/* Payment Screenshot Preview if submitted */}
                       {paymentScreenshot && (
                         <div className="p-3 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3">
@@ -4357,7 +4937,48 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                       </div>
                     </div>
 
-                    {/* Step 2: Pay via Direct WhatsApp to School */}
+                    {/* Step 1.5: Direct Instant Razorpay Online Payment -> Auto-Accept Admission */}
+                    {!isAdmin && (
+                      <div className="bg-gradient-to-br from-indigo-600 via-blue-700 to-violet-700 text-white rounded-3xl p-6 text-center space-y-3.5 shadow-xl shadow-indigo-600/20">
+                        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/15 border border-white/25 text-[11px] font-black uppercase tracking-wider text-amber-300">
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span>Instant Online Admission • Razorpay Checkout</span>
+                        </div>
+                        <h3 className="text-lg sm:text-xl font-black">
+                          अभी ऑनलाइन पेमेंट करें और तुरंत एडमिशन पक्का पाएं!
+                        </h3>
+                        <p className="text-xs text-indigo-100 max-w-lg mx-auto leading-relaxed">
+                          Razorpay से ₹{totalPayable} का भुगतान सफल होते ही आपका फॉर्म <strong>Auto-Approve</strong> हो जाएगा, रोल नंबर तुरंत मिल जाएगा और Face ID फोटो जोड़ते ही छात्र अकाउंट आपकी ID से लिंक हो जाएगा।
+                        </p>
+
+                        {admissionPayError && (
+                          <div className="p-2.5 rounded-xl bg-rose-950/70 border border-rose-400/50 text-rose-100 text-xs font-bold max-w-md mx-auto">
+                            {admissionPayError}
+                          </div>
+                        )}
+
+                        <div className="max-w-md mx-auto pt-1">
+                          <button
+                            type="button"
+                            disabled={payingAdmissionAppId === submittedApp.id}
+                            onClick={() => handleOnlineAdmissionRazorpayPay(submittedApp)}
+                            className="w-full py-4 px-5 rounded-2xl bg-gradient-to-r from-amber-400 to-yellow-400 hover:from-amber-300 hover:to-yellow-300 disabled:opacity-60 text-slate-950 font-black text-sm sm:text-base flex items-center justify-center gap-2.5 shadow-lg active:scale-95 transition cursor-pointer"
+                          >
+                            <CreditCard className="w-5 h-5" />
+                            <span>
+                              {payingAdmissionAppId === submittedApp.id
+                                ? "Opening Razorpay Checkout..."
+                                : `💳 Pay ₹${totalPayable} Online Now (Razorpay)`}
+                            </span>
+                          </button>
+                          <p className="text-[10.5px] text-indigo-100/90 font-semibold mt-2">
+                            UPI (GPay / PhonePe / Paytm), Cards &amp; NetBanking Supported • 100% Verified Auto-Receipt
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Step 2: Pay via Direct WhatsApp to School (Secondary Fallback) */}
                     <div className="bg-gradient-to-br from-emerald-50 via-teal-50 to-green-50 dark:from-emerald-950/40 dark:via-teal-950/30 dark:to-slate-900 rounded-3xl p-6 border-2 border-emerald-400 dark:border-emerald-700 text-center space-y-4 shadow-lg shadow-emerald-500/10">
                       <div className="w-14 h-14 rounded-2xl bg-[#25D366] text-white flex items-center justify-center mx-auto shadow-md">
                         <MessageCircle className="w-8 h-8" />
@@ -7463,16 +8084,30 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
           </div>
         </div>
       )}
-      {/* Live Camera Studio Modal for Admission Photo (Optional) */}
+      {/* Live Camera Studio Modal for Admission Photo */}
       {showLiveCameraModal && (
         <ProfileCameraModal
           isOpen={showLiveCameraModal}
           onClose={() => setShowLiveCameraModal(false)}
-          userName={cameraTarget === "form" ? (form.studentName || "Applicant") : (enrollingApp?.studentName || "Student")}
-          currentPhotoURL={cameraTarget === "form" ? form.photoUrl : enrollPhotoUrl}
+          userName={
+            cameraTarget === "form"
+              ? (form.studentName || "Applicant")
+              : cameraTarget === "post_pay_photo"
+              ? (confirmedAdmission?.student?.name || submittedApp?.studentName || "Student")
+              : (enrollingApp?.studentName || "Student")
+          }
+          currentPhotoURL={
+            cameraTarget === "form"
+              ? form.photoUrl
+              : cameraTarget === "post_pay_photo"
+              ? (confirmedAdmission?.student?.photoUrl || "")
+              : enrollPhotoUrl
+          }
           onSavePhoto={(photoDataUrl) => {
             if (cameraTarget === "form") {
               setForm((p) => ({ ...p, photoUrl: photoDataUrl }));
+            } else if (cameraTarget === "post_pay_photo") {
+              void handlePostPayFaceIdPhotoSave(photoDataUrl, true);
             } else {
               setEnrollPhotoUrl(photoDataUrl);
             }
@@ -7481,7 +8116,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
           onRemovePhoto={() => {
             if (cameraTarget === "form") {
               setForm((p) => ({ ...p, photoUrl: "" }));
-            } else {
+            } else if (cameraTarget === "enroll") {
               setEnrollPhotoUrl("");
             }
             setShowLiveCameraModal(false);

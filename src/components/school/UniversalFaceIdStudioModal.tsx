@@ -24,7 +24,11 @@ import {
   Lightbulb,
   ScanFace,
   ImagePlus,
-  Loader2
+  Loader2,
+  Crown,
+  Lock,
+  QrCode,
+  ArrowRight as ArrowRightIcon
 } from "lucide-react";
 import {
   saveFaceDescriptor,
@@ -65,6 +69,9 @@ interface Props {
   initialTargetPerson?: any;
   initialTargetType?: "STUDENT" | "TEACHER";
   onEnrollmentUpdated?: () => void;
+  hasFaceAccess?: boolean;
+  onUpgradeToElite?: () => void;
+  onOpenQrScanner?: () => void;
 }
 
 const EMPTY_LIST: any[] = [];
@@ -79,7 +86,10 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
   initialTab,
   initialTargetPerson,
   initialTargetType,
-  onEnrollmentUpdated
+  onEnrollmentUpdated,
+  hasFaceAccess = true,
+  onUpgradeToElite,
+  onOpenQrScanner,
 }) => {
   // Navigation tabs: "STUDENTS" | "TEACHERS" | "TEST"
   const [activeTab, setActiveTab] = useState<"STUDENTS" | "TEACHERS" | "TEST">(initialTab || "STUDENTS");
@@ -359,7 +369,7 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
   };
 
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && hasFaceAccess) {
       loadDescriptors();
     } else {
       hasLoadedDescriptorsRef.current = false;
@@ -382,7 +392,7 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
         testStreamRef.current = null;
       }
     };
-  }, [isOpen, loadDescriptors]);
+  }, [isOpen, hasFaceAccess, loadDescriptors]);
 
   // Start Camera for Enrollment
   const startEnrollmentCamera = async (overrideMode?: "user" | "environment") => {
@@ -445,7 +455,7 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
   };
 
   useEffect(() => {
-    if (targetPerson) {
+    if (targetPerson && isOpen && hasFaceAccess) {
       startEnrollmentCamera();
     } else {
       stopEnrollmentCamera();
@@ -453,7 +463,7 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
       setCaptureSuccess(false);
     }
     return () => stopEnrollmentCamera();
-  }, [targetPerson]);
+  }, [targetPerson, isOpen, hasFaceAccess]);
 
   // Start Camera for Test Mode
   const startTestCamera = async (overrideMode?: "user" | "environment") => {
@@ -501,18 +511,18 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
   };
 
   useEffect(() => {
-    if (activeTab === "TEST" && isOpen) {
+    if (activeTab === "TEST" && isOpen && hasFaceAccess) {
       startTestCamera();
     } else {
       stopTestCamera();
       setTestMatchedPerson(null);
     }
     return () => stopTestCamera();
-  }, [activeTab, isOpen]);
+  }, [activeTab, isOpen, hasFaceAccess]);
 
   // Test Mode Detection Loop
   useEffect(() => {
-    if (activeTab !== "TEST" || !isOpen) return;
+    if (activeTab !== "TEST" || !isOpen || !hasFaceAccess) return;
 
     let animId: number;
     let lastScanTime = 0;
@@ -1085,6 +1095,91 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
   };
 
   if (!isOpen) return null;
+
+  if (!hasFaceAccess) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
+        <div className="bg-slate-900 border-2 border-amber-500/50 w-full max-w-md rounded-3xl shadow-2xl overflow-hidden text-slate-100">
+          <div className="p-4 sm:p-5 bg-gradient-to-r from-amber-600 via-amber-500 to-orange-500 text-slate-950 flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="w-10 h-10 rounded-xl bg-slate-950/15 flex items-center justify-center shrink-0">
+                <Crown className="w-5 h-5" />
+              </div>
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-wider bg-slate-950/15 px-2 py-0.5 rounded-full">
+                  Elite Subscription Only
+                </span>
+                <h3 className="text-sm sm:text-base font-black leading-tight mt-0.5">
+                  📷 Live Face ID Studio Lock Hai
+                </h3>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 rounded-xl bg-slate-950/15 hover:bg-slate-950/25 text-slate-950 transition cursor-pointer"
+              title="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="p-5 space-y-4">
+            <div className="flex items-start gap-3 p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30">
+              <Lock className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+              <div className="text-xs leading-relaxed text-slate-200">
+                <p className="font-black text-amber-300 mb-1">
+                  AI Face Attendance &amp; Face ID Studio sirf 👑 Elite Plan mein milta hai!
+                </p>
+                <p className="text-slate-300">
+                  Aapke <strong>⚡ Lite Plan</strong> mein <strong>📷 QR Code Scan Attendance</strong> uplabdh hai. Face ID registration aur 0.2s Face Kiosk ke liye Elite Plan upgrade karein.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-2 pt-1">
+              {onUpgradeToElite && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onUpgradeToElite();
+                  }}
+                  className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-amber-500/25 transition active:scale-95 cursor-pointer"
+                >
+                  <Crown className="w-4 h-4" />
+                  <span>👑 Elite Plan Store Dekhein &amp; Upgrade Karein</span>
+                  <ArrowRightIcon className="w-4 h-4" />
+                </button>
+              )}
+
+              {onOpenQrScanner && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenQrScanner();
+                  }}
+                  className="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs flex items-center justify-center gap-2 transition active:scale-95 cursor-pointer"
+                >
+                  <QrCode className="w-4 h-4" />
+                  <span>📷 QR Code Scan Attendance Chalayein (Lite ✓)</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={onClose}
+                className="w-full py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition cursor-pointer"
+              >
+                Band Karein
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Filtered Students
   const filteredStudents = students.filter((s) => {

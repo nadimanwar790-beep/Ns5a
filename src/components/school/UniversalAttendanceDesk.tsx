@@ -5,8 +5,9 @@ import {
   UserCheck, ShieldCheck, Search, Filter, Sparkles,
   ArrowRight, Phone, Printer, Calendar, RefreshCw,
   LogOut, LogIn, ChevronRight, Check, AlertCircle,
-  ExternalLink, Compass, Navigation
+  ExternalLink, Compass, Navigation, Lock
 } from "lucide-react";
+import { hasFaceAttendanceAccess } from "../../school-types";
 import type {
   School, SchoolClass, SchoolStudent, SchoolTeacher,
   StaffEmployee, AdminAttendanceRecord, StaffDailyAttendanceRecord
@@ -59,6 +60,7 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
   onViewClassAttendance,
 }) => {
   const schoolId = school?.id || "";
+  const hasFaceAccess = hasFaceAttendanceAccess(school);
   const today = todayStr();
 
   const [activeTab, setActiveTab] = useState<RoleTab>("teachers");
@@ -591,7 +593,7 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
               onClick={onOpenScanner}
               className="px-3 py-1.5 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-black text-xs flex items-center gap-1.5 shadow-md shadow-purple-600/30 transition active:scale-95 cursor-pointer"
             >
-              <span>📷 QR / Face Scan</span>
+              <span>{hasFaceAccess ? "📷 QR / Face Scan" : "📷 QR Code Scan"}</span>
             </button>
           )}
 
@@ -600,10 +602,20 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
             <button
               type="button"
               onClick={onOpenFaceTest}
-              className="px-3 py-1.5 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/30 ring-1 ring-amber-300 transition active:scale-95 cursor-pointer"
-              title="टेस्ट मोड: अटेंडेंस नहीं लगेगी, सिर्फ कैमरा में चेहरा मैच करके वॉयस से नाम बोलेगा"
+              className={`px-3 py-1.5 rounded-2xl font-black text-xs flex items-center gap-1.5 transition active:scale-95 cursor-pointer ${
+                hasFaceAccess
+                  ? "bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-md shadow-amber-500/30 ring-1 ring-amber-300"
+                  : "bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40"
+              }`}
+              title={hasFaceAccess ? "टेस्ट मोड: अटेंडेंस नहीं लगेगी, सिर्फ कैमरा में चेहरा मैच करके वॉयस से नाम बोलेगा" : "👑 Elite Plan Only — AI Face Attendance"}
             >
+              {!hasFaceAccess && <Lock className="w-3 h-3 text-amber-400" />}
               <span>🧪 फेस टेस्ट मोड</span>
+              {!hasFaceAccess && (
+                <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-slate-950 text-[9px] font-black">
+                  👑 Elite
+                </span>
+              )}
             </button>
           )}
         </div>

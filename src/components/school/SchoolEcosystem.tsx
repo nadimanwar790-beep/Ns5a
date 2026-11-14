@@ -1366,6 +1366,68 @@ export const SchoolEcosystem: React.FC<Props> = ({
             activeSession={demoData?.sessions?.[0] || null}
             isAdmin={false}
             onBack={() => setShowOnlineAdmission(false)}
+            onStudentEnrolledAndLink={(student) => {
+              const resolvedSchoolId = student.schoolId || currentSchool.id;
+              const finalRecord = {
+                type: "STUDENT",
+                id: student.id,
+                name: student.name,
+                admissionNo: student.admissionNo,
+                rollNo: student.rollNo || "1",
+                classId: student.classId,
+                className: student.className,
+                fatherName: student.fatherName || "",
+                motherName: student.motherName || "",
+                bloodGroup: student.bloodGroup || "",
+                dateOfBirth: student.dateOfBirth || "",
+                address: student.address || "",
+                phone: student.phone || "",
+                monthlyFee: student.monthlyFee ?? 0,
+                photoUrl: student.photoUrl || "",
+                schoolId: resolvedSchoolId,
+                schoolName: currentSchool.name || "",
+                linkedAt: new Date().toISOString(),
+              };
+
+              const recordCompositeKey = getStudentLinkKey(finalRecord, resolvedSchoolId);
+
+              try {
+                const curLocals = getLocalStudents(resolvedSchoolId);
+                const updatedLocals = [
+                  { ...student, ...finalRecord },
+                  ...curLocals.filter((s) => s.id !== finalRecord.id),
+                ];
+                setLocalStudents(resolvedSchoolId, updatedLocals as any);
+              } catch {}
+
+              setLinkedStudents((prev) => {
+                const filtered = prev.filter((item) => {
+                  const itemSchool = item.schoolId || defaultSchoolId;
+                  if (itemSchool !== resolvedSchoolId) return true;
+                  if (item.id === finalRecord.id) return false;
+                  if (
+                    item.admissionNo &&
+                    finalRecord.admissionNo &&
+                    item.admissionNo.toLowerCase() === finalRecord.admissionNo.toLowerCase()
+                  ) {
+                    return false;
+                  }
+                  return true;
+                });
+                const updatedList = [...filtered, finalRecord];
+                void saveUserLinkedStudents(uid, updatedList, recordCompositeKey);
+                void syncLinkedStudentsToPushSubscription(uid, updatedList);
+                return updatedList;
+              });
+
+              setActiveStudentKey(recordCompositeKey);
+              if (finalRecord.schoolName) {
+                try {
+                  localStorage.setItem("nst_last_school_name", finalRecord.schoolName);
+                } catch {}
+              }
+              setShowOnlineAdmission(false);
+            }}
           />
         </Suspense>
       </div>
