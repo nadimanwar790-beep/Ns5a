@@ -14,12 +14,24 @@ import type {
 import {
   todayStr, getAdminAttendance, saveAdminAttendance,
   getStaffDailyAttendance, saveStaffDailyAttendance,
-  markStudentQrAttendance, getAttendance, saveAttendance
+  markStudentQrAttendance, getAttendance, saveAttendance, calculateStayDuration
 } from "../../school-firebase";
 import { calculateDistanceMeters, formatDistance, getLiveBrowserPosition } from "../../utils/geoUtils";
 import { playSoundCorrect } from "../../utils/soundEffects";
 import { SchoolLocationModal } from "./SchoolLocationModal";
 import { TeacherIdCardModal } from "./TeacherIdCardModal";
+import {
+  dispatchAttendanceParentAlert,
+  dispatchAttendanceBatchAlerts,
+} from "../../utils/attendanceAlertDispatcher";
+import {
+  subscribeAttendanceSchedule,
+  saveAttendanceSchedule,
+  getLiveShiftStatus,
+  formatTime12h,
+  DEFAULT_IN_CUTOFF_TIME,
+  DEFAULT_OUT_START_TIME,
+} from "../../utils/schoolAttendanceSchedule";
 
 interface Props {
   school?: School | null;
@@ -58,6 +70,17 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
   // Modals
   const [showLocationModal, setShowLocationModal] = useState(false);
   const [selectedTeacherForIdCard, setSelectedTeacherForIdCard] = useState<SchoolTeacher | null>(null);
+  const [inCutoffTime, setInCutoffTime] = useState(DEFAULT_IN_CUTOFF_TIME);
+  const [outStartTime, setOutStartTime] = useState(DEFAULT_OUT_START_TIME);
+  const [showScheduleEditor, setShowScheduleEditor] = useState(false);
+
+  useEffect(() => {
+    if (!schoolId) return;
+    return subscribeAttendanceSchedule(schoolId, (sched) => {
+      setInCutoffTime(sched.inCutoffTime);
+      setOutStartTime(sched.outStartTime);
+    });
+  }, [schoolId]);
 
   // Live Digital Clock
   const [currentTime, setCurrentTime] = useState<string>(() =>
@@ -139,9 +162,14 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
         outTime: undefined,
       };
     } else {
+      const nowMs = Date.now();
+      const inTime = action === "in" ? nowTime : (existing?.inTime || nowTime);
+      const inTs = action === "in" ? nowMs : (existing?.inTimestamp || nowMs);
+      const outTime = action === "out" ? nowTime : existing?.outTime;
+      const outTs = action === "out" ? nowMs : existing?.outTimestamp;
       let stayDuration = existing?.stayDuration;
       if (action === "out" && existing?.inTime) {
-        stayDuration = `${nowTime} (Departed)`;
+        stayDuration = calculateStayDuration(inTime, outTime, inTs, outTs);
       }
 
       currentRecords[teacher.id] = {
@@ -151,9 +179,12 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
         employeeId: teacher.employeeId || teacher.id,
         present: true,
         status: "present",
-        inTime: action === "in" ? nowTime : (existing?.inTime || nowTime),
-        outTime: action === "out" ? nowTime : existing?.outTime,
+        inTime,
+        outTime,
+        inTimestamp: inTs,
+        outTimestamp: outTs,
         stayDuration,
+        scanType: action,
       };
     }
 
@@ -268,6 +299,20 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
         };
         await saveAttendance(updated);
         setClassAttendanceRecord(updated);
+        const targetClassObj = classes.find((c) => c.id === selectedClassId);
+        void dispatchAttendanceParentAlert({
+          schoolId,
+          schoolName: school?.name,
+          classId: selectedClassId,
+          className: targetClassObj?.name || "",
+          studentId: student.id,
+          studentName: student.name,
+          rollNo: student.rollNo,
+          status: "absent",
+          timeText: nowTime,
+          date: today,
+          sourceLabel: "अटेंडेंस डेस्क",
+        });
       } else {
         const res = await markStudentQrAttendance({
           schoolId: schoolId,
@@ -282,12 +327,29 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
         if (res.record) {
           setClassAttendanceRecord(res.record);
         }
+        if (res.success && !res.alreadyMarked) {
+          const targetClassObj = classes.find((c) => c.id === selectedClassId);
+          void dispatchAttendanceParentAlert({
+            schoolId,
+            schoolName: school?.name,
+            classId: selectedClassId,
+            className: targetClassObj?.name || "",
+            studentId: student.id,
+            studentName: student.name,
+            rollNo: student.rollNo,
+            status: res.action === "out" ? "out" : res.isLate ? "late" : "in",
+            timeText: (res.action === "out" ? res.outTime : res.inTime) || nowTime,
+            stayDuration: res.stayDuration,
+            date: today,
+            sourceLabel: "अटेंडेंस डेस्क",
+          });
+        }
       }
 
       playSoundCorrect();
       setToastMessage({
         type: "success",
-        text: `✓ ${student.name} (Roll #${student.rollNo}) - ${action === "in" ? "आगमन (Punch-In)" : action === "out" ? "प्रस्थान (Punch-Out)" : "अनुपस्थित"} दर्ज!`,
+        text: `✓ ${student.name} (Roll #${student.rollNo}) - ${action === "in" ? "आगमन (Punch-In)" : action === "out" ? "प्रस्थान (Punch-Out)" : "अनुपस्थित"} दर्ज! (NSTA Messenger + Push अलर्ट भेजा गया)`,
       });
       setTimeout(() => setToastMessage(null), 3000);
     } catch (err: any) {
@@ -298,7 +360,9 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
 
   const handleMarkAllClassIn = async () => {
     if (!schoolId || !selectedClassId) return;
-    const nowTime = new Date().toLocaleTimeString("en-IN", {
+    const now = new Date();
+    const nowMs = now.getTime();
+    const nowTime = now.toLocaleTimeString("en-IN", {
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",
@@ -314,8 +378,11 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
           name: st.name,
           rollNo: st.rollNo,
           inTime: map[st.id]?.inTime || nowTime,
+          inTimestamp: map[st.id]?.inTimestamp || nowMs,
           outTime: map[st.id]?.outTime,
-          status: "present",
+          outTimestamp: map[st.id]?.outTimestamp,
+          stayDuration: map[st.id]?.stayDuration,
+          status: map[st.id]?.status === "late" ? "late" : "present",
           scanType: "in",
         };
       });
@@ -334,9 +401,27 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
       playSoundCorrect();
 
       const cName = classes.find((c) => c.id === selectedClassId)?.name || "Class";
+      void dispatchAttendanceBatchAlerts({
+        schoolId,
+        schoolName: school?.name,
+        classId: selectedClassId,
+        className: cName,
+        date: today,
+        sourceLabel: "अटेंडेंस डेस्क (Bulk In)",
+        items: currentClassStudents.map((st) => ({
+          studentId: st.id,
+          studentName: st.name,
+          rollNo: st.rollNo,
+          classId: selectedClassId,
+          className: cName,
+          status: "in" as const,
+          timeText: map[st.id]?.inTime || nowTime,
+        })),
+      });
+
       setToastMessage({
         type: "success",
-        text: `✓ ${cName} के सभी ${currentClassStudents.length} छात्रों का Punch-In (आगमन) एक साथ दर्ज हो गया!`,
+        text: `✓ ${cName} के सभी ${currentClassStudents.length} छात्रों का Punch-In (आगमन) व NSTA Messenger अलर्ट भेजा गया!`,
       });
       setTimeout(() => setToastMessage(null), 3500);
     } catch (e: any) {
@@ -346,7 +431,9 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
 
   const handleMarkAllClassOut = async () => {
     if (!schoolId || !selectedClassId) return;
-    const nowTime = new Date().toLocaleTimeString("en-IN", {
+    const now = new Date();
+    const nowMs = now.getTime();
+    const nowTime = now.toLocaleTimeString("en-IN", {
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",
@@ -355,12 +442,19 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
     try {
       const existing = await getAttendance(schoolId, selectedClassId, today);
       const map = existing?.students ? { ...existing.students } : {};
+      const outTargets: SchoolStudent[] = [];
 
       currentClassStudents.forEach((st) => {
         if (map[st.id]?.present) {
+          outTargets.push(st);
+          const inTime = map[st.id]?.inTime;
+          const inTs = map[st.id]?.inTimestamp;
+          const stayDuration = calculateStayDuration(inTime, nowTime, inTs, nowMs);
           map[st.id] = {
             ...map[st.id],
             outTime: nowTime,
+            outTimestamp: nowMs,
+            stayDuration: stayDuration || map[st.id]?.stayDuration,
             scanType: "out",
           };
         }
@@ -380,9 +474,29 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
       playSoundCorrect();
 
       const cName = classes.find((c) => c.id === selectedClassId)?.name || "Class";
+      if (outTargets.length > 0) {
+        void dispatchAttendanceBatchAlerts({
+          schoolId,
+          schoolName: school?.name,
+          classId: selectedClassId,
+          className: cName,
+          date: today,
+          sourceLabel: "अटेंडेंस डेस्क (Bulk Out)",
+          items: outTargets.map((st) => ({
+            studentId: st.id,
+            studentName: st.name,
+            rollNo: st.rollNo,
+            classId: selectedClassId,
+            className: cName,
+            status: "out" as const,
+            timeText: nowTime,
+          })),
+        });
+      }
+
       setToastMessage({
         type: "success",
-        text: `✓ ${cName} के सभी उपस्थित छात्रों का Punch-Out (प्रस्थान) दर्ज हो गया!`,
+        text: `✓ ${cName} के सभी उपस्थित छात्रों का Punch-Out (प्रस्थान) व NSTA Messenger अलर्ट भेजा गया!`,
       });
       setTimeout(() => setToastMessage(null), 3500);
     } catch (e: any) {
@@ -495,6 +609,63 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
         </div>
       </div>
 
+      {/* School Attendance IN / OUT Timing Clarity Strip */}
+      {(() => {
+        const liveShift = getLiveShiftStatus({ inCutoffTime, outStartTime });
+        return (
+          <div className="bg-slate-50 dark:bg-slate-800/70 rounded-2xl p-3 border border-cyan-500/30 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <Clock className="w-4 h-4 text-cyan-600 dark:text-cyan-400 shrink-0" />
+                <span className="text-xs font-black text-slate-800 dark:text-white truncate">
+                  {liveShift.badgeText}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowScheduleEditor((p) => !p)}
+                className="px-2.5 py-1 rounded-xl bg-cyan-600/10 hover:bg-cyan-600/20 border border-cyan-500/30 text-cyan-700 dark:text-cyan-300 text-[11px] font-black cursor-pointer shrink-0"
+              >
+                {showScheduleEditor ? "बंद करें" : "⚙️ IN/OUT समय बदलें"}
+              </button>
+            </div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              {liveShift.helperText}
+            </p>
+            {showScheduleEditor && (
+              <div className="pt-2 border-t border-slate-200 dark:border-slate-700 flex flex-wrap items-center gap-3 text-xs">
+                <label className="flex items-center gap-1.5 font-bold text-slate-700 dark:text-slate-200">
+                  <span>🟢 IN कटऑफ:</span>
+                  <input
+                    type="time"
+                    value={inCutoffTime}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setInCutoffTime(v);
+                      if (schoolId) void saveAttendanceSchedule(schoolId, { inCutoffTime: v, outStartTime });
+                    }}
+                    className="px-2 py-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 font-mono"
+                  />
+                </label>
+                <label className="flex items-center gap-1.5 font-bold text-slate-700 dark:text-slate-200">
+                  <span>🔴 OUT शुरू:</span>
+                  <input
+                    type="time"
+                    value={outStartTime}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setOutStartTime(v);
+                      if (schoolId) void saveAttendanceSchedule(schoolId, { inCutoffTime, outStartTime: v });
+                    }}
+                    className="px-2 py-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 font-mono"
+                  />
+                </label>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* ── ROLE TABS (TEACHERS, STUDENTS) ── */}
       <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-2 overflow-x-auto">
         <button
@@ -590,9 +761,14 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
                         <p className="text-[10px] text-slate-400 truncate">
                           {teacher.designation || "Teacher"} • ID: {teacher.employeeId || teacher.id.slice(-4)}
                         </p>
-                        <div className="flex items-center gap-2 text-[10px] text-slate-500 font-mono mt-0.5">
+                        <div className="flex items-center gap-2 text-[10px] text-slate-500 font-mono mt-0.5 flex-wrap">
                           <span>In: <strong className="text-emerald-600 dark:text-emerald-400">{rec?.inTime || "--:--"}</strong></span>
-                          <span>Out: <strong className="text-amber-600 dark:text-amber-400">{rec?.outTime || "--:--"}</strong></span>
+                          <span>
+                            Out:{" "}
+                            <strong className={rec?.outTime ? "text-amber-600 dark:text-amber-400" : "text-slate-400"}>
+                              {rec?.outTime || (rec?.inTime ? `Pending (${formatTime12h(outStartTime)} से)` : "--:--")}
+                            </strong>
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -728,13 +904,13 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
                       <p className="text-[10px] text-slate-400 truncate">
                         Roll #{st.rollNo} • {st.phone || "No phone"}
                       </p>
-                      <div className="flex items-center gap-1.5 text-[9px] font-mono text-slate-500 mt-0.5">
+                      <div className="flex items-center gap-1.5 text-[9px] font-mono text-slate-500 mt-0.5 flex-wrap">
                         <span className={attData?.inTime ? "text-emerald-600 dark:text-emerald-400 font-bold" : ""}>
                           In: {attData?.inTime || "--:--"}
                         </span>
                         <span>•</span>
-                        <span className={attData?.outTime ? "text-amber-600 dark:text-amber-400 font-bold" : ""}>
-                          Out: {attData?.outTime || "--:--"}
+                        <span className={attData?.outTime ? "text-amber-600 dark:text-amber-400 font-bold" : "text-slate-400"}>
+                          Out: {attData?.outTime || (attData?.inTime ? `Pending (${formatTime12h(outStartTime)})` : "--:--")}
                         </span>
                       </div>
                     </div>

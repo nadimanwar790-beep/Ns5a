@@ -384,36 +384,68 @@ export function App() {
     }
   }, []);
 
-  // WebAPK Standalone Detection & Push Re-registration:
-  // When launched from mobile Home Screen as installed PWA, refresh the push subscription
-  // so Android binds notifications directly to the NSTA app icon rather than Chrome browser.
+  const [schoolIdentityRev, setSchoolIdentityRev] = useState(0);
+
+  useEffect(() => {
+    const bumpIdentity = () => setSchoolIdentityRev((r) => r + 1);
+    window.addEventListener('nst_school_identity_updated', bumpIdentity);
+    window.addEventListener('storage', bumpIdentity);
+    return () => {
+      window.removeEventListener('nst_school_identity_updated', bumpIdentity);
+      window.removeEventListener('storage', bumpIdentity);
+    };
+  }, []);
+
+  // Automatic Web Push Registration & Re-sync (Chrome Browser + Installed PWA):
+  // Whenever Notification.permission === 'granted', silently ensure the device's
+  // Web Push subscription & school/class metadata stay registered on the server.
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const isStandalone =
-      window.matchMedia('(display-mode: standalone)').matches ||
-      (window.navigator as any)?.standalone === true;
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
 
-    if (isStandalone && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-      const rebindTimer = setTimeout(() => {
-        import('./utils/schoolPushClient').then(({ enableSchoolPushForUser }) => {
-          const studentList: any[] = [];
-          try {
-            const activeStdRaw =
-              localStorage.getItem('nst_active_student') || localStorage.getItem('nst_cached_student');
-            if (activeStdRaw) {
-              const parsed = JSON.parse(activeStdRaw);
-              if (parsed?.id) studentList.push(parsed);
+    const rebindTimer = setTimeout(() => {
+      import('./utils/schoolPushClient').then(({ autoSyncSchoolPushIfPermitted }) => {
+        const studentList: any[] = [];
+        let resolvedSchoolId = '';
+        try {
+          resolvedSchoolId = localStorage.getItem('nst_active_school_id') || '';
+          const activeStdRaw =
+            localStorage.getItem('nst_active_student') || localStorage.getItem('nst_cached_student');
+          if (activeStdRaw) {
+            const parsed = JSON.parse(activeStdRaw);
+            if (parsed?.id) {
+              studentList.push(parsed);
+              if (!resolvedSchoolId && parsed.schoolId) resolvedSchoolId = String(parsed.schoolId);
             }
-          } catch (_) {}
-          enableSchoolPushForUser({
-            userId: user?.uid || user?.id || 'guest',
-            students: studentList,
-          }).catch(() => {});
-        });
-      }, 2500);
-      return () => clearTimeout(rebindTimer);
-    }
-  }, [user?.id, user?.uid]);
+          }
+          const linkedRaw = localStorage.getItem('nst_linked_students');
+          if (linkedRaw) {
+            const parsedLinked = JSON.parse(linkedRaw);
+            if (Array.isArray(parsedLinked)) {
+              parsedLinked.forEach((st: any) => {
+                if (st?.id && !studentList.some((s) => s.id === st.id)) {
+                  studentList.push(st);
+                  if (!resolvedSchoolId && st.schoolId) resolvedSchoolId = String(st.schoolId);
+                }
+              });
+            }
+          }
+          const curUserRaw = localStorage.getItem('nst_current_user');
+          if (curUserRaw) {
+            const cu = JSON.parse(curUserRaw);
+            if (!resolvedSchoolId && cu?.schoolId) resolvedSchoolId = String(cu.schoolId);
+          }
+        } catch (_) {}
+
+        autoSyncSchoolPushIfPermitted({
+          userId: user?.uid || user?.id || studentList[0]?.id || 'guest',
+          schoolId: resolvedSchoolId || undefined,
+          students: studentList,
+        }).catch(() => {});
+      });
+    }, 1200);
+    return () => clearTimeout(rebindTimer);
+  }, [user?.id, user?.uid, schoolIdentityRev]);
 
   // Study timer tracker
   useEffect(() => {
@@ -740,18 +772,37 @@ export function App() {
       unsubForeground = unsub;
     }).catch(() => {});
 
-    const uid = user?.uid || user?.id;
+    let activeStudentId = '';
+    let activeSchoolId = '';
+    try {
+      activeSchoolId = localStorage.getItem('nst_active_school_id') || '';
+      const stRaw = localStorage.getItem('nst_active_student') || localStorage.getItem('nst_cached_student');
+      if (stRaw) {
+        const parsed = JSON.parse(stRaw);
+        if (parsed?.id) activeStudentId = String(parsed.id);
+        if (!activeSchoolId && parsed?.schoolId) activeSchoolId = String(parsed.schoolId);
+      }
+    } catch {}
+
+    const uid = user?.uid || user?.id || activeStudentId;
     if (uid) {
-      unsubUserNotifs = subscribeToUserNotifications(uid, (notif) => {
-        console.log('[App] Received RTDB user notification:', notif);
-      });
+      unsubUserNotifs = subscribeToUserNotifications(
+        uid,
+        (notif) => {
+          console.log('[App] Received RTDB notification:', notif);
+        },
+        {
+          studentId: activeStudentId || undefined,
+          schoolId: activeSchoolId || undefined,
+        }
+      );
     }
 
     return () => {
       if (typeof unsubForeground === 'function') unsubForeground();
       if (typeof unsubUserNotifs === 'function') unsubUserNotifs();
     };
-  }, [user?.uid, user?.id]);
+  }, [user?.uid, user?.id, schoolIdentityRev]);
 
   const handleAcknowledgeConflict = () => {
     setConflictModalOpen(false);

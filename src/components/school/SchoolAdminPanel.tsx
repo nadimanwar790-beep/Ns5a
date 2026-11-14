@@ -10,8 +10,16 @@ import {
   getAllMonthlyFees, getSchoolFeeHistory, currentMonthStr, saveFee, markFeePaid, isStudentInClass, isDemoRecord,
   shouldUseDemoForSchool, getLocalAttendance, getLocalFees,
   isStudentBirthdayToday, dispatchOfficialSchoolBirthdayWish, checkAndDispatchTodaysBirthdays,
-  getStaffDailyAttendance, saveStaffDailyAttendance, todayStr
+  getStaffDailyAttendance, saveStaffDailyAttendance, todayStr, calculateStayDuration
 } from "../../school-firebase";
+import {
+  subscribeAttendanceSchedule,
+  saveAttendanceSchedule,
+  getLiveShiftStatus,
+  formatTime12h,
+  DEFAULT_IN_CUTOFF_TIME,
+  DEFAULT_OUT_START_TIME,
+} from "../../utils/schoolAttendanceSchedule";
 import { loadMergedStoreSales } from "../../utils/schoolCloudSync";
 import { computePaymentBreakdown } from "../../utils/paymentBreakdown";
 import { COMMON_BOOK_PRESETS, PRESET_BOOK_BUNDLES } from "./TeacherPanel";
@@ -114,6 +122,8 @@ import { rotateToLandscape, rotateToPortrait, isDesktopModeOn, setDesktopMode, u
 import { toast } from "sonner";
 import { ADMIN_WHATSAPP_NUMBER } from "../../constants";
 import { safeOpenExternalUrl, getDynamicAcademicSessionLabel } from "../../utils/safeBrowserActions";
+import { autoSyncSchoolPushIfPermitted } from "../../utils/schoolPushClient";
+import { subscribeUserToPush } from "../NotificationManager";
 
 interface Props {
   schoolId: string;
@@ -232,6 +242,54 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     setFaceStudioTargetType("TEACHER");
     setShowFaceStudioModal(true);
   };
+  const [attendanceSchedule, setAttendanceSchedule] = useState({
+    inCutoffTime: DEFAULT_IN_CUTOFF_TIME,
+    outStartTime: DEFAULT_OUT_START_TIME,
+  });
+  const [showAttScheduleEditor, setShowAttScheduleEditor] = useState(false);
+
+  useEffect(() => {
+    if (!schoolId) return;
+    return subscribeAttendanceSchedule(schoolId, (sched) => {
+      setAttendanceSchedule({
+        inCutoffTime: sched.inCutoffTime,
+        outStartTime: sched.outStartTime,
+      });
+    });
+  }, [schoolId]);
+
+  // Auto-sync School Admin device for Web Push & RTDB School Alerts when permission is granted
+  useEffect(() => {
+    if (!schoolId) return;
+    try {
+      localStorage.setItem("nst_active_school_id", schoolId);
+      window.dispatchEvent(new CustomEvent("nst_school_identity_updated", { detail: { schoolId, adminUid } }));
+    } catch {}
+    if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+      autoSyncSchoolPushIfPermitted({
+        userId: "STAFF_ADMIN",
+        schoolId,
+        students: [
+          {
+            id: "STAFF_ADMIN",
+            schoolId,
+            schoolName: school?.name || "School Admin",
+            name: "School Admin",
+          },
+          ...(adminUid ? [{ id: adminUid, schoolId, schoolName: school?.name || "School Admin", name: "Admin" }] : []),
+        ],
+      }).catch(() => {});
+
+      try {
+        const targetUid = adminUid || "STAFF_ADMIN";
+        const fcmKey = `nst_fcm_admin_synced_${targetUid}_${schoolId}`;
+        if (!sessionStorage.getItem(fcmKey)) {
+          sessionStorage.setItem(fcmKey, "1");
+          subscribeUserToPush(targetUid).catch(() => {});
+        }
+      } catch {}
+    }
+  }, [schoolId, adminUid, school?.name]);
   const [expiryPopupExpired, setExpiryPopupExpired] = useState(false);
   const [studentSearchQuery, setStudentSearchQuery] = useState("");
   const [studentPage, setStudentPage] = useState(1);
@@ -6451,19 +6509,14 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           outTime: undefined,
         };
       } else {
+        const nowMs = Date.now();
+        const inTime = action === "in" ? (existing?.inTime || nowTime) : (existing?.inTime || nowTime);
+        const inTimestamp = action === "in" ? (existing?.inTimestamp || nowMs) : (existing?.inTimestamp || nowMs);
+        const outTime = action === "out" ? nowTime : existing?.outTime;
+        const outTimestamp = action === "out" ? nowMs : existing?.outTimestamp;
         let stayDuration = existing?.stayDuration;
-        if (action === "out" && existing?.inTime) {
-          try {
-            const [inH, inM] = existing.inTime.split(":");
-            const inDate = new Date();
-            inDate.setHours(parseInt(inH) || 9, parseInt(inM) || 0, 0);
-            const diffMs = Math.max(0, Date.now() - inDate.getTime());
-            const hrs = Math.floor(diffMs / (1000 * 60 * 60));
-            const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-            stayDuration = `${hrs}h ${mins}m`;
-          } catch (e) {
-            console.warn("Failed to compute stayDuration:", e);
-          }
+        if (action === "out" && inTime) {
+          stayDuration = calculateStayDuration(inTime, outTime, inTimestamp, outTimestamp);
         }
 
         currentRecords[teacher.id] = {
@@ -6473,8 +6526,10 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           employeeId: teacher.employeeId || teacher.id,
           present: true,
           status: "present",
-          inTime: action === "in" ? (existing?.inTime || nowTime) : (existing?.inTime || nowTime),
-          outTime: action === "out" ? nowTime : existing?.outTime,
+          inTime,
+          outTime,
+          inTimestamp,
+          outTimestamp,
           stayDuration,
           scanType: action,
         };
@@ -6494,7 +6549,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
     const handleMarkAllTeachersPresent = async () => {
       if (!schoolId) return;
-      const nowTime = new Date().toLocaleTimeString("en-IN", {
+      const nowMs = Date.now();
+      const nowTime = new Date(nowMs).toLocaleTimeString("en-IN", {
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit",
@@ -6512,7 +6568,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           present: true,
           status: "present",
           inTime: existing?.inTime || nowTime,
+          inTimestamp: existing?.inTimestamp || nowMs,
           outTime: existing?.outTime,
+          outTimestamp: existing?.outTimestamp,
           stayDuration: existing?.stayDuration,
           scanType: "in",
         };
@@ -6528,6 +6586,63 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       await saveStaffDailyAttendance(updated);
       playAttendanceSuccessChime();
       speakNotification("हाजिरी पूर्ण", "सभी शिक्षक उपस्थित दर्ज हो गए।");
+    };
+
+    const handleMarkAllTeachersOut = async () => {
+      if (!schoolId) return;
+      const nowMs = Date.now();
+      const nowTime = new Date(nowMs).toLocaleTimeString("en-IN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: true,
+      });
+
+      const currentRecords = { ...(teacherAttRecords?.records || {}) };
+      let updatedCount = 0;
+      displayedTeachers.forEach((t) => {
+        const existing = currentRecords[t.id];
+        if (existing?.present) {
+          const inTime = existing.inTime || nowTime;
+          const inTs = existing.inTimestamp || nowMs;
+          const outTime = existing.outTime || nowTime;
+          const outTs = existing.outTimestamp || nowMs;
+          const stayDuration = existing.stayDuration || calculateStayDuration(inTime, outTime, inTs, outTs);
+          currentRecords[t.id] = {
+            ...existing,
+            id: t.id,
+            name: t.name,
+            role: "TEACHER",
+            employeeId: t.employeeId || t.id,
+            present: true,
+            status: "present",
+            inTime,
+            inTimestamp: inTs,
+            outTime,
+            outTimestamp: outTs,
+            stayDuration,
+            scanType: "out",
+          };
+          if (!existing.outTime) updatedCount++;
+        }
+      });
+
+      if (updatedCount === 0) {
+        toast.info("सभी उपस्थित शिक्षकों का OUT पहले से दर्ज है।");
+        return;
+      }
+
+      const updated: StaffDailyAttendanceRecord = {
+        schoolId,
+        date: teacherAttendanceDate,
+        records: currentRecords,
+      };
+
+      setTeacherAttRecords(updated);
+      await saveStaffDailyAttendance(updated);
+      playAttendanceSuccessChime();
+      toast.success(`🏃 ${updatedCount} शिक्षकों का Punch-Out दर्ज हुआ!`);
+      speakNotification("प्रस्थान पूर्ण", "सभी उपस्थित शिक्षकों का प्रस्थान दर्ज हो गया।");
     };
 
     return renderErpShell(
@@ -6685,10 +6800,77 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                   title="आज सभी शिक्षकों को Present मार्क करें"
                 >
                   <Check className="w-4 h-4" />
-                  <span>⚡ 1-Tap सभी Present</span>
+                  <span>⚡ सभी Present (IN)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleMarkAllTeachersOut}
+                  className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-1.5 active:scale-95 transition cursor-pointer"
+                  title="सभी उपस्थित शिक्षकों का OUT दर्ज करें"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>🏃 सभी OUT</span>
                 </button>
               </div>
             </div>
+
+            {/* IN / OUT School Shift Timing Strip */}
+            {(() => {
+              const liveShift = getLiveShiftStatus(attendanceSchedule);
+              return (
+                <div className="bg-slate-900/90 border border-cyan-500/30 rounded-2xl p-3 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Clock className="w-4 h-4 text-cyan-400 shrink-0" />
+                      <span className="text-xs font-black text-white truncate">
+                        {liveShift.badgeText}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowAttScheduleEditor((p) => !p)}
+                      className="px-2.5 py-1 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/40 text-cyan-300 text-[11px] font-black cursor-pointer shrink-0"
+                    >
+                      {showAttScheduleEditor ? "बंद करें" : "⚙️ IN/OUT समय बदलें"}
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    {liveShift.helperText}
+                  </p>
+                  {showAttScheduleEditor && (
+                    <div className="pt-2 border-t border-slate-800 flex flex-wrap items-center gap-3 text-xs">
+                      <label className="flex items-center gap-1.5 font-bold text-slate-200">
+                        <span>🟢 IN कटऑफ:</span>
+                        <input
+                          type="time"
+                          value={attendanceSchedule.inCutoffTime}
+                          onChange={(e) => {
+                            const next = { ...attendanceSchedule, inCutoffTime: e.target.value };
+                            setAttendanceSchedule(next);
+                            if (schoolId) void saveAttendanceSchedule(schoolId, next);
+                          }}
+                          className="px-2 py-1 rounded-lg bg-slate-950 border border-slate-700 text-white font-mono"
+                        />
+                      </label>
+                      <label className="flex items-center gap-1.5 font-bold text-slate-200">
+                        <span>🔴 OUT शुरू:</span>
+                        <input
+                          type="time"
+                          value={attendanceSchedule.outStartTime}
+                          onChange={(e) => {
+                            const next = { ...attendanceSchedule, outStartTime: e.target.value };
+                            setAttendanceSchedule(next);
+                            if (schoolId) void saveAttendanceSchedule(schoolId, next);
+                          }}
+                          className="px-2 py-1 rounded-lg bg-slate-950 border border-slate-700 text-white font-mono"
+                        />
+                      </label>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Notice banner if some teachers have pending Face ID */}
             {pendingFaceTeachersCount > 0 && (
@@ -6829,12 +7011,15 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
                       {/* Attendance Punch Timings & Buttons */}
                       <div className="pt-2 border-t border-slate-800/80 space-y-2">
-                        <div className="flex items-center justify-between text-xs text-slate-300 font-mono px-1">
+                        <div className="flex items-center justify-between gap-2 text-xs text-slate-300 font-mono px-1 flex-wrap">
                           <span>
                             आगमन: <strong className="text-emerald-400">{rec?.inTime || "--:--"}</strong>
                           </span>
                           <span>
-                            प्रस्थान: <strong className="text-amber-400">{rec?.outTime || "--:--"}</strong>
+                            प्रस्थान:{" "}
+                            <strong className={rec?.outTime ? "text-amber-400" : "text-slate-400"}>
+                              {rec?.outTime || (rec?.inTime ? `Pending (${formatTime12h(attendanceSchedule.outStartTime)})` : "--:--")}
+                            </strong>
                           </span>
                           {rec?.stayDuration && (
                             <span className="text-[11px] font-bold text-purple-300 bg-purple-950/60 px-1.5 py-0.5 rounded border border-purple-800/60">

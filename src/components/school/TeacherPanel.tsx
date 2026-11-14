@@ -55,6 +55,8 @@ import { PtmSchedulerModal } from "./PtmSchedulerModal";
 import { UniversalFaceIdStudioModal } from "./UniversalFaceIdStudioModal";
 import { QuestionPaperBuilder } from "./QuestionPaperBuilder";
 import { rotateToLandscape, rotateToPortrait, setDesktopMode, useDeviceOrientation } from "../../utils/displayPrefs";
+import { autoSyncSchoolPushIfPermitted } from "../../utils/schoolPushClient";
+import { subscribeUserToPush } from "../NotificationManager";
 
 interface Props {
   schoolId: string;
@@ -349,6 +351,39 @@ export const TeacherPanel: React.FC<Props> = ({
       if (typeof unsubTeachers === "function") unsubTeachers();
     };
   }, [schoolId, teacherId, teacherName]);
+
+  // Auto-sync Teacher device for Web Push & RTDB School Alerts when permission is granted
+  useEffect(() => {
+    if (!schoolId || !teacherId) return;
+    try {
+      localStorage.setItem("nst_active_school_id", schoolId);
+      window.dispatchEvent(new CustomEvent("nst_school_identity_updated", { detail: { schoolId, teacherId } }));
+    } catch {}
+    if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+      autoSyncSchoolPushIfPermitted({
+        userId: teacherId,
+        schoolId,
+        students: [
+          {
+            id: teacherId,
+            schoolId,
+            schoolName: school?.name || "School",
+            classId: currentTeacher?.assignedClassId || "",
+            className: currentTeacher?.assignedClassName || "",
+            name: teacherName || "Teacher",
+          },
+        ],
+      }).catch(() => {});
+
+      try {
+        const fcmKey = `nst_fcm_teacher_synced_${teacherId}_${schoolId}`;
+        if (!sessionStorage.getItem(fcmKey)) {
+          sessionStorage.setItem(fcmKey, "1");
+          subscribeUserToPush(teacherId).catch(() => {});
+        }
+      } catch {}
+    }
+  }, [schoolId, teacherId, teacherName, school?.name, currentTeacher?.assignedClassId, currentTeacher?.assignedClassName]);
 
   // Orientation listener
   useEffect(() => {

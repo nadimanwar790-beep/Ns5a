@@ -247,6 +247,7 @@ export const saveFcmToken = async (userId: string, token: string) => {
     let studentId = "";
     let schoolId = "";
     let classId = "";
+    let className = "";
     try {
       const stRaw = localStorage.getItem('nst_active_student') || localStorage.getItem('nst_cached_student');
       if (stRaw) {
@@ -254,12 +255,28 @@ export const saveFcmToken = async (userId: string, token: string) => {
         if (parsed?.id) studentId = String(parsed.id);
         if (parsed?.schoolId) schoolId = String(parsed.schoolId);
         if (parsed?.classId) classId = String(parsed.classId);
+        if (parsed?.className) className = String(parsed.className);
+      }
+      if (!studentId || !schoolId) {
+        const linkedRaw = localStorage.getItem('nst_linked_students');
+        if (linkedRaw) {
+          const linked = JSON.parse(linkedRaw);
+          if (Array.isArray(linked) && linked[0]) {
+            if (!studentId && linked[0].id) studentId = String(linked[0].id);
+            if (!schoolId && linked[0].schoolId) schoolId = String(linked[0].schoolId);
+            if (!classId && linked[0].classId) classId = String(linked[0].classId);
+            if (!className && linked[0].className) className = String(linked[0].className);
+          }
+        }
       }
       if (!schoolId) {
         schoolId = localStorage.getItem('nst_active_school_id') || "";
       }
       if (!classId) {
         classId = localStorage.getItem('nst_user_class') || "";
+      }
+      if (!className) {
+        className = localStorage.getItem('nst_user_class') || "";
       }
     } catch (_) {}
 
@@ -273,6 +290,7 @@ export const saveFcmToken = async (userId: string, token: string) => {
       ...(studentId ? { studentId } : {}),
       ...(schoolId ? { schoolId } : {}),
       ...(classId ? { classId } : {}),
+      ...(className ? { className } : {}),
     };
     await set(broadcastRef, tokenRecord).catch(() => {});
 
@@ -916,12 +934,14 @@ export const isCategoryEnabled = (prefs: NotificationPreferences | null, type: s
  */
 export const subscribeToUserNotifications = (
   userId: string,
-  onNotificationReceived?: (notification: any) => void
+  onNotificationReceived?: (notification: any) => void,
+  options?: { studentId?: string; schoolId?: string }
 ): (() => void) => {
   if (!userId || typeof window === 'undefined') return () => {};
 
   const sessionStartTime = Date.now();
-  const safeUserId = String(userId).trim().replace(/[.#$[\]/]/g, '_');
+  const sanitizeKey = (v: string) => String(v).trim().replace(/[.#$[\]/]/g, '_');
+  const safeUserId = sanitizeKey(userId);
   const seenIdsKey = `nst_seen_notif_ids_${safeUserId}`;
   const seenIds = new Set<string>();
 
@@ -940,28 +960,132 @@ export const subscribeToUserNotifications = (
     } catch {}
   };
 
-  const handleIncomingNotification = async (item: any, notifKey?: string) => {
+  const getIdentityContext = () => {
+    const myIds = new Set<string>([String(userId).trim(), safeUserId]);
+    const studentIds = new Set<string>();
+    const schoolIds = new Set<string>();
+    const classTokens: string[] = [];
+    let userRole = '';
+
+    if (options?.studentId) {
+      const sid = String(options.studentId).trim();
+      if (sid) {
+        studentIds.add(sid);
+        myIds.add(sid);
+        myIds.add(sanitizeKey(sid));
+      }
+    }
+    if (options?.schoolId) {
+      const sch = String(options.schoolId).trim();
+      if (sch) schoolIds.add(sch);
+    }
+
+    try {
+      const uRaw = localStorage.getItem('nst_current_user');
+      if (uRaw) {
+        const u = JSON.parse(uRaw);
+        userRole = String(u.role || u.schoolRole || '').toUpperCase();
+        if (u.id) { myIds.add(String(u.id)); myIds.add(sanitizeKey(u.id)); }
+        if (u.uid) { myIds.add(String(u.uid)); myIds.add(sanitizeKey(u.uid)); }
+        if (u.studentId) { studentIds.add(String(u.studentId)); myIds.add(String(u.studentId)); }
+        if (u.schoolId) schoolIds.add(String(u.schoolId));
+        if (u.classId) classTokens.push(String(u.classId));
+        if (u.className) classTokens.push(String(u.className));
+      }
+
+      const activeSch = (localStorage.getItem('nst_active_school_id') || '').trim();
+      if (activeSch) schoolIds.add(activeSch);
+
+      const uCls = (localStorage.getItem('nst_user_class') || localStorage.getItem('nst_session_class') || '').trim();
+      if (uCls) classTokens.push(uCls);
+
+      const stRaw = localStorage.getItem('nst_active_student') || localStorage.getItem('nst_cached_student');
+      if (stRaw) {
+        const st = JSON.parse(stRaw);
+        if (st?.id) {
+          studentIds.add(String(st.id));
+          myIds.add(String(st.id));
+          myIds.add(sanitizeKey(st.id));
+        }
+        if (st?.schoolId) schoolIds.add(String(st.schoolId));
+        if (st?.classId) classTokens.push(String(st.classId));
+        if (st?.className) classTokens.push(String(st.className));
+        if (st?.classLevel) classTokens.push(String(st.classLevel));
+      }
+
+      const linkedRaw = localStorage.getItem('nst_linked_students');
+      if (linkedRaw) {
+        const linked = JSON.parse(linkedRaw);
+        if (Array.isArray(linked)) {
+          for (const st of linked) {
+            if (!st) continue;
+            if (st.id) {
+              studentIds.add(String(st.id));
+              myIds.add(String(st.id));
+              myIds.add(sanitizeKey(st.id));
+            }
+            if (st.schoolId) schoolIds.add(String(st.schoolId));
+            if (st.classId) classTokens.push(String(st.classId));
+            if (st.className) classTokens.push(String(st.className));
+          }
+        }
+      }
+    } catch (_) {}
+
+    return { myIds, studentIds, schoolIds, classTokens, userRole };
+  };
+
+  const normalizeClassStr = (val: string) =>
+    String(val || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  const stripClassPrefix = (norm: string) =>
+    norm.replace(/^(cls|class|std|grade)/, '');
+
+  const classesLooselyMatch = (aRaw: string, bRaw: string): boolean => {
+    const a = normalizeClassStr(aRaw);
+    const b = normalizeClassStr(bRaw);
+    if (!a || !b) return false;
+    if (a === b) return true;
+    const sa = stripClassPrefix(a);
+    const sb = stripClassPrefix(b);
+    if (sa && sb && sa === sb) return true;
+    return a.includes(b) || b.includes(a);
+  };
+
+  const handleIncomingNotification = async (
+    item: any,
+    notifKey?: string,
+    inboxOwnerKey?: string // Defined ONLY for user_notifications/<owner>
+  ) => {
     if (!item || !item.id) return;
 
     // A. Already seen / delivered check
     if (seenIds.has(item.id)) {
-      if (notifKey) {
-        remove(ref(rtdb, `user_notifications/${safeUserId}/${notifKey}`)).catch(() => {});
+      if (notifKey && inboxOwnerKey) {
+        remove(ref(rtdb, `user_notifications/${inboxOwnerKey}/${notifKey}`)).catch(() => {});
       }
       return;
     }
     seenIds.add(item.id);
     saveSeenIds();
 
+    const ctx = getIdentityContext();
+
+    // Suppress echo notifications on sender's own device
+    if (item.senderId && ctx.myIds.has(String(item.senderId).trim())) {
+      if (notifKey && inboxOwnerKey) {
+        remove(ref(rtdb, `user_notifications/${inboxOwnerKey}/${notifKey}`)).catch(() => {});
+      }
+      return;
+    }
+
     const notifTimestamp = Number(item.timestamp || 0);
 
-    // B. Old notification suppression:
-    // If the notification was created before the app was opened (older than 25 seconds before session start),
-    // do NOT fire duplicate sound, vibration or OS push when opening the app.
-    const isHistorical = notifTimestamp > 0 && notifTimestamp < (sessionStartTime - 25000);
+    // B. Old notification suppression (90s grace for slight clock skew):
+    const isHistorical = notifTimestamp > 0 && notifTimestamp < (sessionStartTime - 90000);
     if (isHistorical) {
-      if (notifKey) {
-        remove(ref(rtdb, `user_notifications/${safeUserId}/${notifKey}`)).catch(() => {});
+      if (notifKey && inboxOwnerKey) {
+        remove(ref(rtdb, `user_notifications/${inboxOwnerKey}/${notifKey}`)).catch(() => {});
       }
       return;
     }
@@ -969,77 +1093,84 @@ export const subscribeToUserNotifications = (
     // C. Discard ancient notifications older than 30 minutes
     const now = Date.now();
     if (notifTimestamp > 0 && now - notifTimestamp > 30 * 60 * 1000) {
-      if (notifKey) {
-        remove(ref(rtdb, `user_notifications/${safeUserId}/${notifKey}`)).catch(() => {});
+      if (notifKey && inboxOwnerKey) {
+        remove(ref(rtdb, `user_notifications/${inboxOwnerKey}/${notifKey}`)).catch(() => {});
       }
       return;
     }
 
-    // D. Universal Class Filter Check:
-    // Only students belonging to the target class should receive class-targeted messages
-    const targetClass = String(
+    // D. School isolation check (if notification is scoped to a school and device has linked schools)
+    if (item.schoolId && ctx.schoolIds.size > 0 && !ctx.schoolIds.has(String(item.schoolId).trim())) {
+      return;
+    }
+
+    // E. Universal Class & Targeted-Student Filter Check:
+    // Skip class check if this device's studentId/userId was explicitly targeted
+    const explicitRecipients: string[] = Array.isArray(item.studentIds) ? item.studentIds.map(String) : [];
+    const explicitlyTargeted =
+      Boolean(inboxOwnerKey) ||
+      explicitRecipients.some((rid) => ctx.myIds.has(rid) || ctx.myIds.has(sanitizeKey(rid)));
+
+    // If explicitRecipients is specified for private per-student alerts (NOT classBroadcast/schoolBroadcast), only targeted devices should receive it
+    if (
+      !explicitlyTargeted &&
+      explicitRecipients.length > 0 &&
+      !item.classBroadcast &&
+      !item.schoolBroadcast
+    ) {
+      return;
+    }
+
+    const targetClassId = String(
       item.classId ||
       item.classLevel ||
       item.targetClass ||
-      item.className ||
       ''
     ).trim();
+    const targetClassName = String(item.className || '').trim();
 
     if (
-      targetClass &&
-      !['ALL', 'ALL_CLASSES', 'EVERYONE', 'GLOBAL', 'PUBLIC'].includes(targetClass.toUpperCase())
+      !explicitlyTargeted &&
+      (targetClassId || targetClassName) &&
+      !['ALL', 'ALL_CLASSES', 'EVERYONE', 'GLOBAL', 'PUBLIC'].includes(targetClassId.toUpperCase())
     ) {
-      let userRole = '';
-      let userClass = '';
-      try {
-        const uRaw = localStorage.getItem('nst_current_user');
-        if (uRaw) {
-          const u = JSON.parse(uRaw);
-          userRole = String(u.role || u.schoolRole || '').toUpperCase();
-        }
-        userClass = (localStorage.getItem('nst_user_class') || localStorage.getItem('nst_session_class') || '').trim();
-        const stRaw = localStorage.getItem('nst_active_student') || localStorage.getItem('nst_cached_student');
-        if (stRaw) {
-          const st = JSON.parse(stRaw);
-          if (st?.classId || st?.className || st?.classLevel) {
-            userClass = String(st.classId || st.className || st.classLevel).trim();
-          }
-        }
-      } catch (_) {}
+      const isStaff =
+        ctx.userRole === 'TEACHER' ||
+        ctx.userRole === 'ADMIN' ||
+        ctx.userRole === 'SCHOOL_ADMIN' ||
+        ctx.userRole === 'SUPERADMIN' ||
+        ctx.userRole === 'PRINCIPAL';
 
-      // Staff (Teachers/Admins) can monitor class groups; students are strictly class-scoped:
-      const isStaff = userRole === 'TEACHER' || userRole === 'ADMIN' || userRole === 'SUPERADMIN' || userRole === 'PRINCIPAL';
-      if (!isStaff) {
-        const cleanTarget = targetClass.toLowerCase().replace(/[^a-z0-9]/g, '');
-        const cleanUserClass = userClass.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-        const isMatch =
-          cleanUserClass === cleanTarget ||
-          (cleanUserClass && cleanTarget && (cleanTarget.includes(cleanUserClass) || cleanUserClass.includes(cleanTarget)));
+      if (!isStaff && ctx.classTokens.length > 0) {
+        const isMatch = ctx.classTokens.some(
+          (tok) =>
+            (targetClassId && classesLooselyMatch(tok, targetClassId)) ||
+            (targetClassName && classesLooselyMatch(tok, targetClassName))
+        );
 
         if (!isMatch) {
-          console.log(`[NotificationManager] Class filter: Dropping notification for class "${targetClass}" (user class: "${userClass}")`);
-          if (notifKey) {
-            remove(ref(rtdb, `user_notifications/${safeUserId}/${notifKey}`)).catch(() => {});
+          console.log(`[NotificationManager] Class filter: Dropping notification for class "${targetClassName || targetClassId}" (user classes: ${ctx.classTokens.join(', ')})`);
+          if (notifKey && inboxOwnerKey) {
+            remove(ref(rtdb, `user_notifications/${inboxOwnerKey}/${notifKey}`)).catch(() => {});
           }
           return;
         }
       }
     }
 
-    // E. Direct recipient verification (Teacher <-> Student 1-on-1):
-    if (item.targetUserId && item.targetUserId !== safeUserId && item.targetUserId !== userId) {
-      if (notifKey) {
-        remove(ref(rtdb, `user_notifications/${safeUserId}/${notifKey}`)).catch(() => {});
+    // F. Direct recipient verification (Teacher <-> Student 1-on-1):
+    if (item.targetUserId && !ctx.myIds.has(String(item.targetUserId).trim()) && !ctx.myIds.has(sanitizeKey(item.targetUserId))) {
+      if (notifKey && inboxOwnerKey) {
+        remove(ref(rtdb, `user_notifications/${inboxOwnerKey}/${notifKey}`)).catch(() => {});
       }
       return;
     }
 
-    // F. User category preferences check
+    // G. User category preferences check
     const prefs = loadNotificationPreferences(userId);
     if (item.type && !isCategoryEnabled(prefs, item.type)) {
-      if (notifKey) {
-        remove(ref(rtdb, `user_notifications/${safeUserId}/${notifKey}`)).catch(() => {});
+      if (notifKey && inboxOwnerKey) {
+        remove(ref(rtdb, `user_notifications/${inboxOwnerKey}/${notifKey}`)).catch(() => {});
       }
       return;
     }
@@ -1059,16 +1190,32 @@ export const subscribeToUserNotifications = (
     } catch (_) {}
 
     // 3. Mobile Hardware Vibration
-    const isUrgent = item.type === 'FRIEND_REQUEST' || item.type === 'STUDY_ROOM' || item.type === 'CHAT' || item.type === 'NSTA_MESSAGE';
+    const isUrgent =
+      item.urgent === true ||
+      item.type === 'FRIEND_REQUEST' ||
+      item.type === 'STUDY_ROOM' ||
+      item.type === 'CHAT' ||
+      item.type === 'NSTA_MESSAGE' ||
+      item.type === 'SCHOOL_NOTICE' ||
+      item.type === 'FEE_RECEIPT' ||
+      item.type === 'MONTHLY_FEE';
     if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
       try {
         navigator.vibrate(isUrgent ? [250, 100, 250] : [100, 50, 100]);
       } catch (_) {}
     }
 
-    // 4. Native OS Notification via Service Worker (when app is in background or lock-screen)
+    // 4. Native OS Notification via Service Worker
     const isAppHidden = typeof document !== 'undefined' && document.hidden;
-    const allowOsNotification = isAppHidden || item.urgent;
+    const isSchoolOrMessengerAlert = [
+      'NSTA_MESSAGE',
+      'SCHOOL_NOTICE',
+      'FEE_RECEIPT',
+      'MONTHLY_FEE',
+      'HOMEWORK',
+      'SCHOOL_HOLIDAY',
+    ].includes(String(item.type || ''));
+    const allowOsNotification = isAppHidden || item.urgent === true || isSchoolOrMessengerAlert;
 
     if (allowOsNotification && typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
       try {
@@ -1082,26 +1229,36 @@ export const subscribeToUserNotifications = (
               return path;
             }
           };
-          const resolvedIcon = getAbsoluteUrl(item.icon || item.senderPhoto || '/icons/icon-192.png');
-          const resolvedBadge = getAbsoluteUrl('/icons/badge-monochrome.png');
+          const rawIcon = item.icon || item.senderPhoto || '/icons/icon-192.png?v=3';
+          const resolvedIcon = rawIcon.endsWith('.svg') ? getAbsoluteUrl('/icons/icon-192.png?v=3') : getAbsoluteUrl(rawIcon);
+          const resolvedBadge = getAbsoluteUrl('/icons/badge-monochrome.png?v=4');
 
           const reg = await getFcmServiceWorkerRegistration();
-          reg.showNotification(item.title, {
+          const swOptions = {
             body: item.body,
             icon: resolvedIcon,
             badge: resolvedBadge,
-            tag: item.senderId ? `nst-${item.type}-${item.senderId}` : `nst-${item.type}-${item.id}`,
+            tag: `nst-msg-${item.id}`,
             vibrate: isUrgent ? [250, 100, 250] : [100, 50, 100],
             renotify: true,
             requireInteraction: false,
-            data: { url: item.url || '/', ...item },
+            data: { url: item.url || '/', id: item.id, ...item },
             actions: [
-              { action: 'open', title: 'Open App' },
-              { action: 'dismiss', title: 'Dismiss' },
+              { action: 'open', title: 'खोलें (Open)' },
+              { action: 'dismiss', title: 'हटाएं' },
             ],
-          } as any);
+          } as any;
+          reg.showNotification(item.title, swOptions).catch(() => {
+            reg.showNotification(item.title, {
+              body: item.body,
+              icon: resolvedIcon,
+              badge: resolvedBadge,
+              tag: `nst-msg-${item.id}`,
+              data: { url: item.url || '/', id: item.id, ...item },
+            }).catch(() => {});
+          });
         } else {
-          const directIcon = item.icon || '/icons/icon-192.png';
+          const directIcon = item.icon || '/icons/icon-192.png?v=3';
           new Notification(item.title, { body: item.body, icon: directIcon });
         }
       } catch (err) {
@@ -1109,29 +1266,57 @@ export const subscribeToUserNotifications = (
       }
     }
 
-    // 5. Clean up from user_notifications queue in RTDB so it is NEVER processed again
-    if (notifKey) {
+    // 5. Clean up personal user_notifications queue in RTDB so it is NEVER processed again
+    if (notifKey && inboxOwnerKey) {
       try {
-        await remove(ref(rtdb, `user_notifications/${safeUserId}/${notifKey}`));
+        await remove(ref(rtdb, `user_notifications/${inboxOwnerKey}/${notifKey}`));
       } catch (_) {}
     }
   };
 
-  // Subscribe to personal notifications inbox
-  const userNotifRef = ref(rtdb, `user_notifications/${safeUserId}`);
-  const unsubUser = onValue(
-    userNotifRef,
-    (snapshot) => {
-      const val = snapshot.val();
-      if (!val || typeof val !== 'object') return;
-      Object.entries(val).forEach(([key, notif]: [string, any]) => {
-        handleIncomingNotification(notif, key);
-      });
-    },
-    (err) => {
-      console.warn('[NotificationManager] User notifications listen warning:', err);
-    }
-  );
+  // Build unique personal inbox keys (userId + any linked studentIds)
+  const initCtx = getIdentityContext();
+  const inboxKeys = Array.from(new Set<string>([safeUserId, ...Array.from(initCtx.studentIds).map(sanitizeKey)])).filter(Boolean);
+  const unsubs: Array<() => void> = [];
+
+  for (const inboxKey of inboxKeys) {
+    const userNotifRef = ref(rtdb, `user_notifications/${inboxKey}`);
+    const unsubUser = onValue(
+      userNotifRef,
+      (snapshot) => {
+        const val = snapshot.val();
+        if (!val || typeof val !== 'object') return;
+        Object.entries(val).forEach(([key, notif]: [string, any]) => {
+          handleIncomingNotification(notif, key, inboxKey);
+        });
+      },
+      (err) => {
+        console.warn('[NotificationManager] User notifications listen warning:', err);
+      }
+    );
+    unsubs.push(unsubUser);
+  }
+
+  // Subscribe to school-scoped notifications if any schoolId is linked
+  for (const schId of initCtx.schoolIds) {
+    const safeSchId = sanitizeKey(schId);
+    if (!safeSchId) continue;
+    const schoolNotifRef = ref(rtdb, `school_notifications/${safeSchId}`);
+    const unsubSchool = onValue(
+      schoolNotifRef,
+      (snapshot) => {
+        const val = snapshot.val();
+        if (!val || typeof val !== 'object') return;
+        Object.entries(val).forEach(([key, notif]: [string, any]) => {
+          handleIncomingNotification(notif, key, undefined);
+        });
+      },
+      (err) => {
+        console.warn('[NotificationManager] School notifications listen warning:', err);
+      }
+    );
+    unsubs.push(unsubSchool);
+  }
 
   // Subscribe to broadcast notifications
   const broadcastRef = ref(rtdb, 'broadcast_notifications');
@@ -1141,17 +1326,19 @@ export const subscribeToUserNotifications = (
       const val = snapshot.val();
       if (!val || typeof val !== 'object') return;
       Object.entries(val).forEach(([key, notif]: [string, any]) => {
-        handleIncomingNotification(notif, key);
+        handleIncomingNotification(notif, key, undefined);
       });
     },
     (err) => {
       console.warn('[NotificationManager] Broadcast notifications listen warning:', err);
     }
   );
+  unsubs.push(unsubBroadcast);
 
   return () => {
-    unsubUser();
-    unsubBroadcast();
+    unsubs.forEach((fn) => {
+      try { fn(); } catch {}
+    });
   };
 };
 

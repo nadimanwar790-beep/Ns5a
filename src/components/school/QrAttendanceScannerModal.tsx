@@ -10,7 +10,15 @@ import {
 import { markStudentQrAttendance, todayStr, getStudents } from "../../school-firebase";
 import { playSoundCorrect, playSoundWrong } from "../../utils/soundEffects";
 import { hapticStrong, hapticMedium } from "../../utils/haptic";
-import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
+import { dispatchAttendanceParentAlert } from "../../utils/attendanceAlertDispatcher";
+import {
+  subscribeAttendanceSchedule,
+  saveAttendanceSchedule,
+  formatTime12h,
+  getLiveShiftStatus,
+  DEFAULT_IN_CUTOFF_TIME,
+  DEFAULT_OUT_START_TIME,
+} from "../../utils/schoolAttendanceSchedule";
 
 export interface QrAttendanceScannerModalProps {
   isOpen: boolean;
@@ -441,7 +449,7 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
 
   // Active Scan Mode: Live Camera vs Media / Gallery
   const [activeTab, setActiveTab] = useState<"camera" | "media">("camera");
-  const scanMode = "auto" as const;
+  const [scanMode, setScanMode] = useState<"auto" | "in" | "out">("auto");
 
   // Camera State
   const [cameraActive, setCameraActive] = useState(false);
@@ -461,7 +469,17 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
-  const [cutoffTime, setCutoffTime] = useState("08:30");
+  const activeSchoolId = targetSchoolId || currentStudent?.schoolId || "";
+  const [cutoffTime, setCutoffTime] = useState(DEFAULT_IN_CUTOFF_TIME);
+  const [outStartTime, setOutStartTime] = useState(DEFAULT_OUT_START_TIME);
+
+  useEffect(() => {
+    if (!activeSchoolId) return;
+    return subscribeAttendanceSchedule(activeSchoolId, (sched) => {
+      setCutoffTime(sched.inCutoffTime);
+      setOutStartTime(sched.outStartTime);
+    });
+  }, [activeSchoolId]);
 
   // Recent Punches Feed (Live Feed)
   const [recentPunches, setRecentPunches] = useState<Array<{
@@ -587,6 +605,7 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
           markedBy: source === "media" ? "TEACHER_MEDIA_QR_SCAN" : (teacherId || "TEACHER_QR_SCAN"),
           scanMode,
           cutoffTime,
+          outStartTime,
         });
 
         if (res.success) {
@@ -638,25 +657,22 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
 
           onStudentMarked?.({ id: studentId, name: studentName, rollNo });
 
-          // Instant real-time push notification to student's parents
-          const notifTitle = res.action === "in"
-            ? (isLate ? "⚠️ विद्यालय प्रवेश (Late Entry)" : "🏫 विद्यालय उपस्थिति सूचना (Present)")
-            : "🚪 विद्यालय प्रस्थान सूचना (Out/Dispersal)";
-
-          const notifBody = res.action === "in"
-            ? `🔔 उपस्थिति सूचना: ${studentName} ${rollNo ? `(Roll: #${rollNo})` : ""} आज ${res.inTime || punchTime} पर विद्यालय पहुँच चुके हैं। सुरक्षित प्रवेश दर्ज। ✅`
-            : `🚶‍♂️ प्रस्थान सूचना: ${studentName} ${rollNo ? `(Roll: #${rollNo})` : ""} आज ${res.outTime || punchTime} पर विद्यालय से प्रस्थान कर चुके हैं। कुल रुकने का समय: ${res.stayDuration || "Recorded"}।`;
-
-          void sendSchoolPushNotification({
-            schoolId,
-            classId,
-            studentIds: [studentId],
-            title: notifTitle,
-            body: notifBody,
-            type: "SCHOOL_NOTICE",
-            url: `/?schoolPortal=1&studentId=${studentId}&schoolTab=attendance`,
-            urgent: true,
-          });
+          // Instant real-time NSTA Messenger + Push alert to student's parents (skip duplicate if alreadyMarked)
+          if (!res.alreadyMarked) {
+            void dispatchAttendanceParentAlert({
+              schoolId,
+              classId,
+              className: parsed.className || targetClassName || "",
+              studentId,
+              studentName,
+              rollNo,
+              status: res.action === "out" ? "out" : isLate ? "late" : "in",
+              timeText: res.action === "out" ? (res.outTime || punchTime) : (res.inTime || punchTime),
+              stayDuration: res.stayDuration,
+              date: today,
+              sourceLabel: "QR कोड स्कैनर",
+            });
+          }
         } else {
           throw new Error(res.message);
         }
@@ -688,6 +704,7 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
           markedBy: source === "media" ? "STUDENT_MEDIA_QR" : "STUDENT_SELF_QR",
           scanMode,
           cutoffTime,
+          outStartTime,
         });
 
         if (res.success) {
@@ -713,22 +730,23 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
             source,
           });
 
-          // Instant real-time push notification to student's parents
-          const notifTitle = res.action === "in" ? "🏫 विद्यालय उपस्थिति सूचना (Present)" : "🚪 विद्यालय प्रस्थान सूचना (Out/Dispersal)";
-          const notifBody = res.action === "in"
-            ? `🔔 उपस्थिति सूचना: ${currentStudent.name} ${currentStudent.rollNo ? `(Roll: #${currentStudent.rollNo})` : ""} आज ${res.inTime || punchTime} पर विद्यालय उपस्थित हो चुके हैं। सुरक्षित प्रवेश दर्ज। ✅`
-            : `🚶‍♂️ प्रस्थान सूचना: ${currentStudent.name} आज ${res.outTime || punchTime} पर विद्यालय से प्रस्थान कर चुके हैं।`;
-
-          void sendSchoolPushNotification({
-            schoolId,
-            classId,
-            studentIds: [currentStudent.id],
-            title: notifTitle,
-            body: notifBody,
-            type: "SCHOOL_NOTICE",
-            url: `/?schoolPortal=1&studentId=${currentStudent.id}&schoolTab=attendance`,
-            urgent: true,
-          });
+          // Instant real-time NSTA Messenger + Push alert to student's parents
+          if (!res.alreadyMarked) {
+            void dispatchAttendanceParentAlert({
+              schoolId,
+              schoolName: currentStudent.schoolName,
+              classId,
+              className,
+              studentId: currentStudent.id,
+              studentName: currentStudent.name,
+              rollNo: currentStudent.rollNo,
+              status: res.action === "out" ? "out" : res.isLate ? "late" : "in",
+              timeText: res.action === "out" ? (res.outTime || punchTime) : (res.inTime || punchTime),
+              stayDuration: res.stayDuration,
+              date: qrDate,
+              sourceLabel: "क्लास QR सेल्फ-स्कैन",
+            });
+          }
         } else {
           throw new Error(res.message);
         }
@@ -752,7 +770,7 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
       setProcessing(false);
       setMediaScanning(false);
     }
-  }, [isTeacherMode, targetSchoolId, targetClassId, targetClassName, teacherId, currentStudent, scanMode, cutoffTime, onStudentMarked]);
+  }, [isTeacherMode, targetSchoolId, targetClassId, targetClassName, teacherId, currentStudent, scanMode, cutoffTime, outStartTime, onStudentMarked]);
 
   // Start the camera scanner with optimized autofocus and hardware acceleration
   const startScanner = useCallback(async (facing: "environment" | "user") => {
@@ -1015,21 +1033,89 @@ export const QrAttendanceScannerModal: React.FC<QrAttendanceScannerModalProps> =
           </button>
         </div>
 
-        {/* Scan Mode & Time Options (In / Exit / Cutoff) */}
-        {isTeacherMode && (
-          <div className="bg-slate-950 px-4 py-2 border-b border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
-            <div className="flex items-center gap-1 text-[11px] text-slate-400">
-              <span>Cutoff:</span>
-              <input
-                type="time"
-                value={cutoffTime}
-                onChange={e => setCutoffTime(e.target.value)}
-                className="bg-slate-800 text-slate-200 px-1.5 py-0.5 rounded border border-slate-700 text-[11px] outline-hidden cursor-pointer"
-                title="School cutoff time for late arrival"
-              />
+        {/* Scan Mode & IN / OUT Schedule Options */}
+        {(() => {
+          const liveShift = getLiveShiftStatus({ inCutoffTime: cutoffTime, outStartTime });
+          return (
+            <div className="bg-slate-950 px-3.5 py-2 border-b border-slate-800/80 space-y-2 text-xs shrink-0">
+              {isTeacherMode && (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  {/* Auto / IN / OUT Toggle */}
+                  <div className="flex items-center p-0.5 rounded-xl bg-slate-900 border border-slate-800 text-[11px] font-black">
+                    <button
+                      type="button"
+                      onClick={() => setScanMode("auto")}
+                      className={`px-2.5 py-1 rounded-lg transition cursor-pointer ${
+                        scanMode === "auto" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"
+                      }`}
+                    >
+                      🔄 Auto
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setScanMode("in")}
+                      className={`px-2.5 py-1 rounded-lg transition cursor-pointer ${
+                        scanMode === "in" ? "bg-emerald-600 text-white" : "text-slate-400 hover:text-white"
+                      }`}
+                    >
+                      🟢 IN
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setScanMode("out")}
+                      className={`px-2.5 py-1 rounded-lg transition cursor-pointer ${
+                        scanMode === "out" ? "bg-rose-600 text-white" : "text-slate-400 hover:text-white"
+                      }`}
+                    >
+                      🔴 OUT
+                    </button>
+                  </div>
+
+                  {/* Editable Cutoff + OUT Start Timings */}
+                  <div className="flex items-center gap-2 flex-wrap text-[11px] text-slate-300">
+                    <label className="flex items-center gap-1">
+                      <span className="text-emerald-400 font-bold">IN:</span>
+                      <input
+                        type="time"
+                        value={cutoffTime}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setCutoffTime(v);
+                          if (activeSchoolId) void saveAttendanceSchedule(activeSchoolId, { inCutoffTime: v, outStartTime });
+                        }}
+                        className="bg-slate-800 text-slate-100 px-1.5 py-0.5 rounded border border-slate-700 text-[11px] outline-hidden cursor-pointer"
+                        title="Late IN cutoff time"
+                      />
+                    </label>
+                    <label className="flex items-center gap-1">
+                      <span className="text-amber-400 font-bold">OUT:</span>
+                      <input
+                        type="time"
+                        value={outStartTime}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setOutStartTime(v);
+                          if (activeSchoolId) void saveAttendanceSchedule(activeSchoolId, { inCutoffTime: cutoffTime, outStartTime: v });
+                        }}
+                        className="bg-slate-800 text-slate-100 px-1.5 py-0.5 rounded border border-slate-700 text-[11px] outline-hidden cursor-pointer"
+                        title="Auto OUT dispersal start time"
+                      />
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between gap-2 text-[10px] font-bold bg-slate-900/90 border border-slate-800 rounded-lg px-2.5 py-1">
+                <span className="text-cyan-300 truncate">{liveShift.badgeText}</span>
+                {!isTeacherMode && (
+                  <span className="text-slate-400 shrink-0">
+                    OUT: {formatTime12h(outStartTime)}
+                  </span>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* ============================================================== */}
         {/* TAB 1: LIVE CAMERA VIEWFINDER BODY                             */}

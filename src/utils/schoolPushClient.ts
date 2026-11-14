@@ -27,6 +27,14 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
   return outputArray;
 }
 
+function uint8ArraysEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 export function isSchoolPushSupported(): boolean {
   return (
     typeof window !== "undefined" &&
@@ -42,7 +50,10 @@ export function getSchoolPushEnabledState(uid?: string): boolean {
     return false;
   }
   try {
-    return localStorage.getItem(PUSH_ENABLED_KEY(uid || "guest")) === "true";
+    return (
+      localStorage.getItem(PUSH_ENABLED_KEY(uid || "guest")) === "true" ||
+      localStorage.getItem("nst_school_push_enabled_any") === "true"
+    );
   } catch {
     return false;
   }
@@ -84,6 +95,7 @@ async function getPushServiceWorkerRegistration(): Promise<ServiceWorkerRegistra
 
 export async function enableSchoolPushForUser(params: {
   userId: string;
+  schoolId?: string;
   students: LinkedStudentPushPayload[];
   replaceStudents?: boolean;
 }): Promise<{ ok: boolean; error?: string }> {
@@ -115,20 +127,41 @@ export async function enableSchoolPushForUser(params: {
       return { ok: false, error: "Server VAPID key uplabdh nahi hai." };
     }
 
+    const expectedAppKey = urlBase64ToUint8Array(publicKey);
     const swReg = await getPushServiceWorkerRegistration();
     let sub = await swReg.pushManager.getSubscription();
+
+    // Auto-recover from stale VAPID subscription mismatches across server restarts/deployments
+    if (sub && sub.options?.applicationServerKey) {
+      try {
+        const existingKeyBytes = new Uint8Array(sub.options.applicationServerKey);
+        if (!uint8ArraysEqual(existingKeyBytes, expectedAppKey)) {
+          await sub.unsubscribe().catch(() => {});
+          sub = null;
+        }
+      } catch {
+        // Ignore comparison errors if browser blocks applicationServerKey reading
+      }
+    }
+
     if (!sub) {
       sub = await swReg.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(publicKey) as unknown as BufferSource,
+        applicationServerKey: expectedAppKey as unknown as BufferSource,
       });
     }
+
+    const resolvedSchoolId =
+      params.schoolId ||
+      params.students?.[0]?.schoolId ||
+      (typeof localStorage !== "undefined" ? localStorage.getItem("nst_active_school_id") || "" : "");
 
     const saveRes = await fetch("/api/school-push/subscribe", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         userId: params.userId || "guest",
+        schoolId: resolvedSchoolId || undefined,
         subscription: sub.toJSON(),
         students: params.students,
         autoMonthlyEnabled: true,
@@ -142,6 +175,7 @@ export async function enableSchoolPushForUser(params: {
 
     try {
       localStorage.setItem(PUSH_ENABLED_KEY(params.userId || "guest"), "true");
+      localStorage.setItem("nst_school_push_enabled_any", "true");
     } catch {}
 
     return { ok: true };
@@ -150,9 +184,49 @@ export async function enableSchoolPushForUser(params: {
   }
 }
 
+/**
+ * Automatically ensures Web Push subscription & linked student/class metadata are synced
+ * whenever browser/device Notification.permission is already "granted".
+ * Throttled per unique signature in sessionStorage to avoid redundant calls.
+ */
+export async function autoSyncSchoolPushIfPermitted(params: {
+  userId: string;
+  schoolId?: string;
+  students: LinkedStudentPushPayload[];
+}): Promise<boolean> {
+  if (typeof window === "undefined" || !isSchoolPushSupported()) return false;
+  if (Notification.permission !== "granted") return false;
+
+  const cleanStudents = (params.students || []).filter((s) => s && s.id);
+  const sig = `${params.userId || "guest"}|${params.schoolId || ""}|${cleanStudents
+    .map((s) => `${s.id}:${s.schoolId}:${s.classId || ""}:${s.className || ""}`)
+    .join(",")}`;
+
+  try {
+    const prevSig = sessionStorage.getItem("nst_school_push_sync_sig");
+    if (prevSig === sig) return true;
+  } catch {}
+
+  const res = await enableSchoolPushForUser({
+    userId: params.userId || "guest",
+    schoolId: params.schoolId,
+    students: cleanStudents,
+    replaceStudents: cleanStudents.length > 0,
+  });
+
+  if (res.ok) {
+    try {
+      sessionStorage.setItem("nst_school_push_sync_sig", sig);
+    } catch {}
+  }
+  return res.ok;
+}
+
 export async function disableSchoolPushForUser(userId: string): Promise<void> {
   try {
     localStorage.setItem(PUSH_ENABLED_KEY(userId || "guest"), "false");
+    localStorage.removeItem("nst_school_push_enabled_any");
+    sessionStorage.removeItem("nst_school_push_sync_sig");
   } catch {}
   if (!isSchoolPushSupported()) return;
   try {
@@ -172,12 +246,12 @@ export async function syncLinkedStudentsToPushSubscription(
   userId: string,
   students: LinkedStudentPushPayload[]
 ): Promise<void> {
-  if (!getSchoolPushEnabledState(userId) || !isSchoolPushSupported()) return;
+  if (!isSchoolPushSupported() || typeof Notification === "undefined" || Notification.permission !== "granted") return;
   try {
     await enableSchoolPushForUser({
       userId,
       students,
-      replaceStudents: true,
+      replaceStudents: students.length > 0,
     });
   } catch {}
 }
@@ -205,8 +279,13 @@ export async function syncStudentFeeDueForPush(item: {
 export async function sendSchoolPushNotification(payload: {
   schoolId?: string;
   classId?: string;
+  className?: string;
   studentIds?: string[];
   userId?: string;
+  classBroadcast?: boolean;
+  schoolBroadcast?: boolean;
+  senderId?: string;
+  senderName?: string;
   title: string;
   body: string;
   type?: "MONTHLY_FEE" | "FEE_RECEIPT" | "SCHOOL_NOTICE" | "SCHOOL_HOLIDAY" | "HOMEWORK" | "DEFAULT" | "NSTA_MESSAGE";
@@ -214,12 +293,18 @@ export async function sendSchoolPushNotification(payload: {
   urgent?: boolean;
   icon?: string;
   senderPhoto?: string;
-}): Promise<{ delivered: number; matchedDevices: number }> {
-  // 1. Dual-write to RTDB for instantaneous in-app wake up & chime
+}): Promise<{ delivered: number; matchedDevices: number; rtdbDispatched?: boolean }> {
+  const timestamp = Date.now();
+  const notifId = `school_notif_${timestamp}_${Math.random().toString(36).slice(2, 7)}`;
+  let rtdbDispatched = false;
+
+  // 1. Dual-write to RTDB for instantaneous in-app & background SW wake up
   try {
     if (rtdb) {
-      const timestamp = Date.now();
-      const notifId = `school_notif_${timestamp}_${Math.random().toString(36).slice(2, 7)}`;
+      const targetStudentIds = Array.isArray(payload.studentIds)
+        ? Array.from(new Set(payload.studentIds.map((id) => String(id).trim()).filter(Boolean)))
+        : [];
+
       const notifPayload = {
         id: notifId,
         type: payload.type || "SCHOOL_NOTICE",
@@ -228,23 +313,52 @@ export async function sendSchoolPushNotification(payload: {
         url: payload.url || "/?schoolPortal=1",
         icon: payload.icon || payload.senderPhoto || "",
         senderPhoto: payload.senderPhoto || payload.icon || "",
+        senderId: payload.senderId || "",
+        senderName: payload.senderName || "",
         timestamp,
         status: "UNREAD",
+        urgent: payload.urgent !== false,
         schoolId: payload.schoolId || "",
         classId: payload.classId || "",
+        className: payload.className || "",
+        ...(payload.classBroadcast ? { classBroadcast: true } : {}),
+        ...(payload.schoolBroadcast ? { schoolBroadcast: true } : {}),
+        ...(targetStudentIds.length > 0 ? { studentIds: targetStudentIds } : {}),
       };
 
-      if (Array.isArray(payload.studentIds) && payload.studentIds.length > 0) {
-        payload.studentIds.forEach((stId) => {
-          const cleanId = String(stId).replace(/[.#$[\]/]/g, "_");
-          void set(ref(rtdb, `user_notifications/${cleanId}/${notifId}`), notifPayload).catch(() => {});
+      const rtdbWrites: Promise<any>[] = [];
+
+      if (targetStudentIds.length > 0) {
+        targetStudentIds.forEach((stId) => {
+          const cleanId = stId.replace(/[.#$[\]/]/g, "_");
+          rtdbWrites.push(set(ref(rtdb, `user_notifications/${cleanId}/${notifId}`), notifPayload).catch(() => {}));
         });
-      } else if (payload.userId) {
-        const cleanUid = String(payload.userId).replace(/[.#$[\]/]/g, "_");
-        void set(ref(rtdb, `user_notifications/${cleanUid}/${notifId}`), notifPayload).catch(() => {});
-      } else {
-        void set(ref(rtdb, `broadcast_notifications/${notifId}`), notifPayload).catch(() => {});
       }
+
+      if (payload.userId) {
+        const cleanUid = String(payload.userId).trim().replace(/[.#$[\]/]/g, "_");
+        if (cleanUid) {
+          rtdbWrites.push(set(ref(rtdb, `user_notifications/${cleanUid}/${notifId}`), notifPayload).catch(() => {}));
+        }
+      }
+
+      // School-scoped real-time channel for School Broadcasts, Class Broadcasts, or School-wide alerts (not private 1-to-1/per-student alerts)
+      if (
+        payload.schoolId &&
+        (payload.schoolBroadcast || payload.classBroadcast || (targetStudentIds.length === 0 && !payload.userId))
+      ) {
+        const cleanSchoolId = String(payload.schoolId).trim().replace(/[.#$[\]/]/g, "_");
+        if (cleanSchoolId) {
+          rtdbWrites.push(set(ref(rtdb, `school_notifications/${cleanSchoolId}/${notifId}`), notifPayload).catch(() => {}));
+        }
+      }
+
+      if ((targetStudentIds.length === 0 && !payload.userId) || payload.schoolBroadcast) {
+        rtdbWrites.push(set(ref(rtdb, `broadcast_notifications/${notifId}`), notifPayload).catch(() => {}));
+      }
+
+      await Promise.allSettled(rtdbWrites);
+      rtdbDispatched = rtdbWrites.length > 0;
     }
   } catch (_) {}
 
@@ -253,16 +367,17 @@ export async function sendSchoolPushNotification(payload: {
     const res = await fetch("/api/school-push/send", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, notifId }),
     });
-    if (!res.ok) return { delivered: 0, matchedDevices: 0 };
+    if (!res.ok) return { delivered: 0, matchedDevices: 0, rtdbDispatched };
     const data = await res.json();
     return {
       delivered: Number(data?.delivered || 0),
       matchedDevices: Number(data?.matchedDevices || 0),
+      rtdbDispatched,
     };
   } catch {
-    return { delivered: 0, matchedDevices: 0 };
+    return { delivered: 0, matchedDevices: 0, rtdbDispatched };
   }
 }
 

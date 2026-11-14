@@ -2283,8 +2283,9 @@ export const markStudentQrAttendance = async (params: {
   date?: string;
   markedBy?: string;
   scanMode?: "auto" | "in" | "out";
-  cutoffTime?: string; // e.g. "08:30"
-  prayerTime?: string; // e.g. "09:00"
+  cutoffTime?: string; // e.g. "09:30" (Late IN cutoff)
+  outStartTime?: string; // e.g. "12:30" (Auto OUT dispersal start time)
+  prayerTime?: string; // legacy alias
 }): Promise<{
   success: boolean;
   message: string;
@@ -2315,13 +2316,39 @@ export const markStudentQrAttendance = async (params: {
 
   try {
     const docRef = d(`schools/${params.schoolId}/attendance/${docId}`);
-    const [pHour, pMin] = (params.prayerTime || "09:00").split(":").map(Number);
-    const inCutoffMinutes = (isNaN(pHour) ? 9 : pHour) * 60 + (isNaN(pMin) ? 0 : pMin) + 60;
-    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    let storedInCutoff: string | null = null;
+    let storedOutStart: string | null = null;
+    try {
+      if (typeof window !== "undefined") {
+        storedInCutoff = localStorage.getItem(`nst_kiosk_in_cutoff_${params.schoolId}`);
+        storedOutStart = localStorage.getItem(`nst_kiosk_out_start_${params.schoolId}`);
+      }
+    } catch {}
 
-    const cutoff = params.cutoffTime || "08:30";
-    const [cutHour, cutMin] = cutoff.split(":").map(Number);
+    const cutoff = params.cutoffTime || storedInCutoff || "09:30";
+    const [cutHourRaw, cutMinRaw] = cutoff.split(":").map(Number);
+    const cutHour = Number.isFinite(cutHourRaw) ? cutHourRaw : 9;
+    const cutMin = Number.isFinite(cutMinRaw) ? cutMinRaw : 30;
     const isPastCutoff = now.getHours() > cutHour || (now.getHours() === cutHour && now.getMinutes() > cutMin);
+
+    let outStartMinutes = 12 * 60 + 30; // Default 12:30 PM
+    let outStartRaw = params.outStartTime || storedOutStart || "";
+    if (!outStartRaw && params.prayerTime) {
+      const [pHour, pMin] = params.prayerTime.split(":").map(Number);
+      outStartMinutes = (Number.isFinite(pHour) ? pHour : 9) * 60 + (Number.isFinite(pMin) ? pMin : 0) + 60;
+      const oh = Math.floor(outStartMinutes / 60) % 24;
+      const om = outStartMinutes % 60;
+      outStartRaw = `${String(oh).padStart(2, "0")}:${String(om).padStart(2, "0")}`;
+    } else {
+      if (!outStartRaw) outStartRaw = "12:30";
+      const [oH, oM] = outStartRaw.split(":").map(Number);
+      outStartMinutes = (Number.isFinite(oH) ? oH : 12) * 60 + (Number.isFinite(oM) ? oM : 30);
+    }
+
+    const outPeriod = Math.floor(outStartMinutes / 60) >= 12 ? "PM" : "AM";
+    const outHour12 = Math.floor(outStartMinutes / 60) % 12 === 0 ? 12 : Math.floor(outStartMinutes / 60) % 12;
+    const outStart12h = `${String(outHour12).padStart(2, "0")}:${String(outStartMinutes % 60).padStart(2, "0")} ${outPeriod}`;
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
     type TxOutcome = {
       committed: boolean;
@@ -2378,7 +2405,8 @@ export const markStudentQrAttendance = async (params: {
         const existingEntry = studentsMap[params.studentId];
 
         // Determine action safely:
-        // In AUTO mode: if student has NO IN today (even if arriving late after 10:00 AM), record IN!
+        // In AUTO mode: if student has NO IN today (even if arriving later), record IN!
+        // If IN exists and no OUT yet: mark OUT only when current time >= configured outStartMinutes.
         let action: "in" | "out" = "in";
         if (params.scanMode === "out") {
           action = "out";
@@ -2387,12 +2415,29 @@ export const markStudentQrAttendance = async (params: {
         } else {
           if (!existingEntry?.inTime) {
             action = "in";
-          } else if (!existingEntry?.outTime && nowMinutes > inCutoffMinutes) {
-            action = "out";
-          } else if (existingEntry?.inTime && existingEntry?.outTime) {
-            action = "out";
+          } else if (!existingEntry?.outTime) {
+            if (nowMinutes >= outStartMinutes) {
+              action = "out";
+            } else {
+              return {
+                committed: false,
+                result: {
+                  success: true,
+                  action: "in",
+                  inTime: existingEntry.inTime,
+                  outTime: existingEntry.outTime,
+                  stayDuration: existingEntry.stayDuration,
+                  isLate: existingEntry.status === "late",
+                  alreadyMarked: true,
+                  tooEarlyForOut: true,
+                  cloudSaved: true,
+                  message: `⏳ ${params.studentName || 'छात्र'} का आगमन (IN) पहले से दर्ज है (${existingEntry.inTime})। ऑटो OUT ${outStart12h} के बाद लगेगा (अभी तुरंत छुट्टी लगाने के लिए ऊपर 'OUT' मोड चुनें)।`,
+                  record: existing || undefined
+                }
+              };
+            }
           } else {
-            action = "in";
+            action = "out";
           }
         }
 
@@ -2450,7 +2495,7 @@ export const markStudentQrAttendance = async (params: {
             };
           }
 
-          // RULE 4: 30-Minute Minimum Stay Gap (Timestamp-first, midnight-safe)
+          // RULE 4: Minimum Stay Gap (30-min in AUTO kiosk mode to avoid instant double-punch; 1-min in manual OUT override)
           let elapsedMinutes: number | null = null;
           if (typeof existingEntry.inTimestamp === "number" && Number.isFinite(existingEntry.inTimestamp)) {
             elapsedMinutes = Math.floor((nowMs - existingEntry.inTimestamp) / 60000);
@@ -2470,8 +2515,9 @@ export const markStudentQrAttendance = async (params: {
             } catch {}
           }
 
-          if (elapsedMinutes !== null && elapsedMinutes >= 0 && elapsedMinutes < 30) {
-            const remainingMin = 30 - elapsedMinutes;
+          const requiredMinGap = params.scanMode === "out" ? 1 : 30;
+          if (elapsedMinutes !== null && elapsedMinutes >= 0 && elapsedMinutes < requiredMinGap) {
+            const remainingMin = requiredMinGap - elapsedMinutes;
             return {
               committed: false,
               result: {
@@ -2481,7 +2527,7 @@ export const markStudentQrAttendance = async (params: {
                 tooEarlyForOut: true,
                 cloudSaved: false,
                 inTime: existingEntry.inTime,
-                message: `⚠️ ${params.studentName || 'छात्र'} का आगमन अभी दर्ज हुआ है (${existingEntry.inTime})। प्रस्थान (OUT) 30 मिनट बाद ही मान्य होगा (शेष: ${remainingMin} मिनट)।`,
+                message: `⚠️ ${params.studentName || 'छात्र'} का आगमन अभी दर्ज हुआ है (${existingEntry.inTime})। प्रस्थान (OUT) ${requiredMinGap} मिनट बाद ही मान्य होगा (शेष: ${remainingMin} मिनट)।`,
                 record: existing || undefined
               }
             };
@@ -2740,6 +2786,7 @@ export const markStaffAttendanceAtomic = async (params: {
   date?: string;
   scanMode?: "auto" | "in" | "out";
   currentShiftMode?: "in" | "out";
+  outStartTime?: string;
 }): Promise<{
   success: boolean;
   cloudSaved: boolean;
@@ -2772,6 +2819,20 @@ export const markStaffAttendanceAtomic = async (params: {
       message: "Firebase RTDB उपलब्ध नहीं है। क्लाउड सेविंग के बिना शिक्षक की हाजिरी दर्ज नहीं की जा सकती।",
     };
   }
+
+  let storedOutStart: string | null = null;
+  try {
+    if (typeof window !== "undefined") {
+      storedOutStart = localStorage.getItem(`nst_kiosk_out_start_${params.schoolId}`);
+    }
+  } catch {}
+  const outStartRaw = params.outStartTime || storedOutStart || "12:30";
+  const [oH, oM] = outStartRaw.split(":").map(Number);
+  const outStartMinutes = (Number.isFinite(oH) ? oH : 12) * 60 + (Number.isFinite(oM) ? oM : 30);
+  const outPeriod = Math.floor(outStartMinutes / 60) >= 12 ? "PM" : "AM";
+  const outHour12 = Math.floor(outStartMinutes / 60) % 12 === 0 ? 12 : Math.floor(outStartMinutes / 60) % 12;
+  const outStart12h = `${String(outHour12).padStart(2, "0")}:${String(outStartMinutes % 60).padStart(2, "0")} ${outPeriod}`;
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
   const dayRef = ref(rtdb, `school_staff_attendance/${params.schoolId}/${date}`);
   let rejectedOutcome: {
@@ -2806,7 +2867,27 @@ export const markStaffAttendanceAtomic = async (params: {
             : (params.currentShiftMode || "in");
 
         if (params.scanMode === "auto") {
-          action = existingRec?.inTime && !existingRec?.outTime ? "out" : "in";
+          if (!existingRec?.inTime) {
+            action = "in";
+          } else if (!existingRec?.outTime) {
+            if (nowMinutes >= outStartMinutes) {
+              action = "out";
+            } else {
+              rejectedOutcome = {
+                success: true,
+                alreadyMarked: true,
+                tooEarlyForOut: true,
+                action: "in",
+                inTime: existingRec.inTime,
+                outTime: existingRec.outTime,
+                stayDuration: existingRec.stayDuration,
+                message: `⏳ शिक्षक ${params.staffName} का IN पहले से दर्ज है (${existingRec.inTime})। ऑटो OUT ${outStart12h} के बाद लगेगा (तुरंत OUT के लिए 'OUT' मोड चुनें)।`,
+              };
+              return;
+            }
+          } else {
+            action = "out";
+          }
         }
 
         if (action === "in") {
@@ -2865,14 +2946,15 @@ export const markStaffAttendanceAtomic = async (params: {
             } catch {}
           }
 
-          if (elapsedMinutes !== null && elapsedMinutes >= 0 && elapsedMinutes < 30) {
+          const requiredMinGap = params.scanMode === "out" ? 1 : 30;
+          if (elapsedMinutes !== null && elapsedMinutes >= 0 && elapsedMinutes < requiredMinGap) {
             rejectedOutcome = {
               success: false,
               alreadyMarked: true,
               tooEarlyForOut: true,
               action: "out",
               inTime: existingRec.inTime,
-              message: `⚠️ शिक्षक ${params.staffName} का आगमन अभी दर्ज हुआ है (${existingRec.inTime})। प्रस्थान 30 मिनट बाद ही मान्य होगा (शेष: ${30 - elapsedMinutes} मिनट)।`,
+              message: `⚠️ शिक्षक ${params.staffName} का आगमन अभी दर्ज हुआ है (${existingRec.inTime})। प्रस्थान ${requiredMinGap} मिनट बाद ही मान्य होगा (शेष: ${requiredMinGap - elapsedMinutes} मिनट)।`,
             };
             return;
           }
@@ -4224,7 +4306,10 @@ export const promoteStudents = async (
 
 export const generateId = (prefix?: string) => prefix ? `${prefix}_${doc(collection(db, "_")).id}` : doc(collection(db, "_")).id;
 
-export const todayStr = () => new Date().toISOString().split("T")[0];
+export const todayStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
 
 export const currentMonthStr = () => {
   const d = new Date();
@@ -5753,7 +5838,7 @@ export const markNstaMessagesDeliveredOrRead = async (
 
 export const subscribeToNstaMessages = (
   schoolId: string,
-  filter: { threadType: NstaThreadType; classId?: string; studentId?: string; teacherId?: string },
+  filter: { threadType: NstaThreadType; classId?: string; className?: string; studentId?: string; teacherId?: string },
   cb: (msgs: NstaMessage[]) => void
 ): () => void => {
   const cacheKey = `nst_school_nsta_msgs_${schoolId}`;
@@ -5766,10 +5851,15 @@ export const subscribeToNstaMessages = (
         // 1. Strict threadType match - class, school, or teacher
         if (m.threadType !== filter.threadType) return false;
 
-        // 2. Class Group filtering
+        // 2. Class Group filtering (match exact classId OR className/normalized ID via isStudentInClass)
         if (filter.threadType === "CLASS_GROUP") {
           if (filter.classId && m.classId && m.classId !== filter.classId && m.classId !== "all" && m.classId !== "general") {
-            return false;
+            const matched = isStudentInClass(
+              { classId: filter.classId, className: filter.className } as any,
+              m.classId,
+              m.className
+            );
+            if (!matched) return false;
           }
         }
 
@@ -5803,6 +5893,35 @@ export const subscribeToNstaMessages = (
     window.addEventListener("nsta-messages-updated", handleCustomEvent);
   }
 
+  let rtdbList: NstaMessage[] | null = null;
+  let fsList: NstaMessage[] | null = null;
+
+  const mergeAndEmit = () => {
+    const cur = getSchoolCacheSync<NstaMessage[]>(cacheKey, []);
+    const mergedMap = new Map<string, NstaMessage>();
+    // Preserve optimistic local sends created in the last 30s until remote confirms
+    const cutoff = Date.now() - 30_000;
+    if (Array.isArray(cur)) {
+      for (const m of cur) {
+        if (m?.id && m.createdAt && new Date(m.createdAt).getTime() >= cutoff) {
+          mergedMap.set(m.id, m);
+        }
+      }
+    }
+    if (Array.isArray(rtdbList)) {
+      for (const m of rtdbList) {
+        if (m?.id) mergedMap.set(m.id, m);
+      }
+    }
+    if (Array.isArray(fsList)) {
+      for (const m of fsList) {
+        if (m?.id) mergedMap.set(m.id, m);
+      }
+    }
+    setSchoolCacheSync(cacheKey, Array.from(mergedMap.values()));
+    loadFromCacheAndNotify();
+  };
+
   // Realtime Database listener
   let unsubRtdb = () => {};
   if (rtdb) {
@@ -5811,12 +5930,11 @@ export const subscribeToNstaMessages = (
       const onRtdbValue = (snap: any) => {
         const val = snap?.val?.();
         if (val && typeof val === "object") {
-          const remoteList: NstaMessage[] = Object.values(val);
-          setSchoolCacheSync(cacheKey, remoteList);
-          loadFromCacheAndNotify();
+          rtdbList = Object.values(val);
+          mergeAndEmit();
         } else if (val === null) {
-          setSchoolCacheSync(cacheKey, []);
-          loadFromCacheAndNotify();
+          rtdbList = [];
+          mergeAndEmit();
         }
       };
       const unsub = onValue(rtdbPath, onRtdbValue);
@@ -5831,9 +5949,8 @@ export const subscribeToNstaMessages = (
   if (db) {
     try {
       unsubFirestore = onSnapshot(col(`schools/${schoolId}/nsta_messages`), (snap) => {
-        const remote = snap.docs.map(docSnap => docSnap.data() as NstaMessage);
-        setSchoolCacheSync(cacheKey, remote);
-        loadFromCacheAndNotify();
+        fsList = snap.docs.map(docSnap => docSnap.data() as NstaMessage);
+        mergeAndEmit();
       });
     } catch {}
   }

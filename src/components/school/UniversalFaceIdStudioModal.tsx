@@ -49,9 +49,10 @@ import {
   DetectedFaceBox,
   HeadPoseEstimate
 } from "../../utils/faceRecognitionEngine";
-import { updateStudentPhoto, updateTeacher, getTeachers, getLocalTeachers } from "../../school-firebase";
+import { updateStudentPhoto, updateTeacher, getTeachers, getLocalTeachers, saveNstaMessage } from "../../school-firebase";
 import { speakNotification } from "../../utils/voiceNotifyEngine";
 import { hapticStrong } from "../../utils/haptic";
+import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 
 interface Props {
   isOpen: boolean;
@@ -167,7 +168,12 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
     record: FaceDescriptorRecord;
     confidence: number;
     time: string;
+    action?: "in" | "out";
+    count?: number;
   } | null>(null);
+  const testCooldownRef = useRef<Map<string, number>>(new Map());
+  const testCountsRef = useRef<Record<string, number>>({});
+  const [testHistoryCount, setTestHistoryCount] = useState<number>(0);
 
   const studentsRef = useRef<any[]>(students);
   studentsRef.current = students;
@@ -553,11 +559,97 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
               if (matchedStudent) {
                 const rec = enrolledMap[matchedStudent.studentId];
                 if (rec) {
-                  setTestMatchedPerson({
-                    record: rec,
-                    confidence: matchedStudent.similarityPercent,
-                    time: new Date().toLocaleTimeString("en-IN")
+                  const nowMs = Date.now();
+                  const lastTs = testCooldownRef.current.get(rec.studentId) || 0;
+                  const timeStr = new Date(nowMs).toLocaleTimeString("en-IN", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                    hour12: true,
                   });
+
+                  if (nowMs - lastTs >= 3000) {
+                    testCooldownRef.current.set(rec.studentId, nowMs);
+                    const nextCount = (testCountsRef.current[rec.studentId] || 0) + 1;
+                    testCountsRef.current[rec.studentId] = nextCount;
+                    const action: "in" | "out" = nextCount % 2 === 1 ? "in" : "out";
+                    setTestHistoryCount((c) => c + 1);
+
+                    playAttendanceSuccessChime();
+                    hapticStrong();
+
+                    setTestMatchedPerson({
+                      record: rec,
+                      confidence: matchedStudent.similarityPercent,
+                      time: timeStr,
+                      action,
+                      count: nextCount,
+                    });
+
+                    try {
+                      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+                        window.speechSynthesis.cancel();
+                        const utt = new SpeechSynthesisUtterance(
+                          `${rec.name} ${action === "out" ? "प्रस्थान OUT" : "उपस्थित IN"}`
+                        );
+                        utt.lang = "hi-IN";
+                        window.speechSynthesis.speak(utt);
+                      } else {
+                        speakNotification(`${rec.name} ${action.toUpperCase()}`, undefined, { force: true, playTone: false });
+                      }
+                    } catch {}
+
+                    const clsLabel = rec.className || (rec.role === "TEACHER" ? "शिक्षक (Faculty)" : "Class");
+                    const pushTitle = action === "in"
+                      ? `🟢 [TEST #${nextCount} • IN] ${rec.name} प्रवेश`
+                      : `🔴 [TEST #${nextCount} • OUT] ${rec.name} प्रस्थान`;
+                    const pushBody = action === "in"
+                      ? `[Test Mode #${nextCount}] ${rec.name} (${clsLabel}) ka Check-IN samay ${timeStr} par darj hua.`
+                      : `[Test Mode #${nextCount}] ${rec.name} (${clsLabel}) ka Check-OUT samay ${timeStr} par darj hua.`;
+
+                    void sendSchoolPushNotification({
+                      schoolId,
+                      classId: rec.classId || "",
+                      className: clsLabel,
+                      studentIds: [rec.studentId],
+                      ...(rec.role === "TEACHER" ? { userId: rec.studentId } : {}),
+                      senderId: "school_kiosk_test",
+                      senderName: "स्कूल टेस्ट डेस्क",
+                      title: pushTitle,
+                      body: pushBody,
+                      type: "SCHOOL_NOTICE",
+                      url: `/?schoolPortal=1&studentId=${encodeURIComponent(rec.studentId)}&schoolTab=messenger&subTab=school`,
+                      urgent: true,
+                    }).catch(() => {});
+
+                    if (rec.role !== "TEACHER") {
+                      const testMsgText = action === "in"
+                        ? `🟢 [TEST MODE #${nextCount} — Check-IN]\nनमस्ते! ${rec.name} (${clsLabel}${rec.rollNo ? `, Roll #${rec.rollNo}` : ""}) का टेस्ट प्रवेश (IN) समय ${timeStr} पर दर्ज हुआ।`
+                        : `🔴 [TEST MODE #${nextCount} — Check-OUT]\nनमस्ते! ${rec.name} (${clsLabel}${rec.rollNo ? `, Roll #${rec.rollNo}` : ""}) का टेस्ट प्रस्थान (OUT) समय ${timeStr} पर दर्ज हुआ।`;
+                      void saveNstaMessage({
+                        id: `msg_test_studio_${nowMs}_${nextCount}_${rec.studentId}`,
+                        schoolId,
+                        threadType: "SCHOOL_DESK",
+                        classId: rec.classId || "",
+                        studentId: rec.studentId,
+                        studentName: rec.name,
+                        senderId: "school_kiosk_test",
+                        senderName: "स्कूल टेस्ट डेस्क",
+                        senderRole: "ADMIN",
+                        text: testMsgText,
+                        createdAt: new Date(nowMs).toISOString(),
+                        status: "delivered",
+                      }).catch(() => {});
+                    }
+                  } else {
+                    setTestMatchedPerson((prev) => ({
+                      record: rec,
+                      confidence: matchedStudent.similarityPercent,
+                      time: prev?.record?.studentId === rec.studentId ? prev.time : timeStr,
+                      action: prev?.record?.studentId === rec.studentId ? prev.action : ((testCountsRef.current[rec.studentId] || 1) % 2 === 1 ? "in" : "out"),
+                      count: prev?.record?.studentId === rec.studentId ? prev.count : (testCountsRef.current[rec.studentId] || 1),
+                    }));
+                  }
                 }
               }
             } else {
@@ -571,7 +663,7 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
 
     animId = requestAnimationFrame(renderTestLoop);
     return () => cancelAnimationFrame(animId);
-  }, [activeTab, isOpen, enrolledMap]);
+  }, [activeTab, isOpen, enrolledMap, schoolId]);
 
   // 3D Live Head Pose Tracking & Holographic Wireframe Loop
   useEffect(() => {
@@ -1371,7 +1463,36 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
                     </h4>
 
                     {testMatchedPerson ? (
-                      <div className="mt-4 p-4 rounded-2xl bg-emerald-950/60 border border-emerald-500/40 text-center space-y-3 animate-in zoom-in-95">
+                      <div className={`mt-4 p-4 rounded-2xl border text-center space-y-3 animate-in zoom-in-95 ${
+                        testMatchedPerson.action === "out"
+                          ? "bg-rose-950/50 border-rose-500/50"
+                          : "bg-emerald-950/60 border-emerald-500/40"
+                      }`}>
+                        <div className="flex items-center justify-center gap-2 flex-wrap">
+                          <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-black uppercase ${
+                            testMatchedPerson.action === "out"
+                              ? "bg-rose-500 text-white"
+                              : "bg-emerald-500 text-slate-950"
+                          }`}>
+                            {testMatchedPerson.action === "out" ? "🔴 TEST OUT" : "🟢 TEST IN"} (#{testMatchedPerson.count || 1})
+                          </span>
+                          <span className="px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black">
+                            📲 Mobile Push Sent ({testHistoryCount})
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              testCountsRef.current = {};
+                              testCooldownRef.current.clear();
+                              setTestHistoryCount(0);
+                              setTestMatchedPerson(null);
+                            }}
+                            className="px-2 py-0.5 rounded-full bg-slate-800 hover:bg-slate-700 text-amber-300 text-[10px] font-bold border border-amber-500/30 cursor-pointer"
+                          >
+                            रीसेट
+                          </button>
+                        </div>
+
                         <div className="w-20 h-20 rounded-2xl mx-auto overflow-hidden border-2 border-emerald-400 shadow-lg">
                           <img
                             src={testMatchedPerson.record.photoUrl}
@@ -1415,7 +1536,7 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
                         </div>
 
                         <p className="text-[11px] text-emerald-200/90 font-medium">
-                          ✓ बायोमेट्रिक वेरिफिकेशन पास! कियोस्क में उपस्थिति दर्ज करने के लिए पूर्णतः तैयार।
+                          ✓ 1st स्कैन IN और 2nd स्कैन OUT • अगला स्कैन (3s बाद) {testMatchedPerson.action === "in" ? "OUT" : "IN"} होगा और स्टूडेंट मोबाइल पर Push जाएगा।
                         </p>
                       </div>
                     ) : (

@@ -148,11 +148,41 @@ async function getFcmAccessToken(): Promise<string | null> {
   }
 }
 
+function normalizeClassToken(val?: string): string {
+  return String(val || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function stripClassPrefixToken(norm: string): string {
+  return norm.replace(/^(cls|class|std|grade)/, "");
+}
+
+function doesClassMatch(
+  candidateClassId?: string,
+  candidateClassName?: string,
+  targetClassId?: string,
+  targetClassName?: string
+): boolean {
+  const cTokens = [normalizeClassToken(candidateClassId), normalizeClassToken(candidateClassName)].filter(Boolean);
+  const tTokens = [normalizeClassToken(targetClassId), normalizeClassToken(targetClassName)].filter(Boolean);
+  if (tTokens.length === 0) return true;
+  if (cTokens.length === 0) return false;
+  for (const c of cTokens) {
+    const cs = stripClassPrefixToken(c);
+    for (const t of tTokens) {
+      const ts = stripClassPrefixToken(t);
+      if (c === t || (cs && ts && cs === ts) || c.includes(t) || t.includes(c)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 async function dispatchFcmToUsers(
   recipientIds: string[],
   broadcast: boolean,
-  payload: { title: string; body: string; type?: string; url?: string; icon?: string },
-  filter?: { schoolId?: string; classId?: string }
+  payload: { id?: string; title: string; body: string; type?: string; url?: string; icon?: string },
+  filter?: { schoolId?: string; classId?: string; className?: string }
 ): Promise<number> {
   const accessToken = await getFcmAccessToken();
   if (!accessToken) return 0;
@@ -167,17 +197,26 @@ async function dispatchFcmToUsers(
   for (const [key, entry] of Object.entries(allTokens)) {
     if (!entry?.token) continue;
     if (filter?.schoolId && entry.schoolId && entry.schoolId !== filter.schoolId) continue;
-    if (filter?.classId && entry.classId && entry.classId !== filter.classId) continue;
 
     const entryUserId = entry.userId ? String(entry.userId).trim() : "";
     const entryStudentId = entry.studentId ? String(entry.studentId).trim() : "";
 
-    const isMatch =
-      broadcast ||
-      cleanSet.size === 0 ||
+    const explicitIdMatch =
       cleanSet.has(key) ||
       (entryUserId && (rawSet.has(entryUserId) || cleanSet.has(entryUserId.replace(/[.#$[\]/]/g, "_")))) ||
       (entryStudentId && (rawSet.has(entryStudentId) || cleanSet.has(entryStudentId.replace(/[.#$[\]/]/g, "_"))));
+
+    if (!explicitIdMatch && (filter?.classId || filter?.className)) {
+      if (!doesClassMatch(entry.classId, entry.className, filter.classId, filter.className)) {
+        continue;
+      }
+    }
+
+    const isMatch =
+      (broadcast && !filter?.classId && !filter?.className) ||
+      (broadcast && (filter?.classId || filter?.className) && doesClassMatch(entry.classId, entry.className, filter.classId, filter.className)) ||
+      cleanSet.size === 0 ||
+      explicitIdMatch;
 
     if (isMatch) {
       const keys = tokenToKeysMap.get(entry.token) || [];
@@ -299,6 +338,7 @@ export interface LinkedStudentPushMeta {
 export interface StoredPushSubscription {
   id: string;
   userId: string;
+  schoolId?: string;
   subscription: webpush.PushSubscription;
   students: LinkedStudentPushMeta[];
   autoMonthlyEnabled: boolean;
@@ -509,6 +549,7 @@ async function hydrateRemotePushEngine(): Promise<void> {
 async function dispatchWebPush(
   record: StoredPushSubscription,
   payload: {
+    id?: string;
     title: string;
     body: string;
     type?: string;
@@ -516,16 +557,19 @@ async function dispatchWebPush(
     studentId?: string;
     schoolId?: string;
     urgent?: boolean;
+    icon?: string;
+    senderPhoto?: string;
   }
 ): Promise<boolean> {
   try {
+    const effectiveIcon = payload.icon || payload.senderPhoto || "/icons/icon-192.png?v=3";
     await webpush.sendNotification(
       record.subscription,
       JSON.stringify({
         notification: {
           title: payload.title,
           body: payload.body,
-          icon: "/icons/icon-192.png?v=3",
+          icon: effectiveIcon,
           badge: "/icons/badge-monochrome.png?v=4",
           silent: false,
           renotify: true,
@@ -535,12 +579,15 @@ async function dispatchWebPush(
           timestamp: Date.now(),
         },
         data: {
+          id: payload.id || "",
           title: payload.title,
           body: payload.body,
           type: payload.type || "SCHOOL_ALERT",
           url: payload.url || "/",
           studentId: payload.studentId || "",
           schoolId: payload.schoolId || "",
+          icon: effectiveIcon,
+          senderPhoto: effectiveIcon,
           urgent: payload.urgent !== false ? "1" : "0",
         },
       }),
@@ -555,6 +602,8 @@ async function dispatchWebPush(
       subscriptionsMap.delete(record.id);
       saveLocalSubscriptions();
       void rtdbDelete(`school_webpush_subs/${record.id}`);
+    } else {
+      console.warn("[Server WebPush] Send warning:", err?.statusCode || "", err?.body || err?.message || err);
     }
     return false;
   }
@@ -644,7 +693,7 @@ async function startServer() {
   // 2. Subscribe or update linked students for a device (supports Multi-Student under 1 User ID)
   app.post("/api/school-push/subscribe", async (req, res) => {
     try {
-      const { userId, subscription, students, autoMonthlyEnabled = true } = req.body || {};
+      const { userId, schoolId, subscription, students, autoMonthlyEnabled = true } = req.body || {};
       if (!subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
         return res.status(400).json({ error: "Invalid Web Push subscription payload" });
       }
@@ -687,9 +736,14 @@ async function startServer() {
       const finalStudents =
         req.body?.replaceStudents === true ? incomingStudents : Array.from(mergedMap.values());
 
+      const resolvedSchoolId = String(
+        schoolId || finalStudents?.[0]?.schoolId || existing?.schoolId || ""
+      ).trim();
+
       const record: StoredPushSubscription = {
         id: subId,
         userId: String(userId || existing?.userId || "guest"),
+        ...(resolvedSchoolId ? { schoolId: resolvedSchoolId } : {}),
         subscription,
         students: finalStudents,
         autoMonthlyEnabled: Boolean(autoMonthlyEnabled),
@@ -753,15 +807,22 @@ async function startServer() {
   app.post("/api/school-push/send", async (req, res) => {
     try {
       const {
+        notifId,
         schoolId,
         classId,
+        className,
         studentIds,
         userId,
+        classBroadcast,
+        schoolBroadcast,
+        senderId,
         title,
         body,
         type = "SCHOOL_NOTICE",
         url = "/?schoolPortal=1",
         urgent = true,
+        icon,
+        senderPhoto,
       } = req.body || {};
 
       if (!title || !body) {
@@ -774,40 +835,57 @@ async function startServer() {
 
       let delivered = 0;
       let matchedDevices = 0;
+      const effectiveIcon = icon || senderPhoto || "/icons/icon-192.png?v=3";
 
       for (const record of subscriptionsMap.values()) {
+        // Avoid echoing sender's own push notification back when senderId matches record.userId
+        if (senderId && record.userId && record.userId === String(senderId) && !userId) {
+          continue;
+        }
+
         let matchedStudent: LinkedStudentPushMeta | undefined;
 
-        if (userId && record.userId === String(userId)) {
-          matchedStudent = record.students?.[0];
+        if (userId && (record.userId === String(userId) || (record.students || []).some((s) => String(s.id) === String(userId)))) {
+          matchedStudent = record.students?.[0] || ({ id: String(userId), schoolId: schoolId || "" } as any);
         }
 
         if (!matchedStudent && targetStudentSet) {
           matchedStudent = (record.students || []).find((s) => targetStudentSet.has(String(s.id)));
+          if (!matchedStudent && targetStudentSet.has(String(record.userId))) {
+            matchedStudent = record.students?.[0] || ({ id: String(record.userId), schoolId: schoolId || "" } as any);
+          }
         }
 
-        if (!matchedStudent && schoolId && !targetStudentSet && !userId) {
+        if (!matchedStudent && (classId || className) && (classBroadcast || !targetStudentSet)) {
           matchedStudent = (record.students || []).find((s) => {
-            if (s.schoolId && s.schoolId !== schoolId) return false;
-            if (classId && s.classId && s.classId !== classId) return false;
-            return true;
-          }) || record.students?.[0];
+            if (schoolId && s.schoolId && s.schoolId !== schoolId) return false;
+            return doesClassMatch(s.classId, s.className, classId, className);
+          });
         }
 
-        // If it is a school broadcast without target students, deliver to all subscribers
-        if (!matchedStudent && !targetStudentSet && !userId) {
-          matchedStudent = record.students?.[0] || ({ id: "all", schoolId: schoolId || "" } as any);
+        if (!matchedStudent && (schoolBroadcast || (!targetStudentSet && !userId && !classId && !className))) {
+          if (schoolId) {
+            const schoolMatched = (record.students || []).find((s) => !s.schoolId || s.schoolId === schoolId);
+            if (schoolMatched) {
+              matchedStudent = schoolMatched;
+            } else if (record.schoolId === schoolId || (!record.schoolId && (!record.students || record.students.length === 0))) {
+              matchedStudent = record.students?.[0] || ({ id: "all", schoolId } as any);
+            }
+          } else {
+            matchedStudent = record.students?.[0] || ({ id: "all", schoolId: "" } as any);
+          }
         }
 
-        if (!matchedStudent && !(userId && record.userId === String(userId))) continue;
+        if (!matchedStudent) continue;
         matchedDevices++;
 
         const targetUrl =
-          matchedStudent?.id && !url.includes("studentId=")
+          matchedStudent?.id && matchedStudent.id !== "all" && !url.includes("studentId=")
             ? `${url}${url.includes("?") ? "&" : "?"}studentId=${encodeURIComponent(matchedStudent.id)}`
             : url;
 
         const ok = await dispatchWebPush(record, {
+          id: notifId,
           title,
           body,
           type,
@@ -815,6 +893,8 @@ async function startServer() {
           studentId: matchedStudent?.id,
           schoolId: matchedStudent?.schoolId || schoolId,
           urgent,
+          icon: effectiveIcon,
+          senderPhoto: effectiveIcon,
         });
         if (ok) delivered++;
       }
@@ -836,12 +916,14 @@ async function startServer() {
         }
       }
 
-      const isFcmBroadcast = !userId && (!studentIds || studentIds.length === 0 || studentIds.includes("all"));
+      const isFcmBroadcast =
+        Boolean(schoolBroadcast) ||
+        (!userId && (!studentIds || studentIds.length === 0 || studentIds.includes("all")));
       const fcmDelivered = await dispatchFcmToUsers(
         fcmRecipients,
         isFcmBroadcast,
-        { title, body, type, url },
-        { schoolId, classId }
+        { id: notifId, title, body, type, url, icon: effectiveIcon },
+        { schoolId, classId, className }
       );
       delivered += fcmDelivered;
 

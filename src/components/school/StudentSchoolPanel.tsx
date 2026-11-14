@@ -114,9 +114,11 @@ import {
   getSchoolPushEnabledState,
   enableSchoolPushForUser,
   disableSchoolPushForUser,
+  autoSyncSchoolPushIfPermitted,
   syncStudentFeeDueForPush,
   sendSchoolPushNotification,
 } from "../../utils/schoolPushClient";
+import { subscribeUserToPush } from "../NotificationManager";
 import { isSchoolEliteCurriculum, type School, type SchoolStudent, type SchoolTeacher, type NstaWelcomeData, type NstaBirthdayData } from "../../school-types";
 import { ParentLeaveManager } from "./ParentLeaveManager";
 import { PtmSchedulerModal } from "./PtmSchedulerModal";
@@ -127,6 +129,13 @@ import {
   startStudentRazorpayFeeCheckout,
   type PublicRazorpayConfig,
 } from "../../utils/razorpayCheckout";
+import {
+  subscribeAttendanceSchedule,
+  formatTime12h,
+  getLiveShiftStatus,
+  DEFAULT_IN_CUTOFF_TIME,
+  DEFAULT_OUT_START_TIME,
+} from "../../utils/schoolAttendanceSchedule";
 
 interface Props {
   uid?: string;
@@ -339,6 +348,10 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   const photoInputRef = React.useRef<HTMLInputElement | null>(null);
   const [razorpayConfig, setRazorpayConfig] = useState<PublicRazorpayConfig | null>(null);
   const [payingFeeKey, setPayingFeeKey] = useState<string | null>(null);
+  const [attendanceSchedule, setAttendanceSchedule] = useState({
+    inCutoffTime: DEFAULT_IN_CUTOFF_TIME,
+    outStartTime: DEFAULT_OUT_START_TIME,
+  });
 
   // ── School Events & Memories states
   const [selectedMemoryMedia, setSelectedMemoryMedia] = useState<{
@@ -1051,6 +1064,16 @@ export const StudentSchoolPanel: React.FC<Props> = ({
       })
       .catch(() => {});
   }, [schoolId, currentStudent.classId]);
+
+  useEffect(() => {
+    if (!schoolId) return;
+    return subscribeAttendanceSchedule(schoolId, (sched) => {
+      setAttendanceSchedule({
+        inCutoffTime: sched.inCutoffTime,
+        outStartTime: sched.outStartTime,
+      });
+    });
+  }, [schoolId]);
 
   // Combined attendance entries for currentStudent
   const studentAttendanceLogs = useMemo(() => {
@@ -2031,6 +2054,56 @@ export const StudentSchoolPanel: React.FC<Props> = ({
       monthlyFee: st.id === activeStudent.id ? studentMonthlyFee : st.monthlyFee,
     }));
   };
+
+  // Persist active student/school metadata so NotificationManager, FCM tokens, and App Web Push always know exact schoolId + classId + studentId
+  useEffect(() => {
+    if (!activeStudent?.id || !schoolId) return;
+    const resolvedClassName = formatClassLabel(studentClassLabel) || (activeStudent as any).className || "";
+    try {
+      const cachedPayload = {
+        id: activeStudent.id,
+        schoolId,
+        schoolName: schoolDisplayName,
+        classId: activeStudent.classId || "",
+        className: resolvedClassName,
+        section: activeStudent.section || "",
+        name: activeStudent.name || "Student",
+        rollNo: activeStudent.rollNo || "",
+        admissionNo: activeStudent.admissionNo || "",
+      };
+      localStorage.setItem("nst_active_student", JSON.stringify(cachedPayload));
+      localStorage.setItem("nst_active_school_id", schoolId);
+      if (activeStudent.classId || resolvedClassName) {
+        localStorage.setItem("nst_user_class", resolvedClassName || activeStudent.classId);
+      }
+      window.dispatchEvent(
+        new CustomEvent("nst_school_identity_updated", {
+          detail: { studentId: activeStudent.id, schoolId, classId: activeStudent.classId, className: resolvedClassName },
+        })
+      );
+    } catch {}
+
+    if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+      autoSyncSchoolPushIfPermitted({
+        userId: effectiveUid,
+        schoolId,
+        students: buildPushStudentList(),
+      })
+        .then((ok) => {
+          if (ok) setPushEnabled(true);
+        })
+        .catch(() => {});
+
+      try {
+        const fcmSyncKey = `nst_fcm_student_synced_${activeStudent.id}_${activeStudent.classId || ""}`;
+        if (!sessionStorage.getItem(fcmSyncKey)) {
+          sessionStorage.setItem(fcmSyncKey, "1");
+          const targetPushUid = effectiveUid && effectiveUid !== "guest" ? effectiveUid : activeStudent.id;
+          subscribeUserToPush(targetPushUid).catch(() => {});
+        }
+      } catch {}
+    }
+  }, [activeStudent?.id, activeStudent?.classId, activeStudent?.name, schoolId, schoolDisplayName, studentClassLabel, effectiveUid, allLinkedStudents?.length]);
 
   const handleTogglePushAlerts = async () => {
     if (pushBusy) return;
@@ -3235,6 +3308,68 @@ export const StudentSchoolPanel: React.FC<Props> = ({
         {/* TAB 2: MY ATTENDANCE ────────────────────────────────────────────── */}
         {activeTab === "attendance" && (
           <div className="space-y-6">
+            {/* Today's IN / OUT Live Status & School Shift Timing Card */}
+            {(() => {
+              const liveShift = getLiveShiftStatus(attendanceSchedule);
+              return (
+                <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-900 to-indigo-950/60 border border-cyan-500/35 shadow-lg space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Clock className="w-4 h-4 text-cyan-400 shrink-0" />
+                      <h4 className="text-sm font-black text-white">
+                        आज की हाजिरी (Today IN / OUT Status)
+                      </h4>
+                    </div>
+                    <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/15 border border-cyan-500/35 text-cyan-300 text-[11px] font-bold">
+                      {liveShift.badgeText}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800">
+                      <span className="text-[10px] font-bold uppercase text-emerald-400 block">
+                        🟢 IN (प्रवेश समय)
+                      </span>
+                      <span className="text-sm font-black text-white font-mono mt-0.5 block">
+                        {todayEntry?.inTime || (todayEntry?.status === "absent" ? "अनुपस्थित (Absent)" : "⏳ अभी दर्ज नहीं")}
+                      </span>
+                      <span className="text-[10px] text-slate-400 block mt-0.5">
+                        स्कूल समय: {formatTime12h(attendanceSchedule.inCutoffTime)} तक समय पर
+                      </span>
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800">
+                      <span className="text-[10px] font-bold uppercase text-amber-400 block">
+                        🔴 OUT (प्रस्थान / छुट्टी)
+                      </span>
+                      <span className="text-sm font-black text-white font-mono mt-0.5 block">
+                        {todayEntry?.outTime
+                          ? todayEntry.outTime
+                          : todayEntry?.inTime
+                          ? `⏳ बाकी (${formatTime12h(attendanceSchedule.outStartTime)} से)`
+                          : "—"}
+                      </span>
+                      <span className="text-[10px] text-slate-400 block mt-0.5">
+                        ऑटो OUT {formatTime12h(attendanceSchedule.outStartTime)} के बाद सक्रिय होता है
+                      </span>
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800">
+                      <span className="text-[10px] font-bold uppercase text-indigo-400 block">
+                        ⏱️ कुल स्कूल समय (Stay)
+                      </span>
+                      <span className="text-sm font-black text-white font-mono mt-0.5 block">
+                        {todayEntry?.stayDuration || (todayEntry?.inTime ? "स्कूल में उपस्थित" : "—")}
+                      </span>
+                      <span className="text-[10px] text-slate-400 block mt-0.5">
+                        Status: {todayEntry?.status ? todayEntry.status.toUpperCase() : "WAITING"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Attendance Stat Cards */}
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
               <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 text-center">
@@ -3258,6 +3393,51 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                 <span className="text-xl font-black text-indigo-400">{attendanceStats.percentage}%</span>
               </div>
             </div>
+
+            {/* Recent Daily IN/OUT Log */}
+            {studentAttendanceLogs.length > 0 && (
+              <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
+                <h4 className="text-sm font-bold text-white mb-3">
+                  दैनिक आगमन व प्रस्थान रिकॉर्ड (Recent IN / OUT Log)
+                </h4>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs text-left text-slate-300">
+                    <thead className="bg-slate-800/80 text-slate-400 uppercase text-[10px] font-bold">
+                      <tr>
+                        <th className="py-2 px-3 rounded-l-lg">Date</th>
+                        <th className="py-2 px-3">Status</th>
+                        <th className="py-2 px-3 text-emerald-400">IN Time</th>
+                        <th className="py-2 px-3 text-amber-400">OUT Time</th>
+                        <th className="py-2 px-3 text-right rounded-r-lg">Total Stay</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 font-mono">
+                      {studentAttendanceLogs.slice(0, 10).map((log, idx) => (
+                        <tr key={`att-log-${log.date}-${idx}`} className="hover:bg-slate-800/40">
+                          <td className="py-2 px-3 font-bold text-white">{log.date}</td>
+                          <td className="py-2 px-3 uppercase text-[10px] font-black">
+                            <span className={
+                              log.status === "absent"
+                                ? "text-rose-400"
+                                : log.status === "late"
+                                ? "text-amber-400"
+                                : "text-emerald-400"
+                            }>
+                              {log.status}
+                            </span>
+                          </td>
+                          <td className="py-2 px-3 text-emerald-300">{log.inTime || "—"}</td>
+                          <td className="py-2 px-3 text-amber-300">
+                            {log.outTime || (log.inTime ? "Pending" : "—")}
+                          </td>
+                          <td className="py-2 px-3 text-right text-indigo-300">{log.stayDuration || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             {/* Attendance Monthly Breakdown */}
             <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">

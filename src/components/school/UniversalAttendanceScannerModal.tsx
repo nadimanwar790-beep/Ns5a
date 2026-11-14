@@ -11,13 +11,19 @@ import {
 import type { School, SchoolClass, SchoolStudent, SchoolTeacher } from "../../school-types";
 import {
   todayStr, getAdminAttendance, saveAdminAttendance,
-  getStaffDailyAttendance, saveStaffDailyAttendance,
-  markStudentQrAttendance
+  markStaffAttendanceAtomic, markStudentQrAttendance, calculateStayDuration
 } from "../../school-firebase";
 import { playSoundCorrect } from "../../utils/soundEffects";
 import { hapticStrong } from "../../utils/haptic";
 import { speakNotification } from "../../utils/voiceNotifyEngine";
-import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
+import { dispatchAttendanceParentAlert } from "../../utils/attendanceAlertDispatcher";
+import {
+  subscribeAttendanceSchedule,
+  saveAttendanceSchedule,
+  getLiveShiftStatus,
+  DEFAULT_IN_CUTOFF_TIME,
+  DEFAULT_OUT_START_TIME,
+} from "../../utils/schoolAttendanceSchedule";
 
 interface Props {
   isOpen: boolean;
@@ -56,6 +62,17 @@ export const UniversalAttendanceScannerModal: React.FC<Props> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [recentScanResult, setRecentScanResult] = useState<ScanResultCard | null>(null);
   const [scanCooldown, setScanCooldown] = useState(false);
+  const [inCutoffTime, setInCutoffTime] = useState(DEFAULT_IN_CUTOFF_TIME);
+  const [outStartTime, setOutStartTime] = useState(DEFAULT_OUT_START_TIME);
+  const [showScheduleEditor, setShowScheduleEditor] = useState(false);
+
+  useEffect(() => {
+    if (!school?.id) return;
+    return subscribeAttendanceSchedule(school.id, (sched) => {
+      setInCutoffTime(sched.inCutoffTime);
+      setOutStartTime(sched.outStartTime);
+    });
+  }, [school?.id]);
 
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -268,7 +285,24 @@ export const UniversalAttendanceScannerModal: React.FC<Props> = ({
       const currentAdminAtt = getAdminAttendance(school.id, today);
       if (scanMode === "in") finalAction = "in";
       else if (scanMode === "out") finalAction = "out";
-      else finalAction = currentAdminAtt.inTime ? "out" : "in";
+      else finalAction = currentAdminAtt.inTime && !currentAdminAtt.outTime ? "out" : "in";
+
+      if (finalAction === "in" && currentAdminAtt.inTime) {
+        setErrorMessage(`एडमिन ${matchedName} का आगमन (IN) पहले से दर्ज है (${currentAdminAtt.inTime})।`);
+        return;
+      }
+      if (finalAction === "out" && !currentAdminAtt.inTime) {
+        setErrorMessage(`⚠️ ${matchedName} का आगमन (IN) आज दर्ज नहीं है। पहले IN दर्ज करें।`);
+        return;
+      }
+      if (finalAction === "out" && currentAdminAtt.outTime) {
+        setErrorMessage(`${matchedName} का प्रस्थान (OUT) पहले से दर्ज है (${currentAdminAtt.outTime})।`);
+        return;
+      }
+
+      const nextIn = finalAction === "in" ? nowTime : currentAdminAtt.inTime;
+      const nextOut = finalAction === "out" ? nowTime : currentAdminAtt.outTime;
+      stayDuration = finalAction === "out" ? calculateStayDuration(nextIn, nextOut) : undefined;
 
       const updatedAdminAtt = {
         ...currentAdminAtt,
@@ -277,31 +311,29 @@ export const UniversalAttendanceScannerModal: React.FC<Props> = ({
         adminName: matchedName,
         date: today,
         present: true,
-        inTime: finalAction === "in" ? nowTime : (currentAdminAtt.inTime || nowTime),
-        outTime: finalAction === "out" ? nowTime : currentAdminAtt.outTime,
+        inTime: nextIn,
+        outTime: nextOut,
+        stayDuration,
         locationStatus: "inside_campus" as const,
         updatedAt: now.toISOString(),
       };
       await saveAdminAttendance(updatedAdminAtt);
     } else if (matchedRole === "TEACHER") {
-      const staffAtt = getStaffDailyAttendance(school.id, today);
-      const existing = staffAtt.records[matchedId];
-
-      if (scanMode === "in") finalAction = "in";
-      else if (scanMode === "out") finalAction = "out";
-      else finalAction = existing?.inTime ? "out" : "in";
-
-      staffAtt.records[matchedId] = {
-        id: matchedId,
-        name: matchedName,
+      const staffRes = await markStaffAttendanceAtomic({
+        schoolId: school.id,
+        staffId: matchedId,
+        staffName: matchedName,
         role: "TEACHER",
-        employeeId: matchedId,
-        present: true,
-        status: "present",
-        inTime: finalAction === "in" ? nowTime : (existing?.inTime || nowTime),
-        outTime: finalAction === "out" ? nowTime : existing?.outTime,
-      };
-      await saveStaffDailyAttendance(staffAtt);
+        date: today,
+        scanMode,
+        outStartTime,
+      });
+      if (staffRes.alreadyMarked || !staffRes.success) {
+        setErrorMessage(staffRes.message);
+        return;
+      }
+      finalAction = staffRes.action;
+      stayDuration = staffRes.stayDuration;
     } else if (matchedRole === "STUDENT") {
       const res = await markStudentQrAttendance({
         schoolId: school.id,
@@ -311,19 +343,32 @@ export const UniversalAttendanceScannerModal: React.FC<Props> = ({
         rollNo: matchedRoll,
         date: today,
         scanMode,
+        cutoffTime: inCutoffTime,
+        outStartTime,
         markedBy: "UNIVERSAL_SCANNER",
       });
+      if (res.alreadyMarked || !res.success) {
+        setErrorMessage(res.message);
+        return;
+      }
       finalAction = res.action;
       stayDuration = res.stayDuration;
 
-      // Dispatch parent push notification
-      sendSchoolPushNotification({
+      // Dispatch BOTH NSTA Messenger (SCHOOL_DESK) + targeted Push notification to student's parents
+      void dispatchAttendanceParentAlert({
         schoolId: school.id,
+        schoolName: school.name,
         classId: matchedClassId,
+        className: matchedClassName,
         studentId: matchedId,
-        title: `स्कूल हाजिरी: ${matchedName}`,
-        body: `${matchedName} का ${finalAction === "in" ? "आगमन समय" : "प्रस्थान समय"} ${nowTime} दर्ज हुआ।`,
-      }).catch(() => {});
+        studentName: matchedName,
+        rollNo: matchedRoll,
+        status: finalAction === "out" ? "out" : res.isLate ? "late" : "in",
+        timeText: (finalAction === "out" ? res.outTime : res.inTime) || nowTime,
+        stayDuration,
+        date: today,
+        sourceLabel: "यूनिवर्सल QR स्कैनर",
+      });
     }
 
     playSoundCorrect();
@@ -411,44 +456,96 @@ export const UniversalAttendanceScannerModal: React.FC<Props> = ({
           </button>
         </div>
 
-        {/* Scan Mode Toggle Strip (Auto, In, Out) */}
-        <div className="p-3 bg-slate-100 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700/80 flex items-center justify-between gap-2">
-          <span className="text-xs font-bold text-slate-500 dark:text-slate-400">पंच प्रकार:</span>
-          <div className="grid grid-cols-3 gap-1.5 flex-1 max-w-xs">
-            <button
-              type="button"
-              onClick={() => setScanMode("auto")}
-              className={`py-1.5 px-2 rounded-xl text-xs font-black transition cursor-pointer ${
-                scanMode === "auto"
-                  ? "bg-purple-600 text-white shadow-xs"
-                  : "bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200"
-              }`}
-            >
-              🔄 Auto (IN/OUT)
-            </button>
-            <button
-              type="button"
-              onClick={() => setScanMode("in")}
-              className={`py-1.5 px-2 rounded-xl text-xs font-black transition cursor-pointer ${
-                scanMode === "in"
-                  ? "bg-emerald-600 text-white shadow-xs"
-                  : "bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200"
-              }`}
-            >
-              🟢 Punch IN
-            </button>
-            <button
-              type="button"
-              onClick={() => setScanMode("out")}
-              className={`py-1.5 px-2 rounded-xl text-xs font-black transition cursor-pointer ${
-                scanMode === "out"
-                  ? "bg-amber-500 text-slate-950 shadow-xs"
-                  : "bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200"
-              }`}
-            >
-              🟠 Punch OUT
-            </button>
+        {/* Scan Mode Toggle Strip (Auto, In, Out) + Live Shift Schedule */}
+        <div className="p-3 bg-slate-100 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700/80 space-y-2 shrink-0">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-bold text-slate-500 dark:text-slate-400">पंच प्रकार:</span>
+            <div className="grid grid-cols-3 gap-1.5 flex-1 max-w-xs">
+              <button
+                type="button"
+                onClick={() => setScanMode("auto")}
+                className={`py-1.5 px-2 rounded-xl text-xs font-black transition cursor-pointer ${
+                  scanMode === "auto"
+                    ? "bg-purple-600 text-white shadow-xs"
+                    : "bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200"
+                }`}
+              >
+                🔄 Auto
+              </button>
+              <button
+                type="button"
+                onClick={() => setScanMode("in")}
+                className={`py-1.5 px-2 rounded-xl text-xs font-black transition cursor-pointer ${
+                  scanMode === "in"
+                    ? "bg-emerald-600 text-white shadow-xs"
+                    : "bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200"
+                }`}
+              >
+                🟢 Punch IN
+              </button>
+              <button
+                type="button"
+                onClick={() => setScanMode("out")}
+                className={`py-1.5 px-2 rounded-xl text-xs font-black transition cursor-pointer ${
+                  scanMode === "out"
+                    ? "bg-amber-500 text-slate-950 shadow-xs"
+                    : "bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200"
+                }`}
+              >
+                🟠 Punch OUT
+              </button>
+            </div>
           </div>
+
+          {(() => {
+            const liveShift = getLiveShiftStatus({ inCutoffTime, outStartTime });
+            return (
+              <div className="bg-white dark:bg-slate-900 rounded-xl px-2.5 py-1.5 border border-slate-200 dark:border-slate-700 text-[11px] space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-bold text-indigo-700 dark:text-cyan-300 truncate">
+                    {liveShift.badgeText}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowScheduleEditor((p) => !p)}
+                    className="text-[10px] font-black text-indigo-600 dark:text-cyan-400 underline shrink-0 cursor-pointer"
+                  >
+                    {showScheduleEditor ? "बंद करें" : "⚙️ समय बदलें"}
+                  </button>
+                </div>
+                {showScheduleEditor && (
+                  <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-200 dark:border-slate-800 flex-wrap">
+                    <label className="flex items-center gap-1 text-[10px] font-bold text-slate-600 dark:text-slate-300">
+                      <span>IN कटऑफ:</span>
+                      <input
+                        type="time"
+                        value={inCutoffTime}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setInCutoffTime(v);
+                          if (school?.id) void saveAttendanceSchedule(school.id, { inCutoffTime: v, outStartTime });
+                        }}
+                        className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white"
+                      />
+                    </label>
+                    <label className="flex items-center gap-1 text-[10px] font-bold text-slate-600 dark:text-slate-300">
+                      <span>OUT शुरू:</span>
+                      <input
+                        type="time"
+                        value={outStartTime}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setOutStartTime(v);
+                          if (school?.id) void saveAttendanceSchedule(school.id, { inCutoffTime, outStartTime: v });
+                        }}
+                        className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white"
+                      />
+                    </label>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </div>
 
         {/* Camera Viewport Area */}

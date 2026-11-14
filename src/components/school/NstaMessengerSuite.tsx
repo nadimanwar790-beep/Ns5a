@@ -327,7 +327,18 @@ export const NstaMessengerSuite: React.FC<Props> = ({
   onOpenWhatsAppPay
 }) => {
   // ── Top 3-Page Switcher: Class | School | Teacher ───────────────────────
-  const [activeTab, setActiveTab] = useState<"class" | "school" | "teacher">("class");
+  const [activeTab, setActiveTab] = useState<"class" | "school" | "teacher">(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const sp = new URLSearchParams(window.location.search);
+        const subTab = sp.get("subTab");
+        const thread = sp.get("thread");
+        if (subTab === "school" || thread === "desk") return "school";
+        if (subTab === "teacher") return "teacher";
+      } catch {}
+    }
+    return "class";
+  });
 
   const safeClasses = useMemo(() => (Array.isArray(classes) ? classes.filter(Boolean) : []), [classes]);
   const safeStudents = useMemo(() => (Array.isArray(students) ? students.filter(Boolean) : []), [students]);
@@ -338,6 +349,20 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     if (student?.classId) return student.classId;
     return safeClasses[0]?.id || "";
   });
+
+  // Auto-select first class once async classes load if none selected yet
+  useEffect(() => {
+    if (!selectedClassId && safeClasses.length > 0) {
+      if (student?.classId) {
+        const matched = safeClasses.find(c => c.id === student.classId || c.name === student.className);
+        if (matched) {
+          setSelectedClassId(matched.id);
+          return;
+        }
+      }
+      setSelectedClassId(safeClasses[0].id);
+    }
+  }, [safeClasses, selectedClassId, student?.classId, student?.className]);
 
   const [selectedStudentId, setSelectedStudentId] = useState<string>(() => {
     if (student?.id) return student.id;
@@ -575,11 +600,16 @@ export const NstaMessengerSuite: React.FC<Props> = ({
 
     const isSchoolBroadcast = forwardTarget.threadType === "school" && (!forwardTarget.studentId || forwardTarget.studentId === "all");
 
+    const targetClassObj = forwardTarget.threadType === "class"
+      ? safeClasses.find(c => c.id === (forwardTarget.classId || safeClasses[0]?.id)) || activeClass
+      : undefined;
+
     const forwardedMsg: NstaMessage = {
       id: generateId("msg"),
       schoolId: school?.id || "default",
       threadType: targetType,
-      classId: forwardTarget.threadType === "class" ? (forwardTarget.classId || safeClasses[0]?.id || "general") : undefined,
+      classId: forwardTarget.threadType === "class" ? (forwardTarget.classId || targetClassObj?.id || safeClasses[0]?.id || "general") : undefined,
+      className: forwardTarget.threadType === "class" ? (targetClassObj?.name || undefined) : undefined,
       studentId: forwardTarget.threadType === "class" ? undefined : (isSchoolBroadcast ? undefined : (forwardTarget.studentId || undefined)),
       studentName: forwardTarget.threadType === "class" ? undefined : (isSchoolBroadcast ? "Sabhi Chhatra (All Students)" : undefined),
       teacherId: forwardTarget.threadType === "teacher" ? (forwardTarget.teacherId || safeTeachers[0]?.id) : undefined,
@@ -599,6 +629,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
 
     try {
       await saveNstaMessage(forwardedMsg);
+      dispatchMessengerPush(forwardedMsg);
       setForwardModalMsg(null);
       setSelectedMessageIds([]);
       setFloatingReactionMsgId(null);
@@ -1156,12 +1187,13 @@ export const NstaMessengerSuite: React.FC<Props> = ({
   useEffect(() => {
     const effectiveSchoolId = school?.id || "default";
 
-    let filter: { threadType: NstaThreadType; classId?: string; studentId?: string; teacherId?: string };
+    let filter: { threadType: NstaThreadType; classId?: string; className?: string; studentId?: string; teacherId?: string };
 
     if (activeTab === "class") {
       filter = {
         threadType: "CLASS_GROUP",
-        classId: activeClass?.id || "general"
+        classId: activeClass?.id || "general",
+        className: activeClass?.name
       };
     } else if (activeTab === "school") {
       filter = {
@@ -1244,13 +1276,14 @@ export const NstaMessengerSuite: React.FC<Props> = ({
   // Strict, targeted push notification dispatcher for NSTA Messenger Suite
   const dispatchMessengerPush = (msg: NstaMessage, overrideTitle?: string, overrideBody?: string) => {
     try {
-      const isClassGroup = msg.threadType === "CLASS_GROUP" || activeTab === "class";
-      const isSchoolDesk = msg.threadType === "SCHOOL_DESK" || activeTab === "school";
-      const isTeacherChat = msg.threadType === "TEACHER_CHAT" || activeTab === "teacher";
+      const isClassGroup = msg.threadType === "CLASS_GROUP";
+      const isSchoolDesk = msg.threadType === "SCHOOL_DESK";
+      const isTeacherChat = msg.threadType === "TEACHER_CHAT";
 
       const senderTitle = msg.senderName || (msg.senderRole === "ADMIN" ? "School Admin" : msg.senderRole === "TEACHER" ? "Teacher" : "Student");
+      const classLabel = msg.className || activeClass?.name || "Class Group";
       const defaultTitle = isClassGroup
-        ? `👥 ${senderTitle} (${activeClass?.name || "Class Group"})`
+        ? `👥 ${senderTitle} (${classLabel})`
         : isSchoolDesk
         ? `🏫 ${school?.name || "School"} • Official Notice`
         : `💬 ${senderTitle}`;
@@ -1273,12 +1306,13 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       if (isTeacherChat) {
         // 1-on-1 Teacher <-> Admin or Teacher <-> Student private routing:
         if (msg.senderRole === "ADMIN") {
-          // Admin sent message to Teacher -> notify EXCLUSIVELY this teacher!
           const teacherTargetId = msg.teacherId || activeTeacher?.id;
           if (teacherTargetId) {
             void sendSchoolPushNotification({
               schoolId: msg.schoolId,
               userId: teacherTargetId,
+              senderId: msg.senderId || currentUserId,
+              senderName: senderTitle,
               title: `🏫 School Admin (Principal) • संदेश`,
               body,
               type: "NSTA_MESSAGE",
@@ -1289,12 +1323,13 @@ export const NstaMessengerSuite: React.FC<Props> = ({
             });
           }
         } else if (msg.senderRole === "STUDENT") {
-          // Student sent message to teacher -> notify EXCLUSIVELY this teacher!
           const teacherTargetId = msg.teacherId || activeTeacher?.id;
           if (teacherTargetId) {
             void sendSchoolPushNotification({
               schoolId: msg.schoolId,
               userId: teacherTargetId,
+              senderId: msg.senderId || currentUserId,
+              senderName: senderTitle,
               title: `💬 Student: ${senderTitle}`,
               body,
               type: "NSTA_MESSAGE",
@@ -1305,11 +1340,13 @@ export const NstaMessengerSuite: React.FC<Props> = ({
             });
           }
         } else {
-          // Teacher sent message: if studentId is STAFF_ADMIN, notify Admin, else student
           const studentTargetId = msg.studentId || activeStudent?.id;
           if (studentTargetId === "STAFF_ADMIN") {
             void sendSchoolPushNotification({
               schoolId: msg.schoolId,
+              userId: "STAFF_ADMIN",
+              senderId: msg.senderId || currentUserId,
+              senderName: senderTitle,
               title: `💬 Teacher: ${senderTitle}`,
               body,
               type: "NSTA_MESSAGE",
@@ -1322,6 +1359,8 @@ export const NstaMessengerSuite: React.FC<Props> = ({
             void sendSchoolPushNotification({
               schoolId: msg.schoolId,
               studentIds: [studentTargetId],
+              senderId: msg.senderId || currentUserId,
+              senderName: senderTitle,
               title: `💬 Teacher: ${senderTitle}`,
               body,
               type: "NSTA_MESSAGE",
@@ -1333,10 +1372,22 @@ export const NstaMessengerSuite: React.FC<Props> = ({
           }
         }
       } else if (isClassGroup) {
-        // Send strictly to students of this class
+        // Target explicit student IDs in this class AND classId/className so both user_notifications and class matchers deliver
+        const resolvedClassId = msg.classId || activeClass?.id;
+        const resolvedClassName = msg.className || activeClass?.name;
+        const targetClassStudents = safeStudents
+          .filter((s) => s && isStudentInClass(s, resolvedClassId, resolvedClassName))
+          .map((s) => String(s.id))
+          .filter(Boolean);
+
         void sendSchoolPushNotification({
           schoolId: msg.schoolId,
-          classId: msg.classId || activeClass?.id,
+          classId: resolvedClassId,
+          className: resolvedClassName,
+          classBroadcast: true,
+          studentIds: targetClassStudents.length > 0 ? targetClassStudents : undefined,
+          senderId: msg.senderId || currentUserId,
+          senderName: senderTitle,
           title,
           body,
           type: "NSTA_MESSAGE",
@@ -1346,11 +1397,17 @@ export const NstaMessengerSuite: React.FC<Props> = ({
           urgent: true,
         });
       } else if (isSchoolDesk) {
-        // If specific student selected in School Desk, send only to them; otherwise school broadcast
-        const targetStudent = msg.studentId || (selectedStudentId !== "all" ? selectedStudentId : undefined);
+        const targetStudent = msg.studentId && msg.studentId !== "all" ? msg.studentId : undefined;
+        const allSchoolStudentIds = !targetStudent
+          ? safeStudents.map((s) => String(s?.id || "")).filter(Boolean)
+          : [];
+
         void sendSchoolPushNotification({
           schoolId: msg.schoolId,
-          studentIds: targetStudent ? [targetStudent] : undefined,
+          studentIds: targetStudent ? [targetStudent] : (allSchoolStudentIds.length > 0 ? allSchoolStudentIds : undefined),
+          schoolBroadcast: !targetStudent,
+          senderId: msg.senderId || currentUserId,
+          senderName: senderTitle,
           title,
           body,
           type: "SCHOOL_NOTICE",
@@ -1418,6 +1475,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       schoolId: school?.id || "default",
       threadType: targetThreadType,
       classId: activeTab === "class" ? (activeClass?.id || "general") : undefined,
+      className: activeTab === "class" ? activeClass?.name : undefined,
       studentId: targetStudentId,
       studentName: targetStudentName,
       teacherId: activeTab === "teacher" ? (activeTeacher?.id || undefined) : undefined,
@@ -1651,6 +1709,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
         schoolId: school?.id || "default",
         threadType: targetThreadType,
         classId: activeTab === "class" ? (activeClass?.id || "general") : undefined,
+        className: activeTab === "class" ? activeClass?.name : undefined,
         studentId: activeTab === "class" ? undefined : (isSchoolDeskBroadcast ? undefined : (activeStudent?.id || undefined)),
         studentName: activeTab === "class" ? undefined : (isSchoolDeskBroadcast ? "Sabhi Chhatra (All Students)" : (activeStudent?.name || undefined)),
         teacherId: activeTab === "teacher" ? (activeTeacher?.id || undefined) : undefined,
@@ -1717,6 +1776,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
         schoolId: school?.id || "default",
         threadType: targetThreadType,
         classId: activeTab === "class" ? (activeClass?.id || "general") : undefined,
+        className: activeTab === "class" ? activeClass?.name : undefined,
         studentId: activeTab === "class" ? undefined : (isSchoolDeskBroadcast ? undefined : (activeStudent?.id || undefined)),
         studentName: activeTab === "class" ? undefined : (isSchoolDeskBroadcast ? "Sabhi Chhatra (All Students)" : (activeStudent?.name || undefined)),
         teacherId: activeTab === "teacher" ? (activeTeacher?.id || undefined) : undefined,
@@ -1808,6 +1868,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
         schoolId: school?.id || "default",
         threadType: targetThreadType,
         classId: activeTab === "class" ? (activeClass?.id || "general") : undefined,
+        className: activeTab === "class" ? activeClass?.name : undefined,
         studentId: activeTab === "class" ? undefined : (isSchoolDeskBroadcast ? undefined : (activeStudent?.id || undefined)),
         studentName: activeTab === "class" ? undefined : (isSchoolDeskBroadcast ? "Sabhi Chhatra (All Students)" : (activeStudent?.name || undefined)),
         teacherId: activeTab === "teacher" ? (activeTeacher?.id || undefined) : undefined,
@@ -1874,6 +1935,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
         schoolId: school?.id || "default",
         threadType: targetThreadType,
         classId: activeTab === "class" ? (activeClass?.id || "general") : undefined,
+        className: activeTab === "class" ? activeClass?.name : undefined,
         studentId: activeTab === "class" ? undefined : (isSchoolDeskBroadcast ? undefined : (activeStudent?.id || undefined)),
         studentName: activeTab === "class" ? undefined : (isSchoolDeskBroadcast ? "Sabhi Chhatra (All Students)" : (activeStudent?.name || undefined)),
         teacherId: activeTab === "teacher" ? (activeTeacher?.id || undefined) : undefined,
@@ -2036,6 +2098,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
         schoolId: school?.id || "default",
         threadType: targetThreadType,
         classId: activeTab === "class" ? (activeClass?.id || "general") : undefined,
+        className: activeTab === "class" ? activeClass?.name : undefined,
         studentId: activeTab === "class" ? undefined : (isSchoolDeskBroadcast ? undefined : (activeStudent?.id || undefined)),
         studentName: activeTab === "class" ? undefined : (isSchoolDeskBroadcast ? "Sabhi Chhatra (All Students)" : (activeStudent?.name || undefined)),
         teacherId: activeTab === "teacher" ? (activeTeacher?.id || undefined) : undefined,
@@ -2223,6 +2286,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       schoolId: school?.id || "default",
       threadType: targetThreadType,
       classId: activeTab === "class" ? (activeClass?.id || "general") : undefined,
+      className: activeTab === "class" ? activeClass?.name : undefined,
       studentId: activeTab === "class" ? undefined : (isSchoolDeskBroadcast ? undefined : (activeStudent?.id || undefined)),
       studentName: activeTab === "class" ? undefined : (isSchoolDeskBroadcast ? "Sabhi Chhatra (All Students)" : (activeStudent?.name || undefined)),
       teacherId: activeTab === "teacher" ? (activeTeacher?.id || undefined) : undefined,
@@ -2275,6 +2339,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       schoolId: school?.id || "default",
       threadType: targetThreadType,
       classId: activeTab === "class" ? (activeClass?.id || "general") : undefined,
+      className: activeTab === "class" ? activeClass?.name : undefined,
       studentId: activeTab === "class" ? undefined : (isSchoolDeskBroadcast ? undefined : (activeStudent?.id || undefined)),
       studentName: activeTab === "class" ? undefined : (isSchoolDeskBroadcast ? "Sabhi Chhatra (All Students)" : (activeStudent?.name || undefined)),
       teacherId: activeTab === "teacher" ? (activeTeacher?.id || undefined) : undefined,
@@ -2319,7 +2384,12 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       if (targetThreadType === "CLASS_GROUP") {
         const cId = activeClass?.id;
         if (cId && m.classId && m.classId !== cId && m.classId !== "all" && m.classId !== "general") {
-          return false;
+          const matched = isStudentInClass(
+            { classId: cId, className: activeClass?.name } as any,
+            m.classId,
+            m.className
+          );
+          if (!matched) return false;
         }
       }
 

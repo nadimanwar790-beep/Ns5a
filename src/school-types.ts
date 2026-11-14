@@ -1676,6 +1676,7 @@ export interface NstaMessage {
   schoolId: string;
   threadType: NstaThreadType;
   classId?: string;       // For CLASS_GROUP
+  className?: string;     // Human-readable class name for resilient matching
   studentId?: string;     // For SCHOOL_DESK & TEACHER_CHAT
   studentName?: string;
   teacherId?: string;     // For TEACHER_CHAT

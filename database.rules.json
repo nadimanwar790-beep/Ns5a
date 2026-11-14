@@ -25,6 +25,22 @@
       ".indexOn": ["userId", "schoolId", "createdAt"]
     },
 
+    "user_notifications": {
+      ".read": true,
+      ".write": true
+    },
+
+    "school_notifications": {
+      ".read": true,
+      ".write": true
+    },
+
+    "broadcast_notifications": {
+      ".read": true,
+      ".write": true,
+      ".indexOn": ["timestamp", "schoolId"]
+    },
+
     "active_sessions": {
       ".read": true,
       ".write": true,

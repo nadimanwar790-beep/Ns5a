@@ -57,6 +57,16 @@ import {
 import { markStudentQrAttendance, markStaffAttendanceAtomic, todayStr, saveNstaMessage } from "../../school-firebase";
 import type { NstaMessage } from "../../school-types";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
+import { recordAttendanceAlertDispatched } from "../../utils/attendanceAlertDispatcher";
+import {
+  subscribeAttendanceSchedule,
+  saveAttendanceSchedule,
+  formatTime12h,
+  getLiveShiftStatus,
+  timeToMinutes,
+  DEFAULT_IN_CUTOFF_TIME,
+  DEFAULT_OUT_START_TIME,
+} from "../../utils/schoolAttendanceSchedule";
 import { speakNotification } from "../../utils/voiceNotifyEngine";
 import { hapticStrong, hapticMedium } from "../../utils/haptic";
 import { FaceEnrollmentModal } from "./FaceEnrollmentModal";
@@ -167,16 +177,25 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
 
   // Super Admin Configurable IN / OUT Shift Timings
   const [adminInCutoffTime, setAdminInCutoffTime] = useState<string>(() => {
-    return localStorage.getItem(`nst_kiosk_in_cutoff_${schoolId}`) || "10:00";
+    return localStorage.getItem(`nst_kiosk_in_cutoff_${schoolId}`) || DEFAULT_IN_CUTOFF_TIME;
   });
   const [adminOutStartTime, setAdminOutStartTime] = useState<string>(() => {
-    return localStorage.getItem(`nst_kiosk_out_start_${schoolId}`) || "11:30";
+    return localStorage.getItem(`nst_kiosk_out_start_${schoolId}`) || DEFAULT_OUT_START_TIME;
   });
   const [showTimeConfigModal, setShowTimeConfigModal] = useState<boolean>(false);
 
-  // ── LIVE FACE TEST PLAYGROUND (Zero Attendance, Match & Voice Name Announcement) ──
+  useEffect(() => {
+    if (!schoolId) return;
+    return subscribeAttendanceSchedule(schoolId, (sched) => {
+      setAdminInCutoffTime(sched.inCutoffTime);
+      setAdminOutStartTime(sched.outStartTime);
+    });
+  }, [schoolId]);
+
+  // ── LIVE FACE TEST PLAYGROUND (1st IN / 2nd OUT Alternating + Live Student Push on Every Scan) ──
   const [isFaceTestMode, setIsFaceTestMode] = useState<boolean>(() => Boolean(initialTestMode));
   const [testMatchCounts, setTestMatchCounts] = useState<Record<string, number>>({});
+  const testMatchCountsRef = useRef<Record<string, number>>({});
   const [testActiveMatch, setTestActiveMatch] = useState<{
     studentId: string;
     name: string;
@@ -187,6 +206,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
     photoUrl?: string;
     similarityPercent: number;
     matchCount: number;
+    action: "in" | "out";
     lastTime: string;
     distance?: number;
   } | null>(null);
@@ -199,6 +219,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
     time: string;
     similarityPercent: number;
     matchNumber: number;
+    action: "in" | "out";
   }>>([]);
   const testAnnounceCooldownRef = useRef<Map<string, number>>(new Map());
   const testActiveMatchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -218,14 +239,14 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
     }
   }, [isOpen, initialTestMode]);
 
-  // Voice Speech Synthesizer for Test Mode: Bas naam bolega ("Nadim", "Aarav", etc.)
-  const announceFaceTestMatch = useCallback((name: string, count: number, role?: string) => {
+  // Voice Speech Synthesizer for Test Mode: "{Name} IN" / "{Name} OUT"
+  const announceFaceTestMatch = useCallback((name: string, count: number, role?: string, action?: "in" | "out") => {
     if (!name) return;
+    const spokenText = action === "out" ? `${name} प्रस्थान OUT` : action === "in" ? `${name} उपस्थित IN` : name;
     try {
       if (typeof window !== "undefined" && "speechSynthesis" in window) {
         window.speechSynthesis.cancel();
-        // Speak ONLY the person's name cleanly
-        const utterance = new SpeechSynthesisUtterance(name);
+        const utterance = new SpeechSynthesisUtterance(spokenText);
         utterance.lang = "hi-IN";
         utterance.rate = 1.0;
         utterance.pitch = 1.0;
@@ -240,7 +261,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
         }
         window.speechSynthesis.speak(utterance);
       } else {
-        speakNotification(name, undefined, { force: true, playTone: false });
+        speakNotification(spokenText, undefined, { force: true, playTone: false });
       }
     } catch (err) {
       console.warn("Speech synthesis error:", err);
@@ -262,14 +283,13 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
     return () => clearTimeout(timer);
   }, [globalFreezeCountdown]);
 
-  // Compute Shift Routine based on Super Admin configured timings
+  // Compute Shift Routine based on Super Admin configured OUT start time
   const computeRoutineShift = useCallback((): "in" | "out" => {
     const now = new Date();
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
-    const [inH, inM] = adminInCutoffTime.split(":").map(Number);
-    const cutoffMinutes = (isNaN(inH) ? 10 : inH) * 60 + (isNaN(inM) ? 0 : inM);
-    return currentMinutes <= cutoffMinutes ? "in" : "out";
-  }, [adminInCutoffTime]);
+    const outStartMinutes = timeToMinutes(adminOutStartTime, 750);
+    return currentMinutes >= outStartMinutes ? "out" : "in";
+  }, [adminOutStartTime]);
 
   // Live Clock & Shift Ticker
   useEffect(() => {
@@ -623,6 +643,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
             date: todayStr(),
             scanMode: kioskScanMode,
             currentShiftMode,
+            outStartTime: adminOutStartTime,
           });
 
           if (staffRes.alreadyMarked) {
@@ -730,7 +751,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           markedBy: teacherId,
           scanMode: kioskScanMode,
           cutoffTime: adminInCutoffTime,
-          prayerTime: "09:00"
+          outStartTime: adminOutStartTime,
         });
 
         if (res?.alreadyMarked) {
@@ -809,11 +830,15 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
         void sendSchoolPushNotification({
           schoolId,
           classId: targetClassId,
+          className: targetClassName,
           studentIds: [match.studentId],
+          senderId: "school_kiosk_system",
+          senderName: `${schoolName || "विद्यालय"} ऑटोमेशन डेस्क`,
           title: pushTitle,
           body: pushBody,
-          type: "DEFAULT",
-          url: `/?schoolPortal=1&studentId=${encodeURIComponent(match.studentId)}&schoolTab=messenger&thread=desk`
+          type: "SCHOOL_NOTICE",
+          url: `/?schoolPortal=1&studentId=${encodeURIComponent(match.studentId)}&schoolTab=messenger&subTab=school`,
+          urgent: true,
         }).catch(() => {});
 
         // 3. Save Official NSTA Messenger Chat Message in Parent Thread
@@ -836,6 +861,12 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
             status: "delivered"
           };
           void saveNstaMessage(nstaChatMsg);
+          recordAttendanceAlertDispatched(
+            schoolId,
+            todayStr(),
+            match.studentId,
+            action === "out" ? "out" : isLate ? "late" : "in"
+          );
         } catch {}
 
         // Exact requested voice confirmation: In पर "{Name} उपस्थित", Exit पर "{Name} प्रस्थान"
@@ -1019,7 +1050,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                 setIsLowLightWarning(primaryFace.lighting.isLowLight || primaryFace.lighting.isTooDark);
               }
 
-              // ── 1. TEST MODE LOGIC (Zero Attendance, Voice Announcement only) ──
+              // ── 1. TEST MODE LOGIC (1st IN / 2nd OUT / 3rd IN / 4th OUT... + Live Mobile Push Every Time) ──
               if (isFaceTestMode) {
                 if (detectedFaces.length > 1) {
                   setTestActiveMatch(null);
@@ -1031,10 +1062,13 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
 
                   if (elapsed >= cooldownMs) {
                     testAnnounceCooldownRef.current.set(matchedStudent.studentId, now);
-                    const newCount = (testMatchCounts[matchedStudent.studentId] || 0) + 1;
+                    const newCount = (testMatchCountsRef.current[matchedStudent.studentId] || 0) + 1;
+                    testMatchCountsRef.current[matchedStudent.studentId] = newCount;
+                    const testAction: "in" | "out" = newCount % 2 === 1 ? "in" : "out";
+
                     setTestMatchCounts((prev) => ({
                       ...prev,
-                      [matchedStudent.studentId]: (prev[matchedStudent.studentId] || 0) + 1
+                      [matchedStudent.studentId]: newCount
                     }));
 
                     const timeFormatted = new Date().toLocaleTimeString("en-IN", {
@@ -1044,16 +1078,21 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                       hour12: true
                     });
 
+                    const resolvedClassId = matchedStudent.classId || classId || "";
+                    const resolvedClassName =
+                      matchedStudent.className || (matchedStudent.role === "TEACHER" ? "शिक्षक (Faculty)" : className);
+
                     const activeRecord = {
                       studentId: matchedStudent.studentId,
                       name: matchedStudent.name,
                       role: matchedStudent.role,
                       designation: matchedStudent.designation,
-                      className: matchedStudent.className || (matchedStudent.role === "TEACHER" ? "शिक्षक (Faculty)" : className),
+                      className: resolvedClassName,
                       rollNo: matchedStudent.rollNo,
                       photoUrl: matchedStudent.photoUrl || enrolledMap[matchedStudent.studentId]?.photoUrl,
                       similarityPercent: matchedStudent.similarityPercent,
                       matchCount: newCount,
+                      action: testAction,
                       lastTime: timeFormatted,
                       distance: matchedStudent.distance
                     };
@@ -1068,19 +1107,66 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
 
                     setTestSessionLog((prev) => [
                       {
-                        id: `${matchedStudent.studentId}_${now}`,
+                        id: `${matchedStudent.studentId}_${now}_${newCount}`,
                         name: matchedStudent.name,
                         role: matchedStudent.role,
                         className: activeRecord.className,
                         time: timeFormatted,
                         similarityPercent: matchedStudent.similarityPercent,
-                        matchNumber: newCount
+                        matchNumber: newCount,
+                        action: testAction,
                       },
                       ...prev
-                    ].slice(0, 30));
+                    ].slice(0, 50));
 
                     playAttendanceSuccessChime();
-                    announceFaceTestMatch(matchedStudent.name, newCount, matchedStudent.role);
+                    announceFaceTestMatch(matchedStudent.name, newCount, matchedStudent.role, testAction);
+
+                    // Dispatch fresh Push Notification + NSTA Messenger alert on EVERY IN & OUT scan (no daily dedupe)
+                    const pushTitle = testAction === "in"
+                      ? `🟢 [TEST #${newCount} • IN] ${matchedStudent.name} प्रवेश`
+                      : `🔴 [TEST #${newCount} • OUT] ${matchedStudent.name} प्रस्थान`;
+                    const pushBody = testAction === "in"
+                      ? `[Test Mode #${newCount}] ${matchedStudent.name} (${resolvedClassName}) ka Check-IN samay ${timeFormatted} par darj hua.`
+                      : `[Test Mode #${newCount}] ${matchedStudent.name} (${resolvedClassName}) ka Check-OUT samay ${timeFormatted} par darj hua.`;
+
+                    void sendSchoolPushNotification({
+                      schoolId,
+                      classId: resolvedClassId,
+                      className: resolvedClassName,
+                      studentIds: [matchedStudent.studentId],
+                      ...(matchedStudent.role === "TEACHER" ? { userId: matchedStudent.studentId } : {}),
+                      senderId: "school_kiosk_test",
+                      senderName: `${schoolName || "विद्यालय"} टेस्ट डेस्क`,
+                      title: pushTitle,
+                      body: pushBody,
+                      type: "SCHOOL_NOTICE",
+                      url: `/?schoolPortal=1&studentId=${encodeURIComponent(matchedStudent.studentId)}&schoolTab=messenger&subTab=school`,
+                      urgent: true,
+                    }).catch(() => {});
+
+                    if (matchedStudent.role !== "TEACHER") {
+                      try {
+                        const testMsgText = testAction === "in"
+                          ? `🟢 [TEST MODE #${newCount} — Check-IN]\nनमस्ते! ${matchedStudent.name} (${resolvedClassName}${matchedStudent.rollNo ? `, Roll #${matchedStudent.rollNo}` : ""}) का टेस्ट प्रवेश (IN) समय ${timeFormatted} पर दर्ज हुआ।`
+                          : `🔴 [TEST MODE #${newCount} — Check-OUT]\nनमस्ते! ${matchedStudent.name} (${resolvedClassName}${matchedStudent.rollNo ? `, Roll #${matchedStudent.rollNo}` : ""}) का टेस्ट प्रस्थान (OUT) समय ${timeFormatted} पर दर्ज हुआ।`;
+
+                        void saveNstaMessage({
+                          id: `msg_test_att_${now}_${newCount}_${matchedStudent.studentId}`,
+                          schoolId,
+                          threadType: "SCHOOL_DESK",
+                          classId: resolvedClassId,
+                          studentId: matchedStudent.studentId,
+                          studentName: matchedStudent.name,
+                          senderId: "school_kiosk_test",
+                          senderName: `${schoolName || "विद्यालय"} टेस्ट डेस्क`,
+                          senderRole: "ADMIN",
+                          text: testMsgText,
+                          createdAt: new Date(now).toISOString(),
+                          status: "delivered",
+                        });
+                      } catch {}
+                    }
                   } else {
                     const remSec = Math.max(1, Math.ceil((cooldownMs - elapsed) / 1000));
                     setTestCooldownRemaining(remSec);
@@ -1241,7 +1327,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
 
     animId = requestAnimationFrame(renderLoop);
     return () => cancelAnimationFrame(animId);
-  }, [isOpen, enrolledMap, facingMode, handleMarkAttendanceSuccess, pendingBlinkStudent, isFaceTestMode, announceFaceTestMatch, testMatchCounts, className]);
+  }, [isOpen, enrolledMap, facingMode, handleMarkAttendanceSuccess, pendingBlinkStudent, isFaceTestMode, announceFaceTestMatch, className, schoolId, schoolName]);
 
   if (!isOpen) return null;
 
@@ -1284,7 +1370,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
             </div>
             <p className="hidden md:block text-[11px] text-slate-400 truncate">
               {isFaceTestMode
-                ? "जीरो अटेंडेंस • सिर्फ सेव चेहरा मैच करके नाम बोलेगा"
+                ? "1st IN • 2nd OUT • हर बार Student के मोबाइल पर Push अलर्ट जाएगा"
                 : `${schoolName} ${className ? `• ${className}` : ""}`}
             </p>
           </div>
@@ -1322,11 +1408,11 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                   ? "bg-amber-400 text-slate-950 font-black shadow-xs ring-1 ring-amber-300/80"
                   : "text-amber-400 hover:text-amber-300 font-bold"
               }`}
-              title="टेस्ट मोड: अटेंडेंस नहीं लगेगी, सिर्फ चेहरा मैच करके वॉयस से नाम बोलेगा"
+              title="टेस्ट मोड: 1st IN, 2nd OUT और हर बार मोबाइल पर Push नोटिफिकेशन"
             >
               <Sparkles className="w-3.5 h-3.5" />
               <span>🧪 टेस्ट</span>
-              <span className="hidden sm:inline text-[10px] font-semibold text-slate-800">(No Attn)</span>
+              <span className="hidden sm:inline text-[10px] font-semibold text-slate-800">(IN/OUT Push)</span>
             </button>
           </div>
 
@@ -1456,6 +1542,58 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
         </div>
       </header>
 
+      {/* Mobile + Desktop Always-Visible IN / OUT Schedule & Mode Bar */}
+      {!isFaceTestMode && (() => {
+        const liveShift = getLiveShiftStatus({
+          inCutoffTime: adminInCutoffTime,
+          outStartTime: adminOutStartTime,
+        });
+        return (
+          <div className="sm:hidden bg-slate-900/95 border-b border-slate-800 px-2.5 py-1.5 flex items-center justify-between gap-2 shrink-0 z-20">
+            <div className="flex items-center p-0.5 rounded-lg bg-slate-800 border border-slate-700 text-[11px] font-black shrink-0">
+              <button
+                type="button"
+                onClick={() => setKioskScanMode("auto")}
+                className={`px-2 py-0.5 rounded-md transition ${
+                  kioskScanMode === "auto" ? "bg-indigo-600 text-white" : "text-slate-400"
+                }`}
+              >
+                Auto
+              </button>
+              <button
+                type="button"
+                onClick={() => setKioskScanMode("in")}
+                className={`px-2 py-0.5 rounded-md transition ${
+                  kioskScanMode === "in" ? "bg-emerald-600 text-white" : "text-slate-400"
+                }`}
+              >
+                IN
+              </button>
+              <button
+                type="button"
+                onClick={() => setKioskScanMode("out")}
+                className={`px-2 py-0.5 rounded-md transition ${
+                  kioskScanMode === "out" ? "bg-rose-600 text-white" : "text-slate-400"
+                }`}
+              >
+                OUT
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowTimeConfigModal(true)}
+              className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800/90 border border-cyan-500/40 text-[10px] font-bold text-cyan-200 truncate cursor-pointer"
+            >
+              <Clock className="w-3 h-3 text-cyan-400 shrink-0" />
+              <span className="truncate">
+                IN:{liveShift.inCutoffLabel} • OUT:{liveShift.outStartLabel}
+              </span>
+              <span className="underline text-cyan-300 shrink-0">बदलें</span>
+            </button>
+          </div>
+        );
+      })()}
+
       {/* ── MAIN VIEWFINDER CANVAS & TARGETING RETICLE ── */}
       <div className="relative flex-1 bg-black flex items-center justify-center overflow-hidden">
         {/* Camera Video Stream (mirror naturally when using front selfie camera) */}
@@ -1483,17 +1621,18 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                 <span className="text-[11px] sm:text-xs font-black text-amber-300 shrink-0">
                   🧪 टेस्ट मोड
                 </span>
-                <span className="px-1.5 py-0.2 rounded-full bg-amber-400/20 text-amber-300 text-[9px] font-black border border-amber-400/30 shrink-0">
-                  NO ATTENDANCE
+                <span className="px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300 text-[9px] font-black border border-emerald-400/30 shrink-0">
+                  1st IN • 2nd OUT
                 </span>
                 <span className="hidden sm:inline text-[10px] text-slate-300 truncate">
-                  • सिर्फ नाम बोलेगा
+                  • हर बार Push अलर्ट
                 </span>
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 <button
                   type="button"
                   onClick={() => {
+                    testMatchCountsRef.current = {};
                     setTestMatchCounts({});
                     setTestActiveMatch(null);
                     setTestSessionLog([]);
@@ -1519,12 +1658,18 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           </div>
         )}
 
-        {/* ── TEST MODE LIVE MATCH CARD (With Voice Announcement & Repeat Count) ── */}
+        {/* ── TEST MODE LIVE MATCH CARD (Alternating IN/OUT + Push Notification) ── */}
         {isFaceTestMode && testActiveMatch && (
           <div className="absolute top-12 sm:top-14 left-1/2 -translate-x-1/2 z-35 max-w-md w-[92%] animate-in fade-in zoom-in-95 duration-200 pointer-events-auto">
-            <div className="bg-slate-900/95 border-2 border-emerald-400 rounded-2xl sm:rounded-3xl p-3 sm:p-4 shadow-2xl backdrop-blur-md ring-4 ring-emerald-500/20 flex flex-col gap-2.5 sm:gap-3">
+            <div className={`bg-slate-900/95 border-2 rounded-2xl sm:rounded-3xl p-3 sm:p-4 shadow-2xl backdrop-blur-md ring-4 flex flex-col gap-2.5 sm:gap-3 ${
+              testActiveMatch.action === "out"
+                ? "border-rose-400 ring-rose-500/20"
+                : "border-emerald-400 ring-emerald-500/20"
+            }`}>
               <div className="flex items-center gap-3">
-                <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl border-2 border-emerald-400 overflow-hidden shrink-0 bg-slate-800 flex items-center justify-center text-white text-xl font-bold shadow-md">
+                <div className={`w-14 h-14 sm:w-16 sm:h-16 rounded-2xl border-2 overflow-hidden shrink-0 bg-slate-800 flex items-center justify-center text-white text-xl font-bold shadow-md ${
+                  testActiveMatch.action === "out" ? "border-rose-400" : "border-emerald-400"
+                }`}>
                   {testActiveMatch.photoUrl ? (
                     <img src={testActiveMatch.photoUrl} alt={testActiveMatch.name} className="w-full h-full object-cover" />
                   ) : (
@@ -1533,12 +1678,16 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="px-2 py-0.5 rounded-full bg-emerald-500 text-slate-950 font-black text-[11px] uppercase flex items-center gap-1 shadow-sm">
+                    <span className={`px-2 py-0.5 rounded-full font-black text-[11px] uppercase flex items-center gap-1 shadow-sm ${
+                      testActiveMatch.action === "out"
+                        ? "bg-rose-500 text-white"
+                        : "bg-emerald-500 text-slate-950"
+                    }`}>
                       <Check className="w-3.5 h-3.5 stroke-[3]" />
-                      <span>पहचान सफल (Verified)</span>
+                      <span>{testActiveMatch.action === "out" ? "🔴 TEST OUT" : "🟢 TEST IN"} (#{testActiveMatch.matchCount})</span>
                     </span>
                     <span className="px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 font-black text-[11px] shadow-sm">
-                      🎯 {testActiveMatch.matchCount} बार पहचाने गए
+                      📲 Push Sent
                     </span>
                   </div>
                   <h3 className="text-base sm:text-lg font-black text-white truncate mt-1">
@@ -1553,12 +1702,12 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
               <div className="pt-2 border-t border-slate-800 flex items-center justify-between text-xs">
                 <button
                   type="button"
-                  onClick={() => announceFaceTestMatch(testActiveMatch.name, testActiveMatch.matchCount, testActiveMatch.role)}
+                  onClick={() => announceFaceTestMatch(testActiveMatch.name, testActiveMatch.matchCount, testActiveMatch.role, testActiveMatch.action)}
                   className="flex items-center gap-1.5 text-emerald-300 hover:text-emerald-200 font-bold font-mono transition cursor-pointer"
                   title="नाम दोबारा बोलकर सुनें"
                 >
                   <Volume2 className="w-4 h-4 text-emerald-400 animate-pulse" />
-                  <span>वॉयस: "{testActiveMatch.name}"</span>
+                  <span>वॉयस: "{testActiveMatch.name} {testActiveMatch.action.toUpperCase()}"</span>
                 </button>
                 <div className="flex items-center gap-2 font-mono text-slate-400">
                   <span className="text-emerald-400 font-bold">Sim: {testActiveMatch.similarityPercent}%</span>
@@ -1568,7 +1717,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
               </div>
 
               <div className="bg-slate-950/80 rounded-xl px-3 py-1.5 border border-slate-800 flex items-center justify-between text-[11px] text-slate-300">
-                <span>कैमरे में रहने पर 3 सेकंड बाद पुनः नाम बोला जाएगा</span>
+                <span>अगला स्कैन {testActiveMatch.action === "in" ? "OUT" : "IN"} होगा + मोबाइल पर Push जाएगा</span>
                 <span className="font-bold text-amber-300">रिपीट कूलडाउन: 3s</span>
               </div>
             </div>
@@ -1580,8 +1729,8 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           <div className="absolute inset-x-4 top-20 bottom-24 z-40 max-w-lg mx-auto bg-slate-900/95 border-2 border-amber-400/80 rounded-3xl p-4 shadow-2xl backdrop-blur-md flex flex-col pointer-events-auto animate-in fade-in slide-in-from-top-4 duration-200">
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
               <div className="flex items-center gap-2">
-                <span className="text-base font-black text-amber-300">📋 टेस्ट सेशन लॉग</span>
-                <span className="text-xs text-slate-400">({testSessionLog.length} मैच)</span>
+                <span className="text-base font-black text-amber-300">📋 टेस्ट IN/OUT व Push लॉग</span>
+                <span className="text-xs text-slate-400">({testSessionLog.length} स्कैन)</span>
               </div>
               <button
                 type="button"
@@ -1600,9 +1749,18 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                 testSessionLog.map((item) => (
                   <div key={item.id} className="py-2.5 flex items-center justify-between gap-3 text-xs">
                     <div className="min-w-0">
-                      <p className="font-bold text-white truncate">{item.name}</p>
-                      <p className="text-[11px] text-slate-400 truncate">
-                        {item.className} • मैच #{item.matchNumber}
+                      <div className="flex items-center gap-1.5">
+                        <span className={`px-1.5 py-0.5 rounded font-black text-[10px] ${
+                          item.action === "out"
+                            ? "bg-rose-500/25 text-rose-300 border border-rose-500/40"
+                            : "bg-emerald-500/25 text-emerald-300 border border-emerald-500/40"
+                        }`}>
+                          #{item.matchNumber} {item.action.toUpperCase()}
+                        </span>
+                        <p className="font-bold text-white truncate">{item.name}</p>
+                      </div>
+                      <p className="text-[11px] text-slate-400 truncate mt-0.5">
+                        {item.className} • 📲 Push Dispatched
                       </p>
                     </div>
                     <div className="text-right shrink-0">
@@ -1622,6 +1780,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
               <button
                 type="button"
                 onClick={() => {
+                  testMatchCountsRef.current = {};
                   setTestMatchCounts({});
                   setTestActiveMatch(null);
                   setTestSessionLog([]);
@@ -1722,7 +1881,9 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                 {lastMatchedAlert.action === "out" ? "🔴 OUT दर्ज (प्रस्थान)" : `🟢 IN दर्ज (${lastMatchedAlert.status})`}
               </span>
               <h3 className="text-xl font-black text-white truncate max-w-full">
-                {lastMatchedAlert.name} उपस्थित
+                {lastMatchedAlert.action === "out"
+                  ? `${lastMatchedAlert.name} प्रस्थान (OUT)`
+                  : `${lastMatchedAlert.name} उपस्थित (IN)`}
               </h3>
               <p className="text-xs text-slate-300 mt-0.5 font-mono">
                 {lastMatchedAlert.time} {lastMatchedAlert.rollNo ? `• Roll #${lastMatchedAlert.rollNo}` : ""}
@@ -1795,20 +1956,37 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                   <span>जीरो अटेंडेंस मोड • {enrolledCount} सेव चेहरे (KBY-AI Fullscreen)</span>
                 </div>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => setShowEnrolledProfilesModal(true)}
-                  className={`text-[12px] font-bold px-4 py-1.5 rounded-full backdrop-blur-md flex items-center gap-2 border transition cursor-pointer shadow-xl ${
-                    enrolledCount === 0
-                      ? "text-amber-300 bg-amber-950/85 border-amber-400/60 animate-pulse"
-                      : "text-emerald-400/95 bg-black/75 hover:bg-black/90 border-emerald-500/40"
-                  }`}
-                  title="एनरोल किए गए चेहरे देखें व साफ़ करें"
-                >
-                  <span>{(kioskScanMode === "auto" ? currentShiftMode : kioskScanMode) === "in" ? "🟢 IN Mode (आगमन)" : "🔴 OUT Mode (प्रस्थान)"}</span>
-                  <span>•</span>
-                  <span>{enrolledCount > 0 ? `${enrolledCount} सेव चेहरे` : "⚠️ 0 चेहरे सेव"}</span>
-                </button>
+                <div className="flex items-center gap-1.5 flex-wrap justify-center">
+                  <button
+                    type="button"
+                    onClick={() => setShowTimeConfigModal(true)}
+                    className="text-[11px] font-bold px-3 py-1.5 rounded-full backdrop-blur-md flex items-center gap-1.5 border bg-black/75 hover:bg-black/90 border-cyan-500/40 text-cyan-200 transition cursor-pointer shadow-xl"
+                    title="IN व OUT शिफ्ट टाइमिंग बदलें"
+                  >
+                    <Clock className="w-3 h-3 text-cyan-400" />
+                    <span>
+                      {kioskScanMode === "out"
+                        ? "🔴 Force OUT (प्रस्थान)"
+                        : kioskScanMode === "in"
+                        ? "🟢 Force IN (आगमन)"
+                        : currentShiftMode === "out"
+                        ? `🔴 Auto OUT सक्रिय (${formatTime12h(adminOutStartTime)} से)`
+                        : `🟢 Auto IN (OUT: ${formatTime12h(adminOutStartTime)} से)`}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowEnrolledProfilesModal(true)}
+                    className={`text-[11px] font-bold px-3 py-1.5 rounded-full backdrop-blur-md flex items-center gap-1.5 border transition cursor-pointer shadow-xl ${
+                      enrolledCount === 0
+                        ? "text-amber-300 bg-amber-950/85 border-amber-400/60 animate-pulse"
+                        : "text-emerald-400/95 bg-black/75 hover:bg-black/90 border-emerald-500/40"
+                    }`}
+                    title="एनरोल किए गए चेहरे देखें व साफ़ करें"
+                  >
+                    <span>{enrolledCount > 0 ? `${enrolledCount} सेव चेहरे` : "⚠️ 0 चेहरे सेव"}</span>
+                  </button>
+                </div>
               )}
             </div>
           </div>
@@ -2046,11 +2224,11 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
             </div>
             <div>
               <div className="text-[10px] sm:text-[11px] font-black text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
-                <span>टेस्ट सेशन</span>
-                <span className="text-[9px] px-1 rounded bg-amber-400/20 text-amber-300 font-mono">0 Attendance</span>
+                <span>टेस्ट IN/OUT</span>
+                <span className="text-[9px] px-1 rounded bg-emerald-500/20 text-emerald-300 font-mono">Push Live</span>
               </div>
               <div className="text-[9px] sm:text-[10px] text-slate-400">
-                चेहरे: {Object.keys(testMatchCounts).length} • मैच: {testSessionLog.length}
+                चेहरे: {Object.keys(testMatchCounts).length} • पुश: {testSessionLog.length}
               </div>
             </div>
           </div>
@@ -2059,20 +2237,25 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           <div className="flex-1 flex items-center gap-1.5 overflow-x-auto py-1 scrollbar-none">
             {Object.entries(testMatchCounts).length === 0 ? (
               <div className="text-xs text-slate-500 italic pl-1">
-                कैमरे में सेव चेहरा आने पर नाम बोलेगा और काउंट यहाँ दिखेगा...
+                1st स्कैन = IN, 2nd स्कैन = OUT — हर बार स्टूडेंट मोबाइल पर Push जाएगा...
               </div>
             ) : (
               Object.entries(testMatchCounts).map(([id, count]) => {
                 const person = (students || []).find((s) => s.id === id) || (teachers || []).find((t) => t.id === id);
                 const pName = person?.name || "चेहरा";
+                const lastWasOut = count % 2 === 0;
                 return (
                   <div
                     key={id}
-                    className="px-2 py-0.5 rounded-lg bg-slate-800 border border-amber-500/40 flex items-center gap-1.5 text-xs text-white shrink-0 animate-in fade-in"
+                    className={`px-2 py-0.5 rounded-lg bg-slate-800 border flex items-center gap-1.5 text-xs text-white shrink-0 animate-in fade-in ${
+                      lastWasOut ? "border-rose-500/50" : "border-emerald-500/50"
+                    }`}
                   >
                     <span className="font-bold truncate max-w-[90px]">{pName}</span>
-                    <span className="px-1.5 py-0.2 rounded-full bg-amber-400 text-slate-950 font-black text-[10px] font-mono">
-                      {count}x
+                    <span className={`px-1.5 py-0.2 rounded-full font-black text-[10px] font-mono ${
+                      lastWasOut ? "bg-rose-500 text-white" : "bg-emerald-400 text-slate-950"
+                    }`}>
+                      {count}x {lastWasOut ? "OUT" : "IN"}
                     </span>
                   </div>
                 );
@@ -2492,27 +2675,16 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
                 type="button"
                 onClick={async () => {
                   try {
-                    localStorage.setItem(`nst_kiosk_in_cutoff_${schoolId}`, adminInCutoffTime);
-                    localStorage.setItem(`nst_kiosk_out_start_${schoolId}`, adminOutStartTime);
-                    try {
-                      const { doc, setDoc } = await import("firebase/firestore");
-                      const { db } = await import("../../school-firebase");
-                      if (db) {
-                        await setDoc(
-                          doc(db, `schools/${schoolId}/config/attendance_timings`),
-                          {
-                            inCutoffTime: adminInCutoffTime,
-                            outStartTime: adminOutStartTime,
-                            updatedAt: new Date().toISOString()
-                          },
-                          { merge: true }
-                        );
-                      }
-                    } catch {}
+                    await saveAttendanceSchedule(schoolId, {
+                      inCutoffTime: adminInCutoffTime,
+                      outStartTime: adminOutStartTime,
+                    });
                     setShowTimeConfigModal(false);
-                    setCooldownToast(`✅ शिफ्ट टाइमिंग सुरक्षित: IN कटऑफ ${adminInCutoffTime}, OUT शुरू ${adminOutStartTime}`);
+                    setCooldownToast(
+                      `✅ शिफ्ट टाइमिंग सुरक्षित: Late IN ${formatTime12h(adminInCutoffTime)}, Auto OUT ${formatTime12h(adminOutStartTime)} से`
+                    );
                     setTimeout(() => setCooldownToast(null), 3500);
-                  } catch (e) {
+                  } catch {
                     setShowTimeConfigModal(false);
                   }
                 }}

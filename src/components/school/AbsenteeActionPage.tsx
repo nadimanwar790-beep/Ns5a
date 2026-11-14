@@ -26,6 +26,10 @@ import {
   getLocalAbsenteeCallLogs
 } from "../../school-firebase";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
+import {
+  dispatchAttendanceBatchAlerts,
+  dispatchAttendanceParentAlert,
+} from "../../utils/attendanceAlertDispatcher";
 
 export interface AbsenteeActionPageProps {
   schoolId: string;
@@ -252,18 +256,23 @@ export const AbsenteeActionPage: React.FC<AbsenteeActionPageProps> = ({
     setToastMessage(null);
 
     try {
-      const targetIds = absentStudents.map((s) => s.id);
-      const pushRes = await sendSchoolPushNotification({
+      const res = await dispatchAttendanceBatchAlerts({
         schoolId,
-        studentIds: targetIds,
-        title: `⚠️ ${schoolName} • अनुपस्थिति सूचना (Absent Alert)`,
-        body: `आदरणीय अभिभावक, आपका बच्चा आज विद्यालय में अनुपस्थित है। यदि कोई समस्या या अवकाश है तो कृपया सूचित करें।`,
-        type: "SCHOOL_NOTICE",
-        url: `/?schoolPortal=1&schoolTab=attendance`,
-        urgent: true,
+        schoolName,
+        date: selectedDate,
+        sourceLabel: "अनुपस्थिति अलर्ट सेंटर",
+        skipDedupe: true,
+        items: absentStudents.map((s) => ({
+          studentId: s.id,
+          studentName: s.name,
+          rollNo: s.rollNo,
+          classId: s.classId,
+          className: (s as any).className || classes.find((c) => c.id === s.classId)?.name || "",
+          status: "absent" as const,
+        })),
       });
 
-      const msg = `✅ ${targetIds.length} अनुपस्थित छात्रों के पेरेंट्स को Lock-screen Push Notification भेज दिया गया! (Delivered: ${pushRes.delivered})`;
+      const msg = `✅ ${absentStudents.length} अनुपस्थित छात्रों के पेरेंट्स को NSTA Messenger (${res.messengerCount}) व Lock-screen Push (${res.pushDelivered}) भेज दिया गया!`;
       setToastMessage(msg);
       toast.success(msg);
       setTimeout(() => setToastMessage(null), 5000);
@@ -274,21 +283,26 @@ export const AbsenteeActionPage: React.FC<AbsenteeActionPageProps> = ({
     }
   };
 
-  // 1-Tap Single Student Push Alert (Day 1 only)
+  // 1-Tap Single Student Push + NSTA Messenger Alert (Day 1 only)
   const handleSendSinglePush = async (student: SchoolStudent) => {
     try {
-      await sendSchoolPushNotification({
+      const cName = (student as any).className || classes.find((c) => c.id === student.classId)?.name || "";
+      await dispatchAttendanceParentAlert({
         schoolId,
-        studentIds: [student.id],
-        title: `⚠️ ${schoolName} • अनुपस्थिति सूचना`,
-        body: `आदरणीय अभिभावक, आपका बच्चा ${student.name} (Roll #${student.rollNo || "-"}) आज विद्यालय में उपस्थित नहीं है। कृपया कारण सूचित करें।`,
-        type: "SCHOOL_NOTICE",
-        url: `/?schoolPortal=1&studentId=${student.id}&schoolTab=attendance`,
-        urgent: true,
+        schoolName,
+        classId: student.classId,
+        className: cName,
+        studentId: student.id,
+        studentName: student.name,
+        rollNo: student.rollNo,
+        status: "absent",
+        date: selectedDate,
+        sourceLabel: "अनुपस्थिति अलर्ट सेंटर",
+        skipDedupe: true,
       });
 
-      setToastMessage(`✅ ${student.name} के पेरेंट्स को Push Alert भेज दिया गया!`);
-      toast.success(`${student.name} के पेरेंट्स को Push Alert भेजा गया!`);
+      setToastMessage(`✅ ${student.name} के पेरेंट्स को NSTA Messenger व Push Alert भेज दिया गया!`);
+      toast.success(`${student.name} के पेरेंट्स को NSTA Messenger व Push Alert भेजा गया!`);
       setTimeout(() => setToastMessage(null), 3000);
     } catch {
       toast.error("Push alert भेजते समय समस्या आई।");

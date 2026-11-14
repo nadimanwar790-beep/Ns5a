@@ -2,19 +2,32 @@
 import React, { useState, useEffect, useCallback } from "react";
 import {
   saveAttendance, subscribeToAttendance, getAttendance, getMonthlyAttendance, getStudents, todayStr, currentMonthStr,
-  isStudentBirthdayToday, dispatchOfficialSchoolBirthdayWish, getTeachers, getLocalTeachers
+  isStudentBirthdayToday, dispatchOfficialSchoolBirthdayWish, getTeachers, getLocalTeachers,
+  markStudentQrAttendance, calculateStayDuration
 } from "../../school-firebase";
 import type { SchoolStudent, AttendanceRecord } from "../../school-types";
 import {
   CheckCircle, XCircle, Download, Calendar, Users, ChevronLeft, ChevronRight,
   Camera, QrCode, Phone, PhoneCall, Bell, Send, AlertTriangle, AlertCircle,
   CheckCircle2, MessageCircle, ShieldAlert, Sparkles, PhoneOutgoing, Loader2,
-  Cake, Gift, Heart, Wifi, WifiOff, Cloud, CloudOff, RefreshCw, Volume2, Clock
+  Cake, Gift, Heart, Wifi, WifiOff, Cloud, CloudOff, RefreshCw, Volume2, Clock, LogOut
 } from "lucide-react";
 import { toast } from "sonner";
 import { safeOpenExternalUrl } from "../../utils/safeBrowserActions";
 import { speakNotification } from "../../utils/voiceNotifyEngine";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
+import {
+  dispatchAttendanceBatchAlerts,
+  dispatchAttendanceParentAlert,
+} from "../../utils/attendanceAlertDispatcher";
+import {
+  subscribeAttendanceSchedule,
+  saveAttendanceSchedule,
+  getLiveShiftStatus,
+  formatTime12h,
+  DEFAULT_IN_CUTOFF_TIME,
+  DEFAULT_OUT_START_TIME,
+} from "../../utils/schoolAttendanceSchedule";
 import { QrAttendanceScannerModal } from "./QrAttendanceScannerModal";
 import { ClassQrCodeModal } from "./ClassQrCodeModal";
 import { StudentQuickActionModal } from "./StudentQuickActionModal";
@@ -65,6 +78,20 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
   const [modalInitialTab, setModalInitialTab] = useState<"id_card" | "fees" | "attendance">("attendance");
   const [showClassQrModal, setShowClassQrModal] = useState(false);
   const [selectedCellInfo, setSelectedCellInfo] = useState<{ studentName: string; rollNo: string; date: string; info: any } | null>(null);
+
+  const [inCutoffTime, setInCutoffTime] = useState(DEFAULT_IN_CUTOFF_TIME);
+  const [outStartTime, setOutStartTime] = useState(DEFAULT_OUT_START_TIME);
+  const [showScheduleEditor, setShowScheduleEditor] = useState(false);
+  const [punchingOutId, setPunchingOutId] = useState<string | null>(null);
+  const [bulkOutLoading, setBulkOutLoading] = useState(false);
+
+  useEffect(() => {
+    if (!schoolId) return;
+    return subscribeAttendanceSchedule(schoolId, (sched) => {
+      setInCutoffTime(sched.inCutoffTime);
+      setOutStartTime(sched.outStartTime);
+    });
+  }, [schoolId]);
 
   // Absentee Action Center & 2-Day Tracker States
   const [yesterdayRecord, setYesterdayRecord] = useState<AttendanceRecord | null>(null);
@@ -294,14 +321,28 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
 
   const saveRecord = async () => {
     setSaving(true);
+    const now = new Date();
+    const nowMs = now.getTime();
+    const nowTime = now.toLocaleTimeString("en-IN", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: true,
+    });
+    const isToday = selectedDate === todayStr();
+
     const studentsMap: AttendanceRecord["students"] = { ...(existingRecord?.students || {}) };
     students.forEach(s => {
       const previous = studentsMap[s.id];
+      const isPresent = attendance[s.id] ?? previous?.present ?? true;
       studentsMap[s.id] = {
         ...previous,
-        present: attendance[s.id] ?? previous?.present ?? true,
+        present: isPresent,
         name: s.name,
         rollNo: s.rollNo,
+        status: isPresent ? (previous?.status === "late" ? "late" : "present") : "absent",
+        inTime: isPresent ? (previous?.inTime || (isToday ? nowTime : undefined)) : previous?.inTime,
+        inTimestamp: isPresent ? (previous?.inTimestamp || (isToday ? nowMs : undefined)) : previous?.inTimestamp,
       };
     });
     const record: AttendanceRecord = {
@@ -343,9 +384,199 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
     } else {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+
+      // Dispatch NSTA Messenger (SCHOOL_DESK) + Push alerts to parents when today's attendance is saved
+      if (selectedDate === todayStr() && students.length > 0) {
+        const nowTime = new Date().toLocaleTimeString("en-IN", {
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: true,
+        });
+        void dispatchAttendanceBatchAlerts({
+          schoolId,
+          classId,
+          className,
+          date: selectedDate,
+          sourceLabel: "क्लास अटेंडेंस रजिस्टर",
+          items: students.map(s => ({
+            studentId: s.id,
+            studentName: s.name,
+            rollNo: s.rollNo,
+            classId,
+            className,
+            status: studentsMap[s.id]?.present === false ? ("absent" as const) : ("present" as const),
+            timeText: nowTime,
+          })),
+        }).then((res) => {
+          if (res.messengerCount > 0) {
+            toast.success(`📩 ${res.messengerCount} अभिभावकों को NSTA Messenger व Push अलर्ट भेजा गया!`);
+          }
+        });
+      }
     }
 
     setSaving(false);
+  };
+
+  const handleMarkSingleStudentOut = async (student: SchoolStudent) => {
+    if (!schoolId || !classId) return;
+    setPunchingOutId(student.id);
+    try {
+      // Ensure IN entry exists first if student was marked present without saving yet
+      const prevEntry = existingRecord?.students?.[student.id];
+      if (!prevEntry?.inTime && attendance[student.id]) {
+        const now = new Date();
+        const nowTime = now.toLocaleTimeString("en-IN", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: true,
+        });
+        const studentsMap: AttendanceRecord["students"] = { ...(existingRecord?.students || {}) };
+        studentsMap[student.id] = {
+          ...(studentsMap[student.id] || {}),
+          present: true,
+          name: student.name,
+          rollNo: student.rollNo,
+          status: "present",
+          inTime: nowTime,
+          inTimestamp: now.getTime(),
+        };
+        await saveAttendance({
+          date: selectedDate,
+          schoolId,
+          classId,
+          sessionId: students[0]?.sessionId || "",
+          markedBy: teacherId,
+          students: studentsMap,
+          createdAt: existingRecord?.createdAt || now.toISOString(),
+        });
+      }
+
+      const res = await markStudentQrAttendance({
+        schoolId,
+        classId,
+        studentId: student.id,
+        studentName: student.name,
+        rollNo: student.rollNo,
+        date: selectedDate,
+        markedBy: teacherId,
+        scanMode: "out",
+        cutoffTime: inCutoffTime,
+        outStartTime,
+      });
+
+      if (res.success && !res.alreadyMarked) {
+        if (res.record) setExistingRecord(res.record);
+        toast.success(`🏃 ${student.name} का OUT (${res.outTime}) दर्ज व अभिभावक को सूचित किया गया!`);
+        void dispatchAttendanceParentAlert({
+          schoolId,
+          classId,
+          className,
+          studentId: student.id,
+          studentName: student.name,
+          rollNo: student.rollNo,
+          status: "out",
+          timeText: res.outTime || "",
+          stayDuration: res.stayDuration,
+          date: selectedDate,
+          sourceLabel: "क्लास अटेंडेंस रजिस्टर (OUT)",
+        });
+      } else {
+        toast.info(res.message);
+      }
+    } catch (err: any) {
+      toast.error(err?.message || "OUT दर्ज करने में त्रुटि।");
+    } finally {
+      setPunchingOutId(null);
+    }
+  };
+
+  const handleMarkAllStudentsOut = async () => {
+    if (!schoolId || !classId || students.length === 0) return;
+    setBulkOutLoading(true);
+    try {
+      const now = new Date();
+      const nowMs = now.getTime();
+      const nowTime = now.toLocaleTimeString("en-IN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: true,
+      });
+      const existing = (await getAttendance(schoolId, classId, selectedDate)) || existingRecord;
+      const studentsMap: AttendanceRecord["students"] = { ...(existing?.students || {}) };
+      const outTargets: SchoolStudent[] = [];
+
+      students.forEach((s) => {
+        const isPresent = attendance[s.id] ?? studentsMap[s.id]?.present ?? false;
+        if (isPresent) {
+          const prev = studentsMap[s.id];
+          const inTime = prev?.inTime || nowTime;
+          const inTs = prev?.inTimestamp;
+          const outTime = prev?.outTime || nowTime;
+          const outTs = prev?.outTimestamp || nowMs;
+          const stayDuration = prev?.stayDuration || calculateStayDuration(inTime, outTime, inTs, outTs);
+          studentsMap[s.id] = {
+            ...prev,
+            present: true,
+            name: s.name,
+            rollNo: s.rollNo,
+            status: prev?.status === "late" ? "late" : "present",
+            inTime,
+            inTimestamp: inTs || nowMs,
+            outTime,
+            outTimestamp: outTs,
+            stayDuration,
+            scanType: "out",
+          };
+          if (!prev?.outTime) outTargets.push(s);
+        }
+      });
+
+      if (outTargets.length === 0) {
+        toast.info("सभी उपस्थित छात्रों का OUT पहले से दर्ज है।");
+        return;
+      }
+
+      const record: AttendanceRecord = {
+        date: selectedDate,
+        schoolId,
+        classId,
+        sessionId: students[0]?.sessionId || existing?.sessionId || "",
+        markedBy: teacherId,
+        students: studentsMap,
+        createdAt: existing?.createdAt || now.toISOString(),
+      };
+      await saveAttendance(record);
+      setExistingRecord(record);
+
+      if (selectedDate === todayStr()) {
+        void dispatchAttendanceBatchAlerts({
+          schoolId,
+          classId,
+          className,
+          date: selectedDate,
+          sourceLabel: "क्लास रजिस्टर (All OUT)",
+          items: outTargets.map((s) => ({
+            studentId: s.id,
+            studentName: s.name,
+            rollNo: s.rollNo,
+            classId,
+            className,
+            status: "out" as const,
+            timeText: studentsMap[s.id]?.outTime || nowTime,
+            stayDuration: studentsMap[s.id]?.stayDuration,
+          })),
+        });
+      }
+
+      toast.success(`🏃 ${outTargets.length} छात्रों का OUT (प्रस्थान) दर्ज कर दिया गया!`);
+    } catch (err: any) {
+      toast.error(err?.message || "Bulk OUT करने में त्रुटि।");
+    } finally {
+      setBulkOutLoading(false);
+    }
   };
 
   const presentCount = Object.values(attendance).filter(Boolean).length;
@@ -374,7 +605,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
     return { day1Absentees: day1, day2PlusAbsentees: day2Plus };
   })();
 
-  // 1-Click Broadcast Absentee Notices
+  // 1-Click Broadcast Absentee Notices (NSTA Messenger + Push)
   const handleBroadcastAbsenteeNotices = async () => {
     if (absentStudents.length === 0) {
       toast.info("आज कोई भी छात्र अनुपस्थित नहीं है।");
@@ -382,19 +613,24 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
     }
     setBroadcastingAbsentees(true);
     try {
-      const studentIds = absentStudents.map(s => s.id);
-      const pushRes = await sendSchoolPushNotification({
+      const res = await dispatchAttendanceBatchAlerts({
         schoolId,
         classId,
-        studentIds,
-        title: `⚠️ विद्यालय अनुपस्थिति सूचना • ${className}`,
-        body: `आदरणीय अभिभावक, आपका बच्चा आज विद्यालय में अनुपस्थित है। यदि कोई समस्या या अवकाश है तो कृपया सूचित करें।`,
-        type: "SCHOOL_NOTICE",
-        url: `/?schoolPortal=1&classId=${classId}&schoolTab=attendance`,
-        urgent: true,
+        className,
+        date: selectedDate,
+        sourceLabel: "क्लास अनुपस्थिति सूचना",
+        skipDedupe: true,
+        items: absentStudents.map(s => ({
+          studentId: s.id,
+          studentName: s.name,
+          rollNo: s.rollNo,
+          classId,
+          className,
+          status: "absent" as const,
+        })),
       });
 
-      setAbsenteeBroadcastToast(`✅ ${studentIds.length} अनुपस्थित छात्रों के अभिभावकों को पुश नोटिफिकेशन भेज दिया गया! (Delivered: ${pushRes.delivered})`);
+      setAbsenteeBroadcastToast(`✅ ${absentStudents.length} अनुपस्थित छात्रों के अभिभावकों को NSTA Messenger (${res.messengerCount}) व Push (${res.pushDelivered}) अलर्ट भेजा गया!`);
       setTimeout(() => setAbsenteeBroadcastToast(null), 4000);
     } catch {
       toast.error("Notification भेजने में समस्या आई।");
@@ -403,20 +639,24 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
     }
   };
 
-  // 1-Tap Single Absent Push Notice
+  // 1-Tap Single Absent Push + NSTA Messenger Notice
   const handleSendSingleAbsentPush = async (student: SchoolStudent) => {
     try {
-      await sendSchoolPushNotification({
+      const isDay2 = day2PlusAbsentees.some(d => d.id === student.id);
+      await dispatchAttendanceParentAlert({
         schoolId,
         classId,
-        studentIds: [student.id],
-        title: `⚠️ अनुपस्थिति सूचना • ${className}`,
-        body: `आदरणीय अभिभावक, आपका बच्चा ${student.name} (Roll #${student.rollNo || "-"}) आज विद्यालय में उपस्थित नहीं है। कृपया कारण सूचित करें।`,
-        type: "SCHOOL_NOTICE",
-        url: `/?schoolPortal=1&studentId=${student.id}&schoolTab=attendance`,
-        urgent: true,
+        className,
+        studentId: student.id,
+        studentName: student.name,
+        rollNo: student.rollNo,
+        status: "absent",
+        date: selectedDate,
+        sourceLabel: "क्लास अनुपस्थिति सूचना",
+        consecutiveAbsent: isDay2,
+        skipDedupe: true,
       });
-      setAbsenteeBroadcastToast(`✅ ${student.name} के पेरेंट्स को अनुपस्थिति अलर्ट भेजा गया!`);
+      setAbsenteeBroadcastToast(`✅ ${student.name} के पेरेंट्स को NSTA Messenger व Push अलर्ट भेजा गया!`);
       setTimeout(() => setAbsenteeBroadcastToast(null), 3500);
     } catch {
       toast.error("अलर्ट भेजने में समस्या आई।");
@@ -674,6 +914,63 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
             {existingRecord && <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">Saved</span>}
           </div>
 
+          {/* School Attendance IN / OUT Timing Clarity Banner */}
+          {(() => {
+            const liveShift = getLiveShiftStatus({ inCutoffTime, outStartTime });
+            return (
+              <div className="bg-white dark:bg-slate-800 rounded-xl p-3.5 border border-cyan-500/30 shadow-xs space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Clock className="w-4 h-4 text-cyan-600 dark:text-cyan-400 shrink-0" />
+                    <span className="text-xs font-black text-slate-800 dark:text-white truncate">
+                      {liveShift.badgeText}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowScheduleEditor((p) => !p)}
+                    className="px-2.5 py-1 rounded-lg bg-cyan-50 dark:bg-cyan-950/60 border border-cyan-300 dark:border-cyan-700 text-cyan-700 dark:text-cyan-300 text-[11px] font-black cursor-pointer shrink-0"
+                  >
+                    {showScheduleEditor ? "बंद करें" : "⚙️ IN/OUT टाइम बदलें"}
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {liveShift.helperText}
+                </p>
+                {showScheduleEditor && (
+                  <div className="pt-2 border-t border-slate-200 dark:border-slate-700 flex flex-wrap items-center gap-3 text-xs">
+                    <label className="flex items-center gap-1.5 font-bold text-slate-700 dark:text-slate-200">
+                      <span>🟢 IN कटऑफ (Late इसके बाद):</span>
+                      <input
+                        type="time"
+                        value={inCutoffTime}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setInCutoffTime(v);
+                          if (schoolId) void saveAttendanceSchedule(schoolId, { inCutoffTime: v, outStartTime });
+                        }}
+                        className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 font-mono"
+                      />
+                    </label>
+                    <label className="flex items-center gap-1.5 font-bold text-slate-700 dark:text-slate-200">
+                      <span>🔴 OUT शुरू (Auto छुट्टी इसके बाद):</span>
+                      <input
+                        type="time"
+                        value={outStartTime}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setOutStartTime(v);
+                          if (schoolId) void saveAttendanceSchedule(schoolId, { inCutoffTime, outStartTime: v });
+                        }}
+                        className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 font-mono"
+                      />
+                    </label>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Summary */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
             <div className="bg-blue-50 dark:bg-blue-900/30 rounded-xl p-3 text-center">
@@ -701,9 +998,18 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
           </div>
 
           {/* Quick Actions */}
-          <div className="flex gap-2">
-            <button onClick={() => markAll(true)} className="flex-1 py-2 bg-green-500 hover:bg-green-600 text-white rounded-xl text-xs font-bold transition">All Present</button>
-            <button onClick={() => markAll(false)} className="flex-1 py-2 bg-red-500 hover:bg-red-600 text-white rounded-xl text-xs font-bold transition">All Absent</button>
+          <div className="grid grid-cols-3 gap-2">
+            <button onClick={() => markAll(true)} className="py-2 bg-green-500 hover:bg-green-600 text-white rounded-xl text-xs font-bold transition cursor-pointer">All Present</button>
+            <button onClick={() => markAll(false)} className="py-2 bg-red-500 hover:bg-red-600 text-white rounded-xl text-xs font-bold transition cursor-pointer">All Absent</button>
+            <button
+              type="button"
+              onClick={handleMarkAllStudentsOut}
+              disabled={bulkOutLoading}
+              className="py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl text-xs font-black transition flex items-center justify-center gap-1 cursor-pointer disabled:opacity-60"
+            >
+              {bulkOutLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <LogOut className="w-3.5 h-3.5" />}
+              <span>All OUT</span>
+            </button>
           </div>
 
           {/* 1-Click Absentee Broadcast Button (If any absent student) */}
@@ -756,7 +1062,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
                 setShowFaceKiosk(true);
               }}
               className="py-2.5 px-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 active:scale-95 text-slate-950 rounded-xl text-xs font-black flex items-center justify-center gap-1 shadow-md shadow-amber-500/30 ring-1 ring-amber-300 transition cursor-pointer"
-              title="टेस्ट मोड: अटेंडेंस नहीं लगेगी, सिर्फ कैमरा में चेहरा मैच करके वॉयस से नाम बोलेगा"
+              title="टेस्ट मोड: 1st स्कैन IN, 2nd स्कैन OUT और हर बार Student के मोबाइल पर Push नोटिफिकेशन"
             >
               <Volume2 size={14} className="text-slate-950" />
               <span>🧪 फेस टेस्ट</span>
@@ -856,11 +1162,15 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
                           <span className="text-slate-400 italic">No entry punch</span>
                         )}
 
-                        {outTime && (
+                        {outTime ? (
                           <span className="inline-flex items-center gap-1 font-semibold px-2 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
                             Exit: {outTime}
                           </span>
-                        )}
+                        ) : (inTime || attendance[s.id]) ? (
+                          <span className="inline-flex items-center gap-1 font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-600 dark:bg-slate-700/70 dark:text-slate-300">
+                            ⏳ OUT बाकी ({formatTime12h(outStartTime)} से)
+                          </span>
+                        ) : null}
 
                         {duration && (
                           <span className="inline-flex items-center gap-1 font-bold px-2 py-0.5 rounded bg-blue-100 text-blue-800 dark:bg-blue-950/50 dark:text-blue-300">
@@ -872,6 +1182,22 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
                   </div>
 
                   <div className="flex items-center gap-2 self-end sm:self-auto">
+                    {attendance[s.id] && !outTime && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleMarkSingleStudentOut(s);
+                        }}
+                        disabled={punchingOutId === s.id}
+                        className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-[10px] font-black flex items-center gap-1 shadow-xs transition active:scale-95 cursor-pointer disabled:opacity-60"
+                        title="अभी इस छात्र का OUT (प्रस्थान) दर्ज करें"
+                      >
+                        {punchingOutId === s.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <LogOut className="w-3 h-3" />}
+                        <span>OUT</span>
+                      </button>
+                    )}
+
                     {isBirthday && (
                       <button
                         type="button"

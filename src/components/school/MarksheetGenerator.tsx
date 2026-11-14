@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import QRCode from "react-qr-code";
 import type { School, SchoolClass, SchoolStudent, SchoolSession, ExamEntry } from "../../school-types";
 import { getExams, promoteStudents, isStudentInClass, getMonthlyAttendance, currentMonthStr } from "../../school-firebase";
@@ -12,6 +12,7 @@ import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeade
 import { schoolPrintFieldEnabled, isBoardClass } from "../../school-types";
 import { QuickAddStudentModal } from "./QuickAddStudentModal";
 import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo, formatAcademicSession } from "./feeReceiptUtils";
+import { printHtmlInIframe } from "./AdmissionFormPrintModal";
 
 interface Props {
   school: School;
@@ -342,9 +343,11 @@ export const MarksheetGenerator: React.FC<Props> = ({
     return WING_PRESETS[detected]?.subjects || DEFAULT_SUBJECTS;
   });
 
-  // Bulk Mode
+  // Bulk Mode & 2-up PA Pairing
   const [bulkMode, setBulkMode] = useState(false);
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
+  const [pairRightStudentId, setPairRightStudentId] = useState<string>("auto");
+  const printContainerRef = useRef<HTMLDivElement>(null);
 
   // Automatically update wing, subject preset, and exam title when selected class changes
   useEffect(() => {
@@ -959,7 +962,165 @@ export const MarksheetGenerator: React.FC<Props> = ({
   };
 
   const handlePrint = () => {
-    window.print();
+    const container = printContainerRef.current;
+    if (!container || typeof document === "undefined") {
+      window.print();
+      return;
+    }
+
+    const styles = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
+      .map((node) => node.outerHTML)
+      .join("\n");
+
+    const orientation = isPrintLandscape ? "A4 landscape" : "A4 portrait";
+    const sheetWidth = isPrintLandscape ? "289mm" : "202mm";
+    const sheetHeight = isPrintLandscape ? "201mm" : "auto";
+    const safeTitle = `${examTitle || "Marksheet"} - ${currentClass?.name || "Class"}`
+      .replace(/[<>"'&]/g, "");
+
+    const htmlDoc = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${safeTitle}</title>
+  ${styles}
+  <style>
+    @page {
+      size: ${orientation};
+      margin: 4mm;
+    }
+    html, body {
+      margin: 0 !important;
+      padding: 0 !important;
+      width: 100% !important;
+      height: auto !important;
+      background: #ffffff !important;
+      color: #0f172a !important;
+      overflow: visible !important;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
+    .print\\:hidden, .no-print { display: none !important; }
+    .marksheet-print-root {
+      width: 100% !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      display: block !important;
+      background: #ffffff !important;
+    }
+    .marksheet-print-page {
+      width: ${sheetWidth} !important;
+      max-width: ${sheetWidth} !important;
+      ${isPrintLandscape ? `height: ${sheetHeight} !important; max-height: ${sheetHeight} !important; overflow: hidden !important;` : "height: auto !important; overflow: visible !important;"}
+      margin: 0 auto !important;
+      padding: 0 !important;
+      box-sizing: border-box !important;
+      display: block !important;
+      background: #ffffff !important;
+      page-break-inside: avoid !important;
+      break-inside: avoid-page !important;
+      page-break-after: always !important;
+      break-after: page !important;
+    }
+    .marksheet-print-page:last-child {
+      page-break-after: auto !important;
+      break-after: auto !important;
+    }
+    .marksheet-sheet-box {
+      width: 100% !important;
+      min-width: 0 !important;
+      max-width: 100% !important;
+      height: ${isPrintLandscape ? "100%" : "auto"} !important;
+      margin: 0 !important;
+      padding: ${isPrintLandscape ? "2.5mm" : "4mm"} !important;
+      box-sizing: border-box !important;
+      box-shadow: none !important;
+      border-radius: 0 !important;
+      border-width: 2px !important;
+      border-color: #0f172a !important;
+      overflow: hidden !important;
+      display: flex !important;
+      flex-direction: column !important;
+      justify-content: space-between !important;
+    }
+    .marksheet-landscape-split {
+      display: grid !important;
+      grid-template-columns: 1fr 1fr !important;
+      gap: 3mm !important;
+      width: 100% !important;
+      height: 100% !important;
+      align-items: stretch !important;
+    }
+    .marksheet-two-up-grid {
+      display: grid !important;
+      grid-template-columns: 1fr 1fr !important;
+      gap: 2.5mm !important;
+      width: 100% !important;
+      min-width: 0 !important;
+      max-width: 100% !important;
+      height: 100% !important;
+      padding: 0 !important;
+      margin: 0 !important;
+      border: none !important;
+      box-shadow: none !important;
+      border-radius: 0 !important;
+      background: #ffffff !important;
+      align-items: stretch !important;
+    }
+    .marksheet-half-slot {
+      width: 100% !important;
+      height: 100% !important;
+      min-width: 0 !important;
+      box-sizing: border-box !important;
+      display: flex !important;
+      flex-direction: column !important;
+    }
+    .marksheet-half-slot:first-child {
+      padding-right: 2.5mm !important;
+      border-right: 1.5px dashed #64748b !important;
+    }
+    .marksheet-half-slot:last-child {
+      padding-left: 1mm !important;
+    }
+    .marksheet-pa-half-card {
+      width: 100% !important;
+      height: 100% !important;
+      min-width: 0 !important;
+      max-width: 100% !important;
+      padding: 2.5mm !important;
+      margin: 0 !important;
+      box-shadow: none !important;
+      border-radius: 0 !important;
+      border: 2px solid #0f172a !important;
+      box-sizing: border-box !important;
+      overflow: hidden !important;
+      display: flex !important;
+      flex-direction: column !important;
+      justify-content: space-between !important;
+    }
+    .marksheet-dense-sheet td,
+    .marksheet-dense-sheet th {
+      padding-top: 1.5px !important;
+      padding-bottom: 1.5px !important;
+    }
+    .marksheet-sheet-box table,
+    .marksheet-pa-half-card table {
+      width: 100% !important;
+      table-layout: auto !important;
+    }
+    @media print {
+      .marksheet-print-page {
+        ${isPrintLandscape ? `height: ${sheetHeight} !important; max-height: ${sheetHeight} !important;` : ""}
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="marksheet-print-root">${container.innerHTML}</div>
+</body>
+</html>`;
+
+    printHtmlInIframe(htmlDoc, safeTitle);
   };
 
   const baseClassSubjects = subjects;
@@ -1386,108 +1547,105 @@ export const MarksheetGenerator: React.FC<Props> = ({
     })();
 
     // ══════════════════════════════════════════════════════════════════
-    // 1. HORIZONTAL SINGLE MARKSHEET (PA-1, PA-2, PA-3, PA-4 & Custom Exams or Admin Single Slip Choice)
+    // 1. 2-IN-1 HALF-PAGE A4 LANDSCAPE CARD (PA-1, PA-2, PA-3, PA-4, Custom & Single Slip)
+    // Renders a single student's compact slip sized for 50% width of an A4 Landscape sheet
     // ══════════════════════════════════════════════════════════════════
     const shouldRenderSingleSlip = marksheetStyle === "single_slip" || (isSingleExam && marksheetStyle !== "classic_table" && marksheetStyle !== "visual_charts" && marksheetStyle !== "portrait");
     if (shouldRenderSingleSlip) {
+      const isDensePa = subjects.length >= 9;
       return (
-        <div key={targetStudent?.id || "single"} className="marksheet-print-page w-full flex justify-center print:block">
-          <div
-            className="marksheet-sheet-box w-full min-w-[760px] max-w-[1080px] bg-white rounded-xl border-4 border-slate-900 shadow-2xl p-5 text-slate-900 print:shadow-none print:m-0 print:border-2 print:border-black print:max-w-none print:min-w-0 print:p-3 print:rounded-none print:overflow-visible relative overflow-hidden flex flex-col justify-between"
-            style={{ fontFamily: "'Inter', sans-serif" }}
-          >
-            {/* Watermark */}
-            <div className="absolute inset-0 flex items-center justify-center opacity-[0.03] pointer-events-none select-none">
-              <span className="text-[120px] font-black tracking-widest text-slate-900 uppercase">
-                {(schoolDetails.schoolName || school?.name || "ACADEMY").slice(0, 6).toUpperCase()}
-              </span>
-            </div>
+        <div
+          key={targetStudent?.id || "single"}
+          className={`marksheet-pa-half-card w-full h-full bg-white rounded-lg border-2 border-slate-900 ${isDensePa ? "p-2" : "p-3"} text-slate-900 relative overflow-hidden flex flex-col justify-between box-border`}
+          style={{ fontFamily: "'Inter', sans-serif" }}
+        >
+          {/* Watermark */}
+          <div className="absolute inset-0 flex items-center justify-center opacity-[0.03] pointer-events-none select-none">
+            <span className="text-[84px] font-black tracking-widest text-slate-900 uppercase">
+              {(schoolDetails.schoolName || school?.name || "ACADEMY").slice(0, 6).toUpperCase()}
+            </span>
+          </div>
 
+          <div>
             {/* School Header */}
-            <div className="border-b-2 border-slate-900 pb-2 mb-2">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex items-center gap-3">
+            <div className="border-b-2 border-slate-900 pb-1.5 mb-1.5">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
                   {getSavedSchoolLogo(schoolDetails.logoUrl, school?.id) ? (
                     <img
                       src={cleanLogoUrl(getSavedSchoolLogo(schoolDetails.logoUrl, school?.id))}
                       alt="School Logo"
-                      className="w-12 h-12 object-contain rounded-xl border border-slate-300 shadow-sm bg-white p-0.5"
+                      className="w-9 h-9 object-contain rounded-lg border border-slate-300 bg-white p-0.5 shrink-0"
                     />
                   ) : (
-                    <div className="w-12 h-12 rounded-xl bg-slate-900 text-amber-300 font-black text-xl flex items-center justify-center shadow-sm">
+                    <div className="w-9 h-9 rounded-lg bg-slate-900 text-amber-300 font-black text-sm flex items-center justify-center shrink-0">
                       {(schoolDetails.schoolName || "SC").slice(0, 2).toUpperCase()}
                     </div>
                   )}
-                  <div>
-                    <h1 className="text-xl font-black uppercase tracking-tight text-slate-950 leading-none">
+                  <div className="min-w-0">
+                    <h1 className="text-sm font-black uppercase tracking-tight text-slate-950 leading-tight truncate">
                       {schoolDetails.schoolName}
                     </h1>
                     {schoolDetails.address && (
-                      <p className="text-[10px] text-slate-600 mt-0.5 font-medium">{schoolDetails.address}</p>
+                      <p className="text-[8px] text-slate-600 font-medium truncate">{schoolDetails.address}</p>
                     )}
-                    <p className="text-[9px] text-slate-600 font-bold tracking-wide uppercase mt-0.5">
-                      {cleanCurriculumLine || "CBSE Pattern Curriculum"}
-                      {schoolDetails.code ? ` • School Code: ${schoolDetails.code}` : ""}
-                      {schoolDetails.phone ? ` • Ph: ${schoolDetails.phone}` : ""}
+                    <p className="text-[7.5px] text-slate-600 font-bold tracking-wide uppercase truncate">
+                      {cleanCurriculumLine || "CBSE Pattern"}
+                      {schoolDetails.code ? ` • Code: ${schoolDetails.code}` : ""}
                     </p>
                   </div>
                 </div>
-                <div className="text-right flex flex-col items-end gap-1">
-                  <span className="px-2.5 py-1 rounded bg-indigo-950 text-amber-300 font-mono text-[9px] font-black uppercase tracking-wider">
-                    {currentExamOption.shortName} Assessment Slip
+                <div className="text-right flex flex-col items-end gap-0.5 shrink-0">
+                  <span className="px-1.5 py-0.5 rounded bg-indigo-950 text-amber-300 font-mono text-[7.5px] font-black uppercase tracking-wider">
+                    {currentExamOption.shortName} Slip
                   </span>
-                  <span className="text-[9px] font-bold text-slate-600">
-                    Max Marks: {examMax}M Per Subject
+                  <span className="text-[7.5px] font-bold text-slate-600">
+                    Max: {examMax}M
                   </span>
                 </div>
               </div>
 
               {/* Sub-banner */}
-              <div className="text-center mt-2 pt-1 border-t border-slate-200 flex items-center justify-between">
-                <span className="text-[9px] font-mono text-slate-500">Date: {publishDate}</span>
-                <span className="inline-block px-3 py-0.5 rounded-full bg-slate-900 text-white font-black text-[10px] uppercase tracking-widest">
-                  {currentExamOption.name.toUpperCase()} EVALUATION REPORT
+              <div className="text-center mt-1 pt-1 border-t border-slate-200 flex items-center justify-between gap-1">
+                <span className="text-[7.5px] font-mono text-slate-500">{publishDate}</span>
+                <span className="inline-block px-2 py-0.5 rounded-full bg-slate-900 text-white font-black text-[8px] uppercase tracking-wider truncate">
+                  {currentExamOption.name.toUpperCase()} REPORT
                 </span>
-                <span className="text-[9.5px] font-bold text-indigo-950 uppercase tracking-wider">
-                  Session: {cleanSessionText}
+                <span className="text-[7.5px] font-bold text-indigo-950 uppercase">
+                  {cleanSessionText}
                 </span>
               </div>
             </div>
 
             {/* Candidate Details Grid */}
-            <div className="bg-slate-50/90 rounded-lg p-2.5 mb-2 border border-slate-300 text-[10px] font-medium">
-              <div className="grid grid-cols-12 gap-3 items-center">
-                <div className={`${showStudentPhoto ? "col-span-5" : "col-span-6"} space-y-1`}>
-                  <div><span className="text-slate-500 font-bold">Candidate: </span><span className="font-black text-slate-900 text-xs">{sName}</span></div>
-                  <div><span className="text-slate-500 font-bold">Father's Name: </span><span className="font-bold text-slate-800">{sFather}</span></div>
-                  <div><span className="text-slate-500 font-bold">Class &amp; Section: </span><span className="font-black text-indigo-900">{cName} (Sec: {sSection})</span></div>
+            <div className="bg-slate-50/90 rounded-md p-1.5 mb-1.5 border border-slate-300 text-[8.5px] font-medium">
+              <div className="grid grid-cols-12 gap-1.5 items-center">
+                <div className={`${showStudentPhoto ? "col-span-5" : "col-span-6"} space-y-0.5 min-w-0`}>
+                  <div className="truncate"><span className="text-slate-500 font-bold">Name: </span><span className="font-black text-slate-900 text-[9.5px]">{sName}</span></div>
+                  <div className="truncate"><span className="text-slate-500 font-bold">Father: </span><span className="font-bold text-slate-800">{sFather}</span></div>
+                  <div className="truncate"><span className="text-slate-500 font-bold">Class: </span><span className="font-black text-indigo-900">{cName} ({sSection})</span></div>
                 </div>
-                <div className={`${showStudentPhoto ? "col-span-5" : "col-span-6"} space-y-1 text-right sm:text-left`}>
-                  <div className="flex items-center justify-end sm:justify-start gap-2 flex-wrap">
-                    <div><span className="text-slate-500 font-bold">Roll No: </span><span className="font-black text-indigo-700 text-xs">{sRoll}</span></div>
-                    <div><span className="text-slate-500 font-bold">Adm / Reg No: </span><span className="font-black text-slate-900">{sReg}</span></div>
-                    <span className="font-black text-[9.5px] px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">
-                      {totals.hasFail ? "Supplementary" : isBoard ? `Eligible for Board ${boardExamYear}` : totals.resultStatus}
-                    </span>
+                <div className={`${showStudentPhoto ? "col-span-5" : "col-span-6"} space-y-0.5 text-right`}>
+                  <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                    <div><span className="text-slate-500 font-bold">Roll: </span><span className="font-black text-indigo-700 text-[10px]">{sRoll}</span></div>
+                    <div><span className="text-slate-500 font-bold">Adm: </span><span className="font-black text-slate-900">{sReg}</span></div>
                   </div>
-                  <div className="flex items-center justify-end sm:justify-start gap-1.5 flex-wrap pt-0.5">
-                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-50 border border-amber-300 text-amber-950 font-black text-[9px] shadow-2xs">
-                      <span className="text-[10px]">🏅</span>
-                      <span>Class Rank: <b className="text-amber-900 font-black">{sClassRank}</b> / {sClassStrength}</span>
+                  <div className="flex items-center justify-end gap-1 flex-wrap">
+                    <span className="px-1 py-0.2 rounded bg-amber-50 border border-amber-300 text-amber-950 font-black text-[7.5px]">
+                      🏅 C-Rank: <b>{sClassRank}</b>/{sClassStrength}
                     </span>
-                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-sky-50 border border-sky-300 text-sky-950 font-black text-[9px] shadow-2xs">
-                      <span className="text-[10px]">🎖️</span>
-                      <span>Section Rank: <b className="text-sky-900 font-black">{sSectionRank}</b> / {sSectionStrength}</span>
+                    <span className="px-1 py-0.2 rounded bg-sky-50 border border-sky-300 text-sky-950 font-black text-[7.5px]">
+                      🎖️ S-Rank: <b>{sSectionRank}</b>/{sSectionStrength}
                     </span>
                   </div>
                 </div>
                 {showStudentPhoto && (
                   <div className="col-span-2 flex justify-end">
-                    <div className="w-[50px] h-[60px] rounded border border-slate-800 bg-white overflow-hidden shadow-xs flex items-center justify-center relative">
+                    <div className="w-[38px] h-[46px] rounded border border-slate-800 bg-white overflow-hidden flex items-center justify-center shrink-0">
                       {sPhoto ? (
                         <img src={sPhoto} alt="Student" className="w-full h-full object-cover" />
                       ) : (
-                        <User className="w-5 h-5 text-slate-400" />
+                        <User className="w-4 h-4 text-slate-400" />
                       )}
                     </div>
                   </div>
@@ -1495,20 +1653,19 @@ export const MarksheetGenerator: React.FC<Props> = ({
               </div>
             </div>
 
-            {/* Subject Marks Table */}
-            <div className="border-2 border-slate-900 rounded-lg overflow-hidden mb-2">
-              <table className="w-full text-left text-[9.5px] border-collapse">
+            {/* Subject Marks Table (Half-A4 Compact Width Safe) */}
+            <div className="border-2 border-slate-900 rounded-md overflow-hidden mb-1.5">
+              <table className="w-full text-left text-[8px] border-collapse">
                 <thead className="bg-slate-900 text-white font-bold">
                   <tr>
-                    <th className="p-1.5 border-r border-slate-700 text-center w-8">SL</th>
-                    <th className="p-1.5 border-r border-slate-700 text-center w-12 font-mono">Code</th>
-                    <th className="p-1.5 border-r border-slate-700">Subject Name</th>
-                    <th className="p-1.5 border-r border-slate-700 text-center w-24">Written ({maxTheory})</th>
-                    <th className="p-1.5 border-r border-slate-700 text-center w-28">Internal / MCQ ({maxInternal})</th>
-                    <th className="p-1.5 border-r border-slate-700 text-center w-22 bg-indigo-950">Total ({examMax})</th>
-                    <th className="p-1.5 border-r border-slate-700 text-center w-16 bg-slate-800">Highest</th>
-                    <th className="p-1.5 border-r border-slate-700 text-center w-14 bg-indigo-950">Grade</th>
-                    <th className="p-1.5 text-center w-28 bg-indigo-950">Performance Remark</th>
+                    <th className="py-1 px-1 border-r border-slate-700 text-center w-5">#</th>
+                    <th className="py-1 px-1 border-r border-slate-700">Subject</th>
+                    <th className="py-1 px-1 border-r border-slate-700 text-center w-11">Writ ({maxTheory})</th>
+                    <th className="py-1 px-1 border-r border-slate-700 text-center w-10">IA ({maxInternal})</th>
+                    <th className="py-1 px-1 border-r border-slate-700 text-center w-11 bg-indigo-950">Tot ({examMax})</th>
+                    <th className="py-1 px-1 border-r border-slate-700 text-center w-9 bg-slate-800">High</th>
+                    <th className="py-1 px-1 border-r border-slate-700 text-center w-8 bg-indigo-950">Grd</th>
+                    <th className="py-1 px-1 text-center w-16 bg-indigo-950">Remark</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-300 font-medium">
@@ -1516,118 +1673,109 @@ export const MarksheetGenerator: React.FC<Props> = ({
                     const sm = singleExamSubjectMarks[idx];
                     return (
                       <tr key={sub.id || idx} className={idx % 2 === 0 ? "bg-white" : "bg-slate-50/70"}>
-                        <td className="p-1.5 text-center font-bold text-slate-500 border-r border-slate-300">{idx + 1}</td>
-                        <td className="p-1.5 text-center font-mono font-bold text-slate-700 border-r border-slate-300">{sub.code}</td>
-                        <td className="p-1.5 font-black text-slate-900 border-r border-slate-300">{sub.name}</td>
-                        <td className="p-1.5 text-center font-mono font-bold text-slate-800 border-r border-slate-300">{sm.obtTheory}</td>
-                        <td className="p-1.5 text-center font-mono font-bold text-slate-800 border-r border-slate-300">{sm.obtInternal}</td>
-                        <td className="p-1.5 text-center font-mono font-black text-indigo-900 border-r border-slate-300 bg-indigo-50/50">{sm.totalObt}</td>
-                        <td className="p-1.5 text-center font-mono font-bold text-slate-600 border-r border-slate-300 bg-slate-50">{sm.highest}</td>
-                        <td className="p-1.5 text-center font-black border-r border-slate-300 bg-indigo-50/50">
-                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-black ${
-                            sm.grade === "A+" || sm.grade === "A" ? "text-emerald-700" :
-                            sm.grade === "D" ? "text-rose-700" : "text-indigo-800"
-                          }`}>
+                        <td className="py-0.5 px-1 text-center font-bold text-slate-500 border-r border-slate-300">{idx + 1}</td>
+                        <td className="py-0.5 px-1 font-black text-slate-900 border-r border-slate-300 truncate max-w-[115px]">{sub.name}</td>
+                        <td className="py-0.5 px-1 text-center font-mono font-bold text-slate-800 border-r border-slate-300">{sm.obtTheory}</td>
+                        <td className="py-0.5 px-1 text-center font-mono font-bold text-slate-800 border-r border-slate-300">{sm.obtInternal}</td>
+                        <td className="py-0.5 px-1 text-center font-mono font-black text-indigo-900 border-r border-slate-300 bg-indigo-50/50">{sm.totalObt}</td>
+                        <td className="py-0.5 px-1 text-center font-mono font-bold text-slate-600 border-r border-slate-300 bg-slate-50">{sm.highest}</td>
+                        <td className="py-0.5 px-1 text-center font-black border-r border-slate-300 bg-indigo-50/50">
+                          <span className={`${sm.grade === "A+" || sm.grade === "A" ? "text-emerald-700" : sm.grade === "D" ? "text-rose-700" : "text-indigo-800"}`}>
                             {sm.grade}
                           </span>
                         </td>
-                        <td className="p-1.5 text-center font-bold text-slate-700">
+                        <td className="py-0.5 px-1 text-center font-bold text-slate-700 text-[7.5px] truncate">
                           {sm.remark}
                         </td>
                       </tr>
                     );
                   })}
                 </tbody>
-                <tfoot className="bg-slate-900 text-white font-black text-xs">
+                <tfoot className="bg-slate-900 text-white font-black text-[8.5px]">
                   <tr>
-                    <td colSpan={5} className="p-1.5 text-right uppercase tracking-wider border-r border-slate-700 text-[10px]">
-                      Assessment Grand Total &amp; Score Percentage
+                    <td colSpan={4} className="py-1 px-1.5 text-right uppercase tracking-wider border-r border-slate-700">
+                      Grand Total &amp; %
                     </td>
-                    <td className="p-1.5 text-center border-r border-slate-700 text-amber-300 text-xs font-mono font-black">
-                      {singleGrandTotal} / {singleGrandMax}
+                    <td className="py-1 px-1 text-center border-r border-slate-700 text-amber-300 font-mono">
+                      {singleGrandTotal}/{singleGrandMax}
                     </td>
-                    <td className="p-1.5 text-center border-r border-slate-700 text-slate-300 text-[10px]">
+                    <td className="py-1 px-1 text-center border-r border-slate-700 text-slate-200 font-mono">
                       {singleOverallPct}%
                     </td>
-                    <td className="p-1.5 text-center bg-amber-400 text-slate-950 font-black text-xs">
+                    <td className="py-1 px-1 text-center bg-amber-400 text-slate-950 font-black">
                       {singleOverallGrade}
                     </td>
-                    <td className="p-1.5 text-center bg-slate-950 text-emerald-400 font-bold text-[9px]">
-                      {totals.hasFail ? "SUPPLEMENTARY" : isBoard ? `BOARD ELIGIBLE ✓` : "PASSED ✓"}
+                    <td className="py-1 px-1 text-center bg-slate-950 text-emerald-400 font-bold text-[7.5px]">
+                      {totals.hasFail ? "RE-EXAM" : isBoard ? "ELIGIBLE ✓" : "PASSED ✓"}
                     </td>
                   </tr>
                 </tfoot>
               </table>
             </div>
+          </div>
 
+          <div>
             {/* Attendance & QR */}
-            <div className="grid grid-cols-12 gap-3 items-center p-2 bg-indigo-50/70 border border-indigo-200 rounded-lg text-[9.5px] mb-2">
-              <div className="col-span-5 flex items-center gap-2">
-                <div className="w-7 h-7 rounded-lg bg-indigo-900 text-white flex items-center justify-center font-bold text-xs shrink-0">
-                  📅
-                </div>
-                <div>
-                  <span className="text-slate-500 font-bold block text-[8px] uppercase">Assessment Cycle Attendance</span>
-                  <span className="font-black text-slate-900">
-                    {singleTermAttd.presentDays} / {singleTermAttd.workingDays} School Days
-                  </span>
-                  <span className="ml-1 text-[8.5px] font-bold text-emerald-700">
-                    ({Math.round((singleTermAttd.presentDays / (singleTermAttd.workingDays || 1)) * 100)}%)
+            <div className="grid grid-cols-12 gap-1.5 items-center p-1.5 bg-indigo-50/70 border border-indigo-200 rounded-md text-[8px] mb-1.5">
+              <div className="col-span-5 flex items-center gap-1.5">
+                <span className="w-5 h-5 rounded bg-indigo-900 text-white flex items-center justify-center text-[10px] shrink-0">📅</span>
+                <div className="min-w-0">
+                  <span className="text-slate-500 font-bold block text-[7px] uppercase leading-none">Attendance</span>
+                  <span className="font-black text-slate-900 leading-tight">
+                    {singleTermAttd.presentDays}/{singleTermAttd.workingDays} ({Math.round((singleTermAttd.presentDays / (singleTermAttd.workingDays || 1)) * 100)}%)
                   </span>
                 </div>
               </div>
 
-              <div className="col-span-4 border-l border-slate-300 pl-3">
-                <span className="text-slate-500 font-bold block text-[8px] uppercase">Academic Observation</span>
-                <span className="font-bold text-slate-800 text-[9px] leading-tight block">
-                  {singleTermAttd.note || "Consistent classroom regularity and good conceptual focus."}
+              <div className="col-span-4 border-l border-slate-300 pl-1.5 min-w-0">
+                <span className="text-slate-500 font-bold block text-[7px] uppercase leading-none">Observation</span>
+                <span className="font-bold text-slate-800 text-[7.5px] leading-tight block truncate">
+                  {singleTermAttd.note || "Consistent classroom focus"}
                 </span>
               </div>
 
-              <div className="col-span-3 flex items-center justify-end gap-2 border-l border-slate-300 pl-2">
-                <div className="text-right">
-                  <span className="text-slate-500 font-bold block text-[7.5px]">Official Verification</span>
-                  <span className="text-[8px] font-bold text-emerald-700 flex items-center justify-end gap-0.5">
-                    <CheckCircle2 className="w-2.5 h-2.5" /> Scan QR
-                  </span>
+              <div className="col-span-3 flex items-center justify-end gap-1 border-l border-slate-300 pl-1">
+                <div className="text-right leading-none">
+                  <span className="text-slate-500 font-bold block text-[6.5px]">Verify</span>
+                  <span className="text-[7px] font-bold text-emerald-700">QR</span>
                 </div>
-                <div className="p-0.5 bg-white border border-slate-400 rounded shadow-2xs shrink-0">
-                  <QRCode value={qrVerifyUrl} size={32} level="M" />
+                <div className="p-0.5 bg-white border border-slate-400 rounded shrink-0">
+                  <QRCode value={qrVerifyUrl} size={26} level="M" />
                 </div>
               </div>
             </div>
 
             {/* 3 Signatures */}
-            <div className="pt-2 border-t-2 border-slate-900 grid grid-cols-3 gap-4 items-end text-center text-[9px]">
+            <div className="pt-1.5 border-t border-slate-900 grid grid-cols-3 gap-2 items-end text-center text-[7.5px]">
               <div>
-                <div className="h-7 border-b border-slate-400 mb-0.5 flex items-end justify-center">
+                <div className="h-5 border-b border-slate-400 mb-0.5 flex items-end justify-center">
                   {teacherName && teacherName !== "Class Teacher" ? (
-                    <span className="italic font-serif font-bold text-slate-800 text-[9.5px] mb-0.5">{teacherName}</span>
+                    <span className="italic font-serif font-bold text-slate-800 text-[8px]">{teacherName}</span>
                   ) : null}
                 </div>
-                <p className="font-black text-slate-800 uppercase tracking-wider text-[8.5px]">Class Teacher</p>
+                <p className="font-black text-slate-800 uppercase tracking-wider text-[7px]">Class Teacher</p>
               </div>
               <div>
-                <div className="h-7 border-b border-slate-400 mb-0.5 flex items-end justify-center">
+                <div className="h-5 border-b border-slate-400 mb-0.5 flex items-end justify-center">
                   {examControllerName && examControllerName !== "Exam Controller" ? (
-                    <span className="italic font-serif font-bold text-slate-800 text-[9.5px] mb-0.5">{examControllerName}</span>
+                    <span className="italic font-serif font-bold text-slate-800 text-[8px]">{examControllerName}</span>
                   ) : null}
                 </div>
-                <p className="font-black text-slate-800 uppercase tracking-wider text-[8.5px]">Exam Controller</p>
+                <p className="font-black text-slate-800 uppercase tracking-wider text-[7px]">Exam Controller</p>
               </div>
               <div>
-                <div className="h-7 border-b border-slate-400 mb-0.5 flex items-end justify-center">
+                <div className="h-5 border-b border-slate-400 mb-0.5 flex items-end justify-center">
                   {schoolDetails.principalSignatureUrl ? (
                     <img
                       src={schoolDetails.principalSignatureUrl}
                       alt="Principal Signature"
-                      className="max-h-6 max-w-[90px] object-contain mb-0.5"
+                      className="max-h-5 max-w-[70px] object-contain"
                     />
                   ) : principalName ? (
-                    <span className="italic font-serif font-black text-indigo-900 text-[9.5px] mb-0.5">{principalName}</span>
+                    <span className="italic font-serif font-black text-indigo-900 text-[8px]">{principalName}</span>
                   ) : null}
                 </div>
-                <p className="font-black text-slate-950 uppercase tracking-wider text-[8.5px]">
+                <p className="font-black text-slate-950 uppercase tracking-wider text-[7px]">
                   {schoolDetails.principalTitle || "Principal"}
                 </p>
               </div>
@@ -1639,13 +1787,14 @@ export const MarksheetGenerator: React.FC<Props> = ({
 
     // ══════════════════════════════════════════════════════════════════
     // 2. 2-SIDED LANDSCAPE (HALF-YEARLY & ANNUAL EXAMS) OR PORTRAIT
+    // Strictly 1 A4 Landscape sheet per student (Left = Analysis, Right = Official Marksheet)
     // ══════════════════════════════════════════════════════════════════
     const isLandscapeView = marksheetStyle !== "portrait" && (marksheetStyle === "visual_charts" || marksheetStyle === "classic_table" || layoutMode === "landscape_wide");
 
     return (
       <div key={targetStudent?.id || "single"} className="marksheet-print-page w-full flex justify-center print:block">
         <div
-          className={`marksheet-sheet-box ${isDenseSubjects ? "marksheet-dense-sheet" : ""} w-full ${isLandscapeView ? "min-w-[880px] max-w-[1100px]" : "min-w-[720px] max-w-[840px]"} bg-white rounded-xl border-4 border-slate-900 shadow-2xl ${isDenseSubjects ? "p-3" : isCompact ? "p-4" : "p-6"} text-slate-900 print:shadow-none print:m-0 print:border-2 print:border-black print:max-w-none print:min-w-0 print:p-3 print:rounded-none print:overflow-visible relative overflow-hidden flex flex-col justify-between`}
+          className={`marksheet-sheet-box ${isDenseSubjects ? "marksheet-dense-sheet" : ""} w-full ${isLandscapeView ? "min-w-[940px] max-w-[1120px]" : "min-w-[720px] max-w-[840px]"} bg-white rounded-xl border-4 border-slate-900 shadow-2xl ${isDenseSubjects ? "p-2.5" : isCompact ? "p-3" : "p-4"} text-slate-900 print:shadow-none print:m-0 print:border-2 print:border-black print:max-w-none print:min-w-0 print:p-2 print:rounded-none print:overflow-hidden relative overflow-hidden flex flex-col justify-between`}
           style={{ fontFamily: "'Inter', sans-serif" }}
         >
           {/* Decorative Watermark */}
@@ -1661,9 +1810,9 @@ export const MarksheetGenerator: React.FC<Props> = ({
                LEFT SIDE (50%): Cumulative Multi-Term Exams & Attendance Correlation
                RIGHT SIDE (50%): Official Level-Appropriate Final Marksheet
                ══════════════════════════════════════════════════════════════════ */
-            <div className={`marksheet-landscape-split grid grid-cols-12 ${isDenseSubjects ? "gap-3" : "gap-5"} w-full h-full print:h-auto`}>
+            <div className={`marksheet-landscape-split grid grid-cols-12 ${isDenseSubjects ? "gap-2.5" : "gap-4"} w-full h-full`}>
               {/* LEFT COLUMN: Cumulative Academic & Term Attendance Progress */}
-              <div className="col-span-6 flex flex-col justify-between border-r-2 border-slate-800 pr-5">
+              <div className={`col-span-6 flex flex-col justify-between border-r-2 border-slate-800 ${isDenseSubjects ? "pr-2.5" : "pr-4"}`}>
                 <div>
                   {/* Left Header */}
                   <div className="flex items-center justify-between border-b-2 border-slate-800 pb-2 mb-2">
@@ -2544,7 +2693,32 @@ export const MarksheetGenerator: React.FC<Props> = ({
 
     const isOuterSingleExam = currentExamOption.category === "pa" || currentExamOption.category === "custom";
     const isOuterSingleSlip = marksheetStyle === "single_slip" || (isOuterSingleExam && marksheetStyle !== "classic_table" && marksheetStyle !== "visual_charts" && marksheetStyle !== "portrait");
-    const isPrintLandscape = !isOuterSingleSlip && isLandscapeView;
+    // Both 2-sided Half-Yearly/Annual AND 2-in-1 PA1-PA4/Single Slip print in A4 Landscape!
+    // Only explicit "portrait" style prints in A4 Portrait.
+    const isPrintLandscape = marksheetStyle !== "portrait" && (isOuterSingleSlip || isLandscapeView);
+
+    // Helper: wrap 2 PA-1/PA-2/PA-3/PA-4 student cards side-by-side onto ONE A4 Landscape page
+    const renderTwoUpLandscapePage = (leftStudent?: SchoolStudent, rightStudent?: SchoolStudent | null, pageKey = "two-up-0") => (
+      <div key={pageKey} className="marksheet-print-page marksheet-two-up-page w-full flex justify-center print:block">
+        <div className="marksheet-two-up-grid grid grid-cols-2 gap-3 w-full min-w-[960px] max-w-[1140px] bg-white rounded-xl border-2 border-slate-400 p-3 shadow-2xl print:shadow-none print:border-none print:p-0 print:rounded-none print:min-w-0 print:max-w-none print:w-full items-stretch">
+          <div className="marksheet-half-slot pr-3 border-r-2 border-dashed border-slate-400 flex flex-col">
+            {renderMarksheetSheet(leftStudent)}
+          </div>
+          <div className="marksheet-half-slot pl-0.5 flex flex-col">
+            {rightStudent ? (
+              renderMarksheetSheet(rightStudent)
+            ) : (
+              <div className="h-full min-h-[420px] rounded-lg border-2 border-dashed border-slate-300 bg-slate-50/50 flex flex-col items-center justify-center text-slate-400 text-xs font-bold p-6 text-center print:bg-white print:border-slate-200">
+                <span className="text-xl mb-1">✂️</span>
+                <span>Blank Right Half (Cut Line)</span>
+                <span className="text-[10px] font-normal mt-1">Is page par Right side khali hai — Print karke beech se cut kar sakte hain</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+
     const outerSession = sessionName || "2026-27";
     const outerBoardYear = (() => {
       const parts = outerSession.trim().split("-");
@@ -2586,7 +2760,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
           @media print {
             @page {
               size: ${isPrintLandscape ? "A4 landscape" : "A4 portrait"};
-              margin: 6mm;
+              margin: 4mm;
             }
             html, body, #root {
               width: 100% !important;
@@ -2610,16 +2784,13 @@ export const MarksheetGenerator: React.FC<Props> = ({
               display: block !important;
             }
             .marksheet-print-page {
-              width: 100% !important;
+              width: ${isPrintLandscape ? "289mm" : "202mm"} !important;
               max-width: 100% !important;
-              height: auto !important;
-              min-height: 0 !important;
-              max-height: none !important;
+              ${isPrintLandscape ? "height: 201mm !important; max-height: 201mm !important; overflow: hidden !important;" : "height: auto !important; max-height: none !important; overflow: visible !important;"}
               padding: 0 !important;
               margin: 0 auto !important;
               box-sizing: border-box !important;
               display: block !important;
-              overflow: visible !important;
               background: #ffffff !important;
               page-break-inside: avoid !important;
               break-inside: avoid-page !important;
@@ -2633,48 +2804,64 @@ export const MarksheetGenerator: React.FC<Props> = ({
               width: 100% !important;
               min-width: 0 !important;
               max-width: 100% !important;
-              height: auto !important;
-              max-height: none !important;
+              height: ${isPrintLandscape ? "100%" : "auto"} !important;
               margin: 0 !important;
-              padding: ${isPrintLandscape ? "3.5mm" : "4mm"} !important;
+              padding: ${isPrintLandscape ? "2.5mm" : "4mm"} !important;
               box-sizing: border-box !important;
-              overflow: visible !important;
+              overflow: hidden !important;
               display: flex !important;
               flex-direction: column !important;
-              justify-content: flex-start !important;
+              justify-content: space-between !important;
               box-shadow: none !important;
               border-radius: 0 !important;
             }
-            .marksheet-sheet-box table {
+            .marksheet-landscape-split {
+              display: grid !important;
+              grid-template-columns: 1fr 1fr !important;
+              gap: 3mm !important;
+              width: 100% !important;
+              height: 100% !important;
+              align-items: stretch !important;
+            }
+            .marksheet-two-up-grid {
+              display: grid !important;
+              grid-template-columns: 1fr 1fr !important;
+              gap: 2.5mm !important;
+              width: 100% !important;
+              min-width: 0 !important;
+              max-width: 100% !important;
+              height: 100% !important;
+              padding: 0 !important;
+              margin: 0 !important;
+              border: none !important;
+              box-shadow: none !important;
+              border-radius: 0 !important;
+              align-items: stretch !important;
+            }
+            .marksheet-pa-half-card {
+              width: 100% !important;
+              height: 100% !important;
+              padding: 2.5mm !important;
+              margin: 0 !important;
+              border-radius: 0 !important;
+              box-shadow: none !important;
+              overflow: hidden !important;
+            }
+            .marksheet-sheet-box table,
+            .marksheet-pa-half-card table {
               width: 100% !important;
               table-layout: auto !important;
             }
-            .marksheet-sheet-box th,
-            .marksheet-sheet-box td {
-              width: auto !important;
-            }
             .marksheet-dense-sheet {
-              padding: 2.5mm !important;
-              font-size: 9px !important;
+              padding: 2mm !important;
+              font-size: 8.5px !important;
             }
             .marksheet-dense-sheet table th,
             .marksheet-dense-sheet table td {
-              padding-top: 1.5px !important;
-              padding-bottom: 1.5px !important;
-              font-size: 7.5px !important;
-              line-height: 1.15 !important;
-            }
-          }
-          @media print and (orientation: portrait) {
-            .marksheet-landscape-split {
-              grid-template-columns: 1fr !important;
-              gap: 10px !important;
-            }
-            .marksheet-landscape-split > div:first-child {
-              border-right: none !important;
-              padding-right: 0 !important;
-              border-bottom: 2px solid #1e293b !important;
-              padding-bottom: 10px !important;
+              padding-top: 1px !important;
+              padding-bottom: 1px !important;
+              font-size: 7px !important;
+              line-height: 1.1 !important;
             }
           }
         `}</style>
@@ -2834,7 +3021,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                   Select Examination Cycle / Type:
                 </span>
                 <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium hidden sm:inline">
-                  (PA-1 to PA-4: Single Horizontal Slip • Half-Yearly &amp; Annual: 2-Sided Landscape Analysis)
+                  (PA-1 to PA-4: 1 A4 Landscape Page = 2 Students Left+Right • Half-Yearly &amp; Annual: 1 Page Landscape Split Left+Right)
                 </span>
               </div>
               <button
@@ -2881,13 +3068,16 @@ export const MarksheetGenerator: React.FC<Props> = ({
                   Format Style (मार्कशीट डिस्प्ले स्टाइल):
                 </span>
                 <span className="text-[10px] text-slate-500 dark:text-slate-400 hidden sm:inline">
-                  (Final व Half-Yearly को Visual Graph, Classic Data या PA1/PA2 जैसा Normal Single Slip में बदलें)
+                  (Half-Yearly/Annual = 1 Page Left+Right • PA1-PA4 = 1 Page me 2 Students)
                 </span>
               </div>
               <div className="flex flex-wrap items-center gap-1.5">
                 <button
                   type="button"
-                  onClick={() => setMarksheetStyle("visual_charts")}
+                  onClick={() => {
+                    setMarksheetStyle("visual_charts");
+                    setLayoutMode("landscape_wide");
+                  }}
                   className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition cursor-pointer ${
                     marksheetStyle === "visual_charts"
                       ? "bg-indigo-600 text-white shadow-xs"
@@ -2899,7 +3089,10 @@ export const MarksheetGenerator: React.FC<Props> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setMarksheetStyle("classic_table")}
+                  onClick={() => {
+                    setMarksheetStyle("classic_table");
+                    setLayoutMode("landscape_wide");
+                  }}
                   className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition cursor-pointer ${
                     marksheetStyle === "classic_table"
                       ? "bg-indigo-600 text-white shadow-xs"
@@ -2917,13 +3110,16 @@ export const MarksheetGenerator: React.FC<Props> = ({
                       ? "bg-indigo-600 text-white shadow-xs"
                       : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-100"
                   }`}
-                  title="Normal Single Slip like PA-1 / PA-2"
+                  title="2 Students per A4 Landscape Page (Left Student 1 + Right Student 2)"
                 >
-                  <span>📄 Normal Single Slip (PA1/PA2 जैसा नॉर्मल)</span>
+                  <span>📄 2-in-1 Half Page Slip (PA1-PA4 / 1 Page = 2 Students)</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => setMarksheetStyle("portrait")}
+                  onClick={() => {
+                    setMarksheetStyle("portrait");
+                    setLayoutMode("portrait_compact");
+                  }}
                   className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition cursor-pointer ${
                     marksheetStyle === "portrait"
                       ? "bg-indigo-600 text-white shadow-xs"
@@ -2935,6 +3131,35 @@ export const MarksheetGenerator: React.FC<Props> = ({
                 </button>
               </div>
             </div>
+
+            {/* PA 1-4 / 2-in-1 Right Side Student Pairing Selector (Single Mode) */}
+            {isOuterSingleSlip && !bulkMode && (
+              <div className="mt-2 p-2.5 rounded-xl bg-amber-50/80 dark:bg-amber-950/30 border border-amber-300/70 dark:border-amber-700 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="font-black text-amber-950 dark:text-amber-200">
+                    ✂️ 2-in-1 A4 Landscape Mode (Left: {currentStudent?.name || "Student 1"} | Right: Student 2):
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-[11px] font-bold text-amber-900 dark:text-amber-300">Right Half Student:</label>
+                  <select
+                    value={pairRightStudentId}
+                    onChange={e => setPairRightStudentId(e.target.value)}
+                    className="px-2.5 py-1 text-xs font-bold bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-lg border border-amber-300 dark:border-amber-600 outline-none"
+                  >
+                    <option value="auto">Auto Next Student in Class</option>
+                    <option value="blank">Blank Right Half (Sirf 1 Student)</option>
+                    {classStudents
+                      .filter(s => s.id !== currentStudent?.id)
+                      .map(s => (
+                        <option key={s.id} value={s.id}>
+                          {s.name} (Roll: {s.rollNo})
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Exam Title & Promotion Status Controls (Pre-Board / Annual / Board Exam Eligibility) */}
@@ -2977,9 +3202,21 @@ export const MarksheetGenerator: React.FC<Props> = ({
                         const val = e.target.value;
                         if (val !== "custom") {
                           setExamTitle(val);
-                          if (val.includes("PRE-BOARD") || val.includes("BOARD")) {
+                          if (val.includes("HALF-YEARLY")) {
+                            setSelectedExamId("half_yearly");
+                            if (marksheetStyle === "single_slip") setMarksheetStyle("visual_charts");
+                          } else if (val.includes("PERIODIC ASSESSMENT")) {
+                            if (selectedExamId === "annual" || selectedExamId === "half_yearly") {
+                              setSelectedExamId("pa1");
+                            }
+                            setMarksheetStyle("single_slip");
+                          } else if (val.includes("PRE-BOARD") || val.includes("BOARD")) {
+                            setSelectedExamId("annual");
+                            if (marksheetStyle === "single_slip") setMarksheetStyle("visual_charts");
                             setPromotionStatusMode("eligible_board");
                           } else if (val.includes("ANNUAL")) {
+                            setSelectedExamId("annual");
+                            if (marksheetStyle === "single_slip") setMarksheetStyle("visual_charts");
                             if (!isBoardClass(currentClass?.name)) {
                               setPromotionStatusMode("promoted");
                             }
@@ -3024,7 +3261,9 @@ export const MarksheetGenerator: React.FC<Props> = ({
                     <button
                       type="button"
                       onClick={() => {
+                        setSelectedExamId("annual");
                         setExamTitle(`ANNUAL EXAMINATION TRANSCRIPT (${outerSession})`);
+                        if (marksheetStyle === "single_slip") setMarksheetStyle("visual_charts");
                         if (!isBoardClass(currentClass?.name)) setPromotionStatusMode("promoted");
                       }}
                       className="px-2 py-0.5 rounded-lg bg-white dark:bg-slate-800 hover:bg-slate-100 text-slate-800 dark:text-slate-200 border border-slate-300 dark:border-slate-600 font-bold text-[10px] shadow-2xs cursor-pointer"
@@ -3034,7 +3273,9 @@ export const MarksheetGenerator: React.FC<Props> = ({
                     <button
                       type="button"
                       onClick={() => {
+                        setSelectedExamId("half_yearly");
                         setExamTitle(`HALF-YEARLY EXAMINATION (${outerSession})`);
+                        if (marksheetStyle === "single_slip") setMarksheetStyle("visual_charts");
                       }}
                       className="px-2 py-0.5 rounded-lg bg-white dark:bg-slate-800 hover:bg-slate-100 text-slate-800 dark:text-slate-200 border border-slate-300 dark:border-slate-600 font-bold text-[10px] shadow-2xs cursor-pointer"
                     >
@@ -3379,7 +3620,15 @@ export const MarksheetGenerator: React.FC<Props> = ({
               </label>
               <select
                 value={layoutMode}
-                onChange={e => setLayoutMode(e.target.value as any)}
+                onChange={e => {
+                  const next = e.target.value as "portrait_compact" | "two_pages" | "landscape_wide";
+                  setLayoutMode(next);
+                  if (next === "portrait_compact") {
+                    setMarksheetStyle("portrait");
+                  } else if (marksheetStyle === "portrait") {
+                    setMarksheetStyle("visual_charts");
+                  }
+                }}
                 className="w-full px-3 py-1.5 text-xs font-bold bg-white dark:bg-slate-700 text-slate-800 dark:text-white rounded-lg border border-slate-300 dark:border-slate-600"
               >
                 <option value="landscape_wide">A4 Landscape (Left: Cumulative Progress &amp; Attendance Trend | Right: Final Marksheet)</option>
@@ -3674,7 +3923,9 @@ export const MarksheetGenerator: React.FC<Props> = ({
             <div className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
               <span className="text-xs font-black text-slate-800 dark:text-slate-200 uppercase tracking-wider">
-                A4 Marksheet Live Preview ({isPrintLandscape ? "A4 Landscape 297×210mm" : "A4 Portrait 210×297mm"})
+                {isOuterSingleSlip
+                  ? "A4 Landscape 2-in-1 Preview (Left Student 1 | Right Student 2 • 297×210mm)"
+                  : `A4 Marksheet Live Preview (${isPrintLandscape ? "A4 Landscape 1-Page Split 297×210mm" : "A4 Portrait 210×297mm"})`}
               </span>
             </div>
             <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold bg-slate-200/70 dark:bg-slate-800 px-2.5 py-0.5 rounded-full">
@@ -3683,19 +3934,51 @@ export const MarksheetGenerator: React.FC<Props> = ({
           </div>
 
           <div className="w-full max-w-full overflow-x-auto pb-6 pt-1 px-1 rounded-2xl scrollbar-thin bg-slate-200/40 dark:bg-slate-950/40 border border-slate-300/60 dark:border-slate-800 shadow-inner print:bg-transparent print:border-none print:shadow-none print:rounded-none print:p-0 print:m-0 print:overflow-visible">
-            {bulkMode ? (
-              <div className="space-y-8 print:space-y-0 min-w-fit print:min-w-0 flex flex-col items-center print:block">
-                <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-200 p-3 rounded-xl text-xs text-amber-900 dark:text-amber-200 print:hidden flex items-center justify-between w-full max-w-[1100px]">
-                  <span>Bulk Class Mode: Poore <strong>{currentClass?.name}</strong> ke sabhi {classStudents.length} bacchon ki marksheet print hogi.</span>
-                  <span className="font-bold">Total: {classStudents.length} Students</span>
+            <div ref={printContainerRef} className="w-full print:w-full">
+              {bulkMode ? (
+                <div className="space-y-8 print:space-y-0 min-w-fit print:min-w-0 flex flex-col items-center print:block">
+                  <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-200 p-3 rounded-xl text-xs text-amber-900 dark:text-amber-200 print:hidden flex items-center justify-between w-full max-w-[1100px]">
+                    <span>
+                      {isOuterSingleSlip
+                        ? `Bulk 2-in-1 Mode: Poore ${currentClass?.name} ke ${classStudents.length} bacchon ki marksheet (${Math.ceil(classStudents.length / 2)} Landscape pages, 2 students per page) print hogi.`
+                        : `Bulk Class Mode: Poore ${currentClass?.name} ke sabhi ${classStudents.length} bacchon ki marksheet (1 student per Landscape page) print hogi.`}
+                    </span>
+                    <span className="font-bold">
+                      {isOuterSingleSlip
+                        ? `${Math.ceil(classStudents.length / 2)} Pages (${classStudents.length} Students)`
+                        : `Total: ${classStudents.length} Students`}
+                    </span>
+                  </div>
+                  {isOuterSingleSlip
+                    ? Array.from({ length: Math.ceil(classStudents.length / 2) }, (_, pageIdx) => {
+                        const leftSt = classStudents[pageIdx * 2];
+                        const rightSt = classStudents[pageIdx * 2 + 1] || null;
+                        return renderTwoUpLandscapePage(leftSt, rightSt, `bulk-pair-${pageIdx}`);
+                      })
+                    : classStudents.map(student => renderMarksheetSheet(student))}
                 </div>
-                {classStudents.map(student => renderMarksheetSheet(student))}
-              </div>
-            ) : (
-              <div className="min-w-fit print:min-w-0 print:w-full flex justify-center print:block mx-auto print:m-0">
-                {renderMarksheetSheet(currentStudent || undefined)}
-              </div>
-            )}
+              ) : (
+                <div className="min-w-fit print:min-w-0 print:w-full flex justify-center print:block mx-auto print:m-0">
+                  {isOuterSingleSlip
+                    ? (() => {
+                        const curIdx = classStudents.findIndex(s => s.id === currentStudent?.id);
+                        let rightSt: SchoolStudent | null = null;
+                        if (pairRightStudentId === "blank") {
+                          rightSt = null;
+                        } else if (pairRightStudentId === "auto") {
+                          rightSt =
+                            classStudents.length > 1
+                              ? classStudents[(curIdx >= 0 ? curIdx + 1 : 1) % classStudents.length]
+                              : null;
+                        } else {
+                          rightSt = classStudents.find(s => s.id === pairRightStudentId) || null;
+                        }
+                        return renderTwoUpLandscapePage(currentStudent || undefined, rightSt, `single-pair-${currentStudent?.id || "0"}`);
+                      })()
+                    : renderMarksheetSheet(currentStudent || undefined)}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
