@@ -2149,30 +2149,40 @@ export const saveAttendance = async (record: AttendanceRecord) => {
     setLocalAttendance(record.schoolId, updated);
   } catch {}
 
-  // 2. Dual save to Firestore & RTDB with explicit cloud failure reporting
+  // 2. Dual parallel save to Firestore & RTDB with explicit cloud failure reporting
   let firestoreOk = false;
   let rtdbOk = false;
   let lastError: any = null;
 
+  const writes: Promise<void>[] = [];
+
   if (db) {
-    try {
-      await withTimeout(setDoc(d(`schools/${record.schoolId}/attendance/${id}`), sanitized), 3000);
-      firestoreOk = true;
-    } catch (e) {
-      lastError = e;
-      console.warn("[school-firebase] saveAttendance Firestore failed:", e);
-    }
+    writes.push(
+      withTimeout(setDoc(d(`schools/${record.schoolId}/attendance/${id}`), sanitized), 3000)
+        .then(() => {
+          firestoreOk = true;
+        })
+        .catch((e) => {
+          lastError = e;
+          console.warn("[school-firebase] saveAttendance Firestore failed:", e);
+        })
+    );
   }
 
   if (rtdb) {
-    try {
-      await withTimeout(set(ref(rtdb, `schools/${record.schoolId}/attendance/${id}`), sanitized), 2500);
-      rtdbOk = true;
-    } catch (e) {
-      if (!lastError) lastError = e;
-      console.warn("[school-firebase] saveAttendance RTDB failed:", e);
-    }
+    writes.push(
+      withTimeout(set(ref(rtdb, `schools/${record.schoolId}/attendance/${id}`), sanitized), 3000)
+        .then(() => {
+          rtdbOk = true;
+        })
+        .catch((e) => {
+          if (!lastError) lastError = e;
+          console.warn("[school-firebase] saveAttendance RTDB failed:", e);
+        })
+    );
   }
+
+  await Promise.allSettled(writes);
 
   if (!firestoreOk && !rtdbOk) {
     throw new Error(lastError?.message || "Cloud attendance write failed (both Firestore & RTDB unreachable).");
@@ -2305,12 +2315,12 @@ export const markStudentQrAttendance = async (params: {
   const timeFormatted = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
   const docId = `${params.classId}_${date}`;
 
-  if (!db) {
+  if (!db && !rtdb) {
     return {
       success: false,
       action: "in",
       cloudSaved: false,
-      message: "Firebase Firestore उपलब्ध नहीं है। क्लाउड सेविंग के बिना हाजिरी दर्ज नहीं की जा सकती।"
+      message: "Firebase उपलब्ध नहीं है। क्लाउड सेविंग के बिना हाजिरी दर्ज नहीं की जा सकती।"
     };
   }
 
@@ -2367,83 +2377,50 @@ export const markStudentQrAttendance = async (params: {
       };
     };
 
-    // ── ATOMIC FIRESTORE TRANSACTION (Concurrent Multi-Kiosk Protection) ──
+    // ── ATOMIC FIRESTORE TRANSACTION (with RTDB fallback if Firestore fails or auth is absent) ──
     const studentDocRef = d(`schools/${params.schoolId}/students/${params.studentId}`);
-    const txOutcome: TxOutcome = await withTimeout(
-      runTransaction(db, async (transaction) => {
-        const [snap, studentSnap] = await Promise.all([
-          transaction.get(docRef),
-          transaction.get(studentDocRef),
-        ]);
-
-        if (studentSnap.exists()) {
-          const stData = studentSnap.data() as any;
-          const stStatus = typeof stData?.status === "string" ? stData.status.toLowerCase() : "";
-          if (
-            stData?.active === false ||
-            stData?.isDeleted === true ||
-            stData?.tcIssued === true ||
-            stStatus === "deleted" ||
-            stStatus === "disabled" ||
-            stStatus === "inactive"
-          ) {
-            return {
-              committed: false,
-              result: {
-                success: false,
-                action: "in",
-                alreadyMarked: false,
-                cloudSaved: false,
-                message: `⚠️ ${params.studentName || 'छात्र'} का खाता निष्क्रिय (Inactive / Deleted / TC Issued) है। हाजिरी दर्ज नहीं की जा सकती।`
-              }
-            };
-          }
-        }
-
-        const existing = snap.exists() ? (snap.data() as AttendanceRecord) : null;
-        const studentsMap = existing?.students ? { ...existing.students } : {};
-        const existingEntry = studentsMap[params.studentId];
-
-        // Determine action safely:
-        // In AUTO mode: if student has NO IN today (even if arriving later), record IN!
-        // If IN exists and no OUT yet: mark OUT only when current time >= configured outStartMinutes.
-        let action: "in" | "out" = "in";
-        if (params.scanMode === "out") {
-          action = "out";
-        } else if (params.scanMode === "in") {
-          action = "in";
-        } else {
-          if (!existingEntry?.inTime) {
-            action = "in";
-          } else if (!existingEntry?.outTime) {
-            if (nowMinutes >= outStartMinutes) {
-              action = "out";
-            } else {
-              return {
-                committed: false,
-                result: {
-                  success: true,
-                  action: "in",
-                  inTime: existingEntry.inTime,
-                  outTime: existingEntry.outTime,
-                  stayDuration: existingEntry.stayDuration,
-                  isLate: existingEntry.status === "late",
-                  alreadyMarked: true,
-                  tooEarlyForOut: true,
-                  cloudSaved: true,
-                  message: `⏳ ${params.studentName || 'छात्र'} का आगमन (IN) पहले से दर्ज है (${existingEntry.inTime})। ऑटो OUT ${outStart12h} के बाद लगेगा (अभी तुरंत छुट्टी लगाने के लिए ऊपर 'OUT' मोड चुनें)।`,
-                  record: existing || undefined
-                }
-              };
+    const computeQrAttendanceOutcome = (
+      existing: AttendanceRecord | null,
+      stData: any | null
+    ): TxOutcome => {
+      if (stData) {
+        const stStatus = typeof stData?.status === "string" ? stData.status.toLowerCase() : "";
+        if (
+          stData?.active === false ||
+          stData?.isDeleted === true ||
+          stData?.tcIssued === true ||
+          stStatus === "deleted" ||
+          stStatus === "disabled" ||
+          stStatus === "inactive"
+        ) {
+          return {
+            committed: false,
+            result: {
+              success: false,
+              action: "in",
+              alreadyMarked: false,
+              cloudSaved: false,
+              message: `⚠️ ${params.studentName || 'छात्र'} का खाता निष्क्रिय (Inactive / Deleted / TC Issued) है। हाजिरी दर्ज नहीं की जा सकती।`
             }
-          } else {
-            action = "out";
-          }
+          };
         }
+      }
 
-        // RULE 1: Single IN per day
-        if (action === "in") {
-          if (existingEntry?.inTime) {
+      const studentsMap = existing?.students ? { ...existing.students } : {};
+      const existingEntry = studentsMap[params.studentId];
+
+      let action: "in" | "out" = "in";
+      if (params.scanMode === "out") {
+        action = "out";
+      } else if (params.scanMode === "in") {
+        action = "in";
+      } else {
+        if (!existingEntry?.inTime) {
+          action = "in";
+        } else if (!existingEntry?.outTime) {
+          if (nowMinutes >= outStartMinutes) {
+            action = "out";
+          } else {
             return {
               committed: false,
               result: {
@@ -2453,164 +2430,230 @@ export const markStudentQrAttendance = async (params: {
                 outTime: existingEntry.outTime,
                 stayDuration: existingEntry.stayDuration,
                 isLate: existingEntry.status === "late",
-                alreadyMarked: true,
-                cloudSaved: true,
-                message: `${params.studentName || 'छात्र'} का आगमन समय पहले से दर्ज है (${existingEntry.inTime})।`,
-                record: existing || undefined
-              }
-            };
-          }
-        } else {
-          // RULE 2: Single OUT per day
-          if (existingEntry?.outTime) {
-            return {
-              committed: false,
-              result: {
-                success: true,
-                action: "out",
-                inTime: existingEntry.inTime,
-                outTime: existingEntry.outTime,
-                stayDuration: existingEntry.stayDuration,
-                isLate: existingEntry.status === "late",
-                alreadyMarked: true,
-                cloudSaved: true,
-                message: `${params.studentName || 'छात्र'} का प्रस्थान समय पहले से दर्ज है (${existingEntry.outTime})।`,
-                record: existing || undefined
-              }
-            };
-          }
-
-          // RULE 3: No OUT without prior IN
-          if (!existingEntry?.inTime) {
-            return {
-              committed: false,
-              result: {
-                success: false,
-                action: "out",
-                alreadyMarked: false,
-                cloudSaved: false,
-                message: `⚠️ ${params.studentName || 'छात्र'} का आज आगमन (IN) दर्ज नहीं है। प्रस्थान (OUT) से पहले आगमन (IN) आवश्यक है।`,
-                record: existing || undefined
-              }
-            };
-          }
-
-          // RULE 4: Minimum Stay Gap (30-min in AUTO kiosk mode to avoid instant double-punch; 1-min in manual OUT override)
-          let elapsedMinutes: number | null = null;
-          if (typeof existingEntry.inTimestamp === "number" && Number.isFinite(existingEntry.inTimestamp)) {
-            elapsedMinutes = Math.floor((nowMs - existingEntry.inTimestamp) / 60000);
-          } else if (existingEntry.inTime) {
-            try {
-              const inParts = existingEntry.inTime.match(/(\d+):(\d+)(?::(\d+))?\s*(AM|PM)?/i);
-              if (inParts) {
-                let h = parseInt(inParts[1], 10);
-                const m = parseInt(inParts[2], 10);
-                const meridiem = (inParts[4] || "").toUpperCase();
-                if (meridiem === "PM" && h < 12) h += 12;
-                if (meridiem === "AM" && h === 12) h = 0;
-                const inDate = new Date();
-                inDate.setHours(h, m, 0, 0);
-                elapsedMinutes = Math.floor((nowMs - inDate.getTime()) / 60000);
-              }
-            } catch {}
-          }
-
-          const requiredMinGap = params.scanMode === "out" ? 1 : 30;
-          if (elapsedMinutes !== null && elapsedMinutes >= 0 && elapsedMinutes < requiredMinGap) {
-            const remainingMin = requiredMinGap - elapsedMinutes;
-            return {
-              committed: false,
-              result: {
-                success: false,
-                action: "out",
                 alreadyMarked: true,
                 tooEarlyForOut: true,
-                cloudSaved: false,
-                inTime: existingEntry.inTime,
-                message: `⚠️ ${params.studentName || 'छात्र'} का आगमन अभी दर्ज हुआ है (${existingEntry.inTime})। प्रस्थान (OUT) ${requiredMinGap} मिनट बाद ही मान्य होगा (शेष: ${remainingMin} मिनट)।`,
+                cloudSaved: true,
+                message: `⏳ ${params.studentName || 'छात्र'} का आगमन (IN) पहले से दर्ज है (${existingEntry.inTime})। ऑटो OUT ${outStart12h} के बाद लगेगा (अभी तुरंत छुट्टी लगाने के लिए ऊपर 'OUT' मोड चुनें)।`,
                 record: existing || undefined
               }
             };
           }
-        }
-
-        let inTime = existingEntry?.inTime;
-        let outTime = existingEntry?.outTime;
-        let inTimestamp = existingEntry?.inTimestamp;
-        let outTimestamp = existingEntry?.outTimestamp;
-        let stayDuration = existingEntry?.stayDuration;
-        let isLate = existingEntry?.status === "late";
-        let status: "present" | "late" | "half_day" | "absent" | "leave" | "bunk" = existingEntry?.status || "present";
-
-        if (action === "in") {
-          inTime = timeFormatted;
-          inTimestamp = nowMs;
-          if (isPastCutoff) {
-            isLate = true;
-            status = "late";
-          } else {
-            status = "present";
-          }
         } else {
-          outTime = timeFormatted;
-          outTimestamp = nowMs;
-          stayDuration = calculateStayDuration(inTime, outTime, inTimestamp, outTimestamp);
+          action = "out";
+        }
+      }
+
+      if (action === "in") {
+        if (existingEntry?.inTime) {
+          return {
+            committed: false,
+            result: {
+              success: true,
+              action: "in",
+              inTime: existingEntry.inTime,
+              outTime: existingEntry.outTime,
+              stayDuration: existingEntry.stayDuration,
+              isLate: existingEntry.status === "late",
+              alreadyMarked: true,
+              cloudSaved: true,
+              message: `${params.studentName || 'छात्र'} का आगमन समय पहले से दर्ज है (${existingEntry.inTime})।`,
+              record: existing || undefined
+            }
+          };
+        }
+      } else {
+        if (existingEntry?.outTime) {
+          return {
+            committed: false,
+            result: {
+              success: true,
+              action: "out",
+              inTime: existingEntry.inTime,
+              outTime: existingEntry.outTime,
+              stayDuration: existingEntry.stayDuration,
+              isLate: existingEntry.status === "late",
+              alreadyMarked: true,
+              cloudSaved: true,
+              message: `${params.studentName || 'छात्र'} का प्रस्थान समय पहले से दर्ज है (${existingEntry.outTime})।`,
+              record: existing || undefined
+            }
+          };
         }
 
-        studentsMap[params.studentId] = {
-          present: true,
-          name: params.studentName || existingEntry?.name || "Student",
-          rollNo: params.rollNo || existingEntry?.rollNo || "",
+        if (!existingEntry?.inTime) {
+          return {
+            committed: false,
+            result: {
+              success: false,
+              action: "out",
+              alreadyMarked: false,
+              cloudSaved: false,
+              message: `⚠️ ${params.studentName || 'छात्र'} का आज आगमन (IN) दर्ज नहीं है। प्रस्थान (OUT) से पहले आगमन (IN) आवश्यक है।`,
+              record: existing || undefined
+            }
+          };
+        }
+
+        let elapsedMinutes: number | null = null;
+        if (typeof existingEntry.inTimestamp === "number" && Number.isFinite(existingEntry.inTimestamp)) {
+          elapsedMinutes = Math.floor((nowMs - existingEntry.inTimestamp) / 60000);
+        } else if (existingEntry.inTime) {
+          try {
+            const inParts = existingEntry.inTime.match(/(\d+):(\d+)(?::(\d+))?\s*(AM|PM)?/i);
+            if (inParts) {
+              let h = parseInt(inParts[1], 10);
+              const m = parseInt(inParts[2], 10);
+              const meridiem = (inParts[4] || "").toUpperCase();
+              if (meridiem === "PM" && h < 12) h += 12;
+              if (meridiem === "AM" && h === 12) h = 0;
+              const inDate = new Date();
+              inDate.setHours(h, m, 0, 0);
+              elapsedMinutes = Math.floor((nowMs - inDate.getTime()) / 60000);
+            }
+          } catch {}
+        }
+
+        const requiredMinGap = params.scanMode === "out" ? 1 : 30;
+        if (elapsedMinutes !== null && elapsedMinutes >= 0 && elapsedMinutes < requiredMinGap) {
+          const remainingMin = requiredMinGap - elapsedMinutes;
+          return {
+            committed: false,
+            result: {
+              success: false,
+              action: "out",
+              alreadyMarked: true,
+              tooEarlyForOut: true,
+              cloudSaved: false,
+              inTime: existingEntry.inTime,
+              message: `⚠️ ${params.studentName || 'छात्र'} का आगमन अभी दर्ज हुआ है (${existingEntry.inTime})। प्रस्थान (OUT) ${requiredMinGap} मिनट बाद ही मान्य होगा (शेष: ${remainingMin} मिनट)।`,
+              record: existing || undefined
+            }
+          };
+        }
+      }
+
+      let inTime = existingEntry?.inTime;
+      let outTime = existingEntry?.outTime;
+      let inTimestamp = existingEntry?.inTimestamp;
+      let outTimestamp = existingEntry?.outTimestamp;
+      let stayDuration = existingEntry?.stayDuration;
+      let isLate = existingEntry?.status === "late";
+      let status: "present" | "late" | "half_day" | "absent" | "leave" | "bunk" = existingEntry?.status || "present";
+
+      if (action === "in") {
+        inTime = timeFormatted;
+        inTimestamp = nowMs;
+        if (isPastCutoff) {
+          isLate = true;
+          status = "late";
+        } else {
+          status = "present";
+        }
+      } else {
+        outTime = timeFormatted;
+        outTimestamp = nowMs;
+        stayDuration = calculateStayDuration(inTime, outTime, inTimestamp, outTimestamp);
+      }
+
+      studentsMap[params.studentId] = {
+        present: true,
+        name: params.studentName || existingEntry?.name || "Student",
+        rollNo: params.rollNo || existingEntry?.rollNo || "",
+        inTime,
+        outTime,
+        inTimestamp,
+        outTimestamp,
+        stayDuration,
+        status,
+        scanType: action,
+        note: action === "in"
+          ? (isLate ? `Entry (Late) at ${inTime}` : `Entry at ${inTime}`)
+          : `Exit at ${outTime} (Stay: ${stayDuration || 'Recorded'})`
+      };
+
+      const record: AttendanceRecord = {
+        date,
+        schoolId: params.schoolId,
+        classId: params.classId,
+        sessionId: params.sessionId || existing?.sessionId || "",
+        markedBy: params.markedBy || existing?.markedBy || "QR_STUDENT_SCAN",
+        students: studentsMap,
+        createdAt: existing?.createdAt || now.toISOString()
+      };
+
+      const sanitizedRecord = sanitizeForFirestore(record);
+      const message = action === "in"
+        ? (isLate ? `Late Punch-In recorded at ${inTime}!` : `Entry Punch-In recorded at ${inTime}!`)
+        : `Exit Punch-Out recorded at ${outTime}! Stay duration: ${stayDuration || 'Saved'}`;
+
+      return {
+        committed: true,
+        result: {
+          success: true,
+          action,
           inTime,
           outTime,
-          inTimestamp,
-          outTimestamp,
           stayDuration,
-          status,
-          scanType: action,
-          note: action === "in"
-            ? (isLate ? `Entry (Late) at ${inTime}` : `Entry at ${inTime}`)
-            : `Exit at ${outTime} (Stay: ${stayDuration || 'Recorded'})`
-        };
+          isLate,
+          alreadyMarked: false,
+          cloudSaved: true,
+          message,
+          record: sanitizedRecord
+        }
+      };
+    };
 
-        const record: AttendanceRecord = {
-          date,
-          schoolId: params.schoolId,
-          classId: params.classId,
-          sessionId: params.sessionId || existing?.sessionId || "",
-          markedBy: params.markedBy || existing?.markedBy || "QR_STUDENT_SCAN",
-          students: studentsMap,
-          createdAt: existing?.createdAt || now.toISOString()
-        };
+    let txOutcome: TxOutcome | null = null;
+    if (db) {
+      try {
+        txOutcome = await withTimeout(
+          runTransaction(db, async (transaction) => {
+            const [snap, studentSnap] = await Promise.all([
+              transaction.get(docRef),
+              transaction.get(studentDocRef),
+            ]);
+            const existing = snap.exists() ? (snap.data() as AttendanceRecord) : null;
+            const stData = studentSnap.exists() ? studentSnap.data() : null;
+            const outcome = computeQrAttendanceOutcome(existing, stData);
+            if (outcome.committed && outcome.result.record) {
+              transaction.set(docRef, outcome.result.record);
+            }
+            return outcome;
+          }),
+          4500
+        );
+      } catch (fsErr) {
+        console.warn("[school-firebase] Firestore markStudentQrAttendance failed, trying RTDB fallback:", fsErr);
+      }
+    }
 
-        const sanitizedRecord = sanitizeForFirestore(record);
-        transaction.set(docRef, sanitizedRecord);
-
-        const message = action === "in"
-          ? (isLate ? `Late Punch-In recorded at ${inTime}!` : `Entry Punch-In recorded at ${inTime}!`)
-          : `Exit Punch-Out recorded at ${outTime}! Stay duration: ${stayDuration || 'Saved'}`;
-
-        return {
-          committed: true,
-          result: {
-            success: true,
-            action,
-            inTime,
-            outTime,
-            stayDuration,
-            isLate,
-            alreadyMarked: false,
-            cloudSaved: true,
-            message,
-            record: sanitizedRecord
+    // RTDB atomic fallback if Firestore failed (e.g. permission-denied for School PIN login) or unavailable
+    if (!txOutcome && rtdb) {
+      let latestOutcome: TxOutcome | null = null;
+      const rtdbAttRef = ref(rtdb, `schools/${params.schoolId}/attendance/${docId}`);
+      await withTimeout(
+        rtdbRunTransaction(rtdbAttRef, (currentVal: any) => {
+          const outcome = computeQrAttendanceOutcome(
+            currentVal && typeof currentVal === "object" ? (currentVal as AttendanceRecord) : null,
+            null
+          );
+          latestOutcome = outcome;
+          if (outcome.committed && outcome.result.record) {
+            return outcome.result.record;
           }
-        };
-      }),
-      5000
-    );
+          return undefined;
+        }),
+        4500
+      );
+      txOutcome = latestOutcome;
+    }
+
+    if (!txOutcome) {
+      throw new Error("क्लाउड डेटाबेस सेव असफल रहा। कृपया नेटवर्क जांच कर पुनः प्रयास करें।");
+    }
 
     if (txOutcome.committed && txOutcome.result.record) {
-      // Update local cache & mirror to RTDB only AFTER atomic Firestore transaction commits
+      // Update local cache & mirror to RTDB only AFTER atomic transaction commits
       try {
         const current = getLocalAttendance(params.schoolId);
         const updated = [txOutcome.result.record, ...current.filter((r: any) => `${r.classId}_${r.date}` !== docId)];
@@ -5544,16 +5587,18 @@ export const saveNstaMessage = async (msg: NstaMessage): Promise<void> => {
     window.dispatchEvent(new CustomEvent("nsta-messages-updated", { detail: { schoolId: msg.schoolId, message: msg } }));
   }
 
+  const writes: Promise<void>[] = [];
   if (rtdb) {
-    try {
-      await withTimeout(set(ref(rtdb, `schools/${msg.schoolId}/nsta_messages/${msg.id}`), sanitized), 2000);
-    } catch {}
+    writes.push(
+      withTimeout(set(ref(rtdb, `schools/${msg.schoolId}/nsta_messages/${msg.id}`), sanitized), 2500).catch(() => {})
+    );
   }
   if (db) {
-    try {
-      await withTimeout(setDoc(d(`schools/${msg.schoolId}/nsta_messages/${msg.id}`), sanitized), 2500);
-    } catch {}
+    writes.push(
+      withTimeout(setDoc(d(`schools/${msg.schoolId}/nsta_messages/${msg.id}`), sanitized), 2500).catch(() => {})
+    );
   }
+  await Promise.allSettled(writes);
 };
 
 export const deleteNstaMessage = async (schoolId: string, messageId: string): Promise<void> => {

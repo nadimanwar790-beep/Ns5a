@@ -546,6 +546,26 @@ async function hydrateRemotePushEngine(): Promise<void> {
   }
 }
 
+let lastRemotePushSyncMs = 0;
+let activePushSyncPromise: Promise<void> | null = null;
+
+async function ensureFreshPushSubscriptions(force = false): Promise<void> {
+  const now = Date.now();
+  if (!force && subscriptionsMap.size > 0 && now - lastRemotePushSyncMs < 10_000) {
+    return;
+  }
+  if (!activePushSyncPromise) {
+    activePushSyncPromise = hydrateRemotePushEngine()
+      .then(() => {
+        lastRemotePushSyncMs = Date.now();
+      })
+      .finally(() => {
+        activePushSyncPromise = null;
+      });
+  }
+  await activePushSyncPromise;
+}
+
 async function dispatchWebPush(
   record: StoredPushSubscription,
   payload: {
@@ -829,6 +849,8 @@ async function startServer() {
         return res.status(400).json({ error: "title and body are required" });
       }
 
+      await ensureFreshPushSubscriptions();
+
       const targetStudentSet = Array.isArray(studentIds) && studentIds.length > 0
         ? new Set(studentIds.map(String))
         : null;
@@ -936,6 +958,7 @@ async function startServer() {
   // 6. Trigger Monthly Fee Due Push Notifications (manual 1-click from Admin OR automated)
   app.post("/api/school-push/trigger-monthly", async (req, res) => {
     try {
+      await ensureFreshPushSubscriptions();
       const { schoolId, schoolName, monthLabel, duesList } = req.body || {};
       // If Admin passed explicit live duesList from FeeManager, update snapshots & push customized per-student amounts
       if (Array.isArray(duesList) && duesList.length > 0) {
@@ -1019,6 +1042,7 @@ async function startServer() {
     const { recipientIds = [], broadcast = false, title, body, url, type, icon } = req.body || {};
     let delivered = 0;
     if (title && body) {
+      await ensureFreshPushSubscriptions();
       for (const record of subscriptionsMap.values()) {
         if (
           broadcast ||
@@ -1056,10 +1080,8 @@ async function startServer() {
       let delivered = 0;
       const targetUserId = userId ? String(userId).trim() : "";
 
-      // Ensure remote subscriptions are loaded
-      if (subscriptionsMap.size === 0) {
-        await hydrateRemotePushEngine().catch(() => {});
-      }
+      // Ensure remote subscriptions are freshly loaded
+      await ensureFreshPushSubscriptions(true).catch(() => {});
 
       for (const record of subscriptionsMap.values()) {
         const isMatch =

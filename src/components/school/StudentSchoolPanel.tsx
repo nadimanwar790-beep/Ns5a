@@ -2097,9 +2097,16 @@ export const StudentSchoolPanel: React.FC<Props> = ({
       try {
         const fcmSyncKey = `nst_fcm_student_synced_${activeStudent.id}_${activeStudent.classId || ""}`;
         if (!sessionStorage.getItem(fcmSyncKey)) {
-          sessionStorage.setItem(fcmSyncKey, "1");
           const targetPushUid = effectiveUid && effectiveUid !== "guest" ? effectiveUid : activeStudent.id;
-          subscribeUserToPush(targetPushUid).catch(() => {});
+          subscribeUserToPush(targetPushUid)
+            .then((tok) => {
+              if (tok) {
+                try {
+                  sessionStorage.setItem(fcmSyncKey, "1");
+                } catch {}
+              }
+            })
+            .catch(() => {});
         }
       } catch {}
     }
@@ -2122,6 +2129,8 @@ export const StudentSchoolPanel: React.FC<Props> = ({
         });
         if (res.ok) {
           setPushEnabled(true);
+          const targetPushUid = effectiveUid && effectiveUid !== "guest" ? effectiveUid : activeStudent.id;
+          subscribeUserToPush(targetPushUid).catch(() => {});
           const count = Array.isArray(allLinkedStudents) && allLinkedStudents.length > 1 ? allLinkedStudents.length : 1;
           setPushFeedback({
             type: "ok",

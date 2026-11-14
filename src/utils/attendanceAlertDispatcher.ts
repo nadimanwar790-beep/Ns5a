@@ -211,9 +211,6 @@ export const dispatchAttendanceParentAlert = async (
     return { messengerSent: false, pushDelivered: 0, skippedDuplicate: true };
   }
 
-  // Record upfront so double-taps cannot race
-  recordAttendanceAlertDispatched(params.schoolId, date, params.studentId, params.status);
-
   const copy = buildAlertCopy({
     studentName: params.studentName,
     rollNo: params.rollNo,
@@ -229,6 +226,7 @@ export const dispatchAttendanceParentAlert = async (
 
   let messengerSent = false;
   let pushDelivered = 0;
+  let rtdbDispatched = false;
 
   const messengerPromise = params.skipMessenger
     ? Promise.resolve()
@@ -268,10 +266,16 @@ export const dispatchAttendanceParentAlert = async (
       })
         .then((res) => {
           pushDelivered = Number(res?.delivered || 0);
+          rtdbDispatched = Boolean(res?.rtdbDispatched);
         })
         .catch(() => {});
 
   await Promise.allSettled([messengerPromise, pushPromise]);
+
+  // Only record daily dedupe if at least one channel succeeded
+  if (messengerSent || pushDelivered > 0 || rtdbDispatched) {
+    recordAttendanceAlertDispatched(params.schoolId, date, params.studentId, params.status);
+  }
 
   return { messengerSent, pushDelivered };
 };
@@ -282,68 +286,70 @@ export const dispatchAttendanceParentAlert = async (
  */
 export const dispatchAttendanceBatchAlerts = async (
   params: DispatchBatchAttendanceAlertsParams
-): Promise<{ messengerCount: number; pushDelivered: number }> => {
+): Promise<{ messengerCount: number; pushDelivered: number; skippedCount: number }> => {
   if (!params.schoolId || !Array.isArray(params.items) || params.items.length === 0) {
-    return { messengerCount: 0, pushDelivered: 0 };
+    return { messengerCount: 0, pushDelivered: 0, skippedCount: 0 };
   }
 
   const date = params.date || todayStr();
   const alertMap = readDailyAlertMap(params.schoolId, date);
 
-  const eligible = params.items.filter((item) =>
-    item.studentId && shouldDispatchForStudent(alertMap, item.studentId, item.status, params.skipDedupe)
+  const validItems = params.items.filter((item) => Boolean(item?.studentId));
+  const eligible = validItems.filter((item) =>
+    shouldDispatchForStudent(alertMap, item.studentId, item.status, params.skipDedupe)
   );
+  const skippedCount = Math.max(0, validItems.length - eligible.length);
 
   if (eligible.length === 0) {
-    return { messengerCount: 0, pushDelivered: 0 };
+    return { messengerCount: 0, pushDelivered: 0, skippedCount };
   }
-
-  // Record all eligible students immediately
-  eligible.forEach((item) => {
-    const bucket = normalizeAlertBucket(item.status);
-    const prev = alertMap[item.studentId] || "";
-    alertMap[item.studentId] = bucket === "out" && prev === "arrived" ? "arrived+out" : bucket;
-  });
-  writeDailyAlertMap(params.schoolId, date, alertMap);
 
   let messengerCount = 0;
   let pushDelivered = 0;
+  const succeededStudentIds = new Set<string>();
+  const pushSucceededStudentIds = new Set<string>();
 
-  // 1. Send personalized NSTA Messenger SCHOOL_DESK message for each student
+  // 1. Send personalized NSTA Messenger SCHOOL_DESK message in safe chunks of 10
   if (!params.skipMessenger) {
     const baseTs = Date.now();
-    await Promise.allSettled(
-      eligible.map(async (item, idx) => {
-        const copy = buildAlertCopy({
-          studentName: item.studentName,
-          rollNo: item.rollNo,
-          className: item.className || params.className,
-          status: item.status,
-          timeText: item.timeText,
-          stayDuration: item.stayDuration,
-          date,
-          schoolName: params.schoolName,
-          sourceLabel: params.sourceLabel,
-        });
+    const CHUNK_SIZE = 10;
+    for (let start = 0; start < eligible.length; start += CHUNK_SIZE) {
+      const chunk = eligible.slice(start, start + CHUNK_SIZE);
+      await Promise.allSettled(
+        chunk.map(async (item, localIdx) => {
+          const idx = start + localIdx;
+          const copy = buildAlertCopy({
+            studentName: item.studentName,
+            rollNo: item.rollNo,
+            className: item.className || params.className,
+            status: item.status,
+            timeText: item.timeText,
+            stayDuration: item.stayDuration,
+            date,
+            schoolName: params.schoolName,
+            sourceLabel: params.sourceLabel,
+          });
 
-        const msg: NstaMessage = {
-          id: `msg_att_${baseTs}_${idx}_${item.studentId}`,
-          schoolId: params.schoolId,
-          threadType: "SCHOOL_DESK",
-          classId: item.classId || params.classId,
-          studentId: item.studentId,
-          studentName: item.studentName,
-          senderId: "school_attendance_desk",
-          senderName: params.senderName || `${params.schoolName || "विद्यालय"} उपस्थिति डेस्क`,
-          senderRole: "ADMIN",
-          text: copy.messengerText,
-          createdAt: new Date(baseTs + idx).toISOString(),
-          status: "delivered",
-        };
-        await saveNstaMessage(msg);
-        messengerCount++;
-      })
-    );
+          const msg: NstaMessage = {
+            id: `msg_att_${baseTs}_${idx}_${item.studentId}`,
+            schoolId: params.schoolId,
+            threadType: "SCHOOL_DESK",
+            classId: item.classId || params.classId,
+            studentId: item.studentId,
+            studentName: item.studentName,
+            senderId: "school_attendance_desk",
+            senderName: params.senderName || `${params.schoolName || "विद्यालय"} उपस्थिति डेस्क`,
+            senderRole: "ADMIN",
+            text: copy.messengerText,
+            createdAt: new Date(baseTs + idx).toISOString(),
+            status: "delivered",
+          };
+          await saveNstaMessage(msg);
+          messengerCount++;
+          succeededStudentIds.add(item.studentId);
+        })
+      );
+    }
   }
 
   // 2. Group push notifications by status bucket so parents get instant alerts cleanly
@@ -371,6 +377,9 @@ export const dispatchAttendanceBatchAlerts = async (
         })
           .then((res) => {
             pushDelivered += Number(res?.delivered || 0);
+            if (res?.rtdbDispatched || Number(res?.delivered || 0) > 0) {
+              presentIds.forEach((id) => pushSucceededStudentIds.add(id));
+            }
           })
           .catch(() => {})
       );
@@ -393,6 +402,9 @@ export const dispatchAttendanceBatchAlerts = async (
         })
           .then((res) => {
             pushDelivered += Number(res?.delivered || 0);
+            if (res?.rtdbDispatched || Number(res?.delivered || 0) > 0) {
+              absentIds.forEach((id) => pushSucceededStudentIds.add(id));
+            }
           })
           .catch(() => {})
       );
@@ -415,6 +427,9 @@ export const dispatchAttendanceBatchAlerts = async (
         })
           .then((res) => {
             pushDelivered += Number(res?.delivered || 0);
+            if (res?.rtdbDispatched || Number(res?.delivered || 0) > 0) {
+              outIds.forEach((id) => pushSucceededStudentIds.add(id));
+            }
           })
           .catch(() => {})
       );
@@ -423,5 +438,19 @@ export const dispatchAttendanceBatchAlerts = async (
     await Promise.allSettled(pushCalls);
   }
 
-  return { messengerCount, pushDelivered };
+  // Record daily dedupe only for students whose alert actually dispatched on at least one channel
+  let updatedAny = false;
+  eligible.forEach((item) => {
+    if (succeededStudentIds.has(item.studentId) || pushSucceededStudentIds.has(item.studentId)) {
+      const bucket = normalizeAlertBucket(item.status);
+      const prev = alertMap[item.studentId] || "";
+      alertMap[item.studentId] = bucket === "out" && prev === "arrived" ? "arrived+out" : bucket;
+      updatedAny = true;
+    }
+  });
+  if (updatedAny) {
+    writeDailyAlertMap(params.schoolId, date, alertMap);
+  }
+
+  return { messengerCount, pushDelivered, skippedCount };
 };

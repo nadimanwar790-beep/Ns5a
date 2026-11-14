@@ -119,6 +119,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
   });
   const [offlineAlertMsg, setOfflineAlertMsg] = useState<string | null>(null);
   const [isSyncingQueue, setIsSyncingQueue] = useState<boolean>(false);
+  const [resendingAlerts, setResendingAlerts] = useState<boolean>(false);
 
   const getStoredQueue = useCallback((): any[] => {
     try {
@@ -147,12 +148,36 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
     if (queue.length === 0) return;
     setIsSyncingQueue(true);
     let synced = 0;
+    let totalAlertsSent = 0;
     const remaining: any[] = [];
+    const today = todayStr();
 
     for (const item of queue) {
       try {
         await saveAttendance(item.record);
         synced++;
+        if (item.date === today && item.record?.students) {
+          const alertItems = Object.entries(item.record.students).map(([sid, st]: [string, any]) => ({
+            studentId: sid,
+            studentName: st?.name || "Student",
+            rollNo: st?.rollNo || "",
+            classId: item.classId || item.record.classId,
+            className: item.className || className,
+            status: st?.present === false ? ("absent" as const) : st?.status === "late" ? ("late" as const) : ("present" as const),
+            timeText: st?.inTime || undefined,
+          }));
+          if (alertItems.length > 0) {
+            const alertRes = await dispatchAttendanceBatchAlerts({
+              schoolId,
+              classId: item.classId || item.record.classId,
+              className: item.className || className,
+              date: item.date,
+              sourceLabel: "क्लास अटेंडेंस रजिस्टर (ऑफलाइन सिंक)",
+              items: alertItems,
+            }).catch(() => ({ messengerCount: 0, pushDelivered: 0, skippedCount: 0 }));
+            totalAlertsSent += Number(alertRes?.messengerCount || 0);
+          }
+        }
       } catch (e) {
         remaining.push(item);
       }
@@ -165,11 +190,12 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
     setIsSyncingQueue(false);
 
     if (synced > 0) {
-      setOfflineAlertMsg(`☁️ बैकग्राउंड सिंक पूर्ण: ${synced} ऑफलाइन हाजिरी रिकॉर्ड्स क्लाउड पर सफलतापूर्वक सिंक हो गए!`);
+      const alertSuffix = totalAlertsSent > 0 ? ` व ${totalAlertsSent} अभिभावकों को NSTA + Push अलर्ट भेजा गया` : "";
+      setOfflineAlertMsg(`☁️ बैकग्राउंड सिंक पूर्ण: ${synced} ऑफलाइन हाजिरी रिकॉर्ड्स क्लाउड पर सफलतापूर्वक सिंक हो गए${alertSuffix}!`);
       speakNotification("अटेंडेंस सिंक पूर्ण", `${synced} हाजिरी रिकॉर्ड क्लाउड पर सिंक हो गए।`);
-      setTimeout(() => setOfflineAlertMsg(null), 4500);
+      setTimeout(() => setOfflineAlertMsg(null), 5000);
     }
-  }, [QUEUE_KEY, getStoredQueue]);
+  }, [QUEUE_KEY, className, getStoredQueue, schoolId]);
 
   // Network listener & auto-sync every 20s
   useEffect(() => {
@@ -360,13 +386,10 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
 
     if (isCurrentlyOnline) {
       try {
-        await Promise.race([
-          saveAttendance(record),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("Network timeout")), 2500))
-        ]);
+        await saveAttendance(record);
         cloudSynced = true;
       } catch (err) {
-        console.warn("[Attendance] Cloud sync slow or failed, fallback to offline queue:", err);
+        console.warn("[Attendance] Cloud sync failed, fallback to offline queue:", err);
       }
     }
 
@@ -375,7 +398,7 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
       enqueueOfflineRecord(record);
       const prs = Object.values(studentsMap).filter(st => st.present).length;
       setOfflineAlertMsg(
-        `📶 हाजिरी फोन में सुरक्षित सेव हो गई है (${prs} उपस्थित)। इंटरनेट कमजोर या बंद होने के कारण यह ऑफलाइन सुरक्षित है, नेटवर्क आते ही अपने आप क्लाउड पर सिंक हो जाएगी।`
+        `📶 हाजिरी फोन में सुरक्षित सेव हो गई है (${prs} उपस्थित)। इंटरनेट कमजोर या बंद होने के कारण यह ऑफलाइन सुरक्षित है, नेटवर्क आते ही अपने आप क्लाउड पर सिंक होकर अभिभावकों को अलर्ट भेज दिया जाएगा।`
       );
       speakNotification(
         "हाजिरी ऑफलाइन सेव",
@@ -383,39 +406,98 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
       );
     } else {
       setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      setExistingRecord(record);
+      setTimeout(() => setSaved(false), 2500);
 
       // Dispatch NSTA Messenger (SCHOOL_DESK) + Push alerts to parents when today's attendance is saved
       if (selectedDate === todayStr() && students.length > 0) {
-        const nowTime = new Date().toLocaleTimeString("en-IN", {
+        const alertTimeText = new Date().toLocaleTimeString("en-IN", {
           hour: "2-digit",
           minute: "2-digit",
           hour12: true,
         });
-        void dispatchAttendanceBatchAlerts({
-          schoolId,
-          classId,
-          className,
-          date: selectedDate,
-          sourceLabel: "क्लास अटेंडेंस रजिस्टर",
-          items: students.map(s => ({
+        try {
+          const res = await dispatchAttendanceBatchAlerts({
+            schoolId,
+            classId,
+            className,
+            date: selectedDate,
+            sourceLabel: "क्लास अटेंडेंस रजिस्टर",
+            items: students.map(s => ({
+              studentId: s.id,
+              studentName: s.name,
+              rollNo: s.rollNo,
+              classId,
+              className,
+              status:
+                studentsMap[s.id]?.present === false
+                  ? ("absent" as const)
+                  : studentsMap[s.id]?.status === "late"
+                  ? ("late" as const)
+                  : ("present" as const),
+              timeText: studentsMap[s.id]?.inTime || alertTimeText,
+            })),
+          });
+          if (res.messengerCount > 0) {
+            const msg = `📩 ${res.messengerCount} अभिभावकों को NSTA Messenger व Push (${res.pushDelivered} डिवाइस) अलर्ट भेजा गया!`;
+            toast.success(msg);
+            setAbsenteeBroadcastToast(msg);
+            setTimeout(() => setAbsenteeBroadcastToast(null), 5000);
+          } else if (res.skippedCount > 0) {
+            const msg = `✓ हाजिरी सेव हो गई! (आज के अलर्ट पहले ही भेजे जा चुके हैं — दोबारा भेजने के लिए नीचे 'Alerts Dubara Bhejein' दबाएं)`;
+            toast.info(msg);
+            setAbsenteeBroadcastToast(msg);
+            setTimeout(() => setAbsenteeBroadcastToast(null), 5000);
+          }
+        } catch (err) {
+          console.warn("[Attendance] Alert dispatch failed:", err);
+          toast.error("हाजिरी सेव हुई, पर अलर्ट भेजने में समस्या आई। 'Alerts Dubara Bhejein' बटन से पुनः प्रयास करें।");
+        }
+      }
+    }
+
+    setSaving(false);
+  };
+
+  const handleResendAttendanceAlerts = async () => {
+    if (!schoolId || students.length === 0 || resendingAlerts) return;
+    setResendingAlerts(true);
+    try {
+      const nowTime = new Date().toLocaleTimeString("en-IN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+      });
+      const res = await dispatchAttendanceBatchAlerts({
+        schoolId,
+        classId,
+        className,
+        date: selectedDate,
+        sourceLabel: "क्लास अटेंडेंस रजिस्टर",
+        skipDedupe: true,
+        items: students.map(s => {
+          const entry = existingRecord?.students?.[s.id];
+          const isPresent = attendance[s.id] ?? entry?.present ?? true;
+          return {
             studentId: s.id,
             studentName: s.name,
             rollNo: s.rollNo,
             classId,
             className,
-            status: studentsMap[s.id]?.present === false ? ("absent" as const) : ("present" as const),
-            timeText: nowTime,
-          })),
-        }).then((res) => {
-          if (res.messengerCount > 0) {
-            toast.success(`📩 ${res.messengerCount} अभिभावकों को NSTA Messenger व Push अलर्ट भेजा गया!`);
-          }
-        });
-      }
+            status: !isPresent ? ("absent" as const) : entry?.status === "late" ? ("late" as const) : ("present" as const),
+            timeText: entry?.inTime || nowTime,
+          };
+        }),
+      });
+      const msg = `📩 ${res.messengerCount} अभिभावकों को NSTA Messenger (School Desk) व ${res.pushDelivered} डिवाइस पर Push अलर्ट भेजा गया!`;
+      toast.success(msg);
+      setAbsenteeBroadcastToast(msg);
+      setTimeout(() => setAbsenteeBroadcastToast(null), 5000);
+    } catch {
+      toast.error("अलर्ट भेजने में समस्या आई। कृपया इंटरनेट कनेक्शन जांचें।");
+    } finally {
+      setResendingAlerts(false);
     }
-
-    setSaving(false);
   };
 
   const handleMarkSingleStudentOut = async (student: SchoolStudent) => {
@@ -1235,10 +1317,23 @@ export const AttendanceManager: React.FC<Props> = ({ schoolId, classId, classNam
           )}
 
           {students.length > 0 && (
-            <button onClick={saveRecord} disabled={saving}
-              className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-md disabled:opacity-60 transition-colors">
-              {saving ? "Saving..." : saved ? "✓ Attendance Saved!" : "Save Attendance"}
-            </button>
+            <div className="space-y-2">
+              <button onClick={saveRecord} disabled={saving}
+                className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-md disabled:opacity-60 transition-colors cursor-pointer">
+                {saving ? "Saving & Sending Alerts..." : saved ? "✓ Attendance Saved!" : "Save Attendance"}
+              </button>
+              {selectedDate === todayStr() && (
+                <button
+                  type="button"
+                  onClick={handleResendAttendanceAlerts}
+                  disabled={resendingAlerts || saving}
+                  className="w-full py-2.5 bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40 rounded-xl text-xs font-black flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-60"
+                >
+                  {resendingAlerts ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  <span>{resendingAlerts ? "NSTA + Push अलर्ट भेजा जा रहा है..." : "📩 सभी अभिभावकों को NSTA Messenger + Push अलर्ट भेजें (Resend)"}</span>
+                </button>
+              )}
+            </div>
           )}
         </div>
       ) : viewMode === "absentee" ? (

@@ -294,10 +294,29 @@ export const saveFcmToken = async (userId: string, token: string) => {
     };
     await set(broadcastRef, tokenRecord).catch(() => {});
 
-    // If student ID is available and different from userId, also register alias so studentIds lookup matches
-    if (studentId && studentId !== userId) {
-      const safeStudentId = String(studentId).replace(/[.#$[\]/]/g, '_');
-      await set(ref(rtdb, `fcm_tokens/${safeStudentId}`), tokenRecord).catch(() => {});
+    // If student ID(s) are available and different from userId, also register aliases so studentIds lookup matches every linked child
+    const studentIdsToAlias = new Set<string>();
+    if (studentId) studentIdsToAlias.add(studentId);
+    try {
+      const linkedRaw = localStorage.getItem('nst_linked_students');
+      if (linkedRaw) {
+        const linked = JSON.parse(linkedRaw);
+        if (Array.isArray(linked)) {
+          for (const ls of linked) {
+            if (ls?.id) studentIdsToAlias.add(String(ls.id));
+          }
+        }
+      }
+    } catch (_) {}
+
+    for (const sid of studentIdsToAlias) {
+      if (sid && sid !== userId) {
+        const safeStudentId = String(sid).replace(/[.#$[\]/]/g, '_');
+        await set(ref(rtdb, `fcm_tokens/${safeStudentId}`), {
+          ...tokenRecord,
+          studentId: sid,
+        }).catch(() => {});
+      }
     }
 
     // Save in Firestore
@@ -1081,8 +1100,11 @@ export const subscribeToUserNotifications = (
 
     const notifTimestamp = Number(item.timestamp || 0);
 
-    // B. Old notification suppression (90s grace for slight clock skew):
-    const isHistorical = notifTimestamp > 0 && notifTimestamp < (sessionStartTime - 90000);
+    // B. Old notification suppression:
+    // Allow 30 minutes for direct personal user_notifications (inboxOwnerKey) so parents opening the app
+    // minutes after attendance is marked still receive unread alerts; use 90s grace for global broadcasts.
+    const graceWindowMs = inboxOwnerKey ? 30 * 60 * 1000 : 90000;
+    const isHistorical = notifTimestamp > 0 && notifTimestamp < (sessionStartTime - graceWindowMs);
     if (isHistorical) {
       if (notifKey && inboxOwnerKey) {
         remove(ref(rtdb, `user_notifications/${inboxOwnerKey}/${notifKey}`)).catch(() => {});

@@ -1257,6 +1257,31 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     return () => unsub();
   }, [school?.id, activeTab, activeClass?.id, activeStudent?.id, activeTeacher?.id, currentUserRole, isVoiceAnnounceEnabled, currentUserId]);
 
+  // Background unread count for School (Desk) tab (where attendance, fee & school alerts arrive)
+  const [unreadSchoolDeskCount, setUnreadSchoolDeskCount] = useState(0);
+  useEffect(() => {
+    if (activeTab === "school") {
+      setUnreadSchoolDeskCount(0);
+      return;
+    }
+    const effectiveSchoolId = school?.id || "default";
+    const studentFilterId = activeStudent?.id || (currentUserRole === "STUDENT" ? currentUserId : "general") || "general";
+    return subscribeToNstaMessages(
+      effectiveSchoolId,
+      { threadType: "SCHOOL_DESK", studentId: studentFilterId },
+      (deskMsgs) => {
+        const unread = (deskMsgs || []).filter(
+          (m) =>
+            m &&
+            m.senderId !== currentUserId &&
+            (!m.deletedFor || !m.deletedFor.includes(currentUserId)) &&
+            (!m.readBy || !m.readBy.some((r) => r.userId === currentUserId))
+        ).length;
+        setUnreadSchoolDeskCount(unread);
+      }
+    );
+  }, [activeTab, school?.id, activeStudent?.id, currentUserRole, currentUserId]);
+
   // Auto scroll on message length change ONLY if user is already at the bottom
   useEffect(() => {
     if (!isUserScrolledUpRef.current) {
@@ -2795,7 +2820,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
           <button
             type="button"
             onClick={() => handleSwitchTab("school")}
-            className={`w-full py-2 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-1 sm:gap-1.5 transition-all cursor-pointer ${
+            className={`relative w-full py-2 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-1 sm:gap-1.5 transition-all cursor-pointer ${
               activeTab === "school"
                 ? "bg-blue-600 text-white shadow-md shadow-blue-900/40 ring-1 ring-blue-400/40"
                 : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/60"
@@ -2803,6 +2828,11 @@ export const NstaMessengerSuite: React.FC<Props> = ({
           >
             <Building2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
             <span className="truncate">School (Desk)</span>
+            {unreadSchoolDeskCount > 0 && activeTab !== "school" && (
+              <span className="px-1.5 py-0.5 rounded-full bg-rose-500 text-white text-[10px] font-black leading-none shadow-sm animate-pulse">
+                {unreadSchoolDeskCount > 99 ? "99+" : unreadSchoolDeskCount}
+              </span>
+            )}
           </button>
 
           <button
