@@ -79,12 +79,20 @@ export default defineConfig(async ({ command }) => {
     );
   }
 
+  const fallbackMapsKey =
+    !process.env.VITE_GOOGLE_MAPS_API_KEY && process.env.GOOGLE_MAPS_API_KEY
+      ? process.env.GOOGLE_MAPS_API_KEY
+      : undefined;
+
+  const defineConfigObj: Record<string, string> = {
+    ...(isBuild ? { 'process.env.NODE_ENV': JSON.stringify('production') } : {}),
+    ...(fallbackMapsKey
+      ? { 'import.meta.env.VITE_GOOGLE_MAPS_API_KEY': JSON.stringify(fallbackMapsKey) }
+      : {}),
+  };
+
   return {
-    define: isBuild
-      ? {
-          'process.env.NODE_ENV': JSON.stringify('production'),
-        }
-      : undefined,
+    define: Object.keys(defineConfigObj).length > 0 ? defineConfigObj : undefined,
     esbuild: {
       jsx: 'automatic',
       jsxDev: !isBuild,
@@ -135,6 +143,7 @@ export default defineConfig(async ({ command }) => {
         'react-resizable-panels',
         'vaul',
         'canvas-confetti',
+        '@vis.gl/react-google-maps',
       ],
     },
     plugins,

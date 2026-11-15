@@ -7239,6 +7239,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           isOpen={true}
           onClose={() => setView("fees")}
           schoolId={schoolId}
+          schoolName={school?.name}
+          schoolCode={school?.code}
           classes={displayedClasses}
           students={displayedStudents}
           onUpdated={() => {}}

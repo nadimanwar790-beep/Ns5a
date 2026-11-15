@@ -122,6 +122,7 @@ import { subscribeUserToPush } from "../NotificationManager";
 import { isSchoolEliteCurriculum, type School, type SchoolStudent, type SchoolTeacher, type NstaWelcomeData, type NstaBirthdayData } from "../../school-types";
 import { ParentLeaveManager } from "./ParentLeaveManager";
 import { PtmSchedulerModal } from "./PtmSchedulerModal";
+import { AdminBusFleetRadar } from "./AdminBusFleetRadar";
 import { playBusArrivalAlarmChime, checkAndTriggerBusProximity } from "../../utils/busProximityAlarm";
 import { getDynamicAcademicSessionLabel } from "../../utils/safeBrowserActions";
 import {
@@ -273,6 +274,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   const [showPtmModal, setShowPtmModal] = useState<boolean>(false);
   const [confirmRemoveLinkedKey, setConfirmRemoveLinkedKey] = useState<string | null>(null);
   const [busAlarmTriggered, setBusAlarmTriggered] = useState<boolean>(false);
+  const [showBusLiveMapModal, setShowBusLiveMapModal] = useState<boolean>(false);
 
   // Student 3-Theme Switcher (White / Black / Midnight Current)
   const [studentTheme, setStudentTheme] = useState<StudentAppTheme>(() => {
@@ -2601,6 +2603,16 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                   >
                     <Bell className="w-3 h-3 text-amber-400" />
                     <span>{busAlarmTriggered ? "सायरन बज रहा है! 🔔" : "बस 1KM सायरन"}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowBusLiveMapModal(true)}
+                    className="px-2.5 py-1 rounded-lg bg-emerald-950/70 hover:bg-emerald-900/80 text-emerald-300 text-[11px] font-bold flex items-center gap-1.5 border border-emerald-500/40 transition cursor-pointer active:scale-95 shadow-sm"
+                    title="Google Map par school bus ki live location dekhein"
+                  >
+                    <MapPin className="w-3 h-3 text-emerald-400" />
+                    <span>Live Bus Map</span>
                   </button>
 
                   <button
@@ -5788,6 +5800,43 @@ export const StudentSchoolPanel: React.FC<Props> = ({
               >
                 हो गया (Done)
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── LIVE BUS GOOGLE MAP MODAL (FOR PARENTS & STUDENTS) ── */}
+      {showBusLiveMapModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className="relative w-full max-w-4xl max-h-[92vh] bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl flex flex-col overflow-hidden">
+            <div className="p-3.5 sm:p-4 bg-slate-950/90 border-b border-slate-800 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
+                  <MapPin className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-black text-white">
+                    🚌 Live School Bus Google Map
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    {schoolDisplayName} • रियल-टाइम GPS बस लोकेशन
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowBusLiveMapModal(false)}
+                className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-3 sm:p-4 overflow-y-auto flex-1">
+              <AdminBusFleetRadar
+                school={school || ({ id: schoolId, name: schoolDisplayName } as any)}
+                currentStudent={activeStudent}
+                onClose={() => setShowBusLiveMapModal(false)}
+              />
             </div>
           </div>
         </div>

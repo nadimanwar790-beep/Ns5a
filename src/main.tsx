@@ -5,6 +5,21 @@ import './index.css';
 import './app.css';
 import { Toaster } from 'sonner';
 
+// Tier 1 Google Maps Platform Demo Key quota & auth failure detection
+if (typeof window !== 'undefined') {
+  (window as any).gm_authFailure = () => {
+    window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
+  };
+  const origConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    origConsoleError.apply(console, args);
+    const msg = args.map((a) => String(a)).join(' ');
+    if (msg.includes('OverQuotaMapError') || msg.includes('QuotaExceededError')) {
+      window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
+    }
+  };
+}
+
 interface ErrorBoundaryProps {
   children: ReactNode;
 }

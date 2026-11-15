@@ -5,12 +5,14 @@ import { ADMIN_EMAIL } from '../constants';
 import {
   saveUserToLive,
   auth,
+  rtdb,
   getUserByEmail,
   getUserByMobileOrId,
   getUserData,
   getFreshUserData,
   getUserByLinkedGoogleUid
 } from '../firebase';
+import { ref as dbRef, get as rtdbGet } from 'firebase/database';
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
@@ -386,11 +388,57 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
     try {
       let matchedStudentUser: User | null = null;
       let matchedTeacherUser: User | null = null;
+      let matchedDriverUser: any = null;
       let targetSchoolId = 'dps_gurgaon_sector45';
+
+      // ── BRANCH 0: Official School Bus Driver ID Card QR ──
+      // Format: NSTA-SCHOOL-DRIVER:schoolId:busId:busNumber:route:driverName:driverPhone:schoolCode:schoolName
+      if (
+        raw.startsWith('NSTA-SCHOOL-DRIVER:') ||
+        raw.startsWith('NSTA-DRIVER:') ||
+        raw.includes('NSTA-SCHOOL-DRIVER:') ||
+        raw.includes('NSTA-DRIVER:')
+      ) {
+        const token = raw.includes('NSTA-SCHOOL-DRIVER:')
+          ? raw.split('NSTA-SCHOOL-DRIVER:')[1]
+          : raw.split('NSTA-DRIVER:')[1];
+        const cleanToken = token.split('\n')[0].split('\r')[0];
+        const parts = cleanToken.split(':').map((p) => {
+          try { return decodeURIComponent(p); } catch { return p; }
+        });
+        const cleanSchoolId = parts[0] || 'dps_gurgaon_sector45';
+        const cleanBusId = parts[1] || `bus_${Date.now()}`;
+        const cleanBusNumber = parts[2] || 'School Bus';
+        const cleanRoute = parts[3] || 'School Bus Route';
+        const cleanDriverName = parts[4] || 'Bus Driver';
+        const cleanDriverPhone = parts[5] || '';
+        const cleanSchoolCode = parts[6] || '';
+        const cleanSchoolName = parts[7] || 'School Bus Fleet';
+        const phone10 = cleanDriverPhone.replace(/\D/g, '').slice(-10);
+
+        matchedDriverUser = {
+          id: `driver_${cleanBusId}`,
+          uid: `driver_${cleanBusId}`,
+          displayId: `DRV-${(phone10 || cleanBusId).slice(-5).toUpperCase()}`,
+          name: cleanDriverName,
+          email: `driver.${phone10 || cleanBusId}@school.internal`,
+          mobile: phone10 || cleanDriverPhone,
+          role: 'DRIVER',
+          schoolId: cleanSchoolId,
+          schoolCode: cleanSchoolCode,
+          schoolName: cleanSchoolName,
+          busId: cleanBusId,
+          busNumber: cleanBusNumber,
+          busRoute: cleanRoute,
+          profileCompleted: true,
+          provider: 'qr_driver_id',
+          isQrLogin: true,
+        };
+      }
 
       // ── BRANCH 1: Official School ID Card QR (Student OR Teacher/Staff) ──
       // Format: NSTA-SCHOOL[-STAFF]:schoolId:id:rollOrEmp:classOrDept:name:admNo:phone:father:mother:blood:dob:address:fee:title:schoolName
-      if (
+      else if (
         raw.startsWith('NSTA-SCHOOL-STAFF:') ||
         raw.startsWith('NSTA-STAFF:') ||
         raw.startsWith('NSTA-SCHOOL:') ||
@@ -843,37 +891,67 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
       else if (raw.startsWith('http://') || raw.startsWith('https://')) {
         try {
           const urlObj = new URL(raw);
+          const isDriverLink = urlObj.searchParams.get('driverConsole') === '1' || urlObj.searchParams.get('driver') === '1';
           const qSchool = urlObj.searchParams.get('school') || urlObj.searchParams.get('schoolId') || 'dps_gurgaon_sector45';
-          const qStudent = urlObj.searchParams.get('student') || urlObj.searchParams.get('studentId') || urlObj.searchParams.get('id');
-          const qRoll = urlObj.searchParams.get('roll') || urlObj.searchParams.get('rollNo');
-          const qName = urlObj.searchParams.get('name');
-          const qAdm = urlObj.searchParams.get('adm') || urlObj.searchParams.get('admissionNo');
 
-          if (qStudent || qRoll || qName || qAdm) {
-            targetSchoolId = qSchool;
-            const found = resolveStudent(qStudent || qRoll || qAdm || qName || '', qSchool);
-            const realId = found?.id || qStudent || `stu_${Date.now()}`;
-            matchedStudentUser = {
-              id: realId,
-              uid: realId,
-              displayId: (found?.rollNo || qRoll) ? `ROLL-${found?.rollNo || qRoll}` : `STU-${realId.slice(0, 6).toUpperCase()}`,
-              name: found?.name || qName || 'Student',
-              email: found?.email || `${realId}@student.dps.edu.in`,
-              mobile: found?.phone || '9876543210',
-              role: 'STUDENT',
+          if (isDriverLink) {
+            const qBusId = urlObj.searchParams.get('busId') || `bus_${Date.now()}`;
+            const qBusNo = urlObj.searchParams.get('busNumber') || 'School Bus';
+            const qRoute = urlObj.searchParams.get('route') || 'School Bus Route';
+            const qDriverName = urlObj.searchParams.get('driverName') || 'Bus Driver';
+            const qDriverPhone = urlObj.searchParams.get('driverPhone') || '';
+            const qSchoolCode = urlObj.searchParams.get('schoolCode') || '';
+            const qSchoolName = urlObj.searchParams.get('schoolName') || 'School Bus Fleet';
+            matchedDriverUser = {
+              id: `driver_${qBusId}`,
+              uid: `driver_${qBusId}`,
+              displayId: `DRV-${qBusId.slice(-5).toUpperCase()}`,
+              name: qDriverName,
+              email: `driver.${qBusId}@school.internal`,
+              mobile: qDriverPhone,
+              role: 'DRIVER',
               schoolId: qSchool,
-              classLevel: found?.classGrade || found?.classId || '10',
-              stream: 'General',
-              credits: 100,
-              diamonds: 50,
-              streak: 1,
-              totalScore: 0,
+              schoolCode: qSchoolCode,
+              schoolName: qSchoolName,
+              busId: qBusId,
+              busNumber: qBusNo,
+              busRoute: qRoute,
               profileCompleted: true,
-              subscriptionTier: 'PRO',
-              provider: 'qr_student_id',
+              provider: 'qr_driver_id',
               isQrLogin: true,
-              admissionNo: found?.admissionNo || qAdm || ''
             };
+          } else {
+            const qStudent = urlObj.searchParams.get('student') || urlObj.searchParams.get('studentId') || urlObj.searchParams.get('id');
+            const qRoll = urlObj.searchParams.get('roll') || urlObj.searchParams.get('rollNo');
+            const qName = urlObj.searchParams.get('name');
+            const qAdm = urlObj.searchParams.get('adm') || urlObj.searchParams.get('admissionNo');
+
+            if (qStudent || qRoll || qName || qAdm) {
+              targetSchoolId = qSchool;
+              const found = resolveStudent(qStudent || qRoll || qAdm || qName || '', qSchool);
+              const realId = found?.id || qStudent || `stu_${Date.now()}`;
+              matchedStudentUser = {
+                id: realId,
+                uid: realId,
+                displayId: (found?.rollNo || qRoll) ? `ROLL-${found?.rollNo || qRoll}` : `STU-${realId.slice(0, 6).toUpperCase()}`,
+                name: found?.name || qName || 'Student',
+                email: found?.email || `${realId}@student.dps.edu.in`,
+                mobile: found?.phone || '9876543210',
+                role: 'STUDENT',
+                schoolId: qSchool,
+                classLevel: found?.classGrade || found?.classId || '10',
+                stream: 'General',
+                credits: 100,
+                diamonds: 50,
+                streak: 1,
+                totalScore: 0,
+                profileCompleted: true,
+                subscriptionTier: 'PRO',
+                provider: 'qr_student_id',
+                isQrLogin: true,
+                admissionNo: found?.admissionNo || qAdm || ''
+              };
+            }
           }
         } catch {}
       }
@@ -882,7 +960,27 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
       else if (raw.startsWith('{') && raw.endsWith('}')) {
         try {
           const parsed = JSON.parse(raw);
-          if (parsed.type === 'STUDENT_ID' || parsed.studentId || parsed.studentName || parsed.name) {
+          if (parsed.type === 'DRIVER_ID' || parsed.role === 'DRIVER' || parsed.busId) {
+            const cleanBusId = parsed.busId || `bus_${Date.now()}`;
+            matchedDriverUser = {
+              id: `driver_${cleanBusId}`,
+              uid: `driver_${cleanBusId}`,
+              displayId: `DRV-${cleanBusId.slice(-5).toUpperCase()}`,
+              name: parsed.driverName || parsed.name || 'Bus Driver',
+              email: `driver.${cleanBusId}@school.internal`,
+              mobile: parsed.driverPhone || parsed.mobile || parsed.phone || '',
+              role: 'DRIVER',
+              schoolId: parsed.schoolId || 'dps_gurgaon_sector45',
+              schoolCode: parsed.schoolCode || '',
+              schoolName: parsed.schoolName || 'School Bus Fleet',
+              busId: cleanBusId,
+              busNumber: parsed.busNumber || parsed.vehicleNumber || 'School Bus',
+              busRoute: parsed.route || 'School Bus Route',
+              profileCompleted: true,
+              provider: 'qr_driver_id',
+              isQrLogin: true,
+            };
+          } else if (parsed.type === 'STUDENT_ID' || parsed.studentId || parsed.studentName || parsed.name) {
             const cleanId = parsed.studentId || parsed.id || `stu_${Date.now()}`;
             matchedStudentUser = {
               id: cleanId,
@@ -922,7 +1020,7 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
       }
 
       // ── BRANCH 6: Standard NSTA Session QR (Cross-device login) ──
-      if (!matchedStudentUser && !matchedTeacherUser) {
+      if (!matchedDriverUser && !matchedStudentUser && !matchedTeacherUser) {
         const loginPayload = parseLoginQrToken(raw);
         if (loginPayload && loginPayload.uid) {
           let fresh = await getFreshUserData(loginPayload.uid);
@@ -965,7 +1063,7 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
       }
 
       // ── BRANCH 7: Match by Admission number, Roll number or Name directly ──
-      if (!matchedStudentUser && !matchedTeacherUser) {
+      if (!matchedDriverUser && !matchedStudentUser && !matchedTeacherUser) {
         const found = resolveStudent(raw, 'dps_gurgaon_sector45');
         if (found) {
           matchedStudentUser = {
@@ -987,6 +1085,39 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
             admissionNo: found.admissionNo
           };
         }
+      }
+
+      // ── EXECUTE DRIVER LOGIN (INSTANT & DIRECT TO DRIVER DASHBOARD) ──
+      if (matchedDriverUser) {
+        try {
+          const sid = matchedDriverUser.schoolId || 'dps_gurgaon_sector45';
+          const fitKey = `bus_fitness_${sid}`;
+          const existingFit = JSON.parse(localStorage.getItem(fitKey) || '[]');
+          if (Array.isArray(existingFit) && !existingFit.some((b: any) => b.id === matchedDriverUser.busId)) {
+            localStorage.setItem(
+              fitKey,
+              JSON.stringify([
+                {
+                  id: matchedDriverUser.busId,
+                  schoolId: sid,
+                  vehicleNumber: matchedDriverUser.busNumber,
+                  route: matchedDriverUser.busRoute,
+                  driverName: matchedDriverUser.name,
+                  driverPhone: matchedDriverUser.mobile,
+                },
+                ...existingFit,
+              ])
+            );
+          }
+          localStorage.setItem('nst_current_user', JSON.stringify(matchedDriverUser));
+          localStorage.setItem('nsta_cached_user', JSON.stringify(matchedDriverUser));
+          localStorage.setItem('nst_app_view_mode', 'DRIVER');
+          if (sid) localStorage.setItem('nst_active_school_id', sid);
+        } catch {}
+
+        setShowQrModal(false);
+        triggerLoginSuccess(matchedDriverUser);
+        return;
       }
 
       // ── EXECUTE STUDENT LOGIN (INSTANT & NON-BLOCKING) ──
@@ -1218,7 +1349,14 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
       userToLogin?.role === 'ACCOUNTANT'
     );
 
-    if (isSchoolAdmin) {
+    if (userToLogin?.role === 'DRIVER') {
+      try {
+        localStorage.setItem('nst_app_view_mode', 'DRIVER');
+        if (userToLogin.schoolId) {
+          localStorage.setItem('nst_active_school_id', userToLogin.schoolId);
+        }
+      } catch {}
+    } else if (isSchoolAdmin) {
       try {
         localStorage.setItem('nst_app_view_mode', 'SCHOOL_ERP');
         const schId = userToLogin.schoolId || localStorage.getItem('nst_active_school_id') || 'dps_gurgaon_sector45';
@@ -1500,6 +1638,90 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
     triggerLoginSuccess(schoolAdminUser);
   };
 
+  // ── BUS DRIVER RECORD LOOKUP (FOR UNIFIED LOGIN + QR) ──────────────────────
+  const normalizePhone10 = (p: string) => (p || '').replace(/\D/g, '').slice(-10);
+
+  const resolveDriverByMobileOrId = async (rawQuery: string): Promise<any | null> => {
+    const q = (rawQuery || '').trim();
+    if (!q) return null;
+    const qLower = q.toLowerCase();
+    const cleanPhone = normalizePhone10(q);
+
+    const matchBusEntry = (bus: any, schoolId: string, schoolCode = '', schoolName = '') => {
+      if (!bus) return null;
+      const bPhone = normalizePhone10(bus.driverPhone || '');
+      const bId = String(bus.id || bus.busId || '').trim();
+      const drvCode = `DRV-${(bPhone || bId).slice(-5).toUpperCase()}`.toLowerCase();
+      const drvCode4 = `DRV-${(bPhone || bId).slice(-4).toUpperCase()}`.toLowerCase();
+
+      const phoneMatch = cleanPhone.length >= 10 && bPhone === cleanPhone;
+      const idMatch = (bId && bId.toLowerCase() === qLower) || qLower === drvCode || qLower === drvCode4;
+      if (!phoneMatch && !idMatch) return null;
+
+      const resolvedBusId = bId || `bus_${cleanPhone || Date.now()}`;
+      return {
+        id: `driver_${resolvedBusId}`,
+        uid: `driver_${resolvedBusId}`,
+        displayId: `DRV-${(bPhone || resolvedBusId).slice(-5).toUpperCase()}`,
+        name: bus.driverName || 'Bus Driver',
+        email: `driver.${bPhone || resolvedBusId}@school.internal`,
+        mobile: bPhone || bus.driverPhone || '',
+        role: 'DRIVER',
+        schoolId,
+        schoolCode,
+        schoolName: schoolName || 'School Bus Fleet',
+        busId: resolvedBusId,
+        busNumber: bus.vehicleNumber || bus.busNumber || 'School Bus',
+        busRoute: bus.route || 'School Bus Route',
+        busStops: Array.isArray(bus.stops) ? bus.stops : undefined,
+        profileCompleted: true,
+        provider: 'driver_record',
+      };
+    };
+
+    // 1. Check localStorage bus_fitness_* pools first
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('bus_fitness_')) {
+          const sid = k.replace('bus_fitness_', '');
+          const raw = localStorage.getItem(k);
+          if (raw) {
+            const arr = JSON.parse(raw);
+            if (Array.isArray(arr)) {
+              for (const b of arr) {
+                const found = matchBusEntry(b, sid);
+                if (found) return found;
+              }
+            }
+          }
+        }
+      }
+    } catch {}
+
+    // 2. Check Firebase RTDB schools/*/bus_fleet
+    if (rtdb) {
+      try {
+        const snap = await rtdbGet(dbRef(rtdb, 'schools'));
+        if (snap.exists()) {
+          const allSchools = snap.val() || {};
+          for (const [sid, sVal] of Object.entries(allSchools)) {
+            const sObj: any = sVal || {};
+            const fleet = sObj.bus_fleet;
+            if (fleet && typeof fleet === 'object') {
+              for (const b of Object.values(fleet)) {
+                const found = matchBusEntry(b, sObj.id || sid, sObj.code || '', sObj.name || '');
+                if (found) return found;
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+
+    return null;
+  };
+
   // ── FORM FIELD HANDLERS ───────────────────────────────────────────────────
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -1760,7 +1982,15 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
         }
       }
 
-      // 5. School student rosters lookup
+      // 5. School Bus Driver records lookup
+      if (!matchedUser) {
+        const foundDriver = await resolveDriverByMobileOrId(cleanId);
+        if (foundDriver) {
+          matchedUser = foundDriver;
+        }
+      }
+
+      // 6. School student rosters lookup
       if (!matchedUser) {
         const foundStudent = resolveStudent(cleanId);
         if (foundStudent) {
@@ -2562,7 +2792,7 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
 
       {/* FOOTER */}
       <footer className="w-full max-w-md mx-auto text-center py-3 z-10 text-[11px] text-slate-400 shrink-0">
-        <p>DPS &amp; NSTA Secure Education Platform</p>
+        <p>NSTA • Powered School ERP &amp; Smart Learning</p>
       </footer>
 
       {/* ── ID CARD QR SCANNER MODAL ── */}
@@ -2587,7 +2817,7 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
             </div>
 
             <p className="text-xs text-slate-400 text-center">
-              Student ID Card ka QR code camera ke saamne laayein
+              Student, Teacher ya Driver ID Card ka QR code camera ke saamne laayein
             </p>
 
             {/* Camera Scanner Viewport */}

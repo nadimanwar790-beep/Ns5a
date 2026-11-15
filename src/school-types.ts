@@ -462,6 +462,9 @@ export interface SchoolStudent {
   busRoute?: string; // bus route or stop name
   busStop?: string; // boarding / drop stop
   busFee?: number; // custom bus fee if set individually
+  homeLat?: number; // saved student home GPS latitude (for free bus proximity)
+  homeLng?: number; // saved student home GPS longitude (for free bus proximity)
+  homeAddress?: string; // short landmark / home pin note
   religion?: string;
   nationality?: string;
   annualIncome?: string;

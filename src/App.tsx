@@ -29,6 +29,7 @@ import {
   LoginChallengeData,
 } from './services/sessionManager';
 import { performDailyMasterSync, isDailySyncNeeded } from './services/dailySyncManager';
+import { AppLoadingScreen } from './components/AppLoadingScreen';
 
 // Resilient dynamic import helper that retries transient network or dev-server warm-up blips
 function lazyWithRetry<T extends React.ComponentType<any>>(
@@ -113,7 +114,12 @@ const DocumentVerificationView = lazyWithRetry(
   'Document Verification Portal'
 );
 
-export type AppViewMode = 'STUDENT' | 'ADMIN' | 'SCHOOL_ERP';
+const DriverTripConsole = lazyWithRetry(
+  () => import('./components/school/DriverTripConsole').then(m => ({ default: m.DriverTripConsole || (m as any).default })),
+  'Driver GPS Dashboard'
+);
+
+export type AppViewMode = 'STUDENT' | 'ADMIN' | 'SCHOOL_ERP' | 'DRIVER';
 
 export const isSuperAdminEmail = (emailStr?: string | null): boolean => {
   if (!emailStr) return false;
@@ -283,6 +289,7 @@ export function App() {
     try {
       const u = getInitialUser();
       if (u) {
+        if ((u?.role || '').toString().trim().toUpperCase() === 'DRIVER') return 'DRIVER';
         if (isSchoolAdminRole(u)) return 'SCHOOL_ERP';
         if (isAdminUser(u)) return 'ADMIN';
         const r = (u?.role || '').toString().trim().toUpperCase();
@@ -301,7 +308,7 @@ export function App() {
       }
 
       const saved = localStorage.getItem('nst_app_view_mode') as AppViewMode;
-      if (saved === 'ADMIN' || saved === 'STUDENT' || saved === 'SCHOOL_ERP') {
+      if (saved === 'ADMIN' || saved === 'STUDENT' || saved === 'SCHOOL_ERP' || saved === 'DRIVER') {
         return saved;
       }
     } catch {}
@@ -336,6 +343,33 @@ export function App() {
   const [dailyStudySeconds, setDailyStudySeconds] = useState<number>(180);
   const [isDarkMode, setIsDarkMode] = useState<boolean>(false);
   const [isFullScreen, setIsFullScreen] = useState<boolean>(false);
+  const [gmpQuotaExceeded, setGmpQuotaExceeded] = useState<boolean>(false);
+  const [showBootSplash, setShowBootSplash] = useState<boolean>(() => {
+    try {
+      const p = new URLSearchParams(window.location.search);
+      const isPublicVerify = Boolean(
+        p.get('verify') ||
+        p.get('verify-certificate') ||
+        p.get('cNo') ||
+        p.get('certNo') ||
+        p.get('dispatchNo') ||
+        p.get('v') === 'id' ||
+        p.get('type') === 'certificate' ||
+        p.get('type') === 'marksheet' ||
+        window.location.pathname.startsWith('/verify')
+      );
+      const isStandaloneDriver = p.get('driverConsole') === '1' || p.get('driver') === '1';
+      return !isPublicVerify && !isStandaloneDriver;
+    } catch {
+      return true;
+    }
+  });
+
+  useEffect(() => {
+    const onQuotaExceeded = () => setGmpQuotaExceeded(true);
+    window.addEventListener('gmp-quota-exceeded', onQuotaExceeded);
+    return () => window.removeEventListener('gmp-quota-exceeded', onQuotaExceeded);
+  }, []);
 
   // Listen for direct navigation events to Main Student Dashboard
   useEffect(() => {
@@ -376,11 +410,12 @@ export function App() {
 
   // Guarantee pre-react splash screen dismissal immediately
   useEffect(() => {
+    const splash = document.getElementById('pre-react-splash');
+    if (splash) {
+      try { splash.remove(); } catch {}
+    }
     if (typeof (window as any).hidePreReactSplash === 'function') {
       (window as any).hidePreReactSplash();
-    } else {
-      const splash = document.getElementById('pre-react-splash');
-      if (splash) splash.remove();
     }
   }, []);
 
@@ -472,6 +507,22 @@ export function App() {
   };
 
   const handleLogin = (newUser: any) => {
+    // 0. Bus Driver: DIRECT TO DEDICATED DRIVER GPS DASHBOARD!
+    if (newUser && (newUser.role || '').toString().trim().toUpperCase() === 'DRIVER') {
+      newUser.role = 'DRIVER';
+      try {
+        localStorage.removeItem('nst_logged_out');
+        localStorage.setItem('nst_current_user', JSON.stringify(newUser));
+        localStorage.setItem('nst_app_view_mode', 'DRIVER');
+        if (newUser.schoolId) {
+          localStorage.setItem('nst_active_school_id', newUser.schoolId);
+        }
+      } catch (e) {}
+      setUser(newUser);
+      setView('DRIVER');
+      return;
+    }
+
     // 1. Super Admin: direct to Main NSTA Platform Admin Console
     if (newUser && (isSuperAdminEmail(newUser.email) || newUser.id === 'super_admin_nadim' || newUser.uid === 'super_admin_nadim' || newUser.role === 'SUPERADMIN')) {
       newUser.role = 'SUPERADMIN';
@@ -869,44 +920,167 @@ export function App() {
     );
   }
 
-  // If user is logged out, render the authentication screen
-  if (!user) {
+  // Dedicated Standalone Driver GPS Dashboard (?driverConsole=1&schoolId=...&busId=...)
+  const driverConsoleParams = (() => {
+    try {
+      const p = new URLSearchParams(window.location.search);
+      if (p.get('driverConsole') === '1' || p.get('driver') === '1') {
+        return {
+          schoolId: (p.get('schoolId') || '').trim(),
+          schoolCode: (p.get('schoolCode') || '').trim(),
+          schoolName: (p.get('schoolName') || 'School Bus Fleet').trim(),
+          busId: (p.get('busId') || '').trim(),
+          busNumber: (p.get('busNumber') || '').trim(),
+          route: (p.get('route') || '').trim(),
+          driverName: (p.get('driverName') || '').trim(),
+          driverPhone: (p.get('driverPhone') || '').trim(),
+        };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  })();
+
+  if (driverConsoleParams) {
     return (
-      <div className={`min-h-screen min-h-[100dvh] w-full flex flex-col ${appBgClass}`}>
+      <div className="min-h-screen min-h-[100dvh] w-full flex flex-col bg-slate-950">
+        {gmpQuotaExceeded && (
+          <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2.5 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm">
+            <span>
+              Google Maps Platform quota reached. If you are the app owner, visit{' '}
+              <a
+                href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline font-semibold text-amber-950 hover:text-amber-800"
+              >
+                maps developer site
+              </a>{' '}
+              for instructions to update your account.
+            </span>
+          </div>
+        )}
         <Suspense
           fallback={
-            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center min-h-[60vh]">
-              <div className="w-12 h-12 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 flex items-center justify-center mb-4">
-                <Loader2 className={`w-6 h-6 animate-spin ${isDarkMode ? 'text-indigo-400' : 'text-indigo-600'}`} />
-              </div>
-              <h3 className={`text-base font-bold mb-1 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Loading Login Portal...</h3>
-              <p className={`text-xs ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Please wait a moment</p>
+            <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-8 text-center text-white">
+              <Loader2 className="w-8 h-8 animate-spin text-amber-400 mb-3" />
+              <p className="text-sm font-bold">Loading Driver GPS Dashboard...</p>
             </div>
           }
         >
-          <Auth
-            onLogin={handleLogin}
-            appSettings={settings}
-            logActivity={logActivity}
-            onOpenGuestStudyRoom={() => setShowGuestStudyJoin(true)}
+          <DriverTripConsole
+            school={{
+              id: driverConsoleParams.schoolId,
+              code: driverConsoleParams.schoolCode,
+              name: driverConsoleParams.schoolName,
+            } as any}
+            initialBusId={driverConsoleParams.busId || undefined}
+            initialBusMeta={
+              driverConsoleParams.busId || driverConsoleParams.busNumber
+                ? {
+                    id: driverConsoleParams.busId || 'bus_direct',
+                    busNumber: driverConsoleParams.busNumber || 'School Bus',
+                    route: driverConsoleParams.route || 'School Bus Route',
+                    driverName: driverConsoleParams.driverName || 'Driver',
+                    driverPhone: driverConsoleParams.driverPhone || '',
+                  }
+                : undefined
+            }
+            standaloneMode={true}
           />
         </Suspense>
-
-        <GuestRoomJoinModal
-          isOpen={showGuestStudyJoin}
-          onClose={() => setShowGuestStudyJoin(false)}
-          roomCode={studyRoomCodeFromUrl || undefined}
-          onSubmitName={handleGuestJoinStudyRoom}
-          appName={settings?.appName || 'NSTA'}
-        />
-
-        <NotificationPermissionGate userId="" />
       </div>
     );
   }
 
+  const renderBootSplash = () =>
+    showBootSplash && !isPublicDocVerify && !driverConsoleParams ? (
+      <AppLoadingScreen
+        onComplete={() => setShowBootSplash(false)}
+        userId={user?.uid || user?.id}
+        userRole={user?.role}
+        loadingScreenSlotAssignments={user?.loadingScreenSlotAssignments}
+        loadingScreenSlotUnlocks={user?.loadingScreenSlotUnlocks}
+        loadingScreenUnlocks={user?.loadingScreenUnlocks}
+        loadingScreenVideoUrl={settings?.loadingScreenVideoUrl}
+      />
+    ) : null;
+
+  // If user is logged out, render the authentication screen
+  if (!user) {
+    return (
+      <>
+        <div className={`min-h-screen min-h-[100dvh] w-full flex flex-col ${appBgClass}`}>
+          {gmpQuotaExceeded && (
+            <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2.5 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm">
+              <span>
+                Google Maps Platform quota reached. If you are the app owner, visit{' '}
+                <a
+                  href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline font-semibold text-amber-950 hover:text-amber-800"
+                >
+                  maps developer site
+                </a>{' '}
+                for instructions to update your account.
+              </span>
+            </div>
+          )}
+          <Suspense
+            fallback={
+              <div className="flex-1 flex flex-col items-center justify-center p-8 text-center min-h-[60vh]">
+                <div className="w-12 h-12 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 flex items-center justify-center mb-4">
+                  <Loader2 className={`w-6 h-6 animate-spin ${isDarkMode ? 'text-indigo-400' : 'text-indigo-600'}`} />
+                </div>
+                <h3 className={`text-base font-bold mb-1 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Loading Login Portal...</h3>
+                <p className={`text-xs ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Please wait a moment</p>
+              </div>
+            }
+          >
+            <Auth
+              onLogin={handleLogin}
+              appSettings={settings}
+              logActivity={logActivity}
+              onOpenGuestStudyRoom={() => setShowGuestStudyJoin(true)}
+            />
+          </Suspense>
+
+          <GuestRoomJoinModal
+            isOpen={showGuestStudyJoin}
+            onClose={() => setShowGuestStudyJoin(false)}
+            roomCode={studyRoomCodeFromUrl || undefined}
+            onSubmitName={handleGuestJoinStudyRoom}
+            appName={settings?.appName || 'NSTA'}
+          />
+
+          <NotificationPermissionGate userId="" />
+        </div>
+        {renderBootSplash()}
+      </>
+    );
+  }
+
   return (
+    <>
     <div className={`min-h-screen min-h-[100dvh] w-full flex flex-col ${appBgClass}`}>
+      {gmpQuotaExceeded && (
+        <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2.5 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm">
+          <span>
+            Google Maps Platform quota reached. If you are the app owner, visit{' '}
+            <a
+              href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline font-semibold text-amber-950 hover:text-amber-800"
+            >
+              maps developer site
+            </a>{' '}
+            for instructions to update your account.
+          </span>
+        </div>
+      )}
       {/* ── MAIN DASHBOARD VIEWPORT WITH SUSPENSE ───────────────────────── */}
       <div className="flex-1 flex flex-col">
         <Suspense
@@ -942,6 +1116,31 @@ export function App() {
               onToggleDarkMode={setIsDarkMode}
               onUpdateUser={handleUpdateUser}
               onUpdateSettings={handleUpdateSettings}
+            />
+          )}
+
+          {view === 'DRIVER' && (
+            <DriverTripConsole
+              school={{
+                id: user.schoolId || '',
+                code: user.schoolCode || '',
+                name: user.schoolName || 'School Bus Fleet',
+              } as any}
+              initialBusId={user.busId || undefined}
+              initialBusMeta={
+                user.busId || user.busNumber
+                  ? {
+                      id: user.busId || 'bus_driver',
+                      busNumber: user.busNumber || 'School Bus',
+                      route: user.busRoute || 'School Bus Route',
+                      driverName: user.name || 'Driver',
+                      driverPhone: user.mobile || '',
+                      stops: Array.isArray(user.busStops) ? user.busStops : undefined,
+                    }
+                  : undefined
+              }
+              standaloneMode={true}
+              onLogout={handleLogout}
             />
           )}
 
@@ -1039,6 +1238,8 @@ export function App() {
       <NotificationPrompt userId={user?.uid || user?.id || ''} />
       <NotificationPermissionGate userId={user?.uid || user?.id || ''} />
     </div>
+    {renderBootSplash()}
+    </>
   );
 }
 

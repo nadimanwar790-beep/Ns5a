@@ -24,6 +24,7 @@ interface AppLoadingScreenProps {
   onBack?: () => void;
   onApply?: () => void;
   isPreview?: boolean;
+  previewStyleVariant?: number;
   isPremium?: boolean;
   subscriptionLevel?: 'FREE' | 'BASIC' | 'ULTRA';
   userId?: string;
@@ -48,6 +49,7 @@ export const AppLoadingScreen: React.FC<AppLoadingScreenProps> = ({
   onBack,
   onApply,
   isPreview = false,
+  previewStyleVariant,
   isPremium = false, 
   subscriptionLevel = 'FREE',
   userId,
@@ -71,36 +73,40 @@ export const AppLoadingScreen: React.FC<AppLoadingScreenProps> = ({
   })();
   const hasActiveVideo = Boolean(resolvedVideoUrl && !videoFailed);
 
-  // ── Selected style ──
+  // ── Selected style (Strict 1:1:1:1 Alternating 1 -> 2 -> 3 -> 4) ──
+  const rotationSlots = [1, 2, 3, 4];
+  const rotationKey = 'nst_splash_rotation_seq';
   const [styleVariant] = useState<number>(() => {
     try {
-      const previewStyle = isPreview ? sessionStorage.getItem('nst_splash_preview_style') : null;
-      const selected = parseInt(
-        previewStyle ||
-        (userId ? localStorage.getItem(`nst_splash_style_preference_${userId}`) : null) ||
-        localStorage.getItem('nst_splash_style_preference') ||
-        '2',
-        10,
-      );
-      if (isPreview) return !isNaN(selected) && selected >= 1 && selected <= 4 ? selected : 1;
+      if (isPreview) {
+        if (previewStyleVariant && previewStyleVariant >= 1 && previewStyleVariant <= 4) {
+          return previewStyleVariant;
+        }
+        const previewStyle = sessionStorage.getItem('nst_splash_preview_style');
+        const selected = parseInt(previewStyle || '1', 10);
+        return !isNaN(selected) && selected >= 1 && selected <= 4 ? selected : 1;
+      }
 
-      // All four built-in loading screens are permanently free and rotate
-      // automatically. Legacy assignments/unlock records are intentionally
-      // ignored so every user gets the complete rotation.
-      const unlockedSlots = [1, 2, 3, 4];
-      const assigned = Object.values(loadingScreenSlotAssignments || {})
-        .map(value => Number(value))
-        .filter(value => unlockedSlots.includes(value));
-      const available = Array.from(new Set([...unlockedSlots, ...assigned]));
-      const rotationKey = `nst_splash_rotation_${userId || 'guest'}`;
-      const rotationIndex = parseInt(localStorage.getItem(rotationKey) || '0', 10);
-      const candidate = available[rotationIndex % available.length] || 1;
-      localStorage.setItem(rotationKey, String((rotationIndex + 1) % available.length));
-      return candidate;
+      const rawIdx = parseInt(localStorage.getItem(rotationKey) || '0', 10);
+      const safeIdx = Number.isFinite(rawIdx) && rawIdx >= 0 ? rawIdx : 0;
+      return rotationSlots[safeIdx % rotationSlots.length] || 1;
     } catch {
       return 1;
     }
   });
+
+  // Advance rotation index exactly once per actual mount (StrictMode-safe)
+  useEffect(() => {
+    if (isPreview) return;
+    const advanceTimer = setTimeout(() => {
+      try {
+        const rawIdx = parseInt(localStorage.getItem(rotationKey) || '0', 10);
+        const safeIdx = Number.isFinite(rawIdx) && rawIdx >= 0 ? rawIdx : 0;
+        localStorage.setItem(rotationKey, String((safeIdx + 1) % rotationSlots.length));
+      } catch {}
+    }, 150);
+    return () => clearTimeout(advanceTimer);
+  }, [isPreview]);
 
   const [progress, setProgress] = useState(0);
   const [statusText, setStatusText] = useState('Loading Your Learning Journey...');
@@ -111,12 +117,12 @@ export const AppLoadingScreen: React.FC<AppLoadingScreenProps> = ({
 
   // ── 6 Orbit Nodes Config (For Variants 2 & 4) ──
   const orbitNodes = [
-    { id: 'notes', label: 'Smart Notes', icon: BookOpen, color: '#38bdf8', angleDeg: 270, showAt: 10 },
-    { id: 'mcq', label: 'MCQ Practice', icon: FileCheck, color: '#60a5fa', angleDeg: 330, showAt: 25 },
-    { id: 'progress', label: 'Progress Tracking', icon: TrendingUp, color: '#34d399', angleDeg: 30, showAt: 40 },
-    { id: 'routine', label: 'Daily Routine', icon: CalendarCheck, color: '#f472b6', angleDeg: 90, showAt: 55 },
-    { id: 'revision', label: 'Revision Hub', icon: RotateCcw, color: '#fbbf24', angleDeg: 150, showAt: 70 },
-    { id: 'ai', label: 'AI Study Assistant', icon: BrainCircuit, color: '#c084fc', angleDeg: 210, showAt: 85 },
+    { id: 'notes', label: 'Smart Notes', icon: BookOpen, color: '#38bdf8', angleDeg: 270, showAt: 8 },
+    { id: 'mcq', label: 'MCQ Practice', icon: FileCheck, color: '#60a5fa', angleDeg: 330, showAt: 22 },
+    { id: 'progress', label: 'Progress Tracking', icon: TrendingUp, color: '#34d399', angleDeg: 30, showAt: 36 },
+    { id: 'routine', label: 'Daily Routine', icon: CalendarCheck, color: '#f472b6', angleDeg: 90, showAt: 50 },
+    { id: 'revision', label: 'Revision Hub', icon: RotateCcw, color: '#fbbf24', angleDeg: 150, showAt: 64 },
+    { id: 'ai', label: 'AI Study Assistant', icon: BrainCircuit, color: '#c084fc', angleDeg: 210, showAt: 78 },
   ];
 
   // ── Bubble Sort & Crane Engine States (for Variant 3) ──
@@ -149,14 +155,15 @@ export const AppLoadingScreen: React.FC<AppLoadingScreenProps> = ({
     { at: 96, text: 'Welcome to NSTA!' }
   ];
 
-  // ── Engine 1: linear loading screens = 4s ──
+  // ── Engine 1: linear loading screens = 3s total ──
   useEffect(() => {
     if (isSortMode) return;
 
-    const duration = 4000;
+    const duration = 2850;
     const intervalTime = 25;
     const steps = duration / intervalTime;
     let currentStep = 0;
+    let finishTimer: ReturnType<typeof setTimeout> | null = null;
 
     const timer = setInterval(() => {
       currentStep++;
@@ -164,10 +171,10 @@ export const AppLoadingScreen: React.FC<AppLoadingScreenProps> = ({
       setProgress(currentProgress);
 
       if (currentProgress < 50) {
-        if (currentProgress >= 10) setStepPhase1(0);
-        if (currentProgress >= 20) setStepPhase1(1);
-        if (currentProgress >= 30) setStepPhase1(2);
-        if (currentProgress >= 40) setStepPhase1(3);
+        if (currentProgress >= 8) setStepPhase1(0);
+        if (currentProgress >= 18) setStepPhase1(1);
+        if (currentProgress >= 28) setStepPhase1(2);
+        if (currentProgress >= 38) setStepPhase1(3);
       } else {
         setStepPhase1(-1);
         if (currentProgress >= 50) setStepPhase2(0);
@@ -186,19 +193,33 @@ export const AppLoadingScreen: React.FC<AppLoadingScreenProps> = ({
       if (currentStep >= steps) {
         clearInterval(timer);
         if (!isPreview) {
-          setTimeout(() => onCompleteRef.current(), 350);
+          finishTimer = setTimeout(() => onCompleteRef.current(), 150);
         }
       }
     }, intervalTime);
 
-    return () => clearInterval(timer);
-  }, [styleVariant, isSortMode]);
+    return () => {
+      clearInterval(timer);
+      if (finishTimer) clearTimeout(finishTimer);
+    };
+  }, [styleVariant, isSortMode, isPreview]);
 
-  // ── Engine 2: Real-time Algorithm Sort Progress (Variant 3) -> Exact ~4s ──
+  // ── Engine 2: Real-time Algorithm Sort Progress (Variant 3) -> 3s exact ──
   useEffect(() => {
     if (!isSortMode) return;
     let isCancelled = false;
-    const sleep = (ms: number) => new Promise(r => setTimeout(r, Math.round(ms * 0.5)));
+    const startedAt = Date.now();
+    const sleep = (ms: number) => new Promise(r => setTimeout(r, Math.max(12, Math.round(ms * 0.22))));
+    const hardTimeout = !isPreview
+      ? setTimeout(() => {
+          if (!isCancelled) {
+            isCancelled = true;
+            setProgress(100);
+            setStatusText('Welcome to NSTA!');
+            onCompleteRef.current();
+          }
+        }, 3050)
+      : null;
 
     const runSortEngine = async () => {
       let state = [
@@ -347,13 +368,23 @@ export const AppLoadingScreen: React.FC<AppLoadingScreenProps> = ({
       setWireHeight(10);
       setProgress(100);
 
-      await sleep(250);
-      if (!isCancelled && !isPreview) onCompleteRef.current();
+      if (!isCancelled && !isPreview) {
+        const remaining = Math.max(100, 3000 - (Date.now() - startedAt));
+        await new Promise(r => setTimeout(r, remaining));
+        if (!isCancelled) {
+          isCancelled = true;
+          if (hardTimeout) clearTimeout(hardTimeout);
+          onCompleteRef.current();
+        }
+      }
     };
 
     runSortEngine();
-    return () => { isCancelled = true; };
-  }, [isSortMode]);
+    return () => {
+      isCancelled = true;
+      if (hardTimeout) clearTimeout(hardTimeout);
+    };
+  }, [isSortMode, isPreview]);
 
   return (
     <div 
@@ -526,41 +557,41 @@ export const AppLoadingScreen: React.FC<AppLoadingScreenProps> = ({
           </div>
         </div>
       ) : styleVariant === 1 && (
-        /* 1. Feature Grid Flip Cards (5s Duration) */
+        /* 1. Feature Grid Flip Cards (3s Duration) */
         <div className="relative z-10 w-full max-w-[340px] h-[210px] perspective-1000 flex items-center justify-center">
-          <div className={`absolute inset-0 grid grid-cols-2 gap-3 transition-all duration-500 ${progress < 50 ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
-            <div className={`flex flex-col items-center justify-center p-4 rounded-xl bg-slate-900/80 border border-slate-700/60 shadow-lg transition-all duration-500 transform ${stepPhase1 >= 0 ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-6 scale-95'}`}>
+          <div className={`absolute inset-0 grid grid-cols-2 gap-3 transition-all duration-300 ${progress < 50 ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
+            <div className={`flex flex-col items-center justify-center p-4 rounded-xl bg-slate-900/80 border border-slate-700/60 shadow-lg transition-all duration-300 transform ${stepPhase1 >= 0 ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-6 scale-95'}`}>
               <BookOpen size={28} className="text-blue-400 mb-2" />
               <span className="text-xs font-bold text-slate-200">Notes Hub</span>
             </div>
-            <div className={`flex flex-col items-center justify-center p-4 rounded-xl bg-slate-900/80 border border-slate-700/60 shadow-lg transition-all duration-500 transform ${stepPhase1 >= 1 ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-6 scale-95'}`}>
+            <div className={`flex flex-col items-center justify-center p-4 rounded-xl bg-slate-900/80 border border-slate-700/60 shadow-lg transition-all duration-300 transform ${stepPhase1 >= 1 ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-6 scale-95'}`}>
               <HelpCircle size={28} className="text-purple-400 mb-2" />
               <span className="text-xs font-bold text-slate-200">MCQ Practice</span>
             </div>
-            <div className={`flex flex-col items-center justify-center p-4 rounded-xl bg-slate-900/80 border border-slate-700/60 shadow-lg transition-all duration-500 transform ${stepPhase1 >= 2 ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-6 scale-95'}`}>
+            <div className={`flex flex-col items-center justify-center p-4 rounded-xl bg-slate-900/80 border border-slate-700/60 shadow-lg transition-all duration-300 transform ${stepPhase1 >= 2 ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-6 scale-95'}`}>
               <Video size={28} className="text-rose-400 mb-2" />
               <span className="text-xs font-bold text-slate-200">Video Classes</span>
             </div>
-            <div className={`flex flex-col items-center justify-center p-4 rounded-xl bg-slate-900/80 border border-slate-700/60 shadow-lg transition-all duration-500 transform ${stepPhase1 >= 3 ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-6 scale-95'}`}>
+            <div className={`flex flex-col items-center justify-center p-4 rounded-xl bg-slate-900/80 border border-slate-700/60 shadow-lg transition-all duration-300 transform ${stepPhase1 >= 3 ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-6 scale-95'}`}>
               <Headphones size={28} className="text-emerald-400 mb-2" />
               <span className="text-xs font-bold text-slate-200">Audio TTS</span>
             </div>
           </div>
 
-          <div className={`absolute inset-0 grid grid-cols-2 gap-3 transition-all duration-500 ${progress >= 50 ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
-            <div className={`flex flex-col items-center justify-center p-4 rounded-xl bg-slate-900/80 border border-slate-700/60 shadow-lg transition-all duration-500 transform ${stepPhase2 >= 0 ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-6 scale-95'}`}>
+          <div className={`absolute inset-0 grid grid-cols-2 gap-3 transition-all duration-300 ${progress >= 50 ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
+            <div className={`flex flex-col items-center justify-center p-4 rounded-xl bg-slate-900/80 border border-slate-700/60 shadow-lg transition-all duration-300 transform ${stepPhase2 >= 0 ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-6 scale-95'}`}>
               <BrainCircuit size={28} className="text-amber-400 mb-2" />
               <span className="text-xs font-bold text-slate-200">Smart Revision</span>
             </div>
-            <div className={`flex flex-col items-center justify-center p-4 rounded-xl bg-slate-900/80 border border-slate-700/60 shadow-lg transition-all duration-500 transform ${stepPhase2 >= 1 ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-6 scale-95'}`}>
+            <div className={`flex flex-col items-center justify-center p-4 rounded-xl bg-slate-900/80 border border-slate-700/60 shadow-lg transition-all duration-300 transform ${stepPhase2 >= 1 ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-6 scale-95'}`}>
               <BarChart2 size={28} className="text-indigo-400 mb-2" />
               <span className="text-xs font-bold text-slate-200">Leaderboard</span>
             </div>
-            <div className={`flex flex-col items-center justify-center p-4 rounded-xl bg-slate-900/80 border border-slate-700/60 shadow-lg transition-all duration-500 transform ${stepPhase2 >= 2 ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-6 scale-95'}`}>
+            <div className={`flex flex-col items-center justify-center p-4 rounded-xl bg-slate-900/80 border border-slate-700/60 shadow-lg transition-all duration-300 transform ${stepPhase2 >= 2 ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-6 scale-95'}`}>
               <WifiOff size={28} className="text-teal-400 mb-2" />
               <span className="text-xs font-bold text-slate-200">Offline Mode</span>
             </div>
-            <div className={`flex flex-col items-center justify-center p-4 rounded-xl bg-slate-900/80 border border-slate-700/60 shadow-lg transition-all duration-500 transform ${stepPhase2 >= 3 ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-6 scale-95'}`}>
+            <div className={`flex flex-col items-center justify-center p-4 rounded-xl bg-slate-900/80 border border-slate-700/60 shadow-lg transition-all duration-300 transform ${stepPhase2 >= 3 ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-6 scale-95'}`}>
               <Zap size={28} className="text-orange-400 mb-2" />
               <span className="text-xs font-bold text-slate-200">Level System</span>
             </div>
@@ -569,7 +600,7 @@ export const AppLoadingScreen: React.FC<AppLoadingScreenProps> = ({
       )}
 
       {!hasActiveVideo && styleVariant === 2 && (
-        /* 2. Frameless Continuous Spinning Orbit Ring (8s Duration) */
+        /* 2. Frameless Continuous Spinning Orbit Ring (3s Duration) */
         <div className="relative z-10 w-[345px] h-[345px] flex items-center justify-center my-auto">
           <div className="absolute w-[250px] h-[250px] rounded-full border border-sky-500/25 shadow-[0_0_24px_rgba(56,189,248,0.18)] pointer-events-none" />
           <div className="absolute w-[280px] h-[280px] rounded-full border border-dashed border-indigo-400/20 pointer-events-none" />
@@ -666,16 +697,16 @@ export const AppLoadingScreen: React.FC<AppLoadingScreenProps> = ({
              <div className="absolute top-0 left-8 right-8 h-px bg-cyan-300/50 shadow-[0_0_8px_rgba(34,211,238,0.65)]" />
              <div className="absolute top-2 left-2 right-2 h-1.5 bg-slate-800 rounded-full border border-cyan-500/40 shadow-[0_0_12px_rgba(6,182,212,0.3)] flex items-center">
               <div 
-                 className="absolute -top-1.5 w-10 h-5 rounded-md bg-gradient-to-b from-cyan-300 via-cyan-500 to-cyan-800 border border-cyan-100 shadow-[0_0_15px_#06b6d4] transition-transform duration-500 ease-in-out flex flex-col items-center z-40 -ml-1"
+                 className="absolute -top-1.5 w-10 h-5 rounded-md bg-gradient-to-b from-cyan-300 via-cyan-500 to-cyan-800 border border-cyan-100 shadow-[0_0_15px_#06b6d4] transition-transform duration-200 ease-in-out flex flex-col items-center z-40 -ml-1"
                  style={{ transform: `translate3d(${RIG_PAD + craneSlot * SLOT_WIDTH}px, 0, 24px)`, transformStyle: 'preserve-3d' }}
               >
                 <div className="absolute top-5 w-7 h-28 bg-gradient-to-b from-cyan-400/20 to-transparent pointer-events-none blur-[2px]" />
-                 <div className="w-3.5 flex justify-between" style={{ height: `${wireHeight}px`, transition: 'height 420ms cubic-bezier(0.22, 1, 0.36, 1)', transformStyle: 'preserve-3d' }}>
+                 <div className="w-3.5 flex justify-between" style={{ height: `${wireHeight}px`, transition: 'height 160ms cubic-bezier(0.22, 1, 0.36, 1)', transformStyle: 'preserve-3d' }}>
                    <div className="w-0.5 bg-cyan-100 shadow-[0_0_6px_#22d3ee] h-full rounded-full" />
                    <div className="w-0.5 bg-cyan-100 shadow-[0_0_6px_#22d3ee] h-full rounded-full" />
                 </div>
                 <div className="relative -mt-0.5 flex items-center justify-center">
-                   <div className={`w-8 h-2.5 rounded-t border ${isClawClosed ? 'bg-amber-400 border-amber-100 scale-95' : 'bg-cyan-500 border-cyan-200'} transition-all duration-300 flex justify-between px-0.5 shadow-md`}>
+                   <div className={`w-8 h-2.5 rounded-t border ${isClawClosed ? 'bg-amber-400 border-amber-100 scale-95' : 'bg-cyan-500 border-cyan-200'} transition-all duration-150 flex justify-between px-0.5 shadow-md`}>
                     <div className={`w-1 h-5 rounded-b ${isClawClosed ? 'bg-amber-300 rotate-[18deg] shadow-[0_0_8px_#fbbf24]' : 'bg-cyan-300 -rotate-[16deg]'} transition-all origin-top-left`} />
                     <div className={`w-1 h-5 rounded-b ${isClawClosed ? 'bg-amber-300 -rotate-[18deg] shadow-[0_0_8px_#fbbf24]' : 'bg-cyan-300 rotate-[16deg]'} transition-all origin-top-right`} />
                   </div>
@@ -713,12 +744,12 @@ export const AppLoadingScreen: React.FC<AppLoadingScreenProps> = ({
                 <React.Fragment key={block.id}>
                   {block.isLifted && (
                     <div 
-                      className="absolute bottom-7 w-6 h-1.5 rounded-full bg-cyan-950 border border-cyan-500/40 blur-[1px] transition-all duration-120"
+                      className="absolute bottom-7 w-6 h-1.5 rounded-full bg-cyan-950 border border-cyan-500/40 blur-[1px] transition-all duration-100"
                       style={{ left: `${posX}px` }}
                     />
                   )}
                   <div
-                     className={`sort-block-3d absolute bottom-7 w-6 rounded-t-md border flex flex-col items-center justify-start pt-0.5 font-mono text-[11px] font-bold transition-all duration-300 ease-out ${colorClass}`}
+                     className={`sort-block-3d absolute bottom-7 w-6 rounded-t-md border flex flex-col items-center justify-start pt-0.5 font-mono text-[11px] font-bold transition-all duration-150 ease-out ${colorClass}`}
                     style={{
                       left: `${posX}px`,
                       height: `${barHeight}px`,
@@ -745,7 +776,7 @@ export const AppLoadingScreen: React.FC<AppLoadingScreenProps> = ({
       )}
 
       {!hasActiveVideo && styleVariant === 4 && (
-        /* 4. Frameless Sequential Discovery Ring (8s Duration) */
+        /* 4. Frameless Sequential Discovery Ring (3s Duration) */
         <div className="relative z-10 w-[345px] h-[345px] flex items-center justify-center my-auto">
           <div className="absolute w-[250px] h-[250px] rounded-full border border-sky-500/25 shadow-[0_0_24px_rgba(56,189,248,0.18)] pointer-events-none" />
           <div className="absolute w-[280px] h-[280px] rounded-full border border-dashed border-indigo-400/20 pointer-events-none" />

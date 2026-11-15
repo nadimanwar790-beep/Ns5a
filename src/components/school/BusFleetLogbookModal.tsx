@@ -17,10 +17,14 @@ import {
   IndianRupee,
   Phone,
   ShieldAlert,
-  Share2
+  Share2,
+  QrCode
 } from "lucide-react";
 import type { School, VehicleFuelLog, VehicleFitnessRecord } from "../../school-types";
 import { loadSchoolSubcollection, syncSchoolSubcollection } from "../../utils/schoolCloudSync";
+import { rtdb } from "../../firebase";
+import { ref as dbRef, set as rtdbSet } from "firebase/database";
+import { DriverIdCardModal, type DriverIdCardData } from "./DriverIdCardModal";
 
 interface Props {
   school: School;
@@ -160,6 +164,14 @@ export const BusFleetLogbookModal: React.FC<Props> = ({ school, onClose }) => {
   const [receiptNumber, setReceiptNumber] = useState("");
 
   const [editingBusId, setEditingBusId] = useState<string | null>(null);
+  const [showAddBusModal, setShowAddBusModal] = useState<boolean>(false);
+  const [newBusNumber, setNewBusNumber] = useState("");
+  const [newBusModel, setNewBusModel] = useState("");
+  const [newBusRoute, setNewBusRoute] = useState("");
+  const [newBusStops, setNewBusStops] = useState("");
+  const [newDriverName, setNewDriverName] = useState("");
+  const [newDriverPhone, setNewDriverPhone] = useState("");
+  const [selectedDriverForIdCard, setSelectedDriverForIdCard] = useState<DriverIdCardData | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -175,6 +187,26 @@ export const BusFleetLogbookModal: React.FC<Props> = ({ school, onClose }) => {
     return () => { active = false; };
   }, [school?.id]);
 
+  const syncBusFleetToRtdb = (records: VehicleFitnessRecord[]) => {
+    if (!rtdb || !school?.id) return;
+    try {
+      const fleetObj: Record<string, any> = {};
+      records.forEach((r: any) => {
+        if (!r?.id) return;
+        fleetObj[r.id] = {
+          id: r.id,
+          vehicleNumber: r.vehicleNumber || "",
+          model: r.model || "",
+          route: r.route || r.model || "School Bus Route",
+          stops: Array.isArray(r.stops) ? r.stops : [],
+          driverName: r.driverName || "",
+          driverPhone: r.driverPhone || "",
+        };
+      });
+      rtdbSet(dbRef(rtdb, `schools/${school.id}/bus_fleet`), fleetObj).catch(() => {});
+    } catch {}
+  };
+
   const saveFitnessRecords = (updated: VehicleFitnessRecord[]) => {
     setFitnessRecords(updated);
     try {
@@ -183,6 +215,53 @@ export const BusFleetLogbookModal: React.FC<Props> = ({ school, onClose }) => {
       console.warn("[BusFleetLogbook] Save fitness warning:", err);
     }
     syncSchoolSubcollection(school?.id, "bus_fitness", updated);
+    syncBusFleetToRtdb(updated);
+  };
+
+  const handleAddBus = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newBusNumber.trim()) {
+      toast.error("Kripya Bus / Vehicle Number enter karein.");
+      return;
+    }
+    const stopsArr = newBusStops
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const created: any = {
+      id: `bus_${Date.now()}`,
+      schoolId: school?.id || "default",
+      vehicleNumber: newBusNumber.trim(),
+      model: newBusModel.trim() || "School Bus",
+      route: newBusRoute.trim() || "Main School Route",
+      stops: stopsArr.length > 0 ? stopsArr : ["Start Point", "Main Chowk", "School Main Gate"],
+      driverName: newDriverName.trim() || "Bus Driver",
+      driverPhone: newDriverPhone.trim(),
+      fitnessExpiryDate: "",
+      insuranceExpiryDate: "",
+      pollutionPucExpiryDate: "",
+      roadTaxExpiryDate: "",
+      permitExpiryDate: "",
+    };
+    const updated = [created, ...fitnessRecords];
+    saveFitnessRecords(updated);
+    if (!fuelVehicle) setFuelVehicle(created.vehicleNumber);
+    setNewBusNumber("");
+    setNewBusModel("");
+    setNewBusRoute("");
+    setNewBusStops("");
+    setNewDriverName("");
+    setNewDriverPhone("");
+    setShowAddBusModal(false);
+    setSelectedDriverForIdCard({
+      busId: created.id,
+      busNumber: created.vehicleNumber,
+      route: created.route,
+      driverName: created.driverName,
+      driverPhone: created.driverPhone,
+      stops: created.stops,
+    });
+    toast.success(`Bus "${created.vehicleNumber}" added aur Driver ID Card (QR) ban gaya!`);
   };
 
   const handleUpdateExpiryField = (busId: string, field: keyof VehicleFitnessRecord, val: string) => {
@@ -289,6 +368,16 @@ export const BusFleetLogbookModal: React.FC<Props> = ({ school, onClose }) => {
           </div>
 
           <div className="flex items-center gap-2">
+            {activeTab === "fitness" && (
+              <button
+                type="button"
+                onClick={() => setShowAddBusModal(true)}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs transition cursor-pointer shadow active:scale-95"
+              >
+                <Plus className="w-4 h-4 stroke-[3]" />
+                <span>+ Add Bus / Driver</span>
+              </button>
+            )}
             {activeTab === "fuel" && (
               <button
                 type="button"
@@ -452,7 +541,24 @@ export const BusFleetLogbookModal: React.FC<Props> = ({ school, onClose }) => {
                       </div>
                     </div>
 
-                    <div className="pt-2 border-t border-slate-800 flex items-center gap-2">
+                    <div className="pt-2 border-t border-slate-800 flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSelectedDriverForIdCard({
+                            busId: bus.id,
+                            busNumber: bus.vehicleNumber,
+                            route: (bus as any).route || bus.model || "School Bus Route",
+                            driverName: bus.driverName || "Bus Driver",
+                            driverPhone: bus.driverPhone || "",
+                            stops: (bus as any).stops,
+                          })
+                        }
+                        className="px-2.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[11px] transition cursor-pointer flex items-center gap-1 shadow"
+                      >
+                        <QrCode className="w-3.5 h-3.5" />
+                        <span>Driver ID Card</span>
+                      </button>
                       <button
                         type="button"
                         onClick={() => setEditingBusId(editingBusId === bus.id ? null : bus.id)}
@@ -463,10 +569,10 @@ export const BusFleetLogbookModal: React.FC<Props> = ({ school, onClose }) => {
                       <button
                         type="button"
                         onClick={() => handleSendRenewalAlert(bus, "Fitness / Insurance", bus.insuranceExpiryDate)}
-                        className="flex-1 py-1.5 rounded-xl bg-slate-800 hover:bg-amber-600 text-slate-200 hover:text-slate-950 font-black text-[11px] transition cursor-pointer flex items-center justify-center gap-1.5 shadow"
+                        className="flex-1 py-1.5 px-2 rounded-xl bg-slate-800 hover:bg-amber-600 text-slate-200 hover:text-slate-950 font-black text-[11px] transition cursor-pointer flex items-center justify-center gap-1 shadow"
                       >
                         <Share2 className="w-3.5 h-3.5" />
-                        <span>Share Expiry Alert</span>
+                        <span>Alert</span>
                       </button>
                     </div>
                   </div>
@@ -652,6 +758,110 @@ export const BusFleetLogbookModal: React.FC<Props> = ({ school, onClose }) => {
             </div>
           </div>
         )}
+
+        {/* ADD BUS & DRIVER MODAL */}
+        {showAddBusModal && (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl text-white space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                <h3 className="text-base font-black text-white flex items-center gap-2">
+                  <Bus className="w-5 h-5 text-emerald-400" />
+                  <span>Add School Bus &amp; Driver</span>
+                </h3>
+                <button type="button" onClick={() => setShowAddBusModal(false)} className="text-slate-400 hover:text-white cursor-pointer">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <form onSubmit={handleAddBus} className="space-y-3 text-xs">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-bold">Bus / Vehicle Number *</label>
+                    <input
+                      type="text"
+                      required
+                      value={newBusNumber}
+                      onChange={(e) => setNewBusNumber(e.target.value)}
+                      placeholder="e.g. DL-1PC-4590 (Bus #1)"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-bold">Vehicle Model / Type</label>
+                    <input
+                      type="text"
+                      value={newBusModel}
+                      onChange={(e) => setNewBusModel(e.target.value)}
+                      placeholder="e.g. Tata Starbus / Van"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 mb-1 font-bold">Bus Route Name</label>
+                  <input
+                    type="text"
+                    value={newBusRoute}
+                    onChange={(e) => setNewBusRoute(e.target.value)}
+                    placeholder="e.g. Route 1: City Center → Sector 45 → School"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 mb-1 font-bold">Route Stops (Comma separated)</label>
+                  <input
+                    type="text"
+                    value={newBusStops}
+                    onChange={(e) => setNewBusStops(e.target.value)}
+                    placeholder="e.g. Metro Station, Main Bazaar, Sector 45, School Gate"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-bold">Driver Name</label>
+                    <input
+                      type="text"
+                      value={newDriverName}
+                      onChange={(e) => setNewDriverName(e.target.value)}
+                      placeholder="e.g. Rameshwar Singh"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 mb-1 font-bold">Driver Mobile No.</label>
+                    <input
+                      type="tel"
+                      value={newDriverPhone}
+                      onChange={(e) => setNewDriverPhone(e.target.value)}
+                      placeholder="e.g. 9818023450"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white"
+                    />
+                  </div>
+                </div>
+
+                <div className="pt-2 flex justify-end gap-2">
+                  <button type="button" onClick={() => setShowAddBusModal(false)} className="px-4 py-2 bg-slate-800 rounded-xl text-slate-300 cursor-pointer">
+                    Cancel
+                  </button>
+                  <button type="submit" className="px-5 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-xl cursor-pointer">
+                    Save Bus &amp; Driver
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        <DriverIdCardModal
+          isOpen={Boolean(selectedDriverForIdCard)}
+          onClose={() => setSelectedDriverForIdCard(null)}
+          driver={selectedDriverForIdCard}
+          school={school}
+        />
       </div>
     </div>
   );

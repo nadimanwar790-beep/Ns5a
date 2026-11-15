@@ -3943,10 +3943,10 @@ export const StudentDashboard: React.FC<Props> = ({
 
   const isSplashUnlocked = (styleId: number) => styleId >= 1 && styleId <= 4;
   const splashStyles = [
-    { id: 1, label: 'Future Cards', description: '5 seconds · Free' },
-    { id: 2, label: 'Orbit', description: '4 seconds · Free' },
-    { id: 3, label: 'Algorithm Sort', description: '4 seconds · Free' },
-    { id: 4, label: 'Discovery Ring', description: '4 seconds · Free' },
+    { id: 1, label: 'Future Cards', description: '3 seconds · Free' },
+    { id: 2, label: 'Orbit', description: '3 seconds · Free' },
+    { id: 3, label: 'Algorithm Sort', description: '3 seconds · Free' },
+    { id: 4, label: 'Discovery Ring', description: '3 seconds · Free' },
   ];
 
   const persistSplashPreferences = (nextUnlocks: Record<number, number>, nextSlotUnlocks: Record<number, boolean>, nextAssignments: Record<number, number>) => {

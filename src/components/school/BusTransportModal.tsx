@@ -3,18 +3,23 @@ import React, { useState, useEffect } from "react";
 import {
   X, Bus, Save, Search, Check, CheckSquare, Square,
   IndianRupee, Sparkles, AlertCircle, Users, CheckCircle2,
-  MapPin, Sliders
+  MapPin, Sliders, Crosshair, Link2
 } from "lucide-react";
 import type { SchoolClass, SchoolStudent } from "../../school-types";
 import { updateClassFeeStructure, updateStudent } from "../../school-firebase";
 import { toast } from "sonner";
 import { AdminBusFleetRadar } from "./AdminBusFleetRadar";
 import { DriverTripConsole } from "./DriverTripConsole";
+import { parseLatLngInput, type StudentHomePin } from "../../utils/busProximity";
+import { rtdb } from "../../firebase";
+import { ref as dbRef, set as rtdbSet } from "firebase/database";
 
 interface Props {
   isOpen: boolean;
   onClose: () => void;
   schoolId: string;
+  schoolName?: string;
+  schoolCode?: string;
   classes: SchoolClass[];
   students: SchoolStudent[];
   initialClassId?: string;
@@ -26,6 +31,8 @@ export const BusTransportModal: React.FC<Props> = ({
   isOpen,
   onClose,
   schoolId,
+  schoolName,
+  schoolCode,
   classes = [],
   students = [],
   initialClassId,
@@ -42,8 +49,23 @@ export const BusTransportModal: React.FC<Props> = ({
     return Number(currentClass?.feeStructure?.busFee ?? 1000);
   });
 
-  // Local student bus state map: { [studentId]: { usesBus: boolean, busRoute: string, busFee: number } }
-  const [studentBusMap, setStudentBusMap] = useState<Record<string, { usesBus: boolean; busRoute: string; busFee: number }>>({});
+  // Local student bus state map: { [studentId]: { usesBus, busRoute, busFee, homeLat?, homeLng?, homeAddress? } }
+  const [studentBusMap, setStudentBusMap] = useState<
+    Record<
+      string,
+      {
+        usesBus: boolean;
+        busRoute: string;
+        busFee: number;
+        custom?: boolean;
+        homeLat?: number;
+        homeLng?: number;
+        homeAddress?: string;
+      }
+    >
+  >({});
+  const [editingPinStudentId, setEditingPinStudentId] = useState<string | null>(null);
+  const [pinInputText, setPinInputText] = useState<string>("");
   const [activeViewTab, setActiveViewTab] = useState<"students" | "live_radar" | "driver_console">("students");
   const [searchQuery, setSearchQuery] = useState("");
   const [saving, setSaving] = useState(false);
@@ -55,17 +77,27 @@ export const BusTransportModal: React.FC<Props> = ({
     const initialFee = Number(targetClass?.feeStructure?.busFee !== undefined ? targetClass.feeStructure.busFee : 1000);
     setClassBusFee(initialFee);
 
-    const initialMap: Record<string, { usesBus: boolean; busRoute: string; busFee: number; custom?: boolean }> = {};
+    let cachedPins: Record<string, StudentHomePin> = {};
+    try {
+      const rawPins = localStorage.getItem(`nst_student_home_pins_${schoolId}`);
+      if (rawPins) cachedPins = JSON.parse(rawPins) || {};
+    } catch {}
+
+    const initialMap: Record<string, any> = {};
     students.forEach(st => {
+      const pinFallback = cachedPins[st.id];
       initialMap[st.id] = {
         usesBus: Boolean(st.usesBus),
         busRoute: st.busRoute || "Route 1",
         busFee: st.busFee !== undefined ? Number(st.busFee) : initialFee,
         custom: st.busFee !== undefined && st.busFee !== initialFee,
+        homeLat: st.homeLat ?? pinFallback?.homeLat,
+        homeLng: st.homeLng ?? pinFallback?.homeLng,
+        homeAddress: st.homeAddress || st.address || pinFallback?.homeAddress || "",
       };
     });
     setStudentBusMap(initialMap);
-  }, [selectedClassId, classes, students]);
+  }, [selectedClassId, classes, students, schoolId]);
 
   if (!isOpen) return null;
 
@@ -154,6 +186,77 @@ export const BusTransportModal: React.FC<Props> = ({
     });
   };
 
+  const applyStudentHomeCoords = (student: SchoolStudent, lat: number, lng: number, label?: string) => {
+    setStudentBusMap((prev) => {
+      const cur = prev[student.id] || { usesBus: true, busRoute: "Route 1", busFee: classBusFee };
+      return {
+        ...prev,
+        [student.id]: {
+          ...cur,
+          usesBus: true,
+          homeLat: lat,
+          homeLng: lng,
+          homeAddress: label ?? cur.homeAddress ?? student.address ?? "",
+        },
+      };
+    });
+
+    const pinRecord: StudentHomePin = {
+      studentId: student.id,
+      studentName: student.name,
+      rollNo: student.rollNo,
+      className: currentClass?.name || student.className || "",
+      busRoute: studentBusMap[student.id]?.busRoute || student.busRoute || "Route 1",
+      homeLat: lat,
+      homeLng: lng,
+      homeAddress: label ?? student.address ?? "",
+      updatedAt: new Date().toISOString(),
+    };
+
+    try {
+      const key = `nst_student_home_pins_${schoolId}`;
+      const existing = JSON.parse(localStorage.getItem(key) || "{}");
+      existing[student.id] = pinRecord;
+      localStorage.setItem(key, JSON.stringify(existing));
+      if (rtdb && schoolId) {
+        rtdbSet(dbRef(rtdb, `schools/${schoolId}/student_home_pins/${student.id}`), pinRecord).catch(() => {});
+      }
+    } catch {}
+
+    setEditingPinStudentId(null);
+    setPinInputText("");
+    toast.success(`${student.name} ke ghar ka GPS pin (${lat.toFixed(4)}, ${lng.toFixed(4)}) save ho gaya!`);
+  };
+
+  const handleApplyPinLink = (student: SchoolStudent) => {
+    const parsed = parseLatLngInput(pinInputText);
+    if (!parsed) {
+      toast.error("Valid Google Maps link ya 'lat, lng' daalein (jaise: 28.4595, 77.0266)");
+      return;
+    }
+    applyStudentHomeCoords(student, parsed.lat, parsed.lng);
+  };
+
+  const handleCaptureCurrentGpsForStudent = (student: SchoolStudent) => {
+    if (!navigator.geolocation) {
+      toast.error("Device me GPS supported nahi hai.");
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        applyStudentHomeCoords(
+          student,
+          Number(pos.coords.latitude.toFixed(6)),
+          Number(pos.coords.longitude.toFixed(6))
+        );
+      },
+      (err) => {
+        toast.error(err?.message || "GPS location capture nahi ho saki.");
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
+
   const handleSaveAll = async () => {
     setSaving(true);
     setSuccessMsg("");
@@ -173,23 +276,54 @@ export const BusTransportModal: React.FC<Props> = ({
         });
       }
 
-      // 2. Save each student's bus setting
+      // 2. Save each student's bus setting & home GPS pins
       const promises: Promise<any>[] = [];
+      const cachedPins: Record<string, StudentHomePin> = (() => {
+        try {
+          return JSON.parse(localStorage.getItem(`nst_student_home_pins_${schoolId}`) || "{}") || {};
+        } catch {
+          return {};
+        }
+      })();
+
       for (const st of classStudents) {
         const busState = studentBusMap[st.id];
         if (busState) {
-          promises.push(
-            updateStudent(schoolId, st.id, {
-              usesBus: Boolean(busState.usesBus),
+          const updatePayload: any = {
+            usesBus: Boolean(busState.usesBus),
+            busRoute: busState.busRoute || "Route 1",
+            busFee: Number(busState.busFee || classBusFee),
+          };
+          if (typeof busState.homeLat === "number" && typeof busState.homeLng === "number") {
+            updatePayload.homeLat = busState.homeLat;
+            updatePayload.homeLng = busState.homeLng;
+            if (busState.homeAddress) updatePayload.homeAddress = busState.homeAddress;
+
+            const pinRecord: StudentHomePin = {
+              studentId: st.id,
+              studentName: st.name,
+              rollNo: st.rollNo,
+              className: currentClass?.name || st.className || "",
               busRoute: busState.busRoute || "Route 1",
-              busFee: Number(busState.busFee || classBusFee),
-            })
-          );
+              homeLat: busState.homeLat,
+              homeLng: busState.homeLng,
+              homeAddress: busState.homeAddress || st.address || "",
+              updatedAt: new Date().toISOString(),
+            };
+            cachedPins[st.id] = pinRecord;
+            if (rtdb && schoolId) {
+              rtdbSet(dbRef(rtdb, `schools/${schoolId}/student_home_pins/${st.id}`), pinRecord).catch(() => {});
+            }
+          }
+          promises.push(updateStudent(schoolId, st.id, updatePayload));
         }
       }
+      try {
+        localStorage.setItem(`nst_student_home_pins_${schoolId}`, JSON.stringify(cachedPins));
+      } catch {}
       await Promise.all(promises);
 
-      setSuccessMsg(`✓ Bus Fee (₹${classBusFee}) aur students ka bus status save ho gaya! Fee slip me automatically jud gaya hai.`);
+      setSuccessMsg(`✓ Bus Fee (₹${classBusFee}), Bus Roster aur Ghar GPS Pins save ho gaye!`);
       onUpdated();
       setTimeout(() => {
         setSuccessMsg("");
@@ -279,7 +413,7 @@ export const BusTransportModal: React.FC<Props> = ({
         {activeViewTab === "live_radar" && (
           <div className="p-4 flex-1 overflow-y-auto">
             <AdminBusFleetRadar
-              school={{ id: schoolId, name: "Institutional Campus" } as any}
+              school={{ id: schoolId, name: schoolName || "Institutional Campus", code: schoolCode } as any}
               onOpenDriverConsole={() => setActiveViewTab("driver_console")}
             />
           </div>
@@ -288,7 +422,7 @@ export const BusTransportModal: React.FC<Props> = ({
         {activeViewTab === "driver_console" && (
           <div className="flex-1 overflow-y-auto">
             <DriverTripConsole
-              school={{ id: schoolId, name: "Institutional Campus" } as any}
+              school={{ id: schoolId, name: schoolName || "Institutional Campus", code: schoolCode } as any}
               onBack={() => setActiveViewTab("live_radar")}
             />
           </div>
@@ -413,72 +547,129 @@ export const BusTransportModal: React.FC<Props> = ({
               {filteredStudents.map(st => {
                 const busInfo = studentBusMap[st.id] || { usesBus: false, busRoute: "Route 1", busFee: classBusFee };
                 const isBusActive = Boolean(busInfo.usesBus);
+                const hasPin = Number.isFinite(busInfo.homeLat) && Number.isFinite(busInfo.homeLng);
+                const isEditingPin = editingPinStudentId === st.id;
 
                 return (
                   <div
                     key={st.id}
-                    className={`p-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 transition ${
+                    className={`p-3 flex flex-col gap-2 transition ${
                       isBusActive ? "bg-teal-50/40 dark:bg-teal-950/20" : ""
                     }`}
                   >
-                    <div className="flex items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={() => toggleStudentBus(st.id)}
-                        className={`w-6 h-6 rounded-lg flex items-center justify-center transition cursor-pointer ${
-                          isBusActive
-                            ? "bg-teal-600 text-white shadow-xs"
-                            : "border-2 border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800"
-                        }`}
-                        title={isBusActive ? "Bus Band Karein" : "Bus Shuru Karein"}
-                      >
-                        {isBusActive && <Check className="w-4 h-4 stroke-[3]" />}
-                      </button>
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => toggleStudentBus(st.id)}
+                          className={`w-6 h-6 rounded-lg flex items-center justify-center transition cursor-pointer shrink-0 ${
+                            isBusActive
+                              ? "bg-teal-600 text-white shadow-xs"
+                              : "border-2 border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800"
+                          }`}
+                          title={isBusActive ? "Bus Band Karein" : "Bus Shuru Karein"}
+                        >
+                          {isBusActive && <Check className="w-4 h-4 stroke-[3]" />}
+                        </button>
 
-                      <div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-black text-sm text-slate-900 dark:text-white">
-                            {st.name}
-                          </span>
-                          <span className="text-[10px] font-mono text-slate-500 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">
-                            Roll {st.rollNo}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-400">
-                          {isBusActive ? (
-                            <span className="text-teal-700 dark:text-teal-300 font-bold">
-                              🚌 Bus Se Jata Hai (+₹{Number(busInfo.busFee || classBusFee).toLocaleString("en-IN")})
+                        <div>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-black text-sm text-slate-900 dark:text-white">
+                              {st.name}
                             </span>
-                          ) : (
-                            <span className="text-slate-400">Bus Se Nahi Jata (Normal)</span>
-                          )}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Extra Route and Fee inputs if active */}
-                    {isBusActive && (
-                      <div className="flex items-center gap-2 self-end sm:self-auto">
-                        <div className="w-32">
-                          <input
-                            type="text"
-                            placeholder="Route/Stop (e.g. Route 1)"
-                            value={busInfo.busRoute}
-                            onChange={e => updateStudentRoute(st.id, e.target.value)}
-                            className="w-full px-2 py-1 text-xs font-semibold rounded border border-teal-300 dark:border-teal-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white"
-                          />
+                            <span className="text-[10px] font-mono text-slate-500 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">
+                              Roll {st.rollNo}
+                            </span>
+                            {hasPin && (
+                              <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950/60 px-1.5 py-0.5 rounded">
+                                🏠 Home Pin Saved
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-slate-400">
+                            {isBusActive ? (
+                              <span className="text-teal-700 dark:text-teal-300 font-bold">
+                                🚌 Bus Se Jata Hai (+₹{Number(busInfo.busFee || classBusFee).toLocaleString("en-IN")})
+                              </span>
+                            ) : (
+                              <span className="text-slate-400">Bus Se Nahi Jata (Normal)</span>
+                            )}
+                          </p>
                         </div>
-                        <div className="w-24">
-                          <div className="relative">
-                            <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 font-bold">₹</span>
+                      </div>
+
+                      {/* Extra Route, Fee & Home GPS Pin button if active */}
+                      {isBusActive && (
+                        <div className="flex flex-wrap items-center gap-2 self-end sm:self-auto">
+                          <div className="w-28 sm:w-32">
                             <input
-                              type="number"
-                              placeholder="Fee"
-                              value={busInfo.busFee}
-                              onChange={e => updateStudentFee(st.id, e.target.value)}
-                              className="w-full pl-4 pr-1 py-1 text-right text-xs font-black rounded border border-teal-300 dark:border-teal-700 bg-white dark:bg-slate-800 text-teal-700 dark:text-teal-300"
+                              type="text"
+                              placeholder="Route/Stop"
+                              value={busInfo.busRoute}
+                              onChange={e => updateStudentRoute(st.id, e.target.value)}
+                              className="w-full px-2 py-1 text-xs font-semibold rounded border border-teal-300 dark:border-teal-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white"
                             />
                           </div>
+                          <div className="w-20">
+                            <div className="relative">
+                              <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 font-bold">₹</span>
+                              <input
+                                type="number"
+                                placeholder="Fee"
+                                value={busInfo.busFee}
+                                onChange={e => updateStudentFee(st.id, e.target.value)}
+                                className="w-full pl-4 pr-1 py-1 text-right text-xs font-black rounded border border-teal-300 dark:border-teal-700 bg-white dark:bg-slate-800 text-teal-700 dark:text-teal-300"
+                              />
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingPinStudentId(isEditingPin ? null : st.id);
+                              setPinInputText(
+                                hasPin ? `${busInfo.homeLat}, ${busInfo.homeLng}` : ""
+                              );
+                            }}
+                            className={`px-2 py-1 rounded text-[11px] font-bold flex items-center gap-1 cursor-pointer border transition ${
+                              hasPin
+                                ? "bg-emerald-50 dark:bg-emerald-950/50 border-emerald-400/50 text-emerald-700 dark:text-emerald-300"
+                                : "bg-amber-50 dark:bg-amber-950/40 border-amber-400/50 text-amber-700 dark:text-amber-300"
+                            }`}
+                            title="Ghar ka GPS Location save karein (Free Live Distance tracking ke liye)"
+                          >
+                            <MapPin className="w-3 h-3" />
+                            <span>{hasPin ? "Update Pin" : "Set Home Pin"}</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Inline Home Location Paste / Capture Drawer */}
+                    {isBusActive && isEditingPin && (
+                      <div className="mt-1 p-2.5 rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                        <input
+                          type="text"
+                          value={pinInputText}
+                          onChange={(e) => setPinInputText(e.target.value)}
+                          placeholder="Google Maps link paste karein ya lat,lng (e.g. 28.4595, 77.0266)"
+                          className="flex-1 px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-xs text-slate-900 dark:text-white"
+                        />
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleApplyPinLink(st)}
+                            className="px-2.5 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                          >
+                            <Link2 className="w-3 h-3" /> Save Link
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleCaptureCurrentGpsForStudent(st)}
+                            className="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                            title="Apne current mobile GPS ko is student ka ghar pin banayein"
+                          >
+                            <Crosshair className="w-3 h-3" /> My GPS
+                          </button>
                         </div>
                       </div>
                     )}

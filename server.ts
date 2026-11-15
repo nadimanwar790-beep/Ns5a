@@ -710,6 +710,59 @@ async function startServer() {
     res.json({ publicKey: activeVapidKeys.publicKey });
   });
 
+  // Public Google Maps JS API key lookup (supports per-school server env overrides by schoolId or schoolCode + default fallback)
+  app.get("/api/public-config/maps-key", (req, res) => {
+    const rawSchoolId = typeof req.query?.schoolId === "string" ? req.query.schoolId.trim() : "";
+    const rawSchoolCode = typeof req.query?.schoolCode === "string" ? req.query.schoolCode.trim() : "";
+    const candidates = [rawSchoolId, rawSchoolCode].filter(Boolean);
+    let schoolKey = "";
+
+    let parsedJsonMap: Record<string, unknown> | null = null;
+    if (candidates.length > 0 && process.env.SCHOOL_MAPS_API_KEYS_JSON) {
+      try {
+        const parsed = JSON.parse(process.env.SCHOOL_MAPS_API_KEYS_JSON);
+        if (parsed && typeof parsed === "object") {
+          parsedJsonMap = parsed as Record<string, unknown>;
+        }
+      } catch {
+        // Ignore malformed SCHOOL_MAPS_API_KEYS_JSON and fall back to default key
+      }
+    }
+
+    for (const candidate of candidates) {
+      const normalizedEnvSuffix = candidate.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+      const perSchoolEnvVal = process.env[`GOOGLE_MAPS_API_KEY_${normalizedEnvSuffix}`];
+      if (typeof perSchoolEnvVal === "string" && perSchoolEnvVal.trim()) {
+        schoolKey = perSchoolEnvVal.trim();
+        break;
+      }
+
+      if (parsedJsonMap) {
+        const matched =
+          parsedJsonMap[candidate] ??
+          parsedJsonMap[candidate.toLowerCase()] ??
+          parsedJsonMap[candidate.toUpperCase()] ??
+          parsedJsonMap[normalizedEnvSuffix];
+        if (typeof matched === "string" && matched.trim()) {
+          schoolKey = matched.trim();
+          break;
+        }
+      }
+    }
+
+    const defaultKey = (
+      process.env.VITE_GOOGLE_MAPS_API_KEY ||
+      process.env.GOOGLE_MAPS_API_KEY ||
+      ""
+    ).trim();
+
+    const apiKey = schoolKey || defaultKey;
+    res.json({
+      apiKey,
+      scope: schoolKey ? "school" : "default",
+    });
+  });
+
   // 2. Subscribe or update linked students for a device (supports Multi-Student under 1 User ID)
   app.post("/api/school-push/subscribe", async (req, res) => {
     try {

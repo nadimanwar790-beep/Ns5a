@@ -3,18 +3,40 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Bus, Play, Square, Navigation, Phone, ShieldAlert,
   CheckCircle2, Clock, MapPin, Gauge, AlertTriangle,
-  Radio, Volume2, ArrowLeft, RefreshCw, Smartphone
+  Radio, Volume2, ArrowLeft, RefreshCw, Smartphone, Map as MapIcon,
+  Home, Link2, LogOut
 } from "lucide-react";
 import type { School, BusLiveLocation } from "../../school-types";
+import { shouldUseDemoForSchool } from "../../school-firebase";
 import { speakNotification } from "../../utils/voiceNotifyEngine";
 import { rtdb } from "../../firebase";
 import { ref as dbRef, set, onValue } from "firebase/database";
 import { toast } from "sonner";
+import { LiveBusGoogleMap } from "./LiveBusGoogleMap";
+import {
+  parseLatLngInput,
+  haversineMeters,
+  formatDistanceShort,
+  getProximityStatus,
+  type StudentHomePin,
+} from "../../utils/busProximity";
+
+export interface DriverBusConfig {
+  id: string;
+  busNumber: string;
+  route: string;
+  driverName: string;
+  driverPhone: string;
+  stops: string[];
+}
 
 interface Props {
   school: School;
   onBack?: () => void;
+  onLogout?: () => void;
   initialBusId?: string;
+  initialBusMeta?: Partial<DriverBusConfig>;
+  standaloneMode?: boolean;
 }
 
 const DEFAULT_BUSES = [
@@ -44,9 +66,122 @@ const DEFAULT_BUSES = [
   }
 ];
 
-export const DriverTripConsole: React.FC<Props> = ({ school, onBack, initialBusId }) => {
-  const [selectedBusId, setSelectedBusId] = useState(initialBusId || DEFAULT_BUSES[0].id);
-  const selectedBus = DEFAULT_BUSES.find(b => b.id === selectedBusId) || DEFAULT_BUSES[0];
+export const DriverTripConsole: React.FC<Props> = ({
+  school,
+  onBack,
+  onLogout,
+  initialBusId,
+  initialBusMeta,
+  standaloneMode = false,
+}) => {
+  const isDemo = shouldUseDemoForSchool(school?.id);
+  const [fleetBuses, setFleetBuses] = useState<DriverBusConfig[]>(() => {
+    const sid = school?.id || "";
+    const list: DriverBusConfig[] = [];
+    if (sid) {
+      try {
+        const raw = localStorage.getItem(`bus_fitness_${sid}`);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            parsed.forEach((v: any, idx: number) => {
+              list.push({
+                id: v.id || `bus_${idx + 1}`,
+                busNumber: v.vehicleNumber || `Bus #${idx + 1}`,
+                route: v.route || v.model || "Campus Route",
+                driverName: v.driverName || "Driver",
+                driverPhone: v.driverPhone || "",
+                stops:
+                  Array.isArray(v.stops) && v.stops.length > 0
+                    ? v.stops
+                    : ["Start Point", "Main Chowk", "School Main Gate"],
+              });
+            });
+          }
+        }
+      } catch {}
+    }
+
+    if (initialBusMeta?.id || initialBusId) {
+      const targetId = initialBusMeta?.id || initialBusId || "bus_direct";
+      if (!list.some((b) => b.id === targetId) && (initialBusMeta?.busNumber || initialBusMeta?.route)) {
+        list.unshift({
+          id: targetId,
+          busNumber: initialBusMeta.busNumber || "School Bus",
+          route: initialBusMeta.route || "School Bus Route",
+          driverName: initialBusMeta.driverName || "Bus Driver",
+          driverPhone: initialBusMeta.driverPhone || "",
+          stops:
+            Array.isArray(initialBusMeta.stops) && initialBusMeta.stops.length > 0
+              ? initialBusMeta.stops
+              : ["Start Point", "Main Chowk", "School Main Gate"],
+        });
+      }
+    }
+
+    if (list.length === 0 && isDemo) {
+      return DEFAULT_BUSES;
+    }
+    return list;
+  });
+
+  // Also hydrate school's configured bus fleet from Firebase RTDB so standalone driver phones get real buses
+  useEffect(() => {
+    const sid = school?.id;
+    if (!rtdb || !sid) return;
+    let unsub: any = null;
+    try {
+      unsub = onValue(dbRef(rtdb, `schools/${sid}/bus_fleet`), (snap) => {
+        if (!snap.exists()) return;
+        const val = snap.val() || {};
+        const arr = Object.values(val) as any[];
+        if (arr.length === 0) return;
+        const mapped: DriverBusConfig[] = arr
+          .filter((v: any) => v && v.id)
+          .map((v: any, idx: number) => ({
+            id: v.id || `bus_${idx + 1}`,
+            busNumber: v.vehicleNumber || v.busNumber || `Bus #${idx + 1}`,
+            route: v.route || v.model || "Campus Route",
+            driverName: v.driverName || "Driver",
+            driverPhone: v.driverPhone || "",
+            stops:
+              Array.isArray(v.stops) && v.stops.length > 0
+                ? v.stops
+                : ["Start Point", "Main Chowk", "School Main Gate"],
+          }));
+        if (mapped.length > 0) {
+          setFleetBuses((prev) => {
+            const byId = new Map<string, DriverBusConfig>(prev.map((b) => [b.id, b]));
+            mapped.forEach((b) => byId.set(b.id, b));
+            return Array.from(byId.values());
+          });
+        }
+      });
+    } catch {}
+    return () => {
+      if (typeof unsub === "function") unsub();
+    };
+  }, [school?.id]);
+
+  const [selectedBusId, setSelectedBusId] = useState(
+    initialBusId || fleetBuses[0]?.id || DEFAULT_BUSES[0].id
+  );
+  useEffect(() => {
+    if (fleetBuses.length > 0 && !fleetBuses.some((b) => b.id === selectedBusId)) {
+      setSelectedBusId(initialBusId && fleetBuses.some((b) => b.id === initialBusId) ? initialBusId : fleetBuses[0].id);
+    }
+  }, [fleetBuses, initialBusId, selectedBusId]);
+
+  const selectedBus: DriverBusConfig =
+    fleetBuses.find((b) => b.id === selectedBusId) ||
+    fleetBuses[0] || {
+      id: initialBusId || "bus_unconfigured",
+      busNumber: initialBusMeta?.busNumber || "No Bus Added Yet",
+      route: initialBusMeta?.route || "School Admin se bus add karwayein",
+      driverName: initialBusMeta?.driverName || "Driver",
+      driverPhone: initialBusMeta?.driverPhone || "",
+      stops: ["Start Point", "Main Chowk", "School Main Gate"],
+    };
 
   const [tripType, setTripType] = useState<"morning_pickup" | "afternoon_drop">("morning_pickup");
   const [isTripActive, setIsTripActive] = useState(false);
@@ -57,6 +192,60 @@ export const DriverTripConsole: React.FC<Props> = ({ school, onBack, initialBusI
   const [distanceKm, setDistanceKm] = useState(0);
   const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
+  const [showLiveMap, setShowLiveMap] = useState<boolean>(true);
+  const [manualLocationText, setManualLocationText] = useState<string>("");
+  const [studentHomePins, setStudentHomePins] = useState<StudentHomePin[]>([]);
+
+  useEffect(() => {
+    const sid = school?.id || "";
+    try {
+      const raw = sid ? localStorage.getItem(`nst_student_home_pins_${sid}`) : null;
+      if (raw) {
+        const obj = JSON.parse(raw) || {};
+        const arr = Object.values(obj).filter(
+          (p: any) => Number.isFinite(Number(p?.homeLat)) && Number.isFinite(Number(p?.homeLng))
+        ) as StudentHomePin[];
+        if (arr.length > 0) setStudentHomePins(arr);
+      }
+    } catch {}
+
+    if (!rtdb || !sid) return;
+    let unsub: any = null;
+    try {
+      unsub = onValue(dbRef(rtdb, `schools/${sid}/student_home_pins`), (snap) => {
+        if (!snap.exists()) return;
+        const val = snap.val() || {};
+        const arr = Object.values(val).filter(
+          (p: any) => p?.studentId && Number.isFinite(Number(p?.homeLat)) && Number.isFinite(Number(p?.homeLng))
+        ) as StudentHomePin[];
+        setStudentHomePins(
+          arr.map((p) => ({
+            ...p,
+            homeLat: Number(p.homeLat),
+            homeLng: Number(p.homeLng),
+          }))
+        );
+      });
+    } catch {}
+    return () => {
+      if (typeof unsub === "function") unsub();
+    };
+  }, [school?.id]);
+
+  const nearestHomes = React.useMemo(() => {
+    if (!coords) return [];
+    return studentHomePins
+      .map((p) => {
+        const meters = haversineMeters(coords.lat, coords.lng, p.homeLat, p.homeLng);
+        return {
+          ...p,
+          distanceMeters: meters,
+          status: getProximityStatus(meters),
+        };
+      })
+      .sort((a, b) => a.distanceMeters - b.distanceMeters)
+      .slice(0, 6);
+  }, [coords, studentHomePins]);
 
   const watchIdRef = useRef<number | null>(null);
   const tripIntervalRef = useRef<any>(null);
@@ -125,8 +314,9 @@ export const DriverTripConsole: React.FC<Props> = ({ school, onBack, initialBusI
       localStorage.setItem(`nst_last_active_bus_${school?.id || "default"}`, selectedBus.id);
       window.dispatchEvent(new CustomEvent("nst_bus_location_update", { detail: payload }));
 
-      // Also sync to Firebase RTDB if online
+      // Sync to Firebase RTDB (both schools/{sid}/bus_locations for standalone driver devices & school_bus_locations/{sid})
       if (rtdb && school?.id) {
+        set(dbRef(rtdb, `schools/${school.id}/bus_locations/${selectedBus.id}`), payload).catch(() => {});
         set(dbRef(rtdb, `school_bus_locations/${school.id}/${selectedBus.id}`), payload).catch(() => {});
       }
     } catch (e) {
@@ -267,16 +457,21 @@ export const DriverTripConsole: React.FC<Props> = ({ school, onBack, initialBusI
                 <Bus size={18} />
               </span>
               <h1 className="text-base font-black tracking-wide text-white">
-                Driver Console (ड्राइवर मोड)
+                Driver GPS Dashboard
               </h1>
+              {standaloneMode && (
+                <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
+                  Driver Only
+                </span>
+              )}
             </div>
             <p className="text-[11px] text-slate-400">
-              {school?.name || "School Bus Fleet"} • GPS Live Streaming
+              {school?.name || "School Bus Fleet"} {school?.code ? `(#${school.code})` : ""} • GPS Live Streaming
             </p>
           </div>
         </div>
 
-        {/* Live Pulse Indicator */}
+        {/* Live Pulse Indicator + Optional Logout */}
         <div className="flex items-center gap-2">
           {isTripActive ? (
             <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 text-xs font-bold animate-pulse">
@@ -286,6 +481,16 @@ export const DriverTripConsole: React.FC<Props> = ({ school, onBack, initialBusI
             <span className="px-2.5 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700 text-xs font-semibold">
               Idle in Depot
             </span>
+          )}
+          {onLogout && (
+            <button
+              type="button"
+              onClick={onLogout}
+              className="px-2.5 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 text-xs font-bold flex items-center gap-1 cursor-pointer transition"
+              title="Driver Dashboard se Logout karein"
+            >
+              <LogOut size={13} /> Logout
+            </button>
           )}
         </div>
       </header>
@@ -297,13 +502,18 @@ export const DriverTripConsole: React.FC<Props> = ({ school, onBack, initialBusI
           <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
             वाहन व रूट चुनें (Select Bus & Route):
           </label>
+          {fleetBuses.length === 0 && (
+            <div className="mb-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs">
+              Abhi is school me koi bus add nahi hui hai. School Admin se <strong>Bus Radar → Add Bus &amp; Driver</strong> me bus add karne ko kahein.
+            </div>
+          )}
           <select
             value={selectedBusId}
-            disabled={isTripActive}
+            disabled={isTripActive || fleetBuses.length === 0}
             onChange={(e) => setSelectedBusId(e.target.value)}
             className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-slate-100 focus:outline-none focus:border-indigo-500 disabled:opacity-60"
           >
-            {DEFAULT_BUSES.map((b) => (
+            {fleetBuses.map((b) => (
               <option key={b.id} value={b.id}>
                 {b.busNumber} — {b.driverName}
               </option>
@@ -395,6 +605,51 @@ export const DriverTripConsole: React.FC<Props> = ({ school, onBack, initialBusI
           )}
         </div>
 
+        {/* Live Google Map Preview for Driver */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 shadow-xl space-y-2.5">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+              <MapIcon size={14} className="text-amber-400" />
+              Live Google Map (आपकी लाइव लोकेशन)
+            </h3>
+            <button
+              type="button"
+              onClick={() => setShowLiveMap((prev) => !prev)}
+              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] font-bold text-slate-200 cursor-pointer"
+            >
+              {showLiveMap ? "Hide Map" : "Show Map"}
+            </button>
+          </div>
+          {showLiveMap && (
+            <LiveBusGoogleMap
+              buses={[
+                {
+                  busId: selectedBus.id,
+                  busNumber: selectedBus.busNumber,
+                  route: selectedBus.route,
+                  driverName: selectedBus.driverName,
+                  driverPhone: selectedBus.driverPhone,
+                  latitude: coords?.lat ?? 28.4595,
+                  longitude: coords?.lng ?? 77.0266,
+                  speed: currentSpeed,
+                  heading: 0,
+                  accuracy: gpsAccuracy ?? 10,
+                  tripStatus: isTripActive ? "started" : "idle",
+                  tripType,
+                  lastUpdated: new Date().toISOString(),
+                  currentStop: completedStops[completedStops.length - 1] || "Depot",
+                  totalStops: selectedBus.stops.length,
+                  completedStops,
+                },
+              ]}
+              selectedBusId={selectedBus.id}
+              heightClass="h-[230px]"
+              schoolId={school?.id}
+              schoolCode={school?.code}
+            />
+          )}
+        </div>
+
         {/* Big Start / End Trip Button */}
         <div>
           {!isTripActive ? (
@@ -417,6 +672,86 @@ export const DriverTripConsole: React.FC<Props> = ({ school, onBack, initialBusI
             </button>
           )}
         </div>
+
+        {/* Shared Location Link Attachment (100% Free Backup) */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 shadow-xl space-y-2">
+          <p className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
+            <Link2 size={13} className="text-indigo-400" />
+            Google Maps Share Link Attach Karein (Optional Backup)
+          </p>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input
+              type="text"
+              value={manualLocationText}
+              onChange={(e) => setManualLocationText(e.target.value)}
+              placeholder="Google Maps location link paste karein ya lat, lng"
+              className="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                const parsed = parseLatLngInput(manualLocationText);
+                if (!parsed) {
+                  toast.error("Valid Google Maps link ya 'lat, lng' daalein.");
+                  return;
+                }
+                setCoords({ lat: parsed.lat, lng: parsed.lng });
+                setIsTripActive(true);
+                setGpsError(null);
+                broadcastLocation({
+                  latitude: parsed.lat,
+                  longitude: parsed.lng,
+                  tripStatus: "started",
+                });
+                setManualLocationText("");
+                toast.success("Location attach aur live broadcast ho gayi!");
+              }}
+              className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs cursor-pointer shrink-0"
+            >
+              Attach &amp; Share
+            </button>
+          </div>
+        </div>
+
+        {/* Nearest Student Homes Ahead (100% Free Live Proximity) */}
+        {studentHomePins.length > 0 && (
+          <div className="bg-slate-900 border border-emerald-500/30 rounded-2xl p-4 shadow-xl space-y-2.5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-black text-emerald-300 uppercase tracking-wider flex items-center gap-1.5">
+                <Home size={14} /> आगे आने वाले बच्चों के घर (Live Distance)
+              </h3>
+              <span className="text-[10px] text-slate-400 font-mono">
+                {studentHomePins.length} Homes
+              </span>
+            </div>
+            {nearestHomes.length === 0 ? (
+              <p className="text-xs text-slate-400">
+                यात्रा शुरू करें या लोकेशन लिंक अटैच करें — बच्चों के घर की दूरी यहाँ लाइव दिखेगी।
+              </p>
+            ) : (
+              <div className="space-y-1.5">
+                {nearestHomes.map((h) => (
+                  <div
+                    key={h.studentId}
+                    className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 flex items-center justify-between gap-2 text-xs"
+                  >
+                    <div className="min-w-0">
+                      <p className="font-bold text-white truncate">{h.studentName}</p>
+                      <span
+                        className={`inline-block mt-0.5 px-1.5 py-0.5 rounded border text-[10px] font-bold ${h.status.badgeClass}`}
+                      >
+                        {h.status.label}
+                      </span>
+                    </div>
+                    <span className="font-mono font-black text-sm text-amber-300 shrink-0">
+                      {formatDistanceShort(h.distanceMeters)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Checkpoint Stops Checklist */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">

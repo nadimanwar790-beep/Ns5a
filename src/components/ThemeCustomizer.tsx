@@ -10,6 +10,7 @@ import {
     Layers, Navigation, Square, Type, Zap, Star,
     ChevronRight, Check, X, AlertCircle, Globe, Clock, Users, BarChart2, CheckCircle, Home
 } from 'lucide-react';
+import { AppLoadingScreen } from './AppLoadingScreen';
 
 interface Props {
     user: User;
@@ -847,7 +848,8 @@ export const ThemeCustomizer: React.FC<Props> = ({ user, onUpdateUser, onBack, s
     const [showEntryPopup, setShowEntryPopup] = useState(true);
     /* Selected preset index in the entry popup (-1 = none) */
     const [popupPresetIdx, setPopupPresetIdx] = useState<number>(-1);
-    const [storeTab, setStoreTab] = useState<'THEMES' | 'OWNED'>('THEMES');
+    const [storeTab, setStoreTab] = useState<'THEMES' | 'OWNED' | 'LOADING'>('THEMES');
+    const [previewLoadingSlot, setPreviewLoadingSlot] = useState<number | null>(null);
     const [themeDurationEntry, setThemeDurationEntry] = useState<ThemePurchaseEntry | null>(null);
     const [themeDurationDays, setThemeDurationDays] = useState<AccessDurationDays>(7);
     const [loadingScreenPurchaseEntry, setLoadingScreenPurchaseEntry] = useState<any>(null);
@@ -995,10 +997,10 @@ export const ThemeCustomizer: React.FC<Props> = ({ user, onUpdateUser, onBack, s
     const [loadingScreenSaving, setLoadingScreenSaving] = useState(false);
     const [editingLoadingScreenId, setEditingLoadingScreenId] = useState<string | null>(null);
     const builtInLoadingScreens = [
-        { slotId: 1, name: 'Future Cards', emoji: '🃏', description: 'Default · 5 seconds', accessMode: 'FREE' as const },
-        { slotId: 2, name: 'Orbit', emoji: '🪐', description: '4 seconds', accessMode: 'CREDITS' as const },
-        { slotId: 3, name: 'Algorithm Sort', emoji: '⚙️', description: '4 seconds', accessMode: 'CREDITS' as const },
-        { slotId: 4, name: 'Discovery Ring', emoji: '🧭', description: '4 seconds', accessMode: 'CREDITS' as const },
+        { slotId: 1, name: 'Future Cards', emoji: '🃏', description: '3 seconds · Auto Rotate', accessMode: 'FREE' as const },
+        { slotId: 2, name: 'Orbit', emoji: '🪐', description: '3 seconds · Auto Rotate', accessMode: 'FREE' as const },
+        { slotId: 3, name: 'Algorithm Sort', emoji: '⚙️', description: '3 seconds · Auto Rotate', accessMode: 'FREE' as const },
+        { slotId: 4, name: 'Discovery Ring', emoji: '🧭', description: '3 seconds · Auto Rotate', accessMode: 'FREE' as const },
     ];
     // Keep the store in sync with the splash screen even when an older session
     // has the unlock data only in localStorage and not yet on the user object.
@@ -2094,6 +2096,17 @@ export const ThemeCustomizer: React.FC<Props> = ({ user, onUpdateUser, onBack, s
                                      👜 Own Themes {ownedThemes.length > 0 ? `(${ownedThemes.length})` : ''}
                                  </button>
                              )}
+                             <button
+                                 type="button"
+                                 onClick={() => setStoreTab('LOADING')}
+                                 className="flex-1 rounded-lg py-2 text-[10px] font-black transition-all"
+                                 style={{
+                                     color: storeTab === 'LOADING' ? '#fff' : 'rgba(255,255,255,0.42)',
+                                     background: storeTab === 'LOADING' ? 'rgba(56,189,248,0.18)' : 'transparent',
+                                 }}
+                             >
+                                 ⚡ Loading (4)
+                             </button>
                         </div>
 
                          {storeTab === 'THEMES' && (<>
@@ -2352,42 +2365,34 @@ export const ThemeCustomizer: React.FC<Props> = ({ user, onUpdateUser, onBack, s
                              </div>
                          )}
 
-                         {false && storeTab === 'LOADING' && (
+                         {storeTab === 'LOADING' && (
                              <div className="overflow-y-auto flex-1 px-3 pb-2" style={{ WebkitOverflowScrolling: 'touch' }}>
                                  <div className="rounded-xl p-3 mb-3" style={{ background: 'rgba(56,189,248,0.09)', border: '1px solid rgba(56,189,248,0.22)' }}>
-                                     <p className="text-[10px] font-black text-sky-200">Loading screen alag store hai</p>
-                                     <p className="text-[9px] text-sky-100/55 mt-1 leading-relaxed">
-                                         Future Cards free default hai. Baaki screens ko 1 day 10, 7 days 50 ya 30 days 100 credits mein unlock karke rotation mein add karo.
+                                     <p className="text-[10px] font-black text-sky-200">4 Animated Loading Screens (1:1:1:1 Auto Rotate)</p>
+                                     <p className="text-[9px] text-sky-100/65 mt-1 leading-relaxed">
+                                         Har app open par 1 → 2 → 3 → 4 alternate sequence mein 3 second ke liye alag animation chalega (Sabhi 4 FREE hain).
                                      </p>
                                  </div>
-                                 <p className="text-[9px] font-black text-emerald-300/80 uppercase tracking-widest mb-1.5">Built-in Loading Screens</p>
+                                 <p className="text-[9px] font-black text-emerald-300/80 uppercase tracking-widest mb-1.5">Built-in Loading Screens (3s Each)</p>
                                  <div className="space-y-1.5">
                                      {builtInLoadingScreens.map(entry => {
-                                         const unlocked = isLoadingScreenUnlocked(entry);
-                                         const assigned = Object.values((user as any).loadingScreenSlotAssignments || { 1: 1 }).map(Number).includes(entry.slotId);
                                          return (
-                                             <div key={entry.slotId} className="rounded-xl px-3 py-2.5 flex items-center gap-2.5" style={{ background: assigned ? 'rgba(56,189,248,0.12)' : 'rgba(255,255,255,0.04)', border: `1px solid ${assigned ? 'rgba(56,189,248,0.48)' : 'rgba(255,255,255,0.08)'}` }}>
+                                             <div key={entry.slotId} className="rounded-xl px-3 py-2.5 flex items-center gap-2.5" style={{ background: 'rgba(56,189,248,0.10)', border: '1px solid rgba(56,189,248,0.35)' }}>
                                                  <span className="text-xl w-8 text-center">{entry.emoji}</span>
                                                  <div className="flex-1 min-w-0">
-                                                     <p className="text-[10px] font-black text-white">{entry.name}</p>
-                                                      <p className="text-[8px] text-white/40">{entry.description} · {entry.accessMode === 'FREE' ? 'FREE · 1/7/30 days' : '1/7/30 days · credits'}</p>
+                                                     <p className="text-[10px] font-black text-white">{entry.slotId}. {entry.name}</p>
+                                                     <p className="text-[8px] text-emerald-300/80">{entry.description} · FREE</p>
                                                  </div>
-                                                 {unlocked ? (
-                                                     <button type="button" onClick={() => toggleLoadingScreenRotation(entry.slotId)} className="rounded-lg px-2 py-1.5 text-[8px] font-black text-sky-100 bg-sky-500/20 border border-sky-400/25">
-                                                         {assigned ? '✓ IN ROTATION' : '+ ADD'}
-                                                     </button>
-                                                 ) : (
-                                                      <button
-                                                          type="button"
-                                                          onClick={() => {
-                                                              setLoadingScreenPurchaseEntry(entry);
-                                                              setLoadingScreenPurchaseDays((entry.accessDurationDays || 7) as AccessDurationDays);
-                                                          }}
-                                                          className="rounded-lg px-2 py-1.5 text-[8px] font-black text-white bg-gradient-to-r from-sky-500 to-indigo-500"
-                                                      >
-                                                          {entry.accessMode === 'FREE' ? 'USE FREE' : 'CHOOSE DAYS'}
-                                                     </button>
-                                                 )}
+                                                 <button
+                                                     type="button"
+                                                     onClick={() => {
+                                                         try { sessionStorage.setItem('nst_splash_preview_style', String(entry.slotId)); } catch {}
+                                                         setPreviewLoadingSlot(entry.slotId);
+                                                     }}
+                                                     className="rounded-lg px-2.5 py-1.5 text-[9px] font-black text-white bg-gradient-to-r from-sky-500 to-indigo-500 active:scale-95 transition-transform"
+                                                 >
+                                                     ▶ Preview
+                                                 </button>
                                              </div>
                                          );
                                      })}
@@ -4286,6 +4291,17 @@ export const ThemeCustomizer: React.FC<Props> = ({ user, onUpdateUser, onBack, s
                     </div>
                 </div>
             </div>
+        )}
+
+        {previewLoadingSlot !== null && (
+            <AppLoadingScreen
+                isPreview={true}
+                previewStyleVariant={previewLoadingSlot}
+                onComplete={() => setPreviewLoadingSlot(null)}
+                onBack={() => setPreviewLoadingSlot(null)}
+                onApply={() => setPreviewLoadingSlot(null)}
+                userId={user.id}
+            />
         )}
 
         </>
