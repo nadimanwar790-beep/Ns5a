@@ -24,15 +24,17 @@ export interface ProximityStatus {
  * 100% local & free (no API calls).
  */
 export function parseLatLngInput(rawInput: string): { lat: number; lng: number } | null {
-  const input = (rawInput || "").trim();
+  const input = (rawInput || "").trim().replace(/%2C/gi, ",");
   if (!input) return null;
 
   const patterns = [
     /[?&]q=(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i,
     /[?&]query=(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i,
     /[?&]ll=(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i,
+    /[?&]center=(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i,
     /@(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i,
     /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/i,
+    /\/(?:search|place|dir)\/[^/?#]*?(-?\d{1,2}\.\d{3,})\s*,\s*(-?\d{1,3}\.\d{3,})/i,
     /^\s*(-?\d+(?:\.\d+)?)\s*[,\s]\s*(-?\d+(?:\.\d+)?)\s*$/,
   ];
 
@@ -54,6 +56,42 @@ export function parseLatLngInput(rawInput: string): { lat: number; lng: number }
       }
     }
   }
+  return null;
+}
+
+export async function resolveGoogleMapsLocationInput(
+  rawInput: string
+): Promise<{ lat: number; lng: number } | null> {
+  const direct = parseLatLngInput(rawInput);
+  if (direct) return direct;
+
+  const trimmed = (rawInput || "").trim();
+  if (!/^https?:\/\//i.test(trimmed)) return null;
+
+  try {
+    const u = new URL(trimmed);
+    const host = u.hostname.toLowerCase();
+    const isGoogleMapsHost =
+      host === "maps.app.goo.gl" ||
+      host === "goo.gl" ||
+      host === "g.co" ||
+      host.includes("google.");
+    if (!isGoogleMapsHost) return null;
+
+    const res = await fetch("/api/resolve-maps-link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: trimmed }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data?.ok && Number.isFinite(Number(data.lat)) && Number.isFinite(Number(data.lng))) {
+      return {
+        lat: Number(Number(data.lat).toFixed(6)),
+        lng: Number(Number(data.lng).toFixed(6)),
+      };
+    }
+  } catch {}
   return null;
 }
 

@@ -10,7 +10,8 @@ import {
 } from "lucide-react";
 import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeaderEditorModal";
 import { QuickAddStudentModal } from "./QuickAddStudentModal";
-import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo } from "./feeReceiptUtils";
+import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo, getVisibleSchoolRegNo } from "./feeReceiptUtils";
+import { buildCertificateQrUrl } from "../../utils/qrVerifyUrl";
 
 interface Props {
   school: School;
@@ -50,7 +51,7 @@ export const CertificateManager: React.FC<Props> = ({
     logoUrl: getSavedSchoolLogo(school?.logoUrl),
     principalName: school?.principalName || "",
     principalTitle: "Principal / Head of Institution",
-    code: school?.code || "",
+    code: getVisibleSchoolRegNo(school),
     principalPhone: school?.principalPhone || "",
     directorName: school?.directorName || "",
     directorPhone: school?.directorPhone || "",
@@ -70,7 +71,7 @@ export const CertificateManager: React.FC<Props> = ({
       email: school.email || "",
       logoUrl: getSavedSchoolLogo(school.logoUrl || previous.logoUrl),
       principalName: school.principalName || "",
-      code: school.code || "",
+      code: getVisibleSchoolRegNo(school),
       principalPhone: school.principalPhone || "",
       directorName: school.directorName || "",
       directorPhone: school.directorPhone || "",
@@ -230,8 +231,28 @@ export const CertificateManager: React.FC<Props> = ({
     window.print();
   };
 
-  // QR verification code data (Public URL that opens when scanned by mobile camera)
-  const qrData = `${typeof window !== "undefined" ? window.location.origin : ""}/?verify=1&type=certificate&n=${encodeURIComponent(candidateName || "")}&r=${encodeURIComponent(candidateRoll || "")}&adm=${encodeURIComponent(candidateAdmNo || "")}&s=${encodeURIComponent(school?.id || "")}&cNo=${encodeURIComponent(dispatchNo || "")}&session=${encodeURIComponent(academicSession || "")}&school=${encodeURIComponent(schoolDetails.schoolName || school?.name || "")}&certTitle=${encodeURIComponent(customTitle || "Transfer & Character Certificate")}`;
+  // QR verification code data (Public Chrome URL showing real ornate certificate with VERIFIED watermark)
+  const qrData = buildCertificateQrUrl({
+    schoolId: school?.id || "",
+    studentId: selectedStudentId || currentStudent?.id || "",
+    schoolName: schoolDetails.schoolName || school?.name || "",
+    candidateName,
+    rollNo: candidateRoll,
+    admNo: candidateAdmNo,
+    fatherName: candidateFather,
+    className: candidateClass,
+    dispatchNo,
+    session: academicSession,
+    certType,
+    certTitle: customTitle || "Transfer & Character Certificate",
+    issueDate,
+    reason,
+    remarks,
+    rank: candidateRank,
+    percentage: candidatePercentage,
+    division: candidateDivision,
+    customBodyText: useCustomText ? customBodyText : "",
+  });
 
   // Border theme styles
   const themeStyles: Record<CertTheme, { border: string; accent: string; headerColor: string; ribbonBg: string }> = {
@@ -324,20 +345,20 @@ export const CertificateManager: React.FC<Props> = ({
 
       <div className="max-w-6xl mx-auto p-4 sm:p-6 space-y-5 print:p-0 print:m-0 print:max-w-none">
         {/* Banner with 1-Click Auto-Generate */}
-        <div className="bg-gradient-to-br from-indigo-950 via-slate-900 to-amber-950 rounded-3xl p-5 text-white shadow-lg border border-amber-500/20 flex flex-col md:flex-row md:items-center justify-between gap-4 print:hidden">
+        <div className="bg-gradient-to-br from-indigo-50 via-sky-50 to-amber-50 dark:from-indigo-950 dark:via-slate-900 dark:to-amber-950 rounded-3xl p-5 text-slate-900 dark:text-white shadow-md border-2 border-indigo-700 dark:border-amber-500/30 flex flex-col md:flex-row md:items-center justify-between gap-4 print:hidden">
           <div>
             <div className="flex items-center gap-2 flex-wrap">
               <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-400 text-slate-950">
                 Official Certification Hub
               </span>
-              <span className="text-xs text-amber-200/80 font-bold">
+              <span className="text-xs text-amber-800 dark:text-amber-200/80 font-bold">
                 Session {academicSession}
               </span>
             </div>
-            <h1 className="text-xl sm:text-2xl font-black text-white mt-1">
+            <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-1">
               Certificate Designer &amp; Auto-Generator
             </h1>
-            <p className="text-xs text-slate-300 mt-1 max-w-xl">
+            <p className="text-xs text-slate-700 dark:text-slate-300 font-medium mt-1 max-w-xl">
               School ke registered marks aur student data se instant certificate banayein. User ka naam, rank aur details visually highlighted aur printable rahenge.
             </p>
           </div>
@@ -659,13 +680,18 @@ export const CertificateManager: React.FC<Props> = ({
                   {showSchoolDetail("address") && schoolDetails.address && (
                     <p className="text-xs text-slate-700 mt-0.5 font-sans font-medium">{schoolDetails.address}</p>
                   )}
-                  {(showSchoolDetail("affiliation") && schoolDetails.affiliation) || (showSchoolDetail("code") && schoolDetails.code) ? (
-                    <p className="text-[10.5px] text-amber-900 font-bold uppercase tracking-widest mt-0.5 font-sans">
-                      {showSchoolDetail("affiliation") ? schoolDetails.affiliation : ""}
-                      {showSchoolDetail("affiliation") && showSchoolDetail("code") && schoolDetails.code ? " • " : ""}
-                      {showSchoolDetail("code") && schoolDetails.code ? `School Code: ${schoolDetails.code}` : ""}
-                    </p>
-                  ) : null}
+                  {(() => {
+                    const visibleCode = getVisibleSchoolRegNo(school, schoolDetails.code);
+                    const hasAff = showSchoolDetail("affiliation") && !!schoolDetails.affiliation;
+                    const hasCode = showSchoolDetail("code") && !!visibleCode;
+                    return (hasAff || hasCode) ? (
+                      <p className="text-[10.5px] text-amber-900 font-bold uppercase tracking-widest mt-0.5 font-sans">
+                        {hasAff ? schoolDetails.affiliation : ""}
+                        {hasAff && hasCode ? " • " : ""}
+                        {hasCode ? `Reg. No: ${visibleCode}` : ""}
+                      </p>
+                    ) : null;
+                  })()}
                   {(showSchoolDetail("phone") && schoolDetails.phone) || (showSchoolDetail("email") && schoolDetails.email) ? (
                     <p className="text-[9.5px] text-slate-500 font-sans">
                       {showSchoolDetail("phone") && schoolDetails.phone ? `Helpline: ${schoolDetails.phone}` : ""}
@@ -861,7 +887,7 @@ export const CertificateManager: React.FC<Props> = ({
 
               <div className="flex flex-col items-center">
                 <div className="p-1 bg-white border border-slate-300 rounded-lg shadow-xs">
-                  <QRCode value={qrData} size={48} level="M" />
+                  <QRCode value={qrData} size={52} level="L" />
                 </div>
                 <span className="text-[7.5px] font-sans text-slate-500 mt-1 font-bold">Live Scan Verification</span>
               </div>

@@ -7,13 +7,14 @@ import {
   CreditCard, Printer, Download, Eye, ChevronLeft, User, Phone, MapPin,
   Calendar, Award, Sparkles, Filter, CheckSquare, Square, Layers, RefreshCw,
   Building2, UserPlus, Sliders, CheckCircle2, QrCode, FileText, Image as ImageIcon,
-  Edit2, AlertTriangle, ArrowRightLeft, ShieldCheck, HelpCircle, ChevronDown, ChevronUp, Save
+  Edit2, AlertTriangle, ArrowRightLeft, ShieldCheck, HelpCircle, ChevronDown, ChevronUp, Save, Search
 } from "lucide-react";
 import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeaderEditorModal";
 import { QuickAddStudentModal } from "./QuickAddStudentModal";
 import { DirectUploadButton } from "../DirectUploadButton";
-import { updateSchool, isStudentInClass } from "../../school-firebase";
-import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo, formatAcademicSession } from "./feeReceiptUtils";
+import { updateSchool, isStudentInClass, isActiveSchoolTeacherRecord, isActiveStaffRecord, getDeletedTeacherIds } from "../../school-firebase";
+import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo, getVisibleSchoolRegNo, formatAcademicSession } from "./feeReceiptUtils";
+import { buildStudentIdCardQrUrl, buildStaffIdCardQrUrl } from "../../utils/qrVerifyUrl";
 
 interface Props {
   school: School;
@@ -41,11 +42,21 @@ export const IdCardManager: React.FC<Props> = ({
     : [];
   const [students, setStudents] = useState<SchoolStudent[]>(safeInitialStudents);
 
-  // Merge staff and teachers into unifiedStaff so all faculty have immediate ID cards
+  // Merge staff and teachers into unifiedStaff so all active faculty have immediate ID cards
   const unifiedStaff: StaffEmployee[] = React.useMemo(() => {
-    const existingIds = new Set((staff || []).map(s => s.id));
-    const teacherStaff: StaffEmployee[] = (teachers || [])
-      .filter(t => t && !existingIds.has(t.id))
+    const deletedIds = getDeletedTeacherIds(school?.id || "");
+    const cleanTeachers = (teachers || []).filter(
+      (t) => t && isActiveSchoolTeacherRecord(t) && !deletedIds.has(t.id)
+    );
+    const activeTeacherIds = new Set(cleanTeachers.map((t) => t.id));
+    const cleanStaff = (staff || []).filter((s) => {
+      if (!s || !isActiveStaffRecord(s) || deletedIds.has(s.id)) return false;
+      if (s.department === "Academic / Faculty" && !activeTeacherIds.has(s.id)) return false;
+      return true;
+    });
+    const existingIds = new Set(cleanStaff.map(s => s.id));
+    const teacherStaff: StaffEmployee[] = cleanTeachers
+      .filter(t => !existingIds.has(t.id))
       .map(t => ({
         id: t.id,
         schoolId: t.schoolId || school?.id,
@@ -77,7 +88,7 @@ export const IdCardManager: React.FC<Props> = ({
       employeeId: "ADMIN-01",
       createdAt: new Date().toISOString(),
     };
-    return [adminStaffMember, ...(staff || []), ...teacherStaff];
+    return [adminStaffMember, ...cleanStaff, ...teacherStaff];
   }, [staff, teachers, school?.id, school?.principalName, school?.email, school?.phone, school?.mobile, school?.logoUrl]);
 
   const [activeTab, setActiveTab] = useState<"students" | "staff">(initialTab);
@@ -85,6 +96,12 @@ export const IdCardManager: React.FC<Props> = ({
   const [search, setSearch] = useState("");
   const [selectedStudent, setSelectedStudent] = useState<SchoolStudent | null>(safeInitialStudents[0] || null);
   const [selectedStaff, setSelectedStaff] = useState<StaffEmployee | null>(unifiedStaff[0] || null);
+
+  useEffect(() => {
+    if (selectedStaff && !unifiedStaff.some((s) => s.id === selectedStaff.id)) {
+      setSelectedStaff(unifiedStaff[0] || null);
+    }
+  }, [unifiedStaff, selectedStaff]);
   const [theme, setTheme] = useState<CardTheme>("modern_indigo");
   const [bulkMode, setBulkMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -110,7 +127,7 @@ export const IdCardManager: React.FC<Props> = ({
     logoUrl: getSavedSchoolLogo(school?.logoUrl, school?.id),
     principalName: school?.principalName || "",
     principalTitle: "Principal",
-    code: school?.code || "",
+    code: getVisibleSchoolRegNo(school),
     principalPhone: school?.principalPhone || "",
     directorName: school?.directorName || "",
     directorPhone: school?.directorPhone || "",
@@ -132,7 +149,7 @@ export const IdCardManager: React.FC<Props> = ({
       email: school.email || "",
       logoUrl: getSavedSchoolLogo(school.logoUrl || previous.logoUrl, school.id),
       principalName: school.principalName || "",
-      code: school.code || "",
+      code: getVisibleSchoolRegNo(school),
       principalPhone: school.principalPhone || "",
       directorName: school.directorName || "",
       directorPhone: school.directorPhone || "",
@@ -225,7 +242,7 @@ export const IdCardManager: React.FC<Props> = ({
         customFields: schoolDetails.customFields || [],
         documentPrintFields: schoolDetails.documentPrintFields || {},
         idCardFieldSettings: fieldSettings,
-        code: schoolDetails.code || school.code,
+        code: (schoolDetails.code || "").trim(),
       });
       setSaveSuccessMsg("School details default profile mein save ho gaye!");
       setTimeout(() => setSaveSuccessMsg(""), 3000);
@@ -312,24 +329,41 @@ export const IdCardManager: React.FC<Props> = ({
     const cleanClassName = className || item.className || "";
     const cleanSchoolName = schoolDetails.schoolName || school?.name || "";
 
-    const qrPrefix = isStaff ? "NSTA-SCHOOL-STAFF:" : "NSTA-SCHOOL:";
-    const qrVerifyUrl = `${qrPrefix}${[
-      encodeURIComponent(cleanSchoolId),
-      encodeURIComponent(cleanStudentId),
-      encodeURIComponent(cleanRollNo),
-      encodeURIComponent(cleanClassId),
-      encodeURIComponent(cleanStudentName),
-      encodeURIComponent(cleanAdmissionNo),
-      encodeURIComponent(cleanPhone),
-      encodeURIComponent(cleanFatherName),
-      encodeURIComponent(cleanMotherName),
-      encodeURIComponent(cleanBloodGroup),
-      encodeURIComponent(cleanDob),
-      encodeURIComponent(cleanAddress),
-      encodeURIComponent(cleanMonthlyFee),
-      encodeURIComponent(cleanClassName),
-      encodeURIComponent(cleanSchoolName)
-    ].join(":")}`;
+    const qrVerifyUrl = isStaff
+      ? buildStaffIdCardQrUrl({
+          isAdmin: false,
+          schoolId: cleanSchoolId,
+          staffId: cleanStudentId,
+          empId: cleanRollNo,
+          department: cleanClassId,
+          name: cleanStudentName,
+          admNo: cleanAdmissionNo,
+          phone: cleanPhone,
+          fatherName: cleanFatherName,
+          motherName: cleanMotherName,
+          bloodGroup: cleanBloodGroup,
+          dob: cleanDob,
+          address: cleanAddress,
+          designation: cleanClassName,
+          schoolName: cleanSchoolName,
+        })
+      : buildStudentIdCardQrUrl({
+          schoolId: cleanSchoolId,
+          studentId: cleanStudentId,
+          rollNo: cleanRollNo,
+          classId: cleanClassId,
+          studentName: cleanStudentName,
+          admissionNo: cleanAdmissionNo,
+          phone: cleanPhone,
+          fatherName: cleanFatherName,
+          motherName: cleanMotherName,
+          bloodGroup: cleanBloodGroup,
+          dob: cleanDob,
+          address: cleanAddress,
+          monthlyFee: cleanMonthlyFee,
+          className: cleanClassName,
+          schoolName: cleanSchoolName,
+        });
     const isLandscape = cardOrientation === "landscape";
 
     const cleanSessionLabel = formatAcademicSession(schoolDetails.session || "2026-27");
@@ -484,7 +518,7 @@ export const IdCardManager: React.FC<Props> = ({
             {/* 3. RIGHT COLUMN: High-Contrast Attendance QR Code (Balanced ~22% width, Fast Scan) */}
             <div className="flex flex-col items-center justify-center shrink-0 w-[78px]">
               <div className="p-1 bg-white border border-slate-300 rounded-lg shadow-2xs flex items-center justify-center">
-                <QRCode value={qrVerifyUrl} size={66} level="M" />
+                <QRCode value={qrVerifyUrl} size={66} level="L" />
               </div>
               <span className="text-[6px] font-black text-slate-600 uppercase tracking-tighter mt-0.5 flex items-center gap-0.5 whitespace-nowrap">
                 <ShieldCheck className="w-2.5 h-2.5 text-emerald-600 inline shrink-0" /> Scan ID
@@ -501,7 +535,7 @@ export const IdCardManager: React.FC<Props> = ({
               {showSchoolDetail("address") && schoolDetails.address && <span className="font-bold text-slate-700">{schoolDetails.address}</span>}
               {showSchoolDetail("phone") && schoolDetails.phone && <span className="ml-1 text-slate-600 font-semibold">• Helpline: {schoolDetails.phone}</span>}
               {showSchoolDetail("email") && schoolDetails.email && <span className="ml-1 text-slate-500">• {schoolDetails.email}</span>}
-              {showSchoolDetail("code") && schoolDetails.code && schoolDetails.code !== (school as any)?.lockCode && schoolDetails.code !== "0002" && <span className="ml-1 text-slate-500">• Reg. No: {schoolDetails.code}</span>}
+              {showSchoolDetail("code") && getVisibleSchoolRegNo(school, schoolDetails.code) && <span className="ml-1 text-slate-500">• Reg. No: {getVisibleSchoolRegNo(school, schoolDetails.code)}</span>}
               {customSchoolDetails && <span className="ml-1 text-slate-500">• {customSchoolDetails}</span>}
             </div>
             <div className="text-right shrink-0 flex flex-col items-end justify-end">
@@ -591,7 +625,7 @@ export const IdCardManager: React.FC<Props> = ({
           {/* Scannable Attendance QR on RIGHT */}
           <div className="flex flex-col items-center justify-center shrink-0 w-[76px]">
             <div className="p-1 bg-white border border-slate-300 rounded-lg shadow-2xs flex items-center justify-center">
-              <QRCode value={qrVerifyUrl} size={62} level="M" />
+              <QRCode value={qrVerifyUrl} size={62} level="L" />
             </div>
             <span className="text-[6.5px] text-slate-600 font-black uppercase tracking-tighter mt-0.5">
               Scan ID
@@ -694,7 +728,7 @@ export const IdCardManager: React.FC<Props> = ({
             {showSchoolDetail("address") && schoolDetails.address && <span className="font-bold text-slate-700 truncate block">{schoolDetails.address}</span>}
             {showSchoolDetail("phone") && schoolDetails.phone && <span className="text-slate-600 font-semibold text-[6px] block">Helpline: {schoolDetails.phone}</span>}
             {showSchoolDetail("email") && schoolDetails.email && <span className="text-slate-500 text-[6px] block">{schoolDetails.email}</span>}
-            {showSchoolDetail("code") && schoolDetails.code && schoolDetails.code !== (school as any)?.lockCode && schoolDetails.code !== "0002" && <span className="text-slate-500 text-[6px]">Reg. No: {schoolDetails.code}</span>}
+            {showSchoolDetail("code") && getVisibleSchoolRegNo(school, schoolDetails.code) && <span className="text-slate-500 text-[6px]">Reg. No: {getVisibleSchoolRegNo(school, schoolDetails.code)}</span>}
             {customSchoolDetails && <span className="text-slate-500 text-[6px] block truncate">{customSchoolDetails}</span>}
           </div>
           <div className="text-right shrink-0 flex flex-col items-end justify-end">
@@ -782,67 +816,89 @@ export const IdCardManager: React.FC<Props> = ({
         }
       `}</style>
 
-      {/* Top Navbar */}
-      <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-purple-950 px-4 py-3.5 text-white shadow-lg sticky top-0 z-30 print:hidden">
-        <div className="max-w-6xl mx-auto flex items-center justify-between flex-wrap gap-2">
-          <button
-            onClick={onBack}
-            className="flex items-center gap-1.5 text-blue-200 hover:text-white text-xs sm:text-sm font-bold transition-colors"
-          >
-            <ChevronLeft className="w-4 h-4" /> School Dashboard
-          </button>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            {/* Quick School Details button */}
+      {/* Top Navbar (Compact Premium 2-Tier Mobile-First Header) */}
+      <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-md px-3 sm:px-4 py-2.5 text-slate-900 dark:text-white border-b border-slate-200 dark:border-slate-800 shadow-xs sticky top-0 z-30 print:hidden">
+        <div className="max-w-6xl mx-auto space-y-2">
+          <div className="flex items-center justify-between gap-2">
             <button
-              onClick={() => setShowQuickSchoolEditor(!showQuickSchoolEditor)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs ${
-                showQuickSchoolEditor ? "bg-amber-500 text-slate-950 font-black" : "bg-white/15 hover:bg-white/25 text-white"
-              }`}
+              type="button"
+              onClick={onBack}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 text-xs font-black transition cursor-pointer active:scale-95"
             >
-              <Building2 className="w-3.5 h-3.5" />
-              <span>🏫 School Details Likhein</span>
-              {showQuickSchoolEditor ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+              <ChevronLeft className="w-4 h-4" />
+              <span>Back</span>
             </button>
 
-            {/* Smart Auto Data Fit toggle */}
+            <div className="flex items-center gap-1.5 min-w-0">
+              <CreditCard className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+              <span className="text-xs sm:text-sm font-black tracking-tight truncate">
+                QR ID Card Studio
+              </span>
+            </div>
+
             <button
+              type="button"
+              onClick={handlePrint}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-black shadow-sm active:scale-95 transition cursor-pointer shrink-0"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span>Print / PDF</span>
+            </button>
+          </div>
+
+          {/* Compact 4-Button Action Strip (Always 1 Row) */}
+          <div className="grid grid-cols-4 gap-1.5">
+            <button
+              type="button"
+              onClick={() => setShowQuickSchoolEditor(!showQuickSchoolEditor)}
+              className={`px-1.5 py-1.5 rounded-xl text-[10.5px] sm:text-xs font-bold flex items-center justify-center gap-1 border transition-all cursor-pointer min-w-0 ${
+                showQuickSchoolEditor
+                  ? "bg-amber-400/20 text-amber-800 dark:text-amber-300 border-amber-400 shadow-2xs"
+                  : "bg-slate-50 dark:bg-slate-800/80 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700"
+              }`}
+              title="School Details Likhein"
+            >
+              <Building2 className="w-3.5 h-3.5 shrink-0 text-indigo-500" />
+              <span className="truncate">Details</span>
+              {showQuickSchoolEditor ? <ChevronUp className="w-3 h-3 shrink-0" /> : <ChevronDown className="w-3 h-3 shrink-0 opacity-70" />}
+            </button>
+
+            <button
+              type="button"
               onClick={() => setShowAutoMappingOptions(!showAutoMappingOptions)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs ${
-                autoDataMapping ? "bg-emerald-600 hover:bg-emerald-500 text-white" : "bg-slate-700 text-slate-300"
+              className={`px-1.5 py-1.5 rounded-xl text-[10.5px] sm:text-xs font-bold flex items-center justify-center gap-1 border transition-all cursor-pointer min-w-0 ${
+                showAutoMappingOptions || autoDataMapping
+                  ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/40"
+                  : "bg-slate-50 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700"
               }`}
               title="Card mein data automatically sahi jagah fit ho jata hai"
             >
-              <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-              <span>⚡ Auto-Fit Data: {autoDataMapping ? "ON" : "OFF"}</span>
+              <Sparkles className="w-3.5 h-3.5 shrink-0 text-emerald-500" />
+              <span className="truncate">Auto-Fit</span>
             </button>
 
-            {/* Orientation Switcher */}
             <button
+              type="button"
               onClick={() => setCardOrientation(prev => prev === "landscape" ? "portrait" : "landscape")}
-              className="px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 bg-indigo-700/80 hover:bg-indigo-600 text-white transition-all shadow-xs"
-              title="Card shape badlein"
+              className="px-1.5 py-1.5 rounded-xl text-[10.5px] sm:text-xs font-bold flex items-center justify-center gap-1 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-200 border border-indigo-200 dark:border-indigo-700/60 transition-all cursor-pointer min-w-0"
+              title="Card shape badlein (CR80)"
             >
-              <ArrowRightLeft className="w-3.5 h-3.5" />
-              <span>{cardOrientation === "landscape" ? "Landscape (CR80)" : "Portrait (CR80)"}</span>
+              <ArrowRightLeft className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">{cardOrientation === "landscape" ? "Landscape" : "Portrait"}</span>
             </button>
 
-            {/* Bulk vs Single */}
             <button
+              type="button"
               onClick={() => setBulkMode(!bulkMode)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
-                bulkMode ? "bg-amber-500 text-slate-950 font-black shadow" : "bg-white/10 text-white hover:bg-white/20"
+              className={`px-1.5 py-1.5 rounded-xl text-[10.5px] sm:text-xs font-bold flex items-center justify-center gap-1 border transition-all cursor-pointer min-w-0 ${
+                bulkMode
+                  ? "bg-indigo-600 text-white border-indigo-500 shadow-xs"
+                  : "bg-slate-50 dark:bg-slate-800/80 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700"
               }`}
+              title="Bulk Sheet ya Single Card Mode"
             >
-              <Layers className="w-3.5 h-3.5" /> {bulkMode ? "Single Mode" : "Bulk Print (Sheet)"}
-            </button>
-
-            {/* Print button */}
-            <button
-              onClick={handlePrint}
-              className="px-4 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-xs font-black flex items-center gap-1.5 shadow active:scale-95 transition-transform"
-            >
-              <Printer className="w-3.5 h-3.5" /> Print / Save PDF
+              <Layers className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">{bulkMode ? "Single" : "Bulk Sheet"}</span>
             </button>
           </div>
         </div>
@@ -1080,68 +1136,81 @@ export const IdCardManager: React.FC<Props> = ({
           </div>
         )}
 
-        {/* Controls bar (hidden in print) */}
-        <div className="bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm mb-6 space-y-4 print:hidden">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+        {/* Controls Card (Compact & Premium Redesign) */}
+        <div className="bg-white dark:bg-slate-800/95 rounded-2xl p-3.5 sm:p-4 border border-slate-200/80 dark:border-slate-700/80 shadow-sm mb-4 space-y-3 print:hidden">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
             <div>
-              <h1 className="text-xl font-black text-slate-900 dark:text-white flex items-center gap-2">
-                <CreditCard className="w-6 h-6 text-indigo-600" />
-                QR Code ID Card Generator
+              <h1 className="text-base sm:text-lg font-black text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
+                <span className="w-7 h-7 rounded-xl bg-indigo-50 dark:bg-indigo-950/80 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                  <CreditCard className="w-4 h-4" />
+                </span>
+                <span>QR Code ID Card Generator</span>
               </h1>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Standard ID card rule ke hisab se <strong>Student Photo LEFT me</strong> aur <strong>Attendance QR Code RIGHT me</strong> set hai.
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                Standard layout: Photo Left • Attendance QR Right
               </p>
             </div>
 
-            {/* Tab selection: Students vs Staff */}
-            <div className="flex p-1 bg-slate-100 dark:bg-slate-700 rounded-xl">
+            {/* Segmented Tab Switcher: Students vs Staff */}
+            <div className="grid grid-cols-2 p-1 bg-slate-100 dark:bg-slate-900/70 rounded-xl border border-slate-200/70 dark:border-slate-700 shrink-0">
               <button
+                type="button"
                 onClick={() => { setActiveTab("students"); setSelectedIds([]); }}
-                className={`px-4 py-2 rounded-lg text-xs font-black transition-all ${
-                  activeTab === "students" ? "bg-indigo-600 text-white shadow" : "text-slate-600 dark:text-slate-300"
+                className={`px-3 py-1.5 rounded-lg text-[11px] sm:text-xs font-black transition-all cursor-pointer truncate ${
+                  activeTab === "students"
+                    ? "bg-indigo-600 text-white shadow-xs"
+                    : "text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white"
                 }`}
               >
-                🎓 Students ({students.length})
+                Students ({students.length})
               </button>
               <button
+                type="button"
                 onClick={() => { setActiveTab("staff"); setSelectedIds([]); }}
-                className={`px-4 py-2 rounded-lg text-xs font-black transition-all ${
-                  activeTab === "staff" ? "bg-indigo-600 text-white shadow" : "text-slate-600 dark:text-slate-300"
+                className={`px-3 py-1.5 rounded-lg text-[11px] sm:text-xs font-black transition-all cursor-pointer truncate ${
+                  activeTab === "staff"
+                    ? "bg-indigo-600 text-white shadow-xs"
+                    : "text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white"
                 }`}
               >
-                👨‍🏫 Staff & Teachers ({unifiedStaff.length})
+                Staff ({unifiedStaff.length})
               </button>
             </div>
           </div>
 
-          {/* Theme and Filters */}
-          <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t dark:border-slate-700">
-            {/* Theme Picker */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-slate-500">Card Theme:</span>
-              {(["modern_indigo", "royal_maroon", "golden_dark", "emerald_green"] as CardTheme[]).map(t => (
+          {/* Theme Swatches (Single Compact Row) */}
+          <div className="pt-2.5 border-t border-slate-100 dark:border-slate-700/80 space-y-2.5">
+            <div className="grid grid-cols-4 gap-1.5">
+              {([
+                { id: "modern_indigo", label: "Indigo", dot: "bg-indigo-600" },
+                { id: "royal_maroon", label: "Maroon", dot: "bg-rose-800" },
+                { id: "golden_dark", label: "Gold", dot: "bg-amber-500" },
+                { id: "emerald_green", label: "Emerald", dot: "bg-emerald-600" },
+              ] as { id: CardTheme; label: string; dot: string }[]).map((t) => (
                 <button
-                  key={t}
-                  onClick={() => setTheme(t)}
-                  className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase transition-all ${
-                    theme === t
-                      ? "ring-2 ring-indigo-500 bg-slate-200 dark:bg-slate-700 font-bold"
-                      : "bg-slate-100 dark:bg-slate-700/50 text-slate-600 dark:text-slate-400"
+                  key={t.id}
+                  type="button"
+                  onClick={() => setTheme(t.id)}
+                  className={`px-2 py-1.5 rounded-xl text-[11px] font-bold flex items-center justify-center gap-1.5 border transition-all cursor-pointer min-w-0 ${
+                    theme === t.id
+                      ? "border-indigo-500 bg-indigo-50/80 dark:bg-indigo-950/60 text-indigo-800 dark:text-indigo-200 ring-1 ring-indigo-500/40 shadow-2xs font-black"
+                      : "border-slate-200 dark:border-slate-700 bg-slate-50/80 dark:bg-slate-900/40 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
                   }`}
                 >
-                  {t.replace("_", " ")}
+                  <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${t.dot}`} />
+                  <span className="truncate">{t.label}</span>
                 </button>
               ))}
             </div>
 
-            {/* Search and Class Filter */}
-            <div className="flex items-center gap-2">
+            {/* Clean Responsive Class Filter + Add Student + Search Bar */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
               {activeTab === "students" && (
-                <>
+                <div className="grid grid-cols-[1fr_auto] gap-1.5 sm:w-auto shrink-0">
                   <select
                     value={selectedClassId}
                     onChange={e => setSelectedClassId(e.target.value)}
-                    className="px-3 py-1.5 text-xs font-bold bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-white rounded-lg border-0"
+                    className="w-full sm:w-36 px-2.5 py-1.5 text-xs font-bold bg-slate-100 dark:bg-slate-900/80 text-slate-800 dark:text-white rounded-xl border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   >
                     <option value="all">Sabhi Classes</option>
                     {classes.map(c => (
@@ -1149,76 +1218,81 @@ export const IdCardManager: React.FC<Props> = ({
                     ))}
                   </select>
                   <button
+                    type="button"
                     onClick={() => setShowAddStudentModal(true)}
-                    className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1 shadow-xs"
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1 shadow-xs active:scale-95 transition cursor-pointer whitespace-nowrap"
                     title="Naya student turant add karein"
                   >
-                    <UserPlus className="w-3.5 h-3.5" /> + Student Data
+                    <UserPlus className="w-3.5 h-3.5 shrink-0" />
+                    <span>+ Student</span>
                   </button>
-                </>
+                </div>
               )}
-              <input
-                type="text"
-                placeholder="Search name, roll, adm..."
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                className="px-3 py-1.5 text-xs bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-white rounded-lg border-0 w-44"
-              />
+
+              <div className="relative flex-1 min-w-0">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder="Search name, roll, adm..."
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  className="w-full pl-8 pr-3 py-1.5 text-xs font-medium bg-slate-100 dark:bg-slate-900/80 text-slate-800 dark:text-white placeholder:text-slate-400 rounded-xl border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Notice Badge for Print Safety */}
-        <div className="mb-4 p-2.5 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 rounded-xl flex items-center justify-between text-xs text-indigo-900 dark:text-indigo-200 print:hidden">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4 text-indigo-600 shrink-0" />
-            <span>
-              <strong>Standard ID Layout Active:</strong> Student ki Photo baayein (LEFT) taraf, pura Admission No center me aur Attendance QR daayein (RIGHT) taraf balanced size me set hai!
+        {/* Compact Layout Safety Notice */}
+        <div className="mb-4 px-3 py-2 bg-indigo-50/80 dark:bg-indigo-950/35 border border-indigo-200/80 dark:border-indigo-800/70 rounded-xl flex items-center justify-between gap-2 text-[11px] text-indigo-900 dark:text-indigo-200 print:hidden">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <ShieldCheck className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+            <span className="truncate font-semibold">
+              Photo Left • Adm No Center • Attendance QR Right
             </span>
           </div>
-          <div className="flex items-center gap-1">
-            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-white dark:bg-slate-800 border">
-              Orientation: {cardOrientation.toUpperCase()}
-            </span>
-          </div>
+          <span className="text-[10px] font-black px-2 py-0.5 rounded-lg bg-white dark:bg-slate-800 border border-indigo-200 dark:border-slate-700 shrink-0 tracking-wide">
+            {cardOrientation.toUpperCase()} CR80
+          </span>
         </div>
 
         {/* Bulk Mode View vs Single Live Preview */}
         {bulkMode ? (
           <div>
             {/* Bulk Toolbar */}
-            <div className="flex items-center justify-between bg-white dark:bg-slate-800 p-3 rounded-xl shadow-sm mb-4 print:hidden">
+            <div className="flex flex-wrap items-center justify-between gap-2 bg-white dark:bg-slate-800 p-3 rounded-xl border border-slate-200/80 dark:border-slate-700 shadow-sm mb-4 print:hidden">
               <div className="flex items-center gap-2">
                 <button
+                  type="button"
                   onClick={toggleSelectAll}
-                  className="flex items-center gap-1.5 text-xs font-bold text-indigo-600 hover:text-indigo-700"
+                  className="flex items-center gap-1.5 text-xs font-bold text-indigo-600 hover:text-indigo-700 cursor-pointer"
                 >
                   {selectedIds.length === currentList.length ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
                   {selectedIds.length === currentList.length ? "Deselect All" : "Select All"} ({currentList.length})
                 </button>
                 <span className="text-xs text-slate-400">|</span>
                 <span className="text-xs font-bold text-slate-600 dark:text-slate-300">
-                  {selectedIds.length > 0 ? `${selectedIds.length} cards ready to print` : "Print ke liye cards select karein"}
+                  {selectedIds.length > 0 ? `${selectedIds.length} ready` : "Cards select karein"}
                 </span>
               </div>
-              <label className="flex items-center gap-2 text-xs font-bold text-slate-600 dark:text-slate-300">
-                A4 layout
+              <div className="flex items-center gap-2">
                 <select
                   value={cardsPerPage}
                   onChange={event => setCardsPerPage(Number(event.target.value) as 4 | 8)}
-                  className="px-2 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700"
+                  className="px-2.5 py-1.5 text-xs font-bold rounded-xl border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-700 text-slate-800 dark:text-white"
                 >
-                  <option value={4}>4 cards per page · larger</option>
-                  <option value={8}>8 cards per page · standard</option>
+                  <option value={4}>4 / page · Large</option>
+                  <option value={8}>8 / page · Standard</option>
                 </select>
-              </label>
-              <button
-                onClick={handlePrint}
-                disabled={selectedIds.length === 0}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-black shadow flex items-center gap-1.5"
-              >
-                <Printer className="w-3.5 h-3.5" /> Print Selected ({selectedIds.length || currentList.length})
-              </button>
+                <button
+                  type="button"
+                  onClick={handlePrint}
+                  disabled={selectedIds.length === 0}
+                  className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-black shadow flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Printer className="w-3.5 h-3.5" /> Print ({selectedIds.length || currentList.length})
+                </button>
+              </div>
             </div>
 
             {/* A4 Sheet Print Grid with Cut Guides */}

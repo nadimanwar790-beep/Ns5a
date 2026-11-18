@@ -46,6 +46,7 @@ import {
   Filter,
   Layers,
   Eye,
+  EyeOff,
   RefreshCw,
   UserPlus,
   ChevronDown,
@@ -53,6 +54,7 @@ import {
   X,
   ShoppingBag,
   Zap,
+  Globe,
 } from "lucide-react";
 import { toast } from "sonner";
 import QRCode from "react-qr-code";
@@ -89,6 +91,8 @@ import {
   subscribeToSchoolCommunityPosts,
   subscribeToTeachers,
   getClasses,
+  getStudents,
+  getSessions,
   getLocalSchoolCurriculumNotes,
   isDemoRecord,
   shouldUseDemoForSchool,
@@ -97,7 +101,9 @@ import {
   dispatchOfficialSchoolBirthdayWish,
   checkAndDispatchTodaysBirthdays,
 } from "../../school-firebase";
-import { getSavedSchoolLogo, isAppLogo } from "./feeReceiptUtils";
+import { getSessionMonthCodes } from "../../utils/reAdmissionUtils";
+import { getSavedSchoolLogo, getVisibleSchoolRegNo, isAppLogo, maskSensitive2Chars } from "./feeReceiptUtils";
+import { buildStudentIdCardQrUrl } from "../../utils/qrVerifyUrl";
 import { getDemoSchoolDataset, isHolidayDate, isDemoDataEnabled, setDemoDataEnabled } from "./demoDataStore";
 import { OfficialFeeReceiptModal } from "./OfficialFeeReceiptModal";
 import { AdmissionFormPrintModal } from "./AdmissionFormPrintModal";
@@ -123,7 +129,12 @@ import { isSchoolEliteCurriculum, type School, type SchoolStudent, type SchoolTe
 import { ParentLeaveManager } from "./ParentLeaveManager";
 import { PtmSchedulerModal } from "./PtmSchedulerModal";
 import { AdminBusFleetRadar } from "./AdminBusFleetRadar";
+import { ParentTrustDashboardCard } from "./ParentTrustDashboardCard";
+import { StudentGrowthAndPortfolioView } from "./StudentGrowthAndPortfolioView";
+import { StudentHealthAndSafetyView } from "./StudentHealthAndSafetyView";
 import { playBusArrivalAlarmChime, checkAndTriggerBusProximity } from "../../utils/busProximityAlarm";
+import { rtdb } from "../../firebase";
+import { ref as dbRef, onValue } from "firebase/database";
 import { getDynamicAcademicSessionLabel } from "../../utils/safeBrowserActions";
 import {
   fetchSchoolRazorpayConfig,
@@ -153,6 +164,7 @@ interface Props {
   onRemoveLinkedStudent?: (studentKey: string) => void;
   onSwitchStudent?: (studentKey: string) => void;
   onOpenPlatformContent?: () => void;
+  onVisitWebsite?: () => void;
   onBack?: () => void;
   onLogout?: () => void;
   // Backward compatibility props
@@ -174,8 +186,9 @@ type TabType =
   | "teachers"
   | "videos"
   | "holidays"
-  | "events_memories"
   | "explore_plus"
+  | "growth_hub"
+  | "health_safety"
   | "store"
   | "profile";
 
@@ -184,18 +197,18 @@ export type StudentAppTheme = "current" | "white" | "black";
 export const STUDENT_THEMES_META = [
   {
     id: "current" as StudentAppTheme,
-    label: "Midnight",
-    labelHi: "मिडनाइट स्लेट",
+    label: "Blue",
+    labelHi: "रॉयल ब्लू",
     badge: "Default",
-    desc: "डिफ़ॉल्ट स्कूल ब्लू-स्लेट थीम",
-    dotColor: "bg-indigo-500",
+    desc: "रॉयल नेवी ब्लू व शार्प कॉन्ट्रास्ट थीम",
+    dotColor: "bg-blue-500",
   },
   {
     id: "white" as StudentAppTheme,
     label: "White",
     labelHi: "सफेद / लाइट",
     badge: "Daylight",
-    desc: "दिन में पढ़ने के लिए उत्तम स्वच्छ लाइट मोड",
+    desc: "हल्के रंग व गहरे बॉर्डर के साथ साफ लाइट मोड",
     dotColor: "bg-amber-400",
   },
   {
@@ -203,7 +216,7 @@ export const STUDENT_THEMES_META = [
     label: "Black",
     labelHi: "AMOLED ब्लैक",
     badge: "OLED Dark",
-    desc: "सुपर डार्क मोड - बैटरी बचत व आंखों का आराम",
+    desc: "शुद्ध ब्लैक मोड - आंखों का आराम व बैटरी बचत",
     dotColor: "bg-cyan-400",
   },
 ];
@@ -223,6 +236,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   onRemoveLinkedStudent,
   onSwitchStudent,
   onOpenPlatformContent,
+  onVisitWebsite,
   onBack,
   onLogout,
 }) => {
@@ -230,13 +244,13 @@ export const StudentSchoolPanel: React.FC<Props> = ({
     if (!t) return "overview";
     if (t === "updates" || t === "messenger" || t === "chat" || t === "nsta_messenger") return "channel";
     if (t === "feed" || t === "community" || t === "notices") return "holidays";
-    if (t === "memories" || t === "events") return "events_memories";
+    if (t === "memories" || t === "events" || t === "events_memories") return "overview";
     if (t === "explore" || t === "explore_plus") return "overview";
     if (t === "store" || t === "shop" || t === "school_store") return "store";
     if ([
       "overview", "channel", "attendance", "fees", "exams", "homework",
-      "idcard", "teachers", "videos", "holidays", "events_memories",
-      "store"
+      "idcard", "teachers", "videos", "holidays",
+      "growth_hub", "health_safety", "store"
     ].includes(t)) {
       return t as TabType;
     }
@@ -275,6 +289,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   const [confirmRemoveLinkedKey, setConfirmRemoveLinkedKey] = useState<string | null>(null);
   const [busAlarmTriggered, setBusAlarmTriggered] = useState<boolean>(false);
   const [showBusLiveMapModal, setShowBusLiveMapModal] = useState<boolean>(false);
+  const lastProximityBannerRef = useRef<number>(0);
 
   // Student 3-Theme Switcher (White / Black / Midnight Current)
   const [studentTheme, setStudentTheme] = useState<StudentAppTheme>(() => {
@@ -285,34 +300,166 @@ export const StudentSchoolPanel: React.FC<Props> = ({
     return "current";
   });
   const [showThemeModal, setShowThemeModal] = useState<boolean>(false);
+  const [maskSensitiveData, setMaskSensitiveData] = useState<boolean>(false);
 
   const applyStudentTheme = (nextTheme: StudentAppTheme) => {
     setStudentTheme(nextTheme);
     try {
       localStorage.setItem("nst_student_theme", nextTheme);
+      localStorage.setItem("nst_app_theme", nextTheme);
+      localStorage.setItem("nst_dark_mode", nextTheme === "white" ? "false" : "true");
       if (typeof document !== "undefined") {
-        document.documentElement.classList.remove(
+        const root = document.documentElement;
+        root.classList.remove(
           "student-theme-white",
           "student-theme-black",
           "student-theme-current",
+          "admin-theme-white",
+          "admin-theme-black",
+          "admin-theme-current",
+          "teacher-theme-white",
+          "teacher-theme-black",
+          "teacher-theme-current",
+          "app-theme-white",
+          "app-theme-black",
+          "app-theme-current",
           "dark-mode-black",
           "dark-mode-blue"
         );
-        document.documentElement.classList.add(`student-theme-${nextTheme}`);
+        root.classList.add(`student-theme-${nextTheme}`, `app-theme-${nextTheme}`);
+        root.dataset.nstErpTheme = nextTheme;
         if (nextTheme === "white") {
-          document.documentElement.classList.remove("dark", "dark-mode");
+          root.classList.remove("dark", "dark-mode");
+          document.body.classList.remove("dark-mode");
+          document.body.style.backgroundColor = "#eef2f7";
         } else if (nextTheme === "black") {
-          document.documentElement.classList.add("dark", "dark-mode", "dark-mode-black");
+          root.classList.add("dark", "dark-mode", "dark-mode-black");
+          document.body.classList.add("dark-mode");
+          document.body.style.backgroundColor = "#000000";
         } else {
-          document.documentElement.classList.add("dark", "dark-mode", "dark-mode-blue");
+          root.classList.add("dark", "dark-mode", "dark-mode-blue");
+          document.body.classList.add("dark-mode");
+          document.body.style.backgroundColor = "#08142c";
         }
+        let metaTheme = document.querySelector('meta[name="theme-color"]');
+        if (!metaTheme) {
+          metaTheme = document.createElement("meta");
+          metaTheme.setAttribute("name", "theme-color");
+          document.head.appendChild(metaTheme);
+        }
+        metaTheme.setAttribute(
+          "content",
+          nextTheme === "white" ? "#eef2f7" : nextTheme === "black" ? "#000000" : "#08142c"
+        );
       }
       window.dispatchEvent(new Event("nst-dark-theme-change"));
     } catch {}
   };
 
   useEffect(() => {
+    if (!rtdb || !schoolId || !studentId) return;
+    let homePin: { lat: number; lng: number; label: string } | null = null;
+
+    const readCachedPin = () => {
+      try {
+        const raw = localStorage.getItem(`nst_student_home_pins_${schoolId}`);
+        if (raw) {
+          const obj = JSON.parse(raw) || {};
+          const entry = obj[studentId];
+          if (entry && Number.isFinite(Number(entry.homeLat)) && Number.isFinite(Number(entry.homeLng))) {
+            homePin = {
+              lat: Number(entry.homeLat),
+              lng: Number(entry.homeLng),
+              label: entry.homeAddress || "आपके घर/स्टॉप",
+            };
+          }
+        }
+      } catch {}
+    };
+    readCachedPin();
+
+    const evaluateBusMap = (busMap: Record<string, any> | null) => {
+      if (!busMap || !homePin) return;
+      Object.values(busMap).forEach((bus: any) => {
+        if (!bus || bus.tripStatus !== "started") return;
+        const bLat = Number(bus.latitude);
+        const bLng = Number(bus.longitude);
+        if (!Number.isFinite(bLat) || !Number.isFinite(bLng) || (Math.abs(bLat) < 0.001 && Math.abs(bLng) < 0.001)) {
+          return;
+        }
+        const prox = checkAndTriggerBusProximity(
+          { lat: bLat, lng: bLng },
+          { lat: homePin!.lat, lng: homePin!.lng },
+          homePin!.label,
+          bus.busNumber || "School Bus"
+        );
+        if (prox.isWithinRange) {
+          setBusAlarmTriggered(true);
+          setTimeout(() => setBusAlarmTriggered(false), 6000);
+          if (Date.now() - lastProximityBannerRef.current > 60000) {
+            lastProximityBannerRef.current = Date.now();
+            toast.success(`🚌 ${bus.busNumber || "स्कूल बस"} आपके स्टॉप से सिर्फ ${prox.distanceKm} KM दूर है!`, {
+              duration: 7000,
+            });
+          }
+        }
+      });
+    };
+
+    const unsubPin = onValue(
+      dbRef(rtdb, `schools/${schoolId}/student_home_pins/${studentId}`),
+      (snap) => {
+        if (snap.exists()) {
+          const val = snap.val();
+          if (Number.isFinite(Number(val?.homeLat)) && Number.isFinite(Number(val?.homeLng))) {
+            homePin = {
+              lat: Number(val.homeLat),
+              lng: Number(val.homeLng),
+              label: val.homeAddress || "आपके घर/स्टॉप",
+            };
+          }
+        }
+      }
+    );
+
+    const unsubLoc1 = onValue(dbRef(rtdb, `schools/${schoolId}/bus_locations`), (snap) => {
+      if (snap.exists()) evaluateBusMap(snap.val());
+    });
+    const unsubLoc2 = onValue(dbRef(rtdb, `school_bus_locations/${schoolId}`), (snap) => {
+      if (snap.exists()) evaluateBusMap(snap.val());
+    });
+
+    return () => {
+      unsubPin();
+      unsubLoc1();
+      unsubLoc2();
+    };
+  }, [schoolId, studentId]);
+
+  useEffect(() => {
     applyStudentTheme(studentTheme);
+    return () => {
+      if (typeof document !== "undefined") {
+        const root = document.documentElement;
+        root.classList.remove(
+          "student-theme-white",
+          "student-theme-black",
+          "student-theme-current",
+          "admin-theme-white",
+          "admin-theme-black",
+          "admin-theme-current",
+          "teacher-theme-white",
+          "teacher-theme-black",
+          "teacher-theme-current",
+          "app-theme-white",
+          "app-theme-black",
+          "app-theme-current",
+          "dark-mode-black",
+          "dark-mode-blue"
+        );
+        delete root.dataset.nstErpTheme;
+      }
+    };
   }, []);
 
   const handleStudentLogout = () => {
@@ -331,6 +478,11 @@ export const StudentSchoolPanel: React.FC<Props> = ({
     }
   };
   const [school, setSchool] = useState<School | null>(null);
+  const [schoolSessions, setSchoolSessions] = useState<any[]>([]);
+  const [allSchoolStudents, setAllSchoolStudents] = useState<SchoolStudent[]>(() =>
+    schoolId ? getLocalStudents(schoolId) : []
+  );
+  const [selectedSessionStudentId, setSelectedSessionStudentId] = useState<string | null>(null);
   const [selectedFeeForReceipt, setSelectedFeeForReceipt] = useState<any | null>(null);
   const [feeModalFormat, setFeeModalFormat] = useState<"a6" | "pos">("pos");
   const [feeViewMode, setFeeViewMode] = useState<"cards" | "table">("cards");
@@ -354,17 +506,6 @@ export const StudentSchoolPanel: React.FC<Props> = ({
     inCutoffTime: DEFAULT_IN_CUTOFF_TIME,
     outStartTime: DEFAULT_OUT_START_TIME,
   });
-
-  // ── School Events & Memories states
-  const [selectedMemoryMedia, setSelectedMemoryMedia] = useState<{
-    type: "IMAGE" | "VIDEO";
-    url: string;
-    title: string;
-    eventName?: string;
-    date?: string;
-    description?: string;
-  } | null>(null);
-  const [eventsFilter, setEventsFilter] = useState<string>("ALL");
 
   // ── Holidays page states
   const [holidaysFilter, setHolidaysFilter] = useState<string>("ALL");
@@ -450,7 +591,91 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   // Load demo dataset for fallback / syllabus / calendar
   const dataset = useMemo(() => getDemoSchoolDataset(), []);
 
-  // Find this student record from local school database, session cache, or dataset
+  // Load all school sessions and full multi-session student roster for Re-Admission login continuity
+  useEffect(() => {
+    if (!schoolId) return;
+    let cancelled = false;
+    getSessions(schoolId)
+      .then((sess) => {
+        if (!cancelled && Array.isArray(sess)) {
+          setSchoolSessions(sess.filter((s) => s && !s.isDemo));
+        }
+      })
+      .catch(() => {});
+    getStudents(schoolId)
+      .then((list) => {
+        if (!cancelled && Array.isArray(list) && list.length > 0) {
+          setAllSchoolStudents(list);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [schoolId]);
+
+  useEffect(() => {
+    setSelectedSessionStudentId(null);
+  }, [studentId, linkedStudent?.id, linkedStudent?.admissionNo]);
+
+  // Build complete multi-session lineage chain for the logged-in student (old + re-admitted sessions)
+  const studentLineageRecords: SchoolStudent[] = useMemo(() => {
+    let sessionUser: any = null;
+    try {
+      const rawUser = localStorage.getItem("nst_current_user") || localStorage.getItem("nsta_cached_user");
+      if (rawUser) sessionUser = JSON.parse(rawUser);
+    } catch {}
+
+    const localStudents = getLocalStudents(schoolId);
+    const poolMap = new Map<string, SchoolStudent>();
+    [...localStudents, ...allSchoolStudents].forEach((s) => {
+      if (s && s.id && s.active !== false && !(s as any).isDeleted) {
+        poolMap.set(s.id, s);
+      }
+    });
+    const pool = Array.from(poolMap.values());
+
+    const matchId = studentId || linkedStudent?.id || sessionUser?.id || sessionUser?.studentId || sessionUser?.uid;
+    const matchAdm = (linkedStudent?.admissionNo || sessionUser?.admissionNo || "").trim().toLowerCase();
+
+    const matchedIds = new Set<string>();
+    if (matchId) matchedIds.add(matchId);
+    if (linkedStudent?.previousStudentId) matchedIds.add(linkedStudent.previousStudentId);
+
+    // Expand linked IDs iteratively across previousStudentId <-> id and matching admissionNo
+    let changed = true;
+    for (let pass = 0; pass < 6 && changed; pass++) {
+      changed = false;
+      for (const s of pool) {
+        const sAdm = (s.admissionNo || "").trim().toLowerCase();
+        const isLinked =
+          matchedIds.has(s.id) ||
+          (s.previousStudentId && matchedIds.has(s.previousStudentId)) ||
+          (matchAdm && sAdm && sAdm === matchAdm) ||
+          pool.some((m) => matchedIds.has(m.id) && m.previousStudentId === s.id);
+        if (isLinked && !matchedIds.has(s.id)) {
+          matchedIds.add(s.id);
+          changed = true;
+        }
+      }
+    }
+
+    const lineage = pool.filter((s) => matchedIds.has(s.id));
+    if (lineage.length <= 1) return lineage;
+
+    const prevIdSet = new Set(lineage.map((s) => s.previousStudentId).filter(Boolean));
+    return [...lineage].sort((a, b) => {
+      // Latest active node (not pointed to as a previousStudentId by another node) always first
+      const aIsOld = prevIdSet.has(a.id) ? 1 : 0;
+      const bIsOld = prevIdSet.has(b.id) ? 1 : 0;
+      if (aIsOld !== bIsOld) return aIsOld - bIsOld;
+      const aDate = a.reAdmissionDate || a.createdAt || a.joinDate || "";
+      const bDate = b.reAdmissionDate || b.createdAt || b.joinDate || "";
+      return bDate.localeCompare(aDate);
+    });
+  }, [schoolId, studentId, linkedStudent, allSchoolStudents]);
+
+  // Find this student record from lineage, local school database, session cache, or dataset
   const currentStudent: SchoolStudent = useMemo(() => {
     // 0. Check cached logged in user from localStorage
     let sessionUser: any = null;
@@ -519,6 +744,15 @@ export const StudentSchoolPanel: React.FC<Props> = ({
       return healed;
     };
 
+    // 0. Prioritize multi-session lineage resolution (defaults to newest re-admitted session, or user-selected session)
+    if (studentLineageRecords.length > 0) {
+      const chosenFromLineage =
+        (selectedSessionStudentId
+          ? studentLineageRecords.find((s) => s.id === selectedSessionStudentId)
+          : null) || studentLineageRecords[0];
+      if (chosenFromLineage) return healStudentRecord(chosenFromLineage);
+    }
+
     // 1. Match in current school's local student pool by unique ID or unique Admission No
     if (matchId) {
       const foundLocal = localStudents.find(
@@ -567,6 +801,20 @@ export const StudentSchoolPanel: React.FC<Props> = ({
 
     // 5. CRITICAL: If student is logged in or provided by name/props, construct their authentic record!
     if (matchName || matchAdm || matchId) {
+      const rawSessionCls = String(
+        (sessionUser as any)?.className || sessionUser?.classLevel || linkedStudent?.className || ""
+      ).trim();
+      const matchedClsObj = localClasses.find(
+        (c) => c.id === ((sessionUser as any)?.classId || classId)
+      );
+      const cleanSessionCls =
+        matchedClsObj?.name ||
+        (rawSessionCls &&
+        !/^0\d+$/.test(rawSessionCls) &&
+        !/^class\s+0\d+$/i.test(rawSessionCls)
+          ? rawSessionCls
+          : undefined);
+
       const safeStudent: SchoolStudent = {
         id: matchId || `std_${Date.now()}`,
         schoolId: sessionUser?.schoolId || schoolId,
@@ -631,11 +879,17 @@ export const StudentSchoolPanel: React.FC<Props> = ({
         createdAt: new Date().toISOString(),
       }
     );
-  }, [studentId, studentName, classId, sessionId, schoolId, linkedStudent, dataset]);
+  }, [studentId, studentName, classId, sessionId, schoolId, linkedStudent, dataset, studentLineageRecords, selectedSessionStudentId]);
 
   // Synchronize background details from remote Firestore or Admissions
   const [enrichedData, setEnrichedData] = useState<any>(null);
   const [liveStudentData, setLiveStudentData] = useState<Partial<SchoolStudent> | null>(null);
+
+  useEffect(() => {
+    setEnrichedData(null);
+    setLiveStudentData(null);
+    setLiveFees([]);
+  }, [currentStudent?.id]);
 
   useEffect(() => {
     if (!currentStudent) return;
@@ -733,13 +987,12 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   };
 
   const handleExploreFullApp = () => {
+    if (!onOpenPlatformContent) return;
     try {
       localStorage.setItem("nst_app_view_mode", "STUDENT");
       window.dispatchEvent(new CustomEvent("nst_open_student_dashboard"));
     } catch {}
-    if (onOpenPlatformContent) {
-      onOpenPlatformContent();
-    }
+    onOpenPlatformContent();
   };
 
   const [classesList, setClassesList] = useState<any[]>(() => schoolId ? getLocalClasses(schoolId) : []);
@@ -963,7 +1216,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   }, [schoolClassNotes, isCompetitionSelected]);
 
   const handleOpenClassSyllabus = (targetClass: string) => {
-    if (targetClass === 'COMPETITION') {
+    if (targetClass === 'COMPETITION' && onOpenPlatformContent) {
       try {
         localStorage.setItem('nst_session_class', 'COMPETITION');
         localStorage.setItem('nst_active_session_class', 'COMPETITION');
@@ -973,9 +1226,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
           detail: { tab: 'COURSES', targetClass: 'COMPETITION' }
         }));
       } catch {}
-      if (onOpenPlatformContent) {
-        (onOpenPlatformContent as any)('COMPETITION');
-      }
+      (onOpenPlatformContent as any)('COMPETITION');
       return;
     }
     // For school academic class: open the school's own syllabus viewer
@@ -1364,21 +1615,32 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   const sportsFee = Math.max(0, studentMonthlyFee - tuitionFee - computerFee);
 
   // Student fees list: complete academic session passbook merged with real live payments (100% synced with School Admin)
+  const activeStudentSessionObj = useMemo(() => {
+    const targetSid = activeStudent?.sessionId || currentStudent?.sessionId || sessionId;
+    return schoolSessions.find((s) => s.id === targetSid) || null;
+  }, [schoolSessions, activeStudent?.sessionId, currentStudent?.sessionId, sessionId]);
+
   const allStudentFees = useMemo(() => {
-    const sessionMonths = [
-      { code: "2026-04", name: "April 2026" },
-      { code: "2026-05", name: "May 2026" },
-      { code: "2026-06", name: "June 2026" },
-      { code: "2026-07", name: "July 2026" },
-      { code: "2026-08", name: "August 2026" },
-      { code: "2026-09", name: "September 2026" },
-      { code: "2026-10", name: "October 2026" },
-      { code: "2026-11", name: "November 2026" },
-      { code: "2026-12", name: "December 2026" },
-      { code: "2027-01", name: "January 2027" },
-      { code: "2027-02", name: "February 2027" },
-      { code: "2027-03", name: "March 2027" },
-    ];
+    const dynamicSessionMonths = activeStudentSessionObj
+      ? getSessionMonthCodes(activeStudentSessionObj).map((m) => ({
+          code: m.code,
+          name: m.label,
+        }))
+      : [
+          { code: "2026-04", name: "April 2026" },
+          { code: "2026-05", name: "May 2026" },
+          { code: "2026-06", name: "June 2026" },
+          { code: "2026-07", name: "July 2026" },
+          { code: "2026-08", name: "August 2026" },
+          { code: "2026-09", name: "September 2026" },
+          { code: "2026-10", name: "October 2026" },
+          { code: "2026-11", name: "November 2026" },
+          { code: "2026-12", name: "December 2026" },
+          { code: "2027-01", name: "January 2027" },
+          { code: "2027-02", name: "February 2027" },
+          { code: "2027-03", name: "March 2027" },
+        ];
+    const sessionMonths = dynamicSessionMonths;
 
     const activeMonth = currentMonthStr();
     const filteredLiveFees = !schoolDemoActive ? liveFees.filter((f: any) => !isDemoRecord(f)) : liveFees;
@@ -1560,8 +1822,54 @@ export const StudentSchoolPanel: React.FC<Props> = ({
       };
     });
 
-    return [...extraFees, ...sessionList];
-  }, [liveFees, currentStudent, dataset, studentMonthlyFee, schoolId, schoolDemoActive, activeStudent, enrichedData]);
+    const carryEntries: any[] = [];
+    const backSessionRem = Math.max(0, Number((activeStudent as any)?.previousSessionDue ?? (currentStudent as any)?.previousSessionDue ?? 0));
+    if (backSessionRem > 0) {
+      carryEntries.push({
+        id: `back_due_${currentStudent.id}`,
+        schoolId,
+        sessionId: currentStudent.sessionId || sessionId || "",
+        studentId: currentStudent.id,
+        studentName: currentStudent.name,
+        rollNo: currentStudent.rollNo,
+        classId: currentStudent.classId,
+        month: "0000-BACK-DUE",
+        amount: backSessionRem,
+        monthlyAmount: backSessionRem,
+        paid: false,
+        paidAmount: 0,
+        balanceDue: backSessionRem,
+        status: "due",
+        receiptNo: "BACK-DUE",
+        paymentMode: "Carry Forward",
+        note: `पिछला सत्र (${(activeStudent as any)?.previousSessionName || "Back Session"}) बकाया`,
+      });
+    }
+    const admBalRem = Math.max(0, Number((activeStudent as any)?.admissionDueBalance ?? (currentStudent as any)?.admissionDueBalance ?? 0));
+    if (admBalRem > 0) {
+      carryEntries.push({
+        id: `adm_due_${currentStudent.id}`,
+        schoolId,
+        sessionId: currentStudent.sessionId || sessionId || "",
+        studentId: currentStudent.id,
+        studentName: currentStudent.name,
+        rollNo: currentStudent.rollNo,
+        classId: currentStudent.classId,
+        month: "0001-ADM-DUE",
+        amount: admBalRem,
+        monthlyAmount: admBalRem,
+        paid: false,
+        paidAmount: 0,
+        balanceDue: admBalRem,
+        status: "due",
+        receiptNo: "ADM-DUE",
+        paymentMode: "Admission Balance",
+        note: "बकाया प्रवेश शुल्क (Admission Arrears)",
+      });
+    }
+
+    return [...carryEntries, ...extraFees, ...sessionList];
+  }, [liveFees, currentStudent, dataset, studentMonthlyFee, schoolId, schoolDemoActive, activeStudent, enrichedData, sessionId, activeStudentSessionObj]);
 
   const feeSummary = useMemo(() => {
     let totalBilled = 0;
@@ -1641,10 +1949,14 @@ export const StudentSchoolPanel: React.FC<Props> = ({
           phone: school?.mobile || school?.phone || "",
           email: school?.email || "",
           affiliation: school?.affiliation || "",
-          code: school?.code || "",
+          code: getVisibleSchoolRegNo(school),
           logoUrl: getSavedSchoolLogo(school?.logoUrl, schoolId),
           principalSignatureUrl: school?.principalSignatureUrl || "",
           directorSignatureUrl: school?.directorSignatureUrl || "",
+          managerSignatureUrl: school?.managerSignatureUrl || "",
+          managerName: school?.managerName || "",
+          accountantSignatureUrl: school?.accountantSignatureUrl || "",
+          accountantName: school?.accountantName || "",
           principalName: school?.principalName || "",
         },
       });
@@ -1669,10 +1981,14 @@ export const StudentSchoolPanel: React.FC<Props> = ({
           phone: school?.mobile || school?.phone || "",
           email: school?.email || "",
           affiliation: school?.affiliation || "",
-          code: school?.code || "",
+          code: getVisibleSchoolRegNo(school),
           logoUrl: getSavedSchoolLogo(school?.logoUrl, schoolId),
           principalSignatureUrl: school?.principalSignatureUrl || "",
           directorSignatureUrl: school?.directorSignatureUrl || "",
+          managerSignatureUrl: school?.managerSignatureUrl || "",
+          managerName: school?.managerName || "",
+          accountantSignatureUrl: school?.accountantSignatureUrl || "",
+          accountantName: school?.accountantName || "",
           principalName: school?.principalName || "",
         },
         isDueDemand: !isPaid,
@@ -1895,24 +2211,24 @@ export const StudentSchoolPanel: React.FC<Props> = ({
     }));
   };
 
-  // Student QR payload for digital verification
-  const qrStudentPayload = `NSTA-SCHOOL:${[
-    encodeURIComponent(schoolId),
-    encodeURIComponent(activeStudent.id),
-    encodeURIComponent(activeStudent.rollNo),
-    encodeURIComponent(activeStudent.classId || "cls_nursery"),
-    encodeURIComponent(activeStudent.name),
-    encodeURIComponent(activeStudent.admissionNo || ""),
-    encodeURIComponent(activeStudent.phone || ""),
-    encodeURIComponent(activeStudent.fatherName || ""),
-    encodeURIComponent(activeStudent.motherName || ""),
-    encodeURIComponent(activeStudent.bloodGroup || ""),
-    encodeURIComponent(activeStudent.dateOfBirth || ""),
-    encodeURIComponent(activeStudent.address || ""),
-    encodeURIComponent(String(activeStudent.monthlyFee ?? "")),
-    encodeURIComponent(studentClassLabel),
-    encodeURIComponent(school?.name || (activeStudent as any)?.schoolName || "")
-  ].join(":")}`;
+  // Student QR payload for digital Chrome verification + instant Attendance/App Login
+  const qrStudentPayload = buildStudentIdCardQrUrl({
+    schoolId,
+    studentId: activeStudent.id,
+    rollNo: activeStudent.rollNo,
+    classId: activeStudent.classId || "cls_nursery",
+    studentName: activeStudent.name,
+    admissionNo: activeStudent.admissionNo || "",
+    phone: activeStudent.phone || "",
+    fatherName: activeStudent.fatherName || "",
+    motherName: activeStudent.motherName || "",
+    bloodGroup: activeStudent.bloodGroup || "",
+    dob: activeStudent.dateOfBirth || "",
+    address: activeStudent.address || "",
+    monthlyFee: activeStudent.monthlyFee ?? "",
+    className: studentClassLabel,
+    schoolName: school?.name || (activeStudent as any)?.schoolName || "",
+  });
 
   const schoolDisplayName = useMemo(() => {
     // 1. Loaded school profile for THIS schoolId takes highest priority for multi-school accuracy
@@ -1948,11 +2264,11 @@ export const StudentSchoolPanel: React.FC<Props> = ({
       }
     } catch {}
 
-    // 4. Fallback to school?.name or student's school or Nstz
-    return (school?.name && school.name.trim()) || (studentRecordSchoolName && studentRecordSchoolName.trim()) || "Nstz";
+    // 4. Fallback to school?.name or student's school or Life Maker Public School
+    return (school?.name && school.name.trim()) || (studentRecordSchoolName && studentRecordSchoolName.trim()) || "Life Maker Public School";
   }, [school?.name, schoolId, activeStudent, linkedStudent, currentStudent, enrichedData]);
 
-  const schoolInitials = (schoolDisplayName || "NS").slice(0, 2).toUpperCase();
+  const schoolInitials = (schoolDisplayName || "LM").slice(0, 2).toUpperCase();
   const resolvedSchoolLogo = getSavedSchoolLogo(school?.logoUrl || (activeStudent as any)?.schoolLogo, schoolId);
 
   const [birthdayModalData, setBirthdayModalData] = useState<NstaBirthdayData | null>(null);
@@ -2255,20 +2571,26 @@ export const StudentSchoolPanel: React.FC<Props> = ({
   }
 
   return (
-    <div className={`min-h-screen flex flex-col font-sans transition-colors duration-200 student-theme-${studentTheme} ${
+    <div className={`min-h-screen flex flex-col font-sans transition-colors duration-200 student-theme-${studentTheme} app-theme-${studentTheme} ${
       studentTheme === "white"
         ? "bg-slate-100 text-slate-900"
         : studentTheme === "black"
-        ? "bg-black text-white"
-        : "bg-slate-950 text-slate-100"
+        ? "dark bg-black text-white"
+        : "dark bg-[#08142c] text-slate-100"
     }`}>
       {/* ── TOP NAV HEADER (SHOWN STRICTLY ONLY ON HOME OVERVIEW PAGE) ─────── */}
       {activeTab === "overview" && (
-        <header className="sticky top-0 z-30 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 px-3 sm:px-6 py-2 flex items-center justify-between gap-2 overflow-x-auto no-scrollbar shadow-lg">
+        <header className={`sticky top-0 z-30 backdrop-blur-md border-b px-3 sm:px-6 py-2 flex items-center justify-between gap-2 overflow-x-auto no-scrollbar shadow-sm ${
+          studentTheme === "white"
+            ? "bg-white/95 border-slate-200 text-slate-900"
+            : studentTheme === "black"
+            ? "bg-black/95 border-neutral-800 text-white"
+            : "bg-[#0a1935]/95 border-[#1b3564] text-white"
+        }`}>
           {/* Left: Users icon + All linked student accounts as pills */}
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1 shrink-0">
-              <Users className="w-4 h-4 text-emerald-400" />
+              <Users className={`w-4 h-4 ${studentTheme === "white" ? "text-emerald-600" : "text-emerald-400"}`} />
             </span>
             <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
               {(() => {
@@ -2285,7 +2607,11 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                       key={st.id || st.admissionNo || st.name}
                       className={`inline-flex items-center rounded-xl border text-xs font-bold transition shrink-0 ${
                         isSelected
-                          ? "bg-emerald-600/20 border-emerald-500/60 text-emerald-200"
+                          ? studentTheme === "white"
+                            ? "bg-emerald-50 border-emerald-400 text-emerald-900"
+                            : "bg-emerald-600/20 border-emerald-500/60 text-emerald-200"
+                          : studentTheme === "white"
+                          ? "bg-slate-100 border-slate-300 text-slate-700 hover:text-slate-900"
                           : "bg-slate-900 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700"
                       }`}
                     >
@@ -2308,7 +2634,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                       >
                         <span className="truncate max-w-[120px]">{st.name}</span>
                         {chipClass && (
-                          <span className="text-[10px] text-slate-300 font-medium">
+                          <span className={`text-[10px] font-medium ${studentTheme === "white" ? "text-slate-600" : "text-slate-300"}`}>
                             · {chipClass}
                           </span>
                         )}
@@ -2371,18 +2697,49 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                 });
               })()}
             </div>
+            {studentLineageRecords.length > 1 && (
+              <select
+                value={currentStudent.id}
+                onChange={(e) => setSelectedSessionStudentId(e.target.value)}
+                title="सत्र बदलें (Switch Session)"
+                className={`ml-1 px-2 py-1 rounded-xl border text-[11px] font-bold shrink-0 cursor-pointer ${
+                  studentTheme === "white"
+                    ? "bg-blue-50 border-blue-300 text-blue-900"
+                    : "bg-blue-950/60 border-blue-700 text-blue-200"
+                }`}
+              >
+                {studentLineageRecords.map((rec, idx) => {
+                  const sessLabel =
+                    schoolSessions.find((ss) => ss.id === rec.sessionId)?.name ||
+                    (idx === 0 ? "Active Session" : rec.previousSessionName || `Session ${idx + 1}`);
+                  return (
+                    <option key={rec.id} value={rec.id}>
+                      {sessLabel} ({rec.className || "Class"}) {idx === 0 ? "· Active" : "· Old"}
+                    </option>
+                  );
+                })}
+              </select>
+            )}
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
             {/* 3-Theme Switcher Segmented Pill */}
-            <div className="inline-flex items-center p-0.5 rounded-xl bg-slate-800/90 border border-slate-700/80 shadow-xs">
+            <div className={`inline-flex items-center p-0.5 rounded-xl border shadow-xs ${
+              studentTheme === "white"
+                ? "bg-slate-100 border-slate-300"
+                : studentTheme === "black"
+                ? "bg-neutral-900 border-neutral-700"
+                : "bg-[#112447] border-[#294c88]"
+            }`}>
               <button
                 type="button"
                 onClick={() => applyStudentTheme("white")}
                 className={`px-2 py-1 rounded-lg text-[10px] sm:text-xs font-black flex items-center gap-1 transition cursor-pointer ${
                   studentTheme === "white"
                     ? "bg-amber-400 text-slate-950 shadow-sm"
-                    : "text-slate-400 hover:text-white"
+                    : studentTheme === "black"
+                    ? "text-slate-300 hover:text-white"
+                    : "text-slate-300 hover:text-white"
                 }`}
                 title="White (Light) थीम - सफेद"
               >
@@ -2395,7 +2752,9 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                 className={`px-2 py-1 rounded-lg text-[10px] sm:text-xs font-black flex items-center gap-1 transition cursor-pointer ${
                   studentTheme === "black"
                     ? "bg-cyan-400 text-slate-950 shadow-sm"
-                    : "text-slate-400 hover:text-white"
+                    : studentTheme === "white"
+                    ? "text-slate-600 hover:text-slate-900"
+                    : "text-slate-300 hover:text-white"
                 }`}
                 title="Black (AMOLED) थीम - सुपर डार्क"
               >
@@ -2407,17 +2766,35 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                 onClick={() => applyStudentTheme("current")}
                 className={`px-2 py-1 rounded-lg text-[10px] sm:text-xs font-black flex items-center gap-1 transition cursor-pointer ${
                   studentTheme === "current"
-                    ? "bg-indigo-600 text-white shadow-sm"
-                    : "text-slate-400 hover:text-white"
+                    ? "bg-blue-600 text-white shadow-sm"
+                    : studentTheme === "white"
+                    ? "text-slate-600 hover:text-slate-900"
+                    : "text-slate-300 hover:text-white"
                 }`}
-                title="Midnight (Default) थीम - डिफ़ॉल्ट"
+                title="Blue (Default) थीम - रॉयल ब्लू"
               >
                 <Sparkles className="w-3.5 h-3.5" />
-                <span className="hidden xs:inline">Midnight</span>
+                <span className="hidden xs:inline">Blue</span>
               </button>
             </div>
 
-            {/* Right: + Add Student QR button */}
+            {/* Right: Visit Our Website + Add Student QR buttons */}
+            {onVisitWebsite && (
+              <button
+                type="button"
+                onClick={onVisitWebsite}
+                className={`px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-xl border text-[11px] sm:text-xs font-bold flex items-center gap-1.5 shrink-0 transition cursor-pointer ${
+                  studentTheme === "white"
+                    ? "bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-800"
+                    : "bg-emerald-600/20 hover:bg-emerald-600/35 border-emerald-400/50 text-emerald-200 hover:text-white"
+                }`}
+                title="Visit Our School Website"
+              >
+                <Globe className={`w-3.5 h-3.5 ${studentTheme === "white" ? "text-emerald-700" : "text-emerald-300"}`} />
+                <span>Visit Our Website</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => {
@@ -2427,10 +2804,14 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                   setShowStudentSwitcherModal(true);
                 }
               }}
-              className="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/35 border border-indigo-500/40 text-indigo-300 hover:text-white text-[11px] sm:text-xs font-bold flex items-center gap-1.5 shrink-0 transition cursor-pointer"
+              className={`px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-xl border text-[11px] sm:text-xs font-bold flex items-center gap-1.5 shrink-0 transition cursor-pointer ${
+                studentTheme === "white"
+                  ? "bg-indigo-50 hover:bg-indigo-100 border-indigo-300 text-indigo-800"
+                  : "bg-indigo-600/25 hover:bg-indigo-600/40 border-indigo-400/50 text-indigo-200 hover:text-white"
+              }`}
               title="Add another student ID / QR"
             >
-              <UserPlus className="w-3.5 h-3.5 text-indigo-400" />
+              <UserPlus className={`w-3.5 h-3.5 ${studentTheme === "white" ? "text-indigo-700" : "text-indigo-300"}`} />
               <span>+ Add Student QR</span>
             </button>
           </div>
@@ -2439,16 +2820,30 @@ export const StudentSchoolPanel: React.FC<Props> = ({
 
       {/* ── STUDENT IDENTITY HERO BANNER (SHOWN STRICTLY ONLY ON HOME OVERVIEW) ── */}
       {activeTab === "overview" && (
-        <div className="bg-slate-900/90 border-b border-slate-800 px-4 sm:px-6 py-4">
+        <div className={`border-b px-4 sm:px-6 py-4 ${
+          studentTheme === "white"
+            ? "bg-white border-slate-200 text-slate-900"
+            : studentTheme === "black"
+            ? "bg-[#060606] border-neutral-800 text-white"
+            : "bg-[#0d2042]/95 border-[#1e3a6e] text-white"
+        }`}>
           <div className="max-w-6xl mx-auto space-y-3.5">
             {/* School Name & Official Notification Row (Moved Down From Top Bar) */}
-            <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-800/80">
+            <div className={`flex items-center justify-between gap-3 pb-3 border-b ${
+              studentTheme === "white"
+                ? "border-slate-200"
+                : studentTheme === "black"
+                ? "border-neutral-800"
+                : "border-[#1d396b]"
+            }`}>
               <div className="flex items-center gap-2.5 min-w-0">
                 {resolvedSchoolLogo && !isAppLogo(resolvedSchoolLogo) ? (
                   <img
                     src={resolvedSchoolLogo}
                     alt="Logo"
-                    className="w-8 h-8 rounded-xl object-contain bg-white p-0.5 border border-slate-700 shadow-sm shrink-0"
+                    className={`w-8 h-8 rounded-xl object-contain bg-white p-0.5 border shadow-sm shrink-0 ${
+                      studentTheme === "white" ? "border-slate-300" : "border-slate-700"
+                    }`}
                   />
                 ) : (
                   <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center font-black text-white text-xs shrink-0">
@@ -2457,14 +2852,20 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                 )}
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h2 className="text-xs sm:text-sm font-black text-white tracking-tight truncate">
+                    <h2 className={`text-xs sm:text-sm font-black tracking-tight truncate ${
+                      studentTheme === "white" ? "text-slate-900" : "text-white"
+                    }`}>
                       {schoolDisplayName}
                     </h2>
-                    <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 shrink-0">
+                    <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded-full border shrink-0 ${
+                      studentTheme === "white"
+                        ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+                        : "bg-emerald-500/20 text-emerald-300 border-emerald-400/35"
+                    }`}>
                       Student Portal
                     </span>
                   </div>
-                  <p className="text-[10px] text-slate-400">Official Student &amp; Parent Digital Campus</p>
+                  <p className={`text-[10px] ${studentTheme === "white" ? "text-slate-600" : "text-slate-300"}`}>Official Student &amp; Parent Digital Campus</p>
                 </div>
               </div>
 
@@ -2474,15 +2875,19 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                 onClick={() => setShowNotificationModal(true)}
                 className={`px-2.5 py-1.5 rounded-xl border flex items-center gap-1.5 transition cursor-pointer active:scale-95 shrink-0 ${
                   pushEnabled
-                    ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/20"
-                    : "bg-slate-800/90 border-slate-700 hover:bg-slate-700 text-slate-300"
+                    ? studentTheme === "white"
+                      ? "bg-emerald-50 border-emerald-300 text-emerald-800 hover:bg-emerald-100"
+                      : "bg-emerald-500/15 border-emerald-400/40 text-emerald-200 hover:bg-emerald-500/25"
+                    : studentTheme === "white"
+                    ? "bg-slate-100 border-slate-300 text-slate-800 hover:bg-slate-200"
+                    : "bg-[#112447] border-[#274882] hover:bg-[#16305f] text-slate-200"
                 }`}
                 title="School Notifications &amp; History"
               >
                 <div className="relative">
                   <Bell className={`w-3.5 h-3.5 ${pushEnabled ? "text-emerald-400" : "text-amber-400"}`} />
                   {pushEnabled && (
-                    <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-emerald-400" />
                   )}
                 </div>
                 <span className="text-[11px] font-bold">
@@ -2501,9 +2906,13 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                     className="w-14 h-16 sm:w-16 sm:h-20 rounded-xl object-cover border border-emerald-500/50"
                   />
                 ) : (
-                  <div className="w-14 h-16 sm:w-16 sm:h-20 rounded-xl bg-slate-800 border border-slate-700 flex flex-col items-center justify-center text-white select-none">
+                  <div className={`w-14 h-16 sm:w-16 sm:h-20 rounded-xl border flex flex-col items-center justify-center select-none ${
+                    studentTheme === "white"
+                      ? "bg-indigo-50 border-indigo-200 text-indigo-900"
+                      : "bg-[#12264d] border-[#294c88] text-white"
+                  }`}>
                     <span className="text-base sm:text-lg font-bold tracking-wider">{studentInitials}</span>
-                    <span className="text-[8px] font-semibold text-emerald-400">Student</span>
+                    <span className={`text-[8px] font-semibold ${studentTheme === "white" ? "text-emerald-700" : "text-emerald-300"}`}>Student</span>
                   </div>
                 )}
                 <button
@@ -2523,57 +2932,82 @@ export const StudentSchoolPanel: React.FC<Props> = ({
               </div>
 
               <div className="flex-1 min-w-0">
-                <div className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold mb-1.5">
-                  <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                <div className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full border text-[10px] font-bold mb-1.5 ${
+                  studentTheme === "white"
+                    ? "bg-emerald-100 border-emerald-300 text-emerald-800"
+                    : "bg-emerald-500/15 border-emerald-400/35 text-emerald-200"
+                }`}>
+                  <ShieldCheck className={`w-3 h-3 ${studentTheme === "white" ? "text-emerald-700" : "text-emerald-400"}`} />
                   <span>Verified Enrolled Student</span>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h2 className="text-base sm:text-lg font-bold text-white truncate">{activeStudent.name}</h2>
-                  <span className="text-xs text-slate-400">
+                  <h2 className={`text-base sm:text-lg font-bold truncate ${studentTheme === "white" ? "text-slate-900" : "text-white"}`}>{activeStudent.name}</h2>
+                  <span className={`text-xs ${studentTheme === "white" ? "text-slate-600" : "text-slate-300"}`}>
                     · Roll #{activeStudent.rollNo} · {formatClassLabel(studentClassLabel)}
                   </span>
                 </div>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Admission: <span className="font-mono text-slate-200">{activeStudent.admissionNo}</span>
+                <p className={`text-xs mt-0.5 ${studentTheme === "white" ? "text-slate-600" : "text-slate-300"}`}>
+                  Admission: <span className={`font-mono font-semibold ${studentTheme === "white" ? "text-slate-900" : "text-slate-100"}`}>{activeStudent.admissionNo}</span>
                   {activeStudent.bloodGroup ? ` · Blood: ${activeStudent.bloodGroup}` : ""}
                 </p>
 
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-1 mt-2 pt-2 border-t border-slate-800/80 text-[11px]">
+                <div className={`grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-1 mt-2 pt-2 border-t text-[11px] ${
+                  studentTheme === "white" ? "border-slate-200" : "border-[#1d396b]"
+                }`}>
                   <div className="flex items-center gap-1.5 min-w-0">
-                    <span className="text-slate-500">Father:</span>
-                    <span className="font-semibold text-white truncate">{activeStudent.fatherName || "—"}</span>
+                    <span className={studentTheme === "white" ? "text-slate-500" : "text-slate-400"}>Father:</span>
+                    <span className={`font-semibold truncate ${studentTheme === "white" ? "text-slate-900" : "text-white"}`}>
+                      {maskSensitiveData ? maskSensitive2Chars(activeStudent.fatherName, true) : (activeStudent.fatherName || "—")}
+                    </span>
                   </div>
                   <div className="flex items-center gap-1.5 min-w-0">
-                    <span className="text-slate-500">Mother:</span>
-                    <span className="font-semibold text-white truncate">{activeStudent.motherName || "—"}</span>
+                    <span className={studentTheme === "white" ? "text-slate-500" : "text-slate-400"}>Mother:</span>
+                    <span className={`font-semibold truncate ${studentTheme === "white" ? "text-slate-900" : "text-white"}`}>
+                      {maskSensitiveData ? maskSensitive2Chars(activeStudent.motherName, true) : (activeStudent.motherName || "—")}
+                    </span>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <span className="text-slate-500">Mobile:</span>
-                    <span className="font-semibold text-emerald-400 tabular-nums">{activeStudent.phone || "—"}</span>
+                    <span className={studentTheme === "white" ? "text-slate-500" : "text-slate-400"}>Mobile:</span>
+                    <span className={`font-semibold tabular-nums ${studentTheme === "white" ? "text-emerald-700" : "text-emerald-300"}`}>
+                      {maskSensitiveData ? maskSensitive2Chars(activeStudent.phone, true) : (activeStudent.phone || "—")}
+                    </span>
                   </div>
+                  {activeStudent.aadhaarNo && (
+                    <div className="flex items-center gap-1.5">
+                      <span className={studentTheme === "white" ? "text-slate-500" : "text-slate-400"}>Aadhaar:</span>
+                      <span className={`font-semibold font-mono ${studentTheme === "white" ? "text-slate-800" : "text-slate-200"}`}>
+                        {maskSensitiveData ? maskSensitive2Chars(activeStudent.aadhaarNo, true) : activeStudent.aadhaarNo}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2 pt-2.5 flex-wrap">
                   <button
-                    onClick={() => setActiveTab("idcard")}
-                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-bold flex items-center gap-1 border border-slate-700 transition cursor-pointer active:scale-95"
+                    type="button"
+                    onClick={() => setMaskSensitiveData((prev) => !prev)}
+                    className={`p-1.5 rounded-lg flex items-center justify-center border transition cursor-pointer active:scale-95 shadow-sm ${
+                      maskSensitiveData
+                        ? "bg-amber-600 hover:bg-amber-500 text-white border-amber-400"
+                        : studentTheme === "white"
+                        ? "bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-300"
+                        : "bg-[#132952] hover:bg-[#19356a] text-slate-100 border-[#2b4d8c]"
+                    }`}
+                    title={maskSensitiveData ? "संवेदनशील डेटा छिपा है (पूरा दिखाने के लिए क्लिक करें)" : "मोबाइल, आधार, पिता और माता का नाम 2 अक्षर के बाद xxxx में छुपाएं"}
+                    aria-label={maskSensitiveData ? "Show sensitive data" : "Mask sensitive data"}
                   >
-                    <QrCode className="w-3 h-3 text-indigo-400" />
-                    <span>Digital ID Card</span>
-                  </button>
-                  <button
-                    onClick={() => setSelectedAdmissionModal({ isOpen: true, mode: "form_only", feeRecord: studentAdmissionFeeRecord })}
-                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-bold flex items-center gap-1 border border-slate-700 transition cursor-pointer active:scale-95"
-                  >
-                    <FileText className="w-3 h-3 text-emerald-400" />
-                    <span>A4 Admission Form</span>
+                    {maskSensitiveData ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                   </button>
                   <button
                     onClick={() => setShowFaceIdModal(true)}
-                    className="px-2.5 py-1 rounded-lg bg-teal-950/70 hover:bg-teal-900/80 text-teal-300 text-[11px] font-bold flex items-center gap-1.5 border border-teal-500/40 transition cursor-pointer active:scale-95 shadow-sm"
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1.5 border transition cursor-pointer active:scale-95 shadow-sm ${
+                      studentTheme === "white"
+                        ? "bg-teal-50 hover:bg-teal-100 text-teal-800 border-teal-300"
+                        : "bg-teal-950/75 hover:bg-teal-900/85 text-teal-200 border-teal-500/45"
+                    }`}
                     title="Update Face ID Biometric (Free every 30 days)"
                   >
-                    <Camera className="w-3 h-3 text-teal-400" />
+                    <Camera className={`w-3 h-3 ${studentTheme === "white" ? "text-teal-700" : "text-teal-300"}`} />
                     <span>
                       अपडेट फेस आईडी {faceIdDaysRemaining > 0 ? `(${faceIdDaysRemaining}d)` : "(Free)"}
                     </span>
@@ -2581,10 +3015,14 @@ export const StudentSchoolPanel: React.FC<Props> = ({
 
                   <button
                     onClick={() => setShowPtmModal(true)}
-                    className="px-2.5 py-1 rounded-lg bg-indigo-950/70 hover:bg-indigo-900/80 text-indigo-300 text-[11px] font-bold flex items-center gap-1.5 border border-indigo-500/40 transition cursor-pointer active:scale-95 shadow-sm"
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1.5 border transition cursor-pointer active:scale-95 shadow-sm ${
+                      studentTheme === "white"
+                        ? "bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border-indigo-300"
+                        : "bg-indigo-950/75 hover:bg-indigo-900/85 text-indigo-200 border-indigo-500/45"
+                    }`}
                     title="शिक्षक-अभिभावक बैठक स्लॉट बुक करें"
                   >
-                    <Users className="w-3 h-3 text-indigo-400" />
+                    <Users className={`w-3 h-3 ${studentTheme === "white" ? "text-indigo-700" : "text-indigo-300"}`} />
                     <span>PTM स्लॉट</span>
                   </button>
 
@@ -2597,32 +3035,42 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                     className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1.5 border transition cursor-pointer active:scale-95 shadow-sm ${
                       busAlarmTriggered
                         ? "bg-amber-500 text-slate-950 border-amber-400 animate-bounce"
-                        : "bg-amber-950/70 hover:bg-amber-900/80 text-amber-300 border-amber-500/40"
+                        : studentTheme === "white"
+                        ? "bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-300"
+                        : "bg-amber-950/75 hover:bg-amber-900/85 text-amber-200 border-amber-500/45"
                     }`}
                     title="1 KM बस अराइवल सायरन टेस्ट करें"
                   >
-                    <Bell className="w-3 h-3 text-amber-400" />
+                    <Bell className={`w-3 h-3 ${busAlarmTriggered ? "text-slate-950" : studentTheme === "white" ? "text-amber-700" : "text-amber-300"}`} />
                     <span>{busAlarmTriggered ? "सायरन बज रहा है! 🔔" : "बस 1KM सायरन"}</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => setShowBusLiveMapModal(true)}
-                    className="px-2.5 py-1 rounded-lg bg-emerald-950/70 hover:bg-emerald-900/80 text-emerald-300 text-[11px] font-bold flex items-center gap-1.5 border border-emerald-500/40 transition cursor-pointer active:scale-95 shadow-sm"
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1.5 border transition cursor-pointer active:scale-95 shadow-sm ${
+                      studentTheme === "white"
+                        ? "bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300"
+                        : "bg-emerald-950/75 hover:bg-emerald-900/85 text-emerald-200 border-emerald-500/45"
+                    }`}
                     title="Google Map par school bus ki live location dekhein"
                   >
-                    <MapPin className="w-3 h-3 text-emerald-400" />
+                    <MapPin className={`w-3 h-3 ${studentTheme === "white" ? "text-emerald-700" : "text-emerald-300"}`} />
                     <span>Live Bus Map</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => setShowThemeModal(true)}
-                    className="px-2.5 py-1 rounded-lg bg-purple-950/70 hover:bg-purple-900/80 text-purple-300 text-[11px] font-bold flex items-center gap-1.5 border border-purple-500/40 transition cursor-pointer active:scale-95 shadow-sm"
-                    title="ऐप का थीम चुनें (White / Black / Midnight)"
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1.5 border transition cursor-pointer active:scale-95 shadow-sm ${
+                      studentTheme === "white"
+                        ? "bg-purple-50 hover:bg-purple-100 text-purple-800 border-purple-300"
+                        : "bg-purple-950/75 hover:bg-purple-900/85 text-purple-200 border-purple-500/45"
+                    }`}
+                    title="ऐप का थीम चुनें (White / Black / Blue)"
                   >
-                    <Palette className="w-3 h-3 text-purple-400" />
-                    <span>थीम: {studentTheme === "white" ? "☀️ White" : studentTheme === "black" ? "🌑 Black" : "🌌 Midnight"}</span>
+                    <Palette className={`w-3 h-3 ${studentTheme === "white" ? "text-purple-700" : "text-purple-300"}`} />
+                    <span>थीम: {studentTheme === "white" ? "☀️ White" : studentTheme === "black" ? "🌑 Black" : "🔵 Blue"}</span>
                   </button>
                 </div>
               </div>
@@ -2633,42 +3081,70 @@ export const StudentSchoolPanel: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => setActiveTab("attendance")}
-                className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-emerald-500/50 text-center min-w-[88px] cursor-pointer transition active:scale-95 group shadow-sm"
+                className={`p-2.5 rounded-xl border hover:border-emerald-500/50 text-center min-w-[88px] cursor-pointer transition active:scale-95 group shadow-sm ${
+                  studentTheme === "white"
+                    ? "bg-slate-50 border-slate-200"
+                    : studentTheme === "black"
+                    ? "bg-neutral-950 border-neutral-800"
+                    : "bg-[#091833] border-[#213f75]"
+                }`}
                 title="View full attendance details"
               >
-                <span className="text-[11px] text-slate-400 block">Attendance</span>
-                <span className="text-sm sm:text-base font-bold text-emerald-400 tabular-nums block">
+                <span className={`text-[11px] block ${studentTheme === "white" ? "text-slate-600" : "text-slate-300"}`}>Attendance</span>
+                <span className={`text-sm sm:text-base font-bold tabular-nums block ${studentTheme === "white" ? "text-emerald-700" : "text-emerald-400"}`}>
                   {attendanceStats.percentage}%
                 </span>
-                <span className="text-[10px] font-semibold text-slate-400 group-hover:text-emerald-400 flex items-center justify-center gap-0.5 mt-0.5 transition-colors">
+                <span className={`text-[10px] font-semibold flex items-center justify-center gap-0.5 mt-0.5 transition-colors ${
+                  studentTheme === "white" ? "text-slate-500 group-hover:text-emerald-700" : "text-slate-300 group-hover:text-emerald-400"
+                }`}>
                   More →
                 </span>
               </button>
               <button
                 type="button"
                 onClick={() => setActiveTab("fees")}
-                className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-amber-500/50 text-center min-w-[88px] cursor-pointer transition active:scale-95 group shadow-sm"
+                className={`p-2.5 rounded-xl border hover:border-amber-500/50 text-center min-w-[88px] cursor-pointer transition active:scale-95 group shadow-sm ${
+                  studentTheme === "white"
+                    ? "bg-slate-50 border-slate-200"
+                    : studentTheme === "black"
+                    ? "bg-neutral-950 border-neutral-800"
+                    : "bg-[#091833] border-[#213f75]"
+                }`}
                 title="View full fee passbook & dues"
               >
-                <span className="text-[11px] text-slate-400 block">Fee Dues</span>
-                <span className={`text-sm sm:text-base font-bold tabular-nums block ${pendingDues === 0 ? "text-emerald-400" : "text-amber-400"}`}>
+                <span className={`text-[11px] block ${studentTheme === "white" ? "text-slate-600" : "text-slate-300"}`}>Fee Dues</span>
+                <span className={`text-sm sm:text-base font-bold tabular-nums block ${
+                  pendingDues === 0
+                    ? studentTheme === "white" ? "text-emerald-700" : "text-emerald-400"
+                    : studentTheme === "white" ? "text-amber-700" : "text-amber-400"
+                }`}>
                   {pendingDues === 0 ? "Cleared" : `₹${pendingDues.toLocaleString("en-IN")}`}
                 </span>
-                <span className="text-[10px] font-semibold text-slate-400 group-hover:text-amber-400 flex items-center justify-center gap-0.5 mt-0.5 transition-colors">
+                <span className={`text-[10px] font-semibold flex items-center justify-center gap-0.5 mt-0.5 transition-colors ${
+                  studentTheme === "white" ? "text-slate-500 group-hover:text-amber-700" : "text-slate-300 group-hover:text-amber-400"
+                }`}>
                   More →
                 </span>
               </button>
               <button
                 type="button"
                 onClick={() => setActiveTab("exams")}
-                className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-indigo-500/50 text-center min-w-[88px] cursor-pointer transition active:scale-95 group shadow-sm"
+                className={`p-2.5 rounded-xl border hover:border-indigo-500/50 text-center min-w-[88px] cursor-pointer transition active:scale-95 group shadow-sm ${
+                  studentTheme === "white"
+                    ? "bg-slate-50 border-slate-200"
+                    : studentTheme === "black"
+                    ? "bg-neutral-950 border-neutral-800"
+                    : "bg-[#091833] border-[#213f75]"
+                }`}
                 title="View exam results & report card"
               >
-                <span className="text-[11px] text-slate-400 block">Result</span>
-                <span className="text-sm sm:text-base font-bold text-indigo-400 tabular-nums block">
+                <span className={`text-[11px] block ${studentTheme === "white" ? "text-slate-600" : "text-slate-300"}`}>Result</span>
+                <span className={`text-sm sm:text-base font-bold tabular-nums block ${studentTheme === "white" ? "text-indigo-700" : "text-indigo-300"}`}>
                   {latestExamSummary.hasMarks ? `${latestExamSummary.percentage}%` : "Active"}
                 </span>
-                <span className="text-[10px] font-semibold text-slate-400 group-hover:text-indigo-400 flex items-center justify-center gap-0.5 mt-0.5 transition-colors">
+                <span className={`text-[10px] font-semibold flex items-center justify-center gap-0.5 mt-0.5 transition-colors ${
+                  studentTheme === "white" ? "text-slate-500 group-hover:text-indigo-700" : "text-slate-300 group-hover:text-indigo-300"
+                }`}>
                   More →
                 </span>
               </button>
@@ -2714,6 +3190,30 @@ export const StudentSchoolPanel: React.FC<Props> = ({
         {/* TAB 1: UNIFIED APP LAUNCHPAD HOME & PROFILE ──────────────────────────── */}
         {activeTab === "overview" && (
           <div className="space-y-6">
+            {/* ── UNIFIED PARENT TRUST DASHBOARD & LIVE BUS / SAFETY SNAPSHOT ── */}
+            <ParentTrustDashboardCard
+              schoolId={schoolId}
+              student={activeStudent}
+              attendanceStats={attendanceStats}
+              todayAttendanceStatus={todayEntry?.status}
+              todayInTime={todayEntry?.inTime}
+              homeworkList={homeworkList}
+              latestExamSummary={{
+                hasMarks: latestExamSummary.hasMarks,
+                percentage: latestExamSummary.percentage,
+                grade: latestExamSummary.grade,
+                examType: latestExamSummary.name,
+              }}
+              upcomingNotices={noticesList}
+              pendingDues={pendingDues}
+              onOpenGrowthHub={() => setActiveTab("growth_hub")}
+              onOpenHealthSafety={() => setActiveTab("health_safety")}
+              onOpenBusMap={() => setShowBusLiveMapModal(true)}
+              onOpenAttendance={() => setActiveTab("attendance")}
+              onOpenHomework={() => setActiveTab("homework")}
+              onOpenExams={() => setActiveTab("exams")}
+            />
+
             {/* ── 1. SELECTED TARGET / CLASS CARD (DYNAMIC SCHOOL OR GOVT. EXAM) ── GATED TO ELITE SCHOOLS */}
             {isEliteSchool && (
               <div id="home-class-6-12-card" className="space-y-2">
@@ -2739,7 +3239,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
 
                 <div
                   id="home-selected-class-card"
-                  className="nst-card-animated w-full relative overflow-hidden rounded-2xl text-left transition-all group bg-gradient-to-br from-slate-900 via-slate-900 to-indigo-950/40 border border-slate-800 hover:border-slate-700 shadow-xl"
+                  className="nst-card-animated w-full relative overflow-hidden rounded-2xl text-left transition-all group bg-gradient-to-br from-slate-900 via-slate-900 to-indigo-950/40 border-2 border-indigo-700 dark:border-indigo-500/40 shadow-xl"
                 >
                   <div className="p-4 sm:p-5">
                     <div className="flex items-start justify-between gap-3">
@@ -2829,7 +3329,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                 />
                 <div
                   data-no-topbar-swipe
-                  className="relative w-72 sm:w-80 max-w-[calc(100vw-24px)] rounded-2xl shadow-2xl border z-[1000000] animate-in fade-in zoom-in-95 duration-150 overflow-y-auto max-h-[calc(100dvh-80px)] bg-[#111827] border-slate-800 text-white"
+                  className="relative w-72 sm:w-80 max-w-[calc(100vw-24px)] rounded-2xl shadow-2xl border-2 z-[1000000] animate-in fade-in zoom-in-95 duration-150 overflow-y-auto max-h-[calc(100dvh-80px)] bg-white dark:bg-slate-900 border-indigo-700 dark:border-slate-700 text-slate-900 dark:text-white"
                 >
                   <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800">
                     <div className="flex items-center gap-1.5">
@@ -2901,53 +3401,57 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                   </div>
 
                   <div className="px-3.5 py-3">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Competitive Exams</p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedClassLevel('COMPETITION');
-                        try {
-                          localStorage.setItem('nst_session_class', 'COMPETITION');
-                          localStorage.setItem('nst_active_session_class', 'COMPETITION');
-                        } catch {}
-                      }}
-                      className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left border transition-all cursor-pointer active:scale-95 ${
-                        isCompetitionSelected
-                          ? 'border-amber-500 bg-amber-950/60 shadow-xs'
-                          : 'border-slate-800 bg-slate-800/60 hover:bg-slate-800 text-slate-200'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <span className="text-2xl shrink-0">🏛️</span>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-xs font-black truncate">Govt. Exams &amp; Competition</span>
-                            <span className="px-1 py-0.2 rounded-full text-[8px] font-black bg-amber-400 text-amber-900">
-                              Special
-                            </span>
+                    {onOpenPlatformContent && (
+                      <>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Competitive Exams</p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedClassLevel('COMPETITION');
+                            try {
+                              localStorage.setItem('nst_session_class', 'COMPETITION');
+                              localStorage.setItem('nst_active_session_class', 'COMPETITION');
+                            } catch {}
+                          }}
+                          className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left border transition-all cursor-pointer active:scale-95 ${
+                            isCompetitionSelected
+                              ? 'border-amber-500 bg-amber-950/60 shadow-xs'
+                              : 'border-slate-800 bg-slate-800/60 hover:bg-slate-800 text-slate-200'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <span className="text-2xl shrink-0">🏛️</span>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-xs font-black truncate">Govt. Exams &amp; Competition</span>
+                                <span className="px-1 py-0.2 rounded-full text-[8px] font-black bg-amber-400 text-amber-900">
+                                  Special
+                                </span>
+                              </div>
+                              <p className="text-[10px] text-slate-400 font-medium truncate mt-0.5">
+                                SSC · Railway · UPSC · BPSC · Police
+                              </p>
+                            </div>
                           </div>
-                          <p className="text-[10px] text-slate-400 font-medium truncate mt-0.5">
-                            SSC · Railway · UPSC · BPSC · Police
-                          </p>
-                        </div>
-                      </div>
-                      {isCompetitionSelected ? (
-                        <span className="w-5 h-5 rounded-full bg-amber-500 text-white flex items-center justify-center text-xs font-bold shrink-0">
-                          ✓
-                        </span>
-                      ) : (
-                        <span className="text-[11px] font-bold text-slate-400 shrink-0">
-                          Select →
-                        </span>
-                      )}
-                    </button>
+                          {isCompetitionSelected ? (
+                            <span className="w-5 h-5 rounded-full bg-amber-500 text-white flex items-center justify-center text-xs font-bold shrink-0">
+                              ✓
+                            </span>
+                          ) : (
+                            <span className="text-[11px] font-bold text-slate-400 shrink-0">
+                              Select →
+                            </span>
+                          )}
+                        </button>
+                      </>
+                    )}
 
                     <div className="pt-2.5">
                       <button
                         type="button"
                         onClick={() => {
                           setShowClassPickerDrawer(false);
-                          handleOpenClassSyllabus(isCompetitionSelected ? 'COMPETITION' : selectedClassLevel);
+                          handleOpenClassSyllabus(isCompetitionSelected && onOpenPlatformContent ? 'COMPETITION' : selectedClassLevel);
                         }}
                         className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black transition cursor-pointer shadow-md flex items-center justify-center gap-1.5"
                       >
@@ -3025,9 +3529,13 @@ export const StudentSchoolPanel: React.FC<Props> = ({
 
             {/* Clean Multi-Section Official Feature Button Grid */}
             <div>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-bold text-white">Student Portal Services &amp; Documents</h3>
-                <span className="text-xs text-slate-400">आधिकारिक दस्तावेज व स्कूल सुविधाएं</span>
+              <div className="flex items-center justify-between mb-3 gap-2">
+                <h3 className={`text-sm font-bold ${studentTheme === "white" ? "text-slate-900" : "text-white"}`}>
+                  Student Portal Services &amp; Documents
+                </h3>
+                <span className={`text-xs ${studentTheme === "white" ? "text-slate-600" : "text-slate-400"}`}>
+                  आधिकारिक दस्तावेज व स्कूल सुविधाएं
+                </span>
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
@@ -3163,28 +3671,6 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                   </div>
                 </button>
 
-                {/* Dedicated Card 7: School Store (24H Booking) */}
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("store")}
-                  className="p-3.5 rounded-2xl bg-gradient-to-br from-slate-900 to-amber-950/40 hover:bg-slate-800/90 border border-slate-800 hover:border-amber-500/50 text-left transition cursor-pointer flex flex-col justify-between gap-3 group shadow-sm"
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 group-hover:scale-105 transition-transform">
-                      <ShoppingBag className="w-4 h-4" />
-                    </div>
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/25 text-amber-300 border border-amber-500/40 font-black uppercase animate-pulse">
-                      24h Book
-                    </span>
-                  </div>
-                  <div>
-                    <p className="text-xs sm:text-sm font-bold text-white">School Store</p>
-                    <p className="text-[10px] text-slate-400 mt-0.5">
-                      ड्रेस, किताबें व सामग्री
-                    </p>
-                  </div>
-                </button>
-
               </div>
             </div>
 
@@ -3263,7 +3749,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                 logoUrl: resolvedSchoolLogo,
                 address: school?.address || "Institutional Academic Campus, Educational Zone",
                 affiliation: school?.affiliation || "Affiliated School Campus",
-                code: school?.code || "NSTZ",
+                code: getVisibleSchoolRegNo(school),
               } as any}
               currentUserRole="STUDENT"
               currentUserId={activeStudent?.id || studentId || "std_current"}
@@ -3315,7 +3801,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                 logoUrl: resolvedSchoolLogo,
                 address: school?.address || "Institutional Academic Campus, Educational Zone",
                 affiliation: school?.affiliation || "Affiliated School Campus",
-                code: school?.code || "NSTZ",
+                code: getVisibleSchoolRegNo(school),
               } as any}
               classes={classesList}
               teachers={schoolTeachers}
@@ -3333,7 +3819,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
             {(() => {
               const liveShift = getLiveShiftStatus(attendanceSchedule);
               return (
-                <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-900 to-indigo-950/60 border border-cyan-500/35 shadow-lg space-y-3">
+                <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-900 to-indigo-950/60 border-2 border-sky-700 dark:border-cyan-500/35 shadow-lg space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <Clock className="w-4 h-4 text-cyan-400 shrink-0" />
@@ -3523,7 +4009,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
             </div>
 
             {/* Dedicated Card: Daily Class Video Lectures (YouTube Archive) placed below Monthly Attendance Summary */}
-            <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-red-950/80 via-slate-900 to-rose-950/80 border-2 border-red-500/50 shadow-xl shadow-red-950/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-red-950/80 via-slate-900 to-rose-950/80 border-2 border-rose-700 dark:border-red-500/50 shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               <div className="flex items-start sm:items-center gap-3.5">
                 <div className="w-12 h-12 rounded-xl bg-red-600 text-white flex items-center justify-center shrink-0 shadow-lg shadow-red-600/40">
                   <Youtube className="w-6 h-6" />
@@ -4629,285 +5115,6 @@ export const StudentSchoolPanel: React.FC<Props> = ({
           );
         })()}
 
-        {/* ── TAB: SCHOOL EVENTS & MEMORIES (PHOTOS & VIDEOS) ────────────────── */}
-        {activeTab === "events_memories" && (() => {
-          const liveMedia = liveCommunityPosts.filter(
-            (p) => p.category === "EVENT_MEDIA" || Boolean(p.imageUrl) || Boolean(p.videoUrl)
-          );
-
-          const adminCustomMemories: any[] = (() => {
-            try {
-              return JSON.parse(localStorage.getItem(`school_memories_${schoolId}`) || "[]");
-            } catch {
-              return [];
-            }
-          })();
-
-          const combinedMemories = [
-            ...adminCustomMemories,
-            ...liveMedia.map((p) => ({
-              id: p.id,
-              title: p.title || "School Celebration & Memory",
-              category: "SCHOOL",
-              date: p.timestamp ? new Date(p.timestamp).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "Recent",
-              type: p.videoUrl ? "VIDEO" : "IMAGE",
-              url: p.imageUrl || p.videoUrl || "",
-              videoUrl: p.videoUrl || "",
-              description: p.text || "School campus event and student activity memory.",
-              tags: ["School Post", "Campus Memory"],
-              likes: p.likesCount || 42,
-            })),
-            {
-              id: "mem_sports_2026",
-              title: "Annual Sports Meet 2026 (वार्षिक खेलकूद प्रतियोगिता)",
-              category: "SPORTS",
-              date: "14 Feb 2026",
-              type: "IMAGE",
-              url: "https://images.unsplash.com/photo-1526676037777-05a232554f77?auto=format&fit=crop&w=1200&q=80",
-              description: "100m, 200m दौड़, रिले रेस और खेलकूद में छात्र-छात्राओं का शानदार प्रदर्शन व मेडल वितरण।",
-              tags: ["Sports", "Medals", "Athletics"],
-              likes: 124,
-            },
-            {
-              id: "mem_republic_2026",
-              title: "Republic Day Celebration (77वां गणतंत्र दिवस समारोह)",
-              category: "ANNUAL",
-              date: "26 Jan 2026",
-              type: "IMAGE",
-              url: "https://images.unsplash.com/photo-1577495508048-b635879837f1?auto=format&fit=crop&w=1200&q=80",
-              description: "ध्वजारोहण, एनसीसी मार्च पास्ट, देशभक्ति गीतों पर समूह नृत्य व राष्ट्रीय एकता संदेश।",
-              tags: ["Republic Day", "Patriotic", "Dance"],
-              likes: 98,
-            },
-            {
-              id: "mem_science_2026",
-              title: "Science, Robotics & AI Expo (विज्ञान व रोबोटिक्स प्रदर्शनी)",
-              category: "EXPO",
-              date: "10 Jan 2026",
-              type: "IMAGE",
-              url: "https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=1200&q=80",
-              description: "कक्षा 6 से 12 के छात्रों द्वारा बनाए गए सोलर एनर्जी, स्मार्ट इरिगेशन व रोबोटिक्स के वर्किंग मॉडल्स।",
-              tags: ["Science", "Robotics", "Innovation"],
-              likes: 156,
-            },
-            {
-              id: "mem_annual_dance_2025",
-              title: "Annual Cultural Fest & Drama (वार्षिक सांस्कृतिक संध्या)",
-              category: "ANNUAL",
-              date: "20 Dec 2025",
-              type: "VIDEO",
-              url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-              videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-              description: "छात्रों द्वारा 'पर्यावरण संरक्षण' पर नाट्य मंचन और लोकनृत्य प्रस्तुति।",
-              tags: ["Annual Day", "Drama", "Dance"],
-              likes: 210,
-            },
-            {
-              id: "mem_children_2025",
-              title: "Children's Day Carnival (बाल दिवस मेला व प्रतियोगिताएं)",
-              category: "SPORTS",
-              date: "14 Nov 2025",
-              type: "IMAGE",
-              url: "https://images.unsplash.com/photo-1509062522246-3755977927d7?auto=format&fit=crop&w=1200&q=80",
-              description: "फूड स्टॉल, फन गेम्स, क्विज प्रतियोगिता और शिक्षकों द्वारा बच्चों के लिए विशेष कार्यक्रम।",
-              tags: ["Children's Day", "Carnival", "Games"],
-              likes: 87,
-            },
-            {
-              id: "mem_picnic_2025",
-              title: "School Nature Excursion (शैक्षणिक भ्रमण व पिकनिक)",
-              category: "EXPO",
-              date: "05 Oct 2025",
-              type: "IMAGE",
-              url: "https://images.unsplash.com/photo-1544717305-2782549b5136?auto=format&fit=crop&w=1200&q=80",
-              description: "बोटैनिकल गार्डन और विज्ञान केंद्र का शैक्षणिक भ्रमण व फोटोग्राफी सत्र।",
-              tags: ["Picnic", "Nature", "Excursion"],
-              likes: 142,
-            },
-          ];
-
-          const filteredMemories = combinedMemories.filter((m) => {
-            if (eventsFilter === "PHOTOS") return m.type === "IMAGE";
-            if (eventsFilter === "VIDEOS") return m.type === "VIDEO";
-            if (eventsFilter === "SPORTS") return m.category === "SPORTS";
-            if (eventsFilter === "ANNUAL") return m.category === "ANNUAL";
-            if (eventsFilter === "EXPO") return m.category === "EXPO";
-            return true;
-          });
-
-          return (
-            <div className="space-y-6">
-
-
-              {/* Category Filter Tabs */}
-              <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
-                {[
-                  { id: "ALL", label: `All Memories (${combinedMemories.length})` },
-                  { id: "PHOTOS", label: "📸 Photos Only" },
-                  { id: "VIDEOS", label: "🎬 Videos Only" },
-                  { id: "SPORTS", label: "🏆 Sports Day" },
-                  { id: "ANNUAL", label: "🎭 Annual Fest" },
-                  { id: "EXPO", label: "🔬 Science & Art Expo" },
-                ].map((f) => (
-                  <button
-                    key={f.id}
-                    onClick={() => setEventsFilter(f.id)}
-                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition cursor-pointer border ${
-                      eventsFilter === f.id
-                        ? "bg-amber-500 text-slate-950 font-black border-amber-400 shadow-md shadow-amber-500/20"
-                        : "bg-slate-900 text-slate-400 border-slate-800 hover:text-white"
-                    }`}
-                  >
-                    {f.label}
-                  </button>
-                ))}
-              </div>
-
-              {/* Memories Media Cards Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredMemories.map((mem) => {
-                  const isVideo = mem.type === "VIDEO";
-                  return (
-                    <div
-                      key={mem.id}
-                      onClick={() => setSelectedMemoryMedia(mem)}
-                      className="group rounded-2xl bg-slate-900 border border-slate-800 hover:border-amber-500/50 overflow-hidden transition-all duration-200 cursor-pointer flex flex-col shadow-lg hover:shadow-amber-950/30 hover:-translate-y-0.5"
-                    >
-                      {/* Media Thumbnail */}
-                      <div className="relative aspect-video w-full bg-slate-950 overflow-hidden">
-                        {isVideo ? (
-                          <div className="w-full h-full relative flex items-center justify-center bg-gradient-to-tr from-slate-950 via-slate-900 to-rose-950">
-                            {mem.url && mem.url.includes("img") ? (
-                              <img src={mem.url} alt={mem.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
-                            ) : (
-                              <div className="absolute inset-0 bg-cover bg-center opacity-40 group-hover:opacity-60 transition-opacity" style={{ backgroundImage: `url('https://images.unsplash.com/photo-1511578314322-379afb476865?auto=format&fit=crop&w=800&q=80')` }} />
-                            )}
-                            <div className="w-12 h-12 rounded-full bg-red-600/90 text-white flex items-center justify-center shadow-lg shadow-red-600/40 group-hover:scale-110 transition-transform z-10">
-                              <Play className="w-5 h-5 fill-current ml-0.5" />
-                            </div>
-                            <span className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-slate-950/80 text-[10px] font-mono text-white font-bold border border-slate-700/60 z-10">
-                              Video Lecture / Event
-                            </span>
-                          </div>
-                        ) : (
-                          <>
-                            <img
-                              src={mem.url}
-                              alt={mem.title}
-                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                              loading="lazy"
-                            />
-                            <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent opacity-60" />
-                          </>
-                        )}
-
-                        {/* Top Badges */}
-                        <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none">
-                          <span className="px-2 py-0.5 rounded-full bg-slate-950/80 backdrop-blur-md border border-slate-700/80 text-[10px] font-bold text-amber-300 uppercase">
-                            {mem.category}
-                          </span>
-                          <span className="px-2 py-0.5 rounded-full bg-slate-950/80 backdrop-blur-md border border-slate-700/80 text-[10px] font-mono text-slate-300">
-                            {mem.date}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Content */}
-                      <div className="p-4 flex-1 flex flex-col justify-between gap-2.5">
-                        <div>
-                          <h4 className="text-sm font-black text-white group-hover:text-amber-300 transition-colors line-clamp-1">
-                            {mem.title}
-                          </h4>
-                          <p className="text-xs text-slate-400 mt-1 line-clamp-2 leading-relaxed">
-                            {mem.description}
-                          </p>
-                        </div>
-
-                        <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
-                          <div className="flex items-center gap-1.5 text-rose-400">
-                            <Heart className="w-3.5 h-3.5 fill-current" />
-                            <span className="font-bold">{mem.likes}</span>
-                          </div>
-                          <span className="text-[11px] font-bold text-amber-400 group-hover:underline flex items-center gap-1">
-                            <span>{isVideo ? "Play Video" : "View Photo"}</span>
-                            <ArrowRight className="w-3 h-3" />
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Lightbox / Video Modal */}
-              {selectedMemoryMedia && (
-                <div
-                  className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex items-center justify-center p-3 sm:p-6"
-                  onClick={() => setSelectedMemoryMedia(null)}
-                >
-                  <div
-                    className="relative max-w-4xl w-full bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {/* Modal Top Bar */}
-                    <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
-                      <div>
-                        <h3 className="text-sm sm:text-base font-black text-white">{selectedMemoryMedia.title}</h3>
-                        <p className="text-[11px] text-slate-400">{selectedMemoryMedia.date} • {schoolDisplayName}</p>
-                      </div>
-                      <button
-                        onClick={() => setSelectedMemoryMedia(null)}
-                        className="p-1.5 rounded-full bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer"
-                      >
-                        <XCircle className="w-5 h-5" />
-                      </button>
-                    </div>
-
-                    {/* Media Display */}
-                    <div className="flex-1 bg-black overflow-y-auto flex items-center justify-center min-h-[320px] max-h-[60vh]">
-                      {selectedMemoryMedia.type === "VIDEO" ? (
-                        <div className="w-full h-full min-h-[360px] flex items-center justify-center">
-                          <CustomPlayer
-                            videoUrl={selectedMemoryMedia.videoUrl || selectedMemoryMedia.url}
-                            videoTitle={selectedMemoryMedia.title}
-                            onBack={() => setSelectedMemoryMedia(null)}
-                            brandingText={schoolDisplayName}
-                          />
-                        </div>
-                      ) : (
-                        <img
-                          src={selectedMemoryMedia.url}
-                          alt={selectedMemoryMedia.title}
-                          className="max-h-[60vh] w-auto max-w-full object-contain mx-auto"
-                        />
-                      )}
-                    </div>
-
-                    {/* Caption & Actions */}
-                    <div className="p-4 bg-slate-900 border-t border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                      <p className="text-xs sm:text-sm text-slate-300 leading-relaxed max-w-2xl">
-                        {selectedMemoryMedia.description}
-                      </p>
-                      {selectedMemoryMedia.type === "IMAGE" && (
-                        <a
-                          href={selectedMemoryMedia.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          download="school_memory.jpg"
-                          className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-1.5 shrink-0 transition"
-                        >
-                          <Download className="w-4 h-4" />
-                          <span>Save Photo</span>
-                        </a>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })()}
-
 
 
 
@@ -4994,7 +5201,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                   {/* QR */}
                   <div className="flex flex-col items-center justify-center shrink-0 w-[84px]">
                     <div className="p-1 bg-white border border-slate-300 rounded-lg shadow-sm flex items-center justify-center">
-                      <QRCode value={qrStudentPayload} size={72} level="M" />
+                      <QRCode value={qrStudentPayload} size={72} level="L" />
                     </div>
                     <span className="text-[7px] font-black text-slate-600 uppercase tracking-tight mt-1 flex items-center gap-0.5">
                       <ShieldCheck className="w-2.5 h-2.5 text-emerald-600" /> Verify QR
@@ -5010,9 +5217,9 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                     <p className="text-[8.5px] font-black text-emerald-700">{formatClassLabel(studentClassLabel)}</p>
                     <div className="pt-1 space-y-0.5 border-t border-slate-100 text-[8px] text-slate-700">
                       <p><strong>Roll:</strong> #{activeStudent.rollNo} • <strong>Adm:</strong> {activeStudent.admissionNo}</p>
-                      <p><strong>Father:</strong> {activeStudent.fatherName || "—"}</p>
-                      {activeStudent.motherName && <p><strong>Mother:</strong> {activeStudent.motherName}</p>}
-                      <p><strong>Mobile:</strong> {activeStudent.phone || "—"}</p>
+                      <p><strong>Father:</strong> {maskSensitiveData ? maskSensitive2Chars(activeStudent.fatherName, true) : (activeStudent.fatherName || "—")}</p>
+                      {activeStudent.motherName && <p><strong>Mother:</strong> {maskSensitiveData ? maskSensitive2Chars(activeStudent.motherName, true) : activeStudent.motherName}</p>}
+                      <p><strong>Mobile:</strong> {maskSensitiveData ? maskSensitive2Chars(activeStudent.phone, true) : (activeStudent.phone || "—")}</p>
                       <p><strong>Blood:</strong> <span className="text-rose-700 font-bold">🩸 {activeStudent.bloodGroup || "O+"}</span>{activeStudent.dateOfBirth ? ` • DOB: ${activeStudent.dateOfBirth}` : ''}</p>
                       {activeStudent.address && <p><strong>Address:</strong> {activeStudent.address}</p>}
                     </div>
@@ -5051,7 +5258,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
         {activeTab === "teachers" && (
           <div className="space-y-5 animate-in fade-in">
             {/* Faculty Header Card */}
-            <div className="p-4 sm:p-6 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 border border-slate-800 shadow-md">
+            <div className="p-4 sm:p-6 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 border-2 border-blue-700 dark:border-blue-500/40 shadow-md">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div className="flex items-start sm:items-center gap-3.5">
                   <div className="w-12 h-12 rounded-2xl bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-blue-400 shrink-0 shadow-inner">
@@ -5241,6 +5448,29 @@ export const StudentSchoolPanel: React.FC<Props> = ({
           </div>
         )}
 
+        {/* TAB: STUDENT GROWTH, DIARY, SKILLS & AI LEARNING INSIGHTS ────────────── */}
+        {activeTab === "growth_hub" && (
+          <StudentGrowthAndPortfolioView
+            schoolId={schoolId}
+            student={activeStudent}
+            studentExams={liveExams}
+            attendanceStats={attendanceStats}
+            homeworkCompletedCount={homeworkList.filter((h) => h.status === "completed").length}
+            homeworkTotalCount={homeworkList.length}
+            onBack={() => setActiveTab("overview")}
+          />
+        )}
+
+        {/* TAB: HEALTH RECORD, AUTHORIZED PICKUP & PARENT HELPDESK ────────────── */}
+        {activeTab === "health_safety" && (
+          <StudentHealthAndSafetyView
+            schoolId={schoolId}
+            schoolName={schoolDisplayName}
+            student={activeStudent}
+            onBack={() => setActiveTab("overview")}
+          />
+        )}
+
         {/* TAB: SCHOOL STORE & 24-HOUR ITEM BOOKING ──────────────────────────── */}
         {activeTab === "store" && (
           <div className="space-y-4 animate-in fade-in">
@@ -5259,14 +5489,20 @@ export const StudentSchoolPanel: React.FC<Props> = ({
       </main>
 
       {/* ── FIXED BOTTOM NAVIGATION BAR (STUDENT PORTAL) ────────────────────── */}
-      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 backdrop-blur-md border-t border-slate-800 px-2 py-1.5 print:hidden">
+      <nav className={`fixed bottom-0 left-0 right-0 z-40 backdrop-blur-md border-t px-2 py-1.5 print:hidden ${
+        studentTheme === "white"
+          ? "bg-white/95 border-slate-200"
+          : studentTheme === "black"
+          ? "bg-black/95 border-neutral-800"
+          : "bg-[#091630]/95 border-[#1e3a6e]"
+      }`}>
         <div className="max-w-xl mx-auto grid grid-cols-5 gap-1">
           {[
             { id: "overview", label: "Home", icon: Home },
             { id: "attendance", label: "Attendance", icon: CalendarCheck },
             { id: "channel", label: "Updates", icon: Bell },
             { id: "holidays", label: "Holidays", icon: CalendarDays },
-            { id: "events_memories", label: "Memories", icon: Sparkles },
+            { id: "store", label: "Store", icon: ShoppingBag },
           ].map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
@@ -5279,8 +5515,14 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                 }}
                 className={`py-1.5 px-1 rounded-xl flex flex-col items-center justify-center gap-0.5 transition cursor-pointer ${
                   isActive
-                    ? "bg-emerald-600/20 text-emerald-400 font-bold shadow-sm"
-                    : "text-slate-400 hover:text-white"
+                    ? studentTheme === "white"
+                      ? "bg-indigo-600 text-white font-bold shadow-sm"
+                      : studentTheme === "black"
+                      ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-bold shadow-sm"
+                      : "bg-blue-500/25 text-sky-200 border border-sky-400/45 font-bold shadow-sm"
+                    : studentTheme === "white"
+                    ? "text-slate-600 hover:text-slate-900"
+                    : "text-slate-300 hover:text-white"
                 }`}
               >
                 <Icon className="w-5 h-5" />
@@ -5305,7 +5547,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
             logoUrl: resolvedSchoolLogo,
             address: school?.address || "Institutional Academic Campus, Educational Zone",
             affiliation: school?.affiliation || "Affiliated School Campus",
-            code: school?.code || "NSTZ"
+            code: getVisibleSchoolRegNo(school)
           } as any}
           fee={selectedFeeForReceipt}
           student={activeStudent}
@@ -5313,6 +5555,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
           sessionName="2026-2027"
           initialFormat={feeModalFormat}
           isStudentView={true}
+          defaultMasked={maskSensitiveData}
         />
       )}
 
@@ -5329,7 +5572,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
             logoUrl: resolvedSchoolLogo,
             address: school?.address || "",
             affiliation: school?.affiliation || "",
-            code: school?.code || "",
+            code: getVisibleSchoolRegNo(school),
             email: school?.email || "",
             mobile: school?.mobile || school?.phone || "",
           } as any}
@@ -5340,6 +5583,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
           feeRecord={selectedAdmissionModal.feeRecord || studentAdmissionFeeRecord}
           initialMode={selectedAdmissionModal.mode}
           isStudentView={true}
+          defaultMasked={maskSensitiveData}
         />
       )}
 
@@ -5355,7 +5599,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
             logoUrl: resolvedSchoolLogo,
             address: school?.address || "",
             affiliation: school?.affiliation || "",
-            code: school?.code || "",
+            code: getVisibleSchoolRegNo(school),
             email: school?.email || "",
             mobile: school?.mobile || school?.phone || "",
             upiId: school?.upiId || "",
@@ -5710,17 +5954,17 @@ export const StudentSchoolPanel: React.FC<Props> = ({
       {/* ── 3-THEME CUSTOMIZER MODAL FOR STUDENTS ── */}
       {showThemeModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-slate-900 border border-slate-700/80 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-5 text-white">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div className="bg-white dark:bg-slate-900 border-2 border-indigo-700 dark:border-slate-700/80 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-5 text-slate-900 dark:text-white">
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
               <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-purple-500/20 text-purple-400 border border-purple-500/30 flex items-center justify-center">
+                <div className="w-9 h-9 rounded-xl bg-purple-100 dark:bg-purple-500/20 text-purple-700 dark:text-purple-400 border border-purple-400 dark:border-purple-500/30 flex items-center justify-center">
                   <Palette className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="font-black text-sm text-white">
+                  <h3 className="font-black text-sm text-slate-900 dark:text-white">
                     App Theme Switcher (ऐप थीम)
                   </h3>
-                  <p className="text-[11px] text-slate-400">
+                  <p className="text-[11px] text-slate-600 dark:text-slate-400">
                     अपनी पसंद के अनुसार 3 में से कोई भी थीम चुनें
                   </p>
                 </div>
@@ -5728,7 +5972,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => setShowThemeModal(false)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+                className="p-1.5 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -5744,32 +5988,32 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                     onClick={() => {
                       applyStudentTheme(t.id);
                     }}
-                    className={`w-full p-3.5 rounded-2xl border text-left flex items-center justify-between gap-3 transition cursor-pointer active:scale-98 ${
+                    className={`w-full p-3.5 rounded-2xl border-2 text-left flex items-center justify-between gap-3 transition cursor-pointer active:scale-98 ${
                       isActive
-                        ? "bg-purple-950/40 border-purple-500 ring-2 ring-purple-500/30 shadow-md"
-                        : "bg-slate-950/60 border-slate-800 hover:border-slate-700"
+                        ? "bg-indigo-50 dark:bg-purple-950/40 border-indigo-700 dark:border-purple-500 ring-2 ring-indigo-500/20 dark:ring-purple-500/30 shadow-md"
+                        : "bg-slate-50 dark:bg-slate-950/60 border-slate-300 dark:border-slate-800 hover:border-slate-500 dark:hover:border-slate-700"
                     }`}
                   >
                     <div className="flex items-center gap-3">
                       <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0 border ${
                         t.id === "white"
-                          ? "bg-white text-slate-900 border-slate-300 shadow-sm"
+                          ? "bg-white text-slate-900 border-slate-400 shadow-sm"
                           : t.id === "black"
-                          ? "bg-black text-white border-neutral-700"
-                          : "bg-slate-900 text-indigo-400 border-indigo-500/40"
+                          ? "bg-black text-white border-neutral-600"
+                          : "bg-blue-950 text-blue-300 border-blue-500/60"
                       }`}>
-                        {t.id === "white" ? "☀️" : t.id === "black" ? "🌑" : "🌌"}
+                        {t.id === "white" ? "☀️" : t.id === "black" ? "🌑" : "🔵"}
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <span className="font-black text-xs text-white">
+                          <span className="font-black text-xs text-slate-900 dark:text-white">
                             {t.labelHi} ({t.label})
                           </span>
-                          <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-slate-800 text-slate-300">
+                          <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
                             {t.badge}
                           </span>
                         </div>
-                        <p className="text-[10px] text-slate-400 mt-0.5">
+                        <p className="text-[10px] text-slate-600 dark:text-slate-400 mt-0.5">
                           {t.desc}
                         </p>
                       </div>
@@ -5781,7 +6025,7 @@ export const StudentSchoolPanel: React.FC<Props> = ({
                           ✓
                         </div>
                       ) : (
-                        <div className="w-5 h-5 rounded-full border border-slate-700" />
+                        <div className="w-5 h-5 rounded-full border border-slate-400 dark:border-slate-700" />
                       )}
                     </div>
                   </button>
@@ -5789,8 +6033,8 @@ export const StudentSchoolPanel: React.FC<Props> = ({
               })}
             </div>
 
-            <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between">
-              <span className="text-[11px] text-slate-400">
+            <div className="pt-2 border-t border-slate-200 dark:border-slate-800/80 flex items-center justify-between">
+              <span className="text-[11px] text-slate-600 dark:text-slate-400">
                 चयनित थीम डिवाइस में हमेशा सुरक्षित रहेगी
               </span>
               <button

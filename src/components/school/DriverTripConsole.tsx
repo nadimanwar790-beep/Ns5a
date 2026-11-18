@@ -12,14 +12,16 @@ import { speakNotification } from "../../utils/voiceNotifyEngine";
 import { rtdb } from "../../firebase";
 import { ref as dbRef, set, onValue } from "firebase/database";
 import { toast } from "sonner";
+import { getLocalRoutes, getLocalFitnessVehicles } from "../../utils/schoolTransportStore";
 import { LiveBusGoogleMap } from "./LiveBusGoogleMap";
 import {
-  parseLatLngInput,
+  resolveGoogleMapsLocationInput,
   haversineMeters,
   formatDistanceShort,
   getProximityStatus,
   type StudentHomePin,
 } from "../../utils/busProximity";
+import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 
 export interface DriverBusConfig {
   id: string;
@@ -66,6 +68,54 @@ const DEFAULT_BUSES = [
   }
 ];
 
+function loadConfiguredFleetForDriver(sid: string, initialBusId?: string, initialBusMeta?: Partial<DriverBusConfig>, isDemo?: boolean): DriverBusConfig[] {
+  const byId = new Map<string, DriverBusConfig>();
+  if (sid) {
+    getLocalFitnessVehicles(sid).forEach((v: any, idx: number) => {
+      const id = v.id || `bus_${idx + 1}`;
+      byId.set(id, {
+        id,
+        busNumber: v.vehicleNumber || `Bus #${idx + 1}`,
+        route: v.route || v.model || "Campus Route",
+        driverName: v.driverName || "Driver",
+        driverPhone: v.driverPhone || "",
+        stops: Array.isArray(v.stops) && v.stops.length > 0 ? v.stops : ["Start Point", "Main Chowk", "School Main Gate"],
+      });
+    });
+
+    getLocalRoutes(sid).forEach((r) => {
+      const id = r.busId || r.id;
+      const stopNames = r.stops.map((s) => s.stopName).filter(Boolean);
+      byId.set(id, {
+        id,
+        busNumber: r.busNumber || byId.get(id)?.busNumber || r.routeName,
+        route: r.routeName,
+        driverName: r.driverName || byId.get(id)?.driverName || "Driver",
+        driverPhone: r.driverPhone || byId.get(id)?.driverPhone || "",
+        stops: stopNames.length > 0 ? stopNames : ["Start Point", "Main Chowk", "School Main Gate"],
+      });
+    });
+  }
+
+  if (initialBusMeta?.id || initialBusId) {
+    const targetId = initialBusMeta?.id || initialBusId || "bus_direct";
+    if (!byId.has(targetId) && (initialBusMeta?.busNumber || initialBusMeta?.route)) {
+      byId.set(targetId, {
+        id: targetId,
+        busNumber: initialBusMeta.busNumber || "School Bus",
+        route: initialBusMeta.route || "School Bus Route",
+        driverName: initialBusMeta.driverName || "Bus Driver",
+        driverPhone: initialBusMeta.driverPhone || "",
+        stops: Array.isArray(initialBusMeta.stops) && initialBusMeta.stops.length > 0 ? initialBusMeta.stops : ["Start Point", "Main Chowk", "School Main Gate"],
+      });
+    }
+  }
+
+  const list = Array.from(byId.values());
+  if (list.length === 0 && isDemo) return DEFAULT_BUSES;
+  return list;
+}
+
 export const DriverTripConsole: React.FC<Props> = ({
   school,
   onBack,
@@ -75,55 +125,18 @@ export const DriverTripConsole: React.FC<Props> = ({
   standaloneMode = false,
 }) => {
   const isDemo = shouldUseDemoForSchool(school?.id);
-  const [fleetBuses, setFleetBuses] = useState<DriverBusConfig[]>(() => {
+  const [fleetBuses, setFleetBuses] = useState<DriverBusConfig[]>(() =>
+    loadConfiguredFleetForDriver(school?.id || "", initialBusId, initialBusMeta, isDemo)
+  );
+
+  useEffect(() => {
     const sid = school?.id || "";
-    const list: DriverBusConfig[] = [];
-    if (sid) {
-      try {
-        const raw = localStorage.getItem(`bus_fitness_${sid}`);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) {
-            parsed.forEach((v: any, idx: number) => {
-              list.push({
-                id: v.id || `bus_${idx + 1}`,
-                busNumber: v.vehicleNumber || `Bus #${idx + 1}`,
-                route: v.route || v.model || "Campus Route",
-                driverName: v.driverName || "Driver",
-                driverPhone: v.driverPhone || "",
-                stops:
-                  Array.isArray(v.stops) && v.stops.length > 0
-                    ? v.stops
-                    : ["Start Point", "Main Chowk", "School Main Gate"],
-              });
-            });
-          }
-        }
-      } catch {}
-    }
-
-    if (initialBusMeta?.id || initialBusId) {
-      const targetId = initialBusMeta?.id || initialBusId || "bus_direct";
-      if (!list.some((b) => b.id === targetId) && (initialBusMeta?.busNumber || initialBusMeta?.route)) {
-        list.unshift({
-          id: targetId,
-          busNumber: initialBusMeta.busNumber || "School Bus",
-          route: initialBusMeta.route || "School Bus Route",
-          driverName: initialBusMeta.driverName || "Bus Driver",
-          driverPhone: initialBusMeta.driverPhone || "",
-          stops:
-            Array.isArray(initialBusMeta.stops) && initialBusMeta.stops.length > 0
-              ? initialBusMeta.stops
-              : ["Start Point", "Main Chowk", "School Main Gate"],
-        });
-      }
-    }
-
-    if (list.length === 0 && isDemo) {
-      return DEFAULT_BUSES;
-    }
-    return list;
-  });
+    const refreshFleet = () => {
+      setFleetBuses(loadConfiguredFleetForDriver(sid, initialBusId, initialBusMeta, isDemo));
+    };
+    window.addEventListener("school-transport-updated", refreshFleet);
+    return () => window.removeEventListener("school-transport-updated", refreshFleet);
+  }, [school?.id, initialBusId, isDemo]);
 
   // Also hydrate school's configured bus fleet from Firebase RTDB so standalone driver phones get real buses
   useEffect(() => {
@@ -194,6 +207,7 @@ export const DriverTripConsole: React.FC<Props> = ({
   const [gpsError, setGpsError] = useState<string | null>(null);
   const [showLiveMap, setShowLiveMap] = useState<boolean>(true);
   const [manualLocationText, setManualLocationText] = useState<string>("");
+  const [resolvingLocationLink, setResolvingLocationLink] = useState<boolean>(false);
   const [studentHomePins, setStudentHomePins] = useState<StudentHomePin[]>([]);
 
   useEffect(() => {
@@ -250,6 +264,7 @@ export const DriverTripConsole: React.FC<Props> = ({
   const watchIdRef = useRef<number | null>(null);
   const tripIntervalRef = useRef<any>(null);
   const lastCoordsRef = useRef<{ lat: number; lng: number; time: number } | null>(null);
+  const notifiedProximityRef = useRef<Map<string, number>>(new Map());
 
   // Sync bus live state key
   const storageKey = `nst_live_bus_${school?.id || "default"}_${selectedBus.id}`;
@@ -319,6 +334,76 @@ export const DriverTripConsole: React.FC<Props> = ({
         set(dbRef(rtdb, `schools/${school.id}/bus_locations/${selectedBus.id}`), payload).catch(() => {});
         set(dbRef(rtdb, `school_bus_locations/${school.id}/${selectedBus.id}`), payload).catch(() => {});
       }
+
+      // Automatic 1 KM & Gate Arrival Lock-Screen Push Notification to Parents/Students
+      if (
+        payload.tripStatus === "started" &&
+        school?.id &&
+        Number.isFinite(payload.latitude) &&
+        Number.isFinite(payload.longitude) &&
+        (Math.abs(payload.latitude) > 0.001 || Math.abs(payload.longitude) > 0.001) &&
+        studentHomePins.length > 0
+      ) {
+        const nowMs = Date.now();
+        const cooldownMs = 15 * 60 * 1000;
+        const busNumLow = (selectedBus.busNumber || "").toLowerCase();
+        const busRouteLow = (selectedBus.route || "").toLowerCase();
+        let triggeredNames: string[] = [];
+
+        studentHomePins.forEach((pin) => {
+          if (!pin?.studentId || !Number.isFinite(pin.homeLat) || !Number.isFinite(pin.homeLng)) return;
+          // If pin specifies a bus/route that clearly names a different bus number, skip only when other bus specified
+          const pinRouteLow = (pin.busRoute || "").trim().toLowerCase();
+          if (
+            pinRouteLow &&
+            fleetBuses.length > 1 &&
+            !busNumLow.includes(pinRouteLow) &&
+            !pinRouteLow.includes(busNumLow) &&
+            !busRouteLow.includes(pinRouteLow) &&
+            !pinRouteLow.includes(busRouteLow)
+          ) {
+            return;
+          }
+
+          const distM = haversineMeters(payload.latitude, payload.longitude, pin.homeLat, pin.homeLng);
+          if (distM > 1000) return;
+
+          const stage = distM <= 200 ? "gate" : "under_1km";
+          const alertKey = `${selectedBus.id}__${pin.studentId}__${stage}`;
+          const lastSent = notifiedProximityRef.current.get(alertKey) || 0;
+          if (nowMs - lastSent < cooldownMs) return;
+
+          notifiedProximityRef.current.set(alertKey, nowMs);
+          if (stage === "gate") {
+            // Also suppress subsequent 1km alert on same trip once gate alert fires
+            notifiedProximityRef.current.set(`${selectedBus.id}__${pin.studentId}__under_1km`, nowMs);
+          }
+
+          triggeredNames.push(pin.studentName || "Student");
+          const distLabel = formatDistanceShort(distM);
+          const title =
+            stage === "gate"
+              ? `🏠 ${selectedBus.busNumber} आपके घर/स्टॉप पर पहुँच गई है!`
+              : `🚌 स्कूल बस 1 KM के अंदर आ गई (${distLabel})!`;
+          const body = `${selectedBus.busNumber} (${selectedBus.route}) ${pin.studentName ? `${pin.studentName} के स्टॉप से ` : "आपके स्टॉप से "}सिर्फ ${distLabel} दूर है। कृपया तैयार रहें।`;
+
+          void sendSchoolPushNotification({
+            schoolId: school.id,
+            studentIds: [pin.studentId],
+            senderId: `bus_driver_${selectedBus.id}`,
+            senderName: selectedBus.busNumber,
+            title,
+            body,
+            type: "DEFAULT",
+            url: "/?schoolPortal=1",
+            urgent: true,
+          });
+        });
+
+        if (triggeredNames.length > 0) {
+          toast.info(`🔔 ${triggeredNames.slice(0, 2).join(", ")}${triggeredNames.length > 2 ? ` +${triggeredNames.length - 2}` : ""} को 1 KM बस अलर्ट भेजा गया!`);
+        }
+      }
     } catch (e) {
       console.warn("[DriverTripConsole] Broadcast error:", e);
     }
@@ -337,6 +422,7 @@ export const DriverTripConsole: React.FC<Props> = ({
     setTripDuration(0);
     setDistanceKm(0);
     setCompletedStops([]);
+    notifiedProximityRef.current.clear();
 
     speakNotification("यात्रा शुरू", `${selectedBus.busNumber} की लाइव लोकेशन शुरू हो चुकी है।`);
 
@@ -673,42 +759,91 @@ export const DriverTripConsole: React.FC<Props> = ({
           )}
         </div>
 
-        {/* Shared Location Link Attachment (100% Free Backup) */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 shadow-xl space-y-2">
-          <p className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
-            <Link2 size={13} className="text-indigo-400" />
-            Google Maps Share Link Attach Karein (Optional Backup)
-          </p>
+        {/* Shared Location Link Attachment + 1-Tap GPS (100% Free Backup) */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 shadow-xl space-y-2.5">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <p className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
+              <Link2 size={13} className="text-indigo-400" />
+              Google Maps Share Link Attach Karein (Optional Backup)
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                if (!navigator.geolocation) {
+                  toast.error("Device me GPS available nahi hai.");
+                  return;
+                }
+                navigator.geolocation.getCurrentPosition(
+                  (pos) => {
+                    const lat = Number(pos.coords.latitude.toFixed(6));
+                    const lng = Number(pos.coords.longitude.toFixed(6));
+                    setCoords({ lat, lng });
+                    setGpsAccuracy(Math.round(pos.coords.accuracy || 10));
+                    setIsTripActive(true);
+                    setGpsError(null);
+                    broadcastLocation({
+                      latitude: lat,
+                      longitude: lng,
+                      accuracy: pos.coords.accuracy || 10,
+                      tripStatus: "started",
+                    });
+                    toast.success(`Live GPS (${lat.toFixed(4)}, ${lng.toFixed(4)}) share ho gaya!`);
+                  },
+                  (err) => {
+                    toast.error(err?.message || "GPS permission allow karein ya Google Maps link paste karein.");
+                  },
+                  { enableHighAccuracy: true, timeout: 10000 }
+                );
+              }}
+              className="px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+            >
+              <Navigation size={12} /> 1-Tap Live GPS
+            </button>
+          </div>
           <div className="flex flex-col sm:flex-row gap-2">
             <input
               type="text"
               value={manualLocationText}
               onChange={(e) => setManualLocationText(e.target.value)}
-              placeholder="Google Maps location link paste karein ya lat, lng"
+              placeholder="maps.app.goo.gl/... ya Google Maps link ya lat, lng"
               className="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white"
             />
             <button
               type="button"
-              onClick={() => {
-                const parsed = parseLatLngInput(manualLocationText);
-                if (!parsed) {
-                  toast.error("Valid Google Maps link ya 'lat, lng' daalein.");
+              disabled={resolvingLocationLink}
+              onClick={async () => {
+                if (!manualLocationText.trim()) {
+                  toast.error("Google Maps share link ya 'lat, lng' daalein.");
                   return;
                 }
-                setCoords({ lat: parsed.lat, lng: parsed.lng });
-                setIsTripActive(true);
-                setGpsError(null);
-                broadcastLocation({
-                  latitude: parsed.lat,
-                  longitude: parsed.lng,
-                  tripStatus: "started",
-                });
-                setManualLocationText("");
-                toast.success("Location attach aur live broadcast ho gayi!");
+                setResolvingLocationLink(true);
+                try {
+                  const parsed = await resolveGoogleMapsLocationInput(manualLocationText);
+                  if (!parsed) {
+                    toast.error(
+                      "Link se coordinates nahi mil sake. Google Maps me pin drop karke link share karein ya '1-Tap Live GPS' dabayein."
+                    );
+                    return;
+                  }
+                  setCoords({ lat: parsed.lat, lng: parsed.lng });
+                  setIsTripActive(true);
+                  setGpsError(null);
+                  broadcastLocation({
+                    latitude: parsed.lat,
+                    longitude: parsed.lng,
+                    tripStatus: "started",
+                  });
+                  setManualLocationText("");
+                  toast.success(
+                    `Location (${parsed.lat.toFixed(4)}, ${parsed.lng.toFixed(4)}) attach aur live broadcast ho gayi!`
+                  );
+                } finally {
+                  setResolvingLocationLink(false);
+                }
               }}
-              className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs cursor-pointer shrink-0"
+              className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white font-bold text-xs cursor-pointer shrink-0"
             >
-              Attach &amp; Share
+              {resolvingLocationLink ? "Resolving Link..." : "Attach & Share"}
             </button>
           </div>
         </div>
@@ -800,24 +935,39 @@ export const DriverTripConsole: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Emergency SOS & Support */}
-        <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-400">
-              <Phone size={18} />
+        {/* Principal Helpline (Never shows dummy 9811023450 for real schools) */}
+        {(() => {
+          const rawPrincipalPhone = String(school?.principalPhone || "").trim();
+          const principalHelpline =
+            rawPrincipalPhone && (isDemo || rawPrincipalPhone !== "9811023450")
+              ? rawPrincipalPhone
+              : "";
+          return (
+            <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-400 shrink-0">
+                  <Phone size={18} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-white">Principal Helpline</p>
+                  <p className="text-[11px] text-slate-400 truncate">
+                    {principalHelpline
+                      ? `प्रिंसिपल संपर्क: ${principalHelpline}`
+                      : "प्रिंसिपल नंबर सेट नहीं है (School Profile से जोड़ें)"}
+                  </p>
+                </div>
+              </div>
+              {principalHelpline && (
+                <a
+                  href={`tel:${principalHelpline}`}
+                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold transition-colors shrink-0"
+                >
+                  कॉल करें
+                </a>
+              )}
             </div>
-            <div>
-              <p className="text-xs font-bold text-white">School Dispatch Helpline</p>
-              <p className="text-[11px] text-slate-400">आपातकालीन संपर्क: +91 9811023450</p>
-            </div>
-          </div>
-          <a
-            href="tel:9811023450"
-            className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold transition-colors"
-          >
-            कॉल करें
-          </a>
-        </div>
+          );
+        })()}
       </main>
     </div>
   );

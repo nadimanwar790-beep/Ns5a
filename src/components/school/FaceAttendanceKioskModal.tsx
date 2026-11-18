@@ -653,6 +653,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
             date: todayStr(),
             scanMode: kioskScanMode,
             currentShiftMode,
+            cutoffTime: adminInCutoffTime,
             outStartTime: adminOutStartTime,
           });
 
@@ -688,6 +689,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           hapticStrong();
 
           const action = staffRes.action;
+          const staffIsLate = Boolean(staffRes.isLate);
           const recordedTime = action === "out" ? (staffRes.outTime || timeFormatted) : (staffRes.inTime || timeFormatted);
 
           const checkInEntry: RecentCheckIn = {
@@ -698,7 +700,7 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
             className: "शिक्षक (Faculty)",
             photoUrl: match.photoUrl || descriptorRec?.photoUrl,
             time: recordedTime,
-            status: action === "out" ? "OUT" : "PRESENT",
+            status: action === "out" ? "OUT" : staffIsLate ? "LATE" : "PRESENT",
             action,
             stayDuration: staffRes.stayDuration,
             confidence: match.similarityPercent
@@ -719,7 +721,12 @@ export const FaceAttendanceKioskModal: React.FC<FaceAttendanceKioskModalProps> =
           }, 2000);
           setRecentScans((prev) => [checkInEntry, ...prev.filter((p) => p.studentId !== match.studentId)].slice(0, 8));
 
-          const teacherVoice = action === "out" ? `${match.name} प्रस्थान` : `${match.name} उपस्थित`;
+          const teacherVoice =
+            action === "out"
+              ? `${match.name} प्रस्थान`
+              : staffIsLate
+              ? `${match.name} लेट आगमन दर्ज`
+              : `${match.name} उपस्थित`;
           try {
             if (typeof window !== "undefined" && "speechSynthesis" in window) {
               window.speechSynthesis.cancel();

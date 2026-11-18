@@ -186,40 +186,40 @@ export const SchoolMessengerBroadcastStudio: React.FC<Props> = ({
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 pb-20 text-slate-900 dark:text-slate-100 animate-in fade-in">
       {/* Top Header */}
-      <div className="bg-gradient-to-r from-indigo-900 via-purple-900 to-slate-950 px-4 py-4 sm:px-6 text-white shadow-lg sticky top-0 z-30">
-        <div className="max-w-6xl mx-auto flex items-center justify-between gap-3">
+      <div className="bg-gradient-to-r from-indigo-50 via-purple-50 to-blue-50 dark:from-indigo-900 dark:via-purple-900 dark:to-slate-950 px-4 py-4 sm:px-6 text-slate-900 dark:text-white shadow-sm sticky top-0 z-30 border-b-2 border-indigo-700 dark:border-indigo-500/50">
+        <div className="max-w-6xl mx-auto flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={onBack}
-              className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
+              className="p-2 rounded-xl bg-white hover:bg-indigo-100 dark:bg-white/10 dark:hover:bg-white/20 text-slate-900 dark:text-white border border-indigo-700/40 dark:border-transparent transition cursor-pointer"
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-base sm:text-lg font-black text-white leading-tight">
+                <h2 className="text-base sm:text-lg font-black text-slate-900 dark:text-white leading-tight">
                   NSTA Messenger Broadcast Studio
                 </h2>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-400 text-slate-950">
                   {currentUserRole}
                 </span>
               </div>
-              <p className="text-xs text-indigo-200 mt-0.5">
+              <p className="text-xs text-slate-700 dark:text-indigo-200 font-semibold mt-0.5">
                 {school?.name || "School"} • 1-Way Class Broadcast &amp; Lock-Screen Push
               </p>
             </div>
           </div>
 
           {/* Quick Tab Switcher */}
-          <div className="flex items-center gap-1 bg-black/30 p-1 rounded-2xl border border-white/10">
+          <div className="flex items-center gap-1 bg-white/90 dark:bg-black/30 p-1 rounded-2xl border-2 border-indigo-700/40 dark:border-white/10">
             <button
               type="button"
               onClick={() => setActiveTab("broadcast")}
               className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
                 activeTab === "broadcast"
                   ? "bg-indigo-600 text-white shadow-sm"
-                  : "text-slate-300 hover:text-white"
+                  : "text-slate-700 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white"
               }`}
             >
               📢 Naya Broadcast
@@ -230,7 +230,7 @@ export const SchoolMessengerBroadcastStudio: React.FC<Props> = ({
               className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
                 activeTab === "feed"
                   ? "bg-indigo-600 text-white shadow-sm"
-                  : "text-slate-300 hover:text-white"
+                  : "text-slate-700 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white"
               }`}
             >
               📋 Live Feed ({broadcastFeed.length})
@@ -241,7 +241,7 @@ export const SchoolMessengerBroadcastStudio: React.FC<Props> = ({
               className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
                 activeTab === "helpdesk"
                   ? "bg-indigo-600 text-white shadow-sm"
-                  : "text-slate-300 hover:text-white"
+                  : "text-slate-700 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white"
               }`}
             >
               💬 Parent Helpdesk

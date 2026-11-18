@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useMemo, useEffect } from "react";
 import {
-  X, Printer, Download, MessageCircle, CheckCircle2, Loader2, Send
+  X, Printer, Download, MessageCircle, CheckCircle2, Loader2, Send, Eye, EyeOff
 } from "lucide-react";
 import type { School, MonthlyFee, SchoolStudent } from "../../school-types";
 import {
@@ -20,6 +20,7 @@ import {
   formatShortFeeMonth,
   formatConciseArrearsMonths,
   computeStudentFeeHistorySummary,
+  maskSensitive2Chars,
   type FeeReceiptItem,
   type DpsReceiptData,
 } from "./feeReceiptUtils";
@@ -41,8 +42,9 @@ interface Props {
   className?: string;
   sessionName?: string;
   feeHistory?: MonthlyFee[];
-  initialFormat?: "4in1" | "pos" | "a6";
+  initialFormat?: "full" | "4in1" | "pos" | "a6";
   isStudentView?: boolean;
+  defaultMasked?: boolean;
 }
 
 export const OfficialFeeReceiptModal: React.FC<Props> = ({
@@ -54,9 +56,31 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
   className = "Class 6-B",
   sessionName = "2026-27",
   feeHistory,
-  initialFormat = "pos",
+  initialFormat,
   isStudentView = false,
+  defaultMasked = false,
 }) => {
+  const isAdmissionReceipt = fee?.feeType === "admission" || fee?.receiptCategory === "admission";
+  const resolvedDefaultFormat: "full" | "4in1" | "pos" | "a6" = isAdmissionReceipt
+    ? initialFormat || "full"
+    : initialFormat && initialFormat !== "full"
+    ? initialFormat
+    : "4in1";
+  const [activeFormat, setActiveFormat] = useState<"full" | "4in1" | "pos" | "a6">(resolvedDefaultFormat);
+  const [maskSensitiveData, setMaskSensitiveData] = useState<boolean>(() => Boolean(defaultMasked));
+  useEffect(() => {
+    setActiveFormat(
+      isAdmissionReceipt
+        ? initialFormat || "full"
+        : initialFormat && initialFormat !== "full"
+        ? initialFormat
+        : "4in1"
+    );
+  }, [initialFormat, isAdmissionReceipt, isOpen, fee?.receiptNo]);
+  useEffect(() => {
+    setMaskSensitiveData(Boolean(defaultMasked));
+  }, [defaultMasked, isOpen]);
+
   const [fetchedHistory, setFetchedHistory] = useState<MonthlyFee[]>([]);
 
   useEffect(() => {
@@ -101,8 +125,8 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
   const session = formatAcademicSession(sessionName);
   const resolvedClass = className;
   const isDueDemand = !fee.paid && Number(fee.paidAmount || 0) === 0;
-  const isSlipView = initialFormat === "a6" || (initialFormat !== "pos" && isDueDemand);
-  const counterNo = isSlipView ? "DUE-DEMAND" : ((fee as any).counterNo || "DPS-RECEIPT");
+  const isSlipView = activeFormat === "a6";
+  const counterNo = isDueDemand ? "DUE-DEMAND" : isAdmissionReceipt ? "ADM-RECEIPT" : ((fee as any).counterNo || "DPS-RECEIPT");
   const note = fee.note || (fee as any).remarks || "";
   const [zoomLevel, setZoomLevel] = useState<number>(() => (isStudentView ? 0.8 : 1));
 
@@ -276,6 +300,9 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
     admissionNo,
     studentName,
     fatherName,
+    motherName: student?.motherName || (student as any)?.mother || "",
+    aadhaarNo: student?.aadhaarNo || (student as any)?.aadhaar || "",
+    maskSensitiveData,
     studentId: student?.id || fee.studentId || "",
     rollNo,
     phone: student?.phone || student?.whatsappNo || (fee as any).phone || "",
@@ -300,19 +327,35 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
       number: chequeNumber,
     },
     note,
-    showDigitalSignature: Boolean(school?.principalSignatureUrl || school?.directorSignatureUrl),
+    showDigitalSignature: Boolean(
+      school?.principalSignatureUrl ||
+      school?.accountantSignatureUrl ||
+      school?.managerSignatureUrl ||
+      school?.directorSignatureUrl ||
+      fee.collectorSignatureUrl
+    ),
     principalSignatureUrl: school?.principalSignatureUrl,
     principalName: school?.principalName || "Principal",
     principalTitle: "Principal (Sign & Seal)",
     directorSignatureUrl: school?.directorSignatureUrl,
-    directorName: school?.directorName || "Cashier / Clerk",
+    directorName: school?.directorName || "Director",
+    managerSignatureUrl: school?.managerSignatureUrl,
+    managerName: school?.managerName || "Manager",
+    accountantSignatureUrl: school?.accountantSignatureUrl,
+    accountantName: school?.accountantName || "Accountant",
+    collectedByRole: fee.collectedByRole || "accountant",
+    collectedByName: fee.collectedByName,
+    collectorSignatureUrl: fee.collectorSignatureUrl,
     signatoryTitle: school?.principalName || "Principal",
-    signatoryMode: (fee.receiptCategory === "admission" || fee.feeType === "admission") ? "both" : "principal_only",
-    cashierTitle: "Cashier / Clerk",
+    signatoryMode: isDueDemand ? "principal_only" : "both",
+    cashierTitle:
+      fee.collectedByRole === "manager"
+        ? (fee.collectedByName || school?.managerName || "Manager")
+        : (fee.collectedByName || school?.accountantName || "Accountant"),
   }), [
     schoolNameState, school, schoolAddressState, schoolLogoUrl, fee, totalPaid, totalDue, grandTotal,
     receiptNo, admissionNo, studentName, student, studentPhotoUrl, installment, receiptDate,
-    session, resolvedClass, counterNo, items, payMode, payDate, bank, chequeNumber, note, historySummary, balanceDue, fatherName, rollNo
+    session, resolvedClass, counterNo, items, payMode, payDate, bank, chequeNumber, note, historySummary, balanceDue, fatherName, rollNo, isDueDemand, maskSensitiveData
   ]);
 
   // Extract parent / student mobile number (prefill from student phone or fatherPhone)
@@ -341,11 +384,13 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
     }
   }, [initialParentPhone]);
 
-  // Direct Print: A6 Demand Slip or Receipt
+  // Direct Print: Full A4, A6 Slip, 4-in-1 A4, or POS 80mm
   const handlePrint = () => {
-    if (isSlipView) {
+    if (activeFormat === "full") {
+      printDpsReceiptDirect(receiptData, "full");
+    } else if (activeFormat === "a6") {
       printA6SlipDirect(receiptData);
-    } else if (initialFormat === "4in1") {
+    } else if (activeFormat === "4in1") {
       printDpsReceipts4in1([receiptData]);
     } else {
       printPosSlipDirect(receiptData, 80);
@@ -356,19 +401,31 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
 
   // Prepared fee options for WhatsApp message and PDF Blob
   const feeDocumentOptions = useMemo(() => ({
-    mode: (isSlipView ? "a6" : initialFormat === "4in1" ? "4in1" : "pos") as any,
+    mode: activeFormat as any,
+    receiptDataOverride: receiptData,
     fee: {
       ...fee,
       receiptNo,
+      items,
       amount: grandTotal,
-      monthlyAmount: grandTotal,
+      monthlyAmount: fee.monthlyAmount,
       studentName,
       note,
       paidDate: fee.paidDate || new Date().toISOString(),
       paidAmount: totalPaid > 0 ? totalPaid : (fee.paid ? grandTotal : 0),
       arrearsAmount: fee.arrearsAmount,
     },
-    student,
+    feeHistory: feeHistory && feeHistory.length > 0 ? feeHistory : fetchedHistory,
+    student: maskSensitiveData && student
+      ? {
+          ...student,
+          fatherName: maskSensitive2Chars(student.fatherName, true),
+          motherName: maskSensitive2Chars(student.motherName, true),
+          phone: maskSensitive2Chars(student.phone || student.whatsappNo, true),
+          whatsappNo: maskSensitive2Chars(student.whatsappNo || student.phone, true),
+          aadhaarNo: maskSensitive2Chars(student.aadhaarNo, true),
+        }
+      : student,
     schoolName: receiptData.schoolName,
     className: resolvedClass,
     schoolDetails: {
@@ -382,10 +439,14 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
       upiId: school?.upiId,
       principalSignatureUrl: receiptData.principalSignatureUrl,
       directorSignatureUrl: receiptData.directorSignatureUrl,
+      managerSignatureUrl: receiptData.managerSignatureUrl,
+      managerName: receiptData.managerName,
+      accountantSignatureUrl: receiptData.accountantSignatureUrl,
+      accountantName: receiptData.accountantName,
       principalName: receiptData.signatoryTitle,
     },
-    isDueDemand,
-  }), [fee, receiptNo, grandTotal, studentName, note, totalPaid, student, receiptData, resolvedClass, school, isDueDemand, initialFormat]);
+    isDueDemand: activeFormat === "a6" && isDueDemand,
+  }), [activeFormat, fee, receiptNo, items, grandTotal, studentName, note, totalPaid, feeHistory, fetchedHistory, student, receiptData, resolvedClass, school, isDueDemand, maskSensitiveData]);
 
   const whatsAppMeta = useMemo(() => {
     return buildWhatsAppReceiptMessage({
@@ -405,7 +466,7 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
     try {
       await downloadFeeDocument({
         ...feeDocumentOptions,
-        mode: isDueDemand ? "a6" : initialFormat === "4in1" ? "4in1" : "pos",
+        mode: activeFormat,
       });
     } catch (err) {
       console.error("PDF download error:", err);
@@ -421,20 +482,20 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-2 sm:p-4 bg-slate-950/80 backdrop-blur-xs animate-in fade-in duration-150">
       <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[96vh]">
         {/* Top Navbar with EXACTLY 3 Action Buttons: WhatsApp, Print, Download + Close */}
-        <div className="px-3 sm:px-4 py-2.5 bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950 text-white flex items-center justify-between shrink-0 border-b border-white/10 gap-2">
+        <div className="px-3 sm:px-4 py-2.5 bg-gradient-to-r from-blue-50 via-indigo-50 to-sky-50 dark:from-slate-950 dark:via-slate-900 dark:to-indigo-950 text-slate-900 dark:text-white flex items-center justify-between shrink-0 border-b-2 border-indigo-700 dark:border-white/10 gap-2">
           {/* Left: Student & Document Info */}
           <div className="min-w-0 flex items-center gap-2">
             <span className="text-lg shrink-0">{isDueDemand ? "📄" : "🧾"}</span>
             <div className="min-w-0">
               <div className="flex items-center gap-1.5 flex-nowrap overflow-hidden">
-                <h2 className="text-xs sm:text-sm font-black text-white leading-tight truncate">
+                <h2 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white leading-tight truncate">
                   {studentName}
                 </h2>
-                <span className="text-[10px] bg-slate-800 text-slate-300 font-mono px-1.5 py-0.2 rounded shrink-0">
+                <span className="text-[10px] bg-indigo-100 dark:bg-slate-800 text-indigo-900 dark:text-slate-300 border border-indigo-700/40 dark:border-transparent font-mono font-bold px-1.5 py-0.2 rounded shrink-0">
                   {resolvedClass}
                 </span>
                 {totalPaid >= grandTotal && grandTotal > 0 ? (
-                  <span className="text-[10px] bg-emerald-500 text-white font-bold px-1.5 py-0.2 rounded-md shrink-0 flex items-center gap-0.5">
+                  <span className="text-[10px] bg-emerald-600 text-white font-bold px-1.5 py-0.2 rounded-md shrink-0 flex items-center gap-0.5">
                     <CheckCircle2 className="w-2.5 h-2.5" /> Paid
                   </span>
                 ) : totalPaid > 0 ? (
@@ -442,62 +503,69 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
                     Partial: ₹{totalPaid.toLocaleString("en-IN")}
                   </span>
                 ) : (
-                  <span className="text-[10px] bg-rose-500 text-white font-bold px-1.5 py-0.2 rounded-md shrink-0">
+                  <span className="text-[10px] bg-rose-600 text-white font-bold px-1.5 py-0.2 rounded-md shrink-0">
                     Due: ₹{grandTotal.toLocaleString("en-IN")}
                   </span>
                 )}
               </div>
-              <p className="text-[10px] text-slate-400 truncate">
-                #{receiptNo} • {receiptDate} • {isSlipView ? "Fee Demand Slip (मांग पर्ची - A6)" : "Official Fee Receipt (शुल्क रसीद - POS 3\")"}
+              <p className="text-[10px] text-slate-700 dark:text-slate-400 font-semibold truncate">
+                #{receiptNo} • {receiptDate} •{" "}
+                {activeFormat === "full"
+                  ? "Full A4 Official Receipt (पूरा पेज A4)"
+                  : activeFormat === "a6"
+                  ? "Slip Preview (A6)"
+                  : activeFormat === "4in1"
+                  ? "4-in-1 A4 Sheet"
+                  : "Thermal POS Receipt (3\")"}
               </p>
             </div>
           </div>
 
           {/* Right: 3 Prominent Action Buttons + Close */}
           <div className="flex items-center gap-1.5 shrink-0">
-            {/* 1. WhatsApp: Direct dispatch with copy number, direct document share & WhatsApp */}
+            {/* 1. WhatsApp */}
             <button
               type="button"
               onClick={handleWhatsAppClick}
               className="inline-flex items-center gap-1 px-2.5 sm:px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-xs font-black rounded-xl shadow-xs transition cursor-pointer"
-              title={isSlipView ? "अभिभावक के WhatsApp पर मांग पर्ची शेयर करें" : "अभिभावक के WhatsApp पर रसीद शेयर करें"}
+              title="अभिभावक के WhatsApp पर रसीद शेयर करें"
             >
               <MessageCircle className="w-3.5 h-3.5 text-white" />
-              <span>WhatsApp</span>
+              <span className="hidden sm:inline">WhatsApp</span>
             </button>
 
-            {/* 2. Print: Direct A6 demand slip or receipt print */}
+            {/* 2. Print */}
             <button
               type="button"
               onClick={handlePrint}
               className="inline-flex items-center gap-1 px-2.5 sm:px-3 py-1.5 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 active:scale-95 text-white text-xs font-black rounded-xl shadow-xs transition cursor-pointer"
-              title={isSlipView ? "मांग पर्ची प्रिंट करें (Print Demand Slip A6)" : "शुल्क रसीद प्रिंट करें (Print Receipt POS)"}
+              title="रसीद प्रिंट करें"
             >
               <Printer className="w-3.5 h-3.5 text-amber-200" />
-              <span>Print</span>
+              <span className="hidden sm:inline">Print</span>
             </button>
 
-            {/* 3. Download: Download PDF */}
+            {/* 3. Download */}
             <button
               type="button"
               onClick={handleDownloadPdf}
               disabled={isDownloadingPdf}
               className="inline-flex items-center gap-1 px-2.5 sm:px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-black rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
-              title={isSlipView ? "Download Demand Slip PDF" : "Download Fee Receipt PDF"}
+              title="Download PDF"
             >
               {isDownloadingPdf ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
               ) : (
                 <Download className="w-3.5 h-3.5 text-white" />
               )}
-              <span>Download</span>
+              <span className="hidden sm:inline">PDF</span>
             </button>
 
             {/* Close */}
             <button
               type="button"
               onClick={onClose}
-              className="w-7 h-7 rounded-xl bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white flex items-center justify-center transition cursor-pointer ml-0.5"
+              className="w-7 h-7 rounded-xl bg-slate-200 dark:bg-white/10 hover:bg-slate-300 dark:hover:bg-white/20 text-slate-700 dark:text-slate-200 flex items-center justify-center transition cursor-pointer ml-0.5"
               title="Close modal"
             >
               <X className="w-4 h-4" />
@@ -505,21 +573,99 @@ export const OfficialFeeReceiptModal: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Modal Body: Direct Single A6 Demand Slip or Receipt Preview */}
-        <div className="flex-1 overflow-y-auto p-2 sm:p-5 bg-slate-100 dark:bg-slate-950/70 flex flex-col items-center">
+        {/* Paper Format Switcher Strip (Full A4 / POS 80mm / 4-in-1 A4 / A6 Slip) */}
+        <div className="px-3 py-1.5 bg-slate-100 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 overflow-x-auto no-scrollbar shrink-0">
+          <div className="flex items-center gap-1 text-[11px] font-bold">
+            {isAdmissionReceipt && (
+              <button
+                type="button"
+                onClick={() => setActiveFormat("full")}
+                className={`px-2.5 py-1 rounded-lg transition cursor-pointer shrink-0 ${
+                  activeFormat === "full"
+                    ? "bg-blue-600 text-white shadow-xs"
+                    : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
+                }`}
+              >
+                📄 Full A4
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setActiveFormat("pos")}
+              className={`px-2.5 py-1 rounded-lg transition cursor-pointer shrink-0 ${
+                activeFormat === "pos"
+                  ? "bg-amber-600 text-white shadow-xs"
+                  : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
+              }`}
+            >
+              🧾 POS 80mm
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveFormat("4in1")}
+              className={`px-2.5 py-1 rounded-lg transition cursor-pointer shrink-0 ${
+                activeFormat === "4in1"
+                  ? "bg-indigo-600 text-white shadow-xs"
+                  : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
+              }`}
+            >
+              📑 4-in-1 A4
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveFormat("a6")}
+              className={`px-2.5 py-1 rounded-lg transition cursor-pointer shrink-0 ${
+                activeFormat === "a6"
+                  ? "bg-slate-800 text-white shadow-xs"
+                  : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
+              }`}
+            >
+              🏷️ A6 Slip
+            </button>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {isAdmissionReceipt && activeFormat !== "full" && (
+              <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 hidden sm:inline">
+                💡 पूरी जानकारी के लिए &quot;Full A4&quot; चुनें
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => setMaskSensitiveData((prev) => !prev)}
+              className={`p-1.5 rounded-lg flex items-center justify-center border transition cursor-pointer shrink-0 shadow-xs ${
+                maskSensitiveData
+                  ? "bg-amber-600 text-white border-amber-500 hover:bg-amber-500"
+                  : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700"
+              }`}
+              title={maskSensitiveData ? "संवेदनशील डेटा छिपा है (पूरा दिखाने के लिए क्लिक करें)" : "मोबाइल नंबर, आधार, पिता और माता का नाम 2 अक्षर के बाद xxxx में छुपाएं"}
+              aria-label={maskSensitiveData ? "Show sensitive data" : "Mask sensitive data"}
+            >
+              {maskSensitiveData ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+            </button>
+          </div>
+        </div>
+
+        {/* Modal Body: Direct Receipt Preview */}
+        <div className="flex-1 overflow-auto p-2 sm:p-5 bg-slate-100 dark:bg-slate-950/70 flex flex-col items-center">
           {/* Inject Receipt & Thermal POS CSS */}
           <style>{DPS_RECEIPT_CSS}</style>
           <style>{POS_SLIP_CSS}</style>
 
-          <div className="w-full flex justify-center py-1">
+          <div className="w-full flex justify-center py-1 overflow-x-auto">
             <div
-              className="w-full flex justify-center"
+              className="flex justify-center"
+              style={{
+                width: activeFormat === "4in1" ? "210mm" : activeFormat === "full" ? "100%" : "auto",
+                maxWidth: activeFormat === "full" ? "700px" : undefined,
+              }}
               dangerouslySetInnerHTML={{
                 __html:
-                  isSlipView
+                  activeFormat === "a6"
                     ? generateSingleA6SlipHtml(receiptData)
-                    : initialFormat === "4in1"
+                    : activeFormat === "4in1"
                     ? generate4in1A4PageHtml([{ data: receiptData }])
+                    : activeFormat === "full"
+                    ? generateDpsReceiptHtml(receiptData, { layout: "full" })
                     : generatePosSlipHtml(receiptData, { rollWidthMm: 80 }),
               }}
             />

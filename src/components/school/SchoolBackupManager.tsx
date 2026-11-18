@@ -574,24 +574,24 @@ export const SchoolBackupManager: React.FC<Props> = ({
   return (
     <div className="space-y-6 max-w-5xl mx-auto pb-12">
       {/* Header Banner */}
-      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border border-indigo-500/30 rounded-2xl p-5 sm:p-6 shadow-xl relative overflow-hidden">
+      <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-sky-50 dark:from-slate-900 dark:via-indigo-950 dark:to-slate-900 border-2 border-indigo-700 dark:border-indigo-500/50 rounded-2xl p-5 sm:p-6 shadow-md relative overflow-hidden">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3.5">
-            <div className="w-12 h-12 rounded-2xl bg-indigo-500/20 border border-indigo-500/40 text-indigo-400 flex items-center justify-center shrink-0 shadow-lg">
+            <div className="w-12 h-12 rounded-2xl bg-indigo-100 dark:bg-indigo-500/20 border-2 border-indigo-600 dark:border-indigo-500/40 text-indigo-700 dark:text-indigo-400 flex items-center justify-center shrink-0 shadow-sm">
               <ShieldCheck className="w-6 h-6" />
             </div>
             <div>
-              <h2 className="text-xl font-black text-white flex items-center gap-2">
+              <h2 className="text-xl font-black text-slate-900 dark:text-white flex items-center gap-2">
                 1-क्लिक सम्पूर्ण स्कूल डेटा बैकअप व डिजास्टर रिकवरी
               </h2>
-              <p className="text-xs text-indigo-200/80">
-                School: <strong className="text-amber-300">{school?.name || "School"}</strong> • Session:{" "}
-                <span className="text-emerald-300 font-semibold">{activeSession?.name || defaultSession}</span>
+              <p className="text-xs text-slate-700 dark:text-indigo-200/80 font-medium">
+                School: <strong className="text-indigo-800 dark:text-amber-300">{school?.name || "School"}</strong> • Session:{" "}
+                <span className="text-emerald-700 dark:text-emerald-300 font-semibold">{activeSession?.name || defaultSession}</span>
               </p>
             </div>
           </div>
-          <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shrink-0">
-            ✓ 100% Cloud & Offline Safe
+          <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 dark:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 border border-emerald-700 dark:border-emerald-500/30 shrink-0">
+            ✓ 100% Cloud &amp; Offline Safe
           </span>
         </div>
       </div>

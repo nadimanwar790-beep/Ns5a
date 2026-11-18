@@ -4,8 +4,8 @@ import { Building2, X, Save, CheckCircle2, Image as ImageIcon, Phone, Mail, MapP
 import QRCode from "react-qr-code";
 import { DirectUploadButton } from "../DirectUploadButton";
 import { updateSchool } from "../../school-firebase";
-import { DigitalSignatureModal } from "./DigitalSignatureModal";
-import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo } from "./feeReceiptUtils";
+import { DigitalSignatureModal, type DigitalSignatureTab } from "./DigitalSignatureModal";
+import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo, getVisibleSchoolRegNo } from "./feeReceiptUtils";
 import { setSchoolLogoSync } from "../../utils/schoolIndexedDb";
 import { uploadImageToImgBB } from "../../services/imgbbService";
 import { DEFAULT_ERP_APP_DOWNLOAD_URL } from "./marksheetBacksideUtils";
@@ -32,8 +32,13 @@ export interface SchoolHeaderDetails {
   principalPhone?: string;
   directorName?: string;
   directorPhone?: string;
+  managerName?: string;
+  managerPhone?: string;
+  accountantName?: string;
   principalSignatureUrl?: string;
   directorSignatureUrl?: string;
+  managerSignatureUrl?: string;
+  accountantSignatureUrl?: string;
   principalPhotoUrl?: string;
   directorPhotoUrl?: string;
   erpAppUrl?: string;
@@ -82,12 +87,17 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
       logoUrl: resolvedLogo,
       principalName: currentDetails?.principalName || initialDetails?.principalName || school?.principalName || "",
       principalTitle: currentDetails?.principalTitle || initialDetails?.principalTitle || "Principal",
-      code: currentDetails?.code || initialDetails?.code || (school?.code && school?.code !== (school as any)?.lockCode && school?.code !== "0002" ? school.code : "") || "",
+      code: getVisibleSchoolRegNo(school, currentDetails?.code ?? initialDetails?.code),
       principalPhone: currentDetails?.principalPhone || initialDetails?.principalPhone || school?.principalPhone || "",
       directorName: currentDetails?.directorName || initialDetails?.directorName || school?.directorName || "",
       directorPhone: currentDetails?.directorPhone || initialDetails?.directorPhone || school?.directorPhone || "",
+      managerName: currentDetails?.managerName || initialDetails?.managerName || school?.managerName || "",
+      managerPhone: currentDetails?.managerPhone || initialDetails?.managerPhone || school?.managerPhone || "",
+      accountantName: currentDetails?.accountantName || initialDetails?.accountantName || school?.accountantName || "",
       principalSignatureUrl: currentDetails?.principalSignatureUrl || initialDetails?.principalSignatureUrl || school?.principalSignatureUrl || "",
       directorSignatureUrl: currentDetails?.directorSignatureUrl || initialDetails?.directorSignatureUrl || school?.directorSignatureUrl || "",
+      managerSignatureUrl: currentDetails?.managerSignatureUrl || initialDetails?.managerSignatureUrl || school?.managerSignatureUrl || "",
+      accountantSignatureUrl: currentDetails?.accountantSignatureUrl || initialDetails?.accountantSignatureUrl || school?.accountantSignatureUrl || "",
       principalPhotoUrl: currentDetails?.principalPhotoUrl || initialDetails?.principalPhotoUrl || school?.principalPhotoUrl || "",
       directorPhotoUrl: currentDetails?.directorPhotoUrl || initialDetails?.directorPhotoUrl || school?.directorPhotoUrl || "",
       erpAppUrl: currentDetails?.erpAppUrl || initialDetails?.erpAppUrl || school?.erpAppUrl || DEFAULT_ERP_APP_DOWNLOAD_URL,
@@ -103,6 +113,7 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [showDigitalSignatureModal, setShowDigitalSignatureModal] = useState(false);
+  const [digitalSigTab, setDigitalSigTab] = useState<DigitalSignatureTab>("principal");
 
   // CRITICAL FIX: Only populate details when the modal transitions from closed to open.
   // Never wipe user edits while they are actively typing inside the open modal!
@@ -149,8 +160,13 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
       principalPhone: dataToSave.principalPhone || "",
       directorName: dataToSave.directorName || "",
       directorPhone: dataToSave.directorPhone || "",
+      managerName: dataToSave.managerName || "",
+      managerPhone: dataToSave.managerPhone || "",
+      accountantName: dataToSave.accountantName || "",
       principalSignatureUrl: dataToSave.principalSignatureUrl || "",
       directorSignatureUrl: dataToSave.directorSignatureUrl || "",
+      managerSignatureUrl: dataToSave.managerSignatureUrl || "",
+      accountantSignatureUrl: dataToSave.accountantSignatureUrl || "",
       principalPhotoUrl: dataToSave.principalPhotoUrl || "",
       directorPhotoUrl: dataToSave.directorPhotoUrl || "",
       erpAppUrl: (dataToSave.erpAppUrl || "").trim(),
@@ -158,7 +174,7 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
       upiId: (dataToSave.upiId || "").trim(),
       customFields: dataToSave.customFields || [],
       documentPrintFields: dataToSave.documentPrintFields || {},
-      code: dataToSave.code || school?.code,
+      code: (dataToSave.code || "").trim(),
     });
   };
 
@@ -215,6 +231,8 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
     { key: "principalPhone", label: "Principal mobile" },
     { key: "directorName", label: "Director name" },
     { key: "directorPhone", label: "Director mobile" },
+    { key: "managerName", label: "Manager name" },
+    { key: "managerPhone", label: "Manager mobile" },
     { key: "customFields", label: "Extra school details" },
   ];
   const fieldsForDocument = (document: SchoolDocumentKey) =>
@@ -255,19 +273,19 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-5 bg-slate-950/70 backdrop-blur-xs animate-in fade-in duration-150">
       <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[92vh]">
         {/* Modal Header */}
-        <div className="px-5 py-4 bg-gradient-to-r from-indigo-900 via-slate-900 to-blue-900 text-white flex items-center justify-between shrink-0">
+        <div className="px-5 py-4 bg-gradient-to-r from-indigo-50 via-blue-50 to-sky-50 dark:from-indigo-900 dark:via-slate-900 dark:to-blue-900 text-slate-900 dark:text-white border-b-2 border-indigo-700 dark:border-indigo-500/40 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center text-amber-300">
+            <div className="w-10 h-10 rounded-xl bg-indigo-100 dark:bg-white/10 border border-indigo-700/40 dark:border-transparent flex items-center justify-center text-amber-700 dark:text-amber-300">
               <Building2 className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base font-black leading-tight text-white">{title}</h2>
-              <p className="text-xs text-indigo-200 font-medium">{subtitle}</p>
+              <h2 className="text-base font-black leading-tight text-slate-900 dark:text-white">{title}</h2>
+              <p className="text-xs text-slate-700 dark:text-indigo-200 font-semibold">{subtitle}</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-full hover:bg-white/10 text-slate-300 hover:text-white transition"
+            className="p-1.5 rounded-full hover:bg-indigo-100 dark:hover:bg-white/10 text-slate-700 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white transition"
           >
             <X className="w-5 h-5" />
           </button>
@@ -514,12 +532,12 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
               />
             </div>
             <div>
-              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">Director / Manager Name</label>
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">Director Name (अलग पद)</label>
               <input
                 type="text"
                 value={details.directorName || ""}
                 onChange={e => setDetails(p => ({ ...p, directorName: e.target.value }))}
-                placeholder="Director or manager name"
+                placeholder="Director full name"
                 className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
               />
             </div>
@@ -533,98 +551,111 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
                 className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
               />
             </div>
+            <div>
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">Manager Name (अलग पद)</label>
+              <input
+                type="text"
+                value={details.managerName || ""}
+                onChange={e => setDetails(p => ({ ...p, managerName: e.target.value }))}
+                placeholder="Manager full name"
+                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">Manager Mobile Number</label>
+              <input
+                type="tel"
+                value={details.managerPhone || ""}
+                onChange={e => setDetails(p => ({ ...p, managerPhone: e.target.value }))}
+                placeholder="Manager mobile number"
+                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="text-xs font-bold text-emerald-700 dark:text-emerald-400 block mb-1">Accountant Name (Fee Receipt Default Signatory)</label>
+              <input
+                type="text"
+                value={details.accountantName || ""}
+                onChange={e => setDetails(p => ({ ...p, accountantName: e.target.value }))}
+                placeholder="Head Accountant / Cashier name"
+                className="w-full px-3 py-2 text-xs font-semibold rounded-xl border border-emerald-300 dark:border-emerald-700 bg-emerald-50/40 dark:bg-slate-800 text-slate-900 dark:text-white"
+              />
+            </div>
           </div>
 
-          {/* Digital Signatures Studio (Principal & Director) */}
+          {/* Digital Signatures Studio (Principal, Director, Manager & Accountant) */}
           <div className="p-4 bg-gradient-to-br from-indigo-50/80 via-blue-50/40 to-amber-50/40 dark:from-indigo-950/40 dark:via-blue-950/20 dark:to-slate-900 rounded-2xl border border-indigo-200/80 dark:border-indigo-800/50 space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <div className="flex items-center gap-1.5 text-xs font-black text-indigo-950 dark:text-indigo-200">
                   <PenTool className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                  <span>Digital Signatures Studio (Principal &amp; Director)</span>
-                  <span className="text-[10px] bg-indigo-600 text-white font-bold px-1.5 py-0.5 rounded-full">New</span>
+                  <span>Digital Signatures Studio (Principal, Director, Manager &amp; Accountant)</span>
                 </div>
                 <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5">
-                  Screen pe ungli ya stylus se sign karein, ya photo upload karein — har document (ID Card, Fee Slip, Certificate, Marksheet, Admit Card) par auto-apply hoga.
+                  Fee Receipt पर Accountant (या Manager) के हस्ताक्षर अलग से दिखते हैं। नीचे किसी भी पद पर क्लिक करके sign करें।
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => setShowDigitalSignatureModal(true)}
+                onClick={() => {
+                  setDigitalSigTab("principal");
+                  setShowDigitalSignatureModal(true);
+                }}
                 className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white text-xs font-bold rounded-xl shadow-md shadow-indigo-600/20 active:scale-95 transition-all shrink-0 cursor-pointer"
               >
                 <PenTool className="w-3.5 h-3.5" />
-                <span>✍️ Screen Pe Sign Karein</span>
+                <span>✍️ Signature Studio खोलें</span>
               </button>
             </div>
 
             {/* Signature status chips / mini previews */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-              <div className="p-2.5 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Principal Signature</span>
-                  <span className="text-xs font-bold text-slate-800 dark:text-white truncate block">
-                    {details.principalName || "Principal"}
-                  </span>
-                </div>
-                {details.principalSignatureUrl ? (
-                  <div className="flex items-center gap-2">
-                    <img
-                      src={details.principalSignatureUrl}
-                      alt="Principal Sign"
-                      className="h-8 max-w-[80px] object-contain border border-slate-200 dark:border-slate-700 rounded-md p-1 bg-white"
-                    />
+              {[
+                { key: "principal" as const, roleLabel: "Principal Signature", nameVal: details.principalName || "Principal", urlVal: details.principalSignatureUrl, clearKey: "principalSignatureUrl" as const },
+                { key: "director" as const, roleLabel: "Director Signature", nameVal: details.directorName || "Director", urlVal: details.directorSignatureUrl, clearKey: "directorSignatureUrl" as const },
+                { key: "manager" as const, roleLabel: "Manager Signature", nameVal: details.managerName || "Manager", urlVal: details.managerSignatureUrl, clearKey: "managerSignatureUrl" as const },
+                { key: "accountant" as const, roleLabel: "Accountant (Fee Receipt)", nameVal: details.accountantName || "Accountant", urlVal: details.accountantSignatureUrl, clearKey: "accountantSignatureUrl" as const },
+              ].map((sigItem) => (
+                <div key={sigItem.key} className="p-2.5 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">{sigItem.roleLabel}</span>
+                    <span className="text-xs font-bold text-slate-800 dark:text-white truncate block">
+                      {sigItem.nameVal}
+                    </span>
+                  </div>
+                  {sigItem.urlVal ? (
+                    <div className="flex items-center gap-2">
+                      <img
+                        src={sigItem.urlVal}
+                        alt={sigItem.roleLabel}
+                        className="h-8 max-w-[80px] object-contain border border-slate-200 dark:border-slate-700 rounded-md p-1 bg-white cursor-pointer"
+                        onClick={() => {
+                          setDigitalSigTab(sigItem.key);
+                          setShowDigitalSignatureModal(true);
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setDetails(p => ({ ...p, [sigItem.clearKey]: "" }))}
+                        className="text-[10px] text-rose-500 hover:underline cursor-pointer"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ) : (
                     <button
                       type="button"
-                      onClick={() => setDetails(p => ({ ...p, principalSignatureUrl: "" }))}
-                      className="text-[10px] text-rose-500 hover:underline"
+                      onClick={() => {
+                        setDigitalSigTab(sigItem.key);
+                        setShowDigitalSignatureModal(true);
+                      }}
+                      className="text-[11px] text-indigo-600 dark:text-indigo-400 font-bold hover:underline cursor-pointer"
                     >
-                      Remove
+                      + Add Sign
                     </button>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setShowDigitalSignatureModal(true)}
-                    className="text-[11px] text-indigo-600 dark:text-indigo-400 font-bold hover:underline"
-                  >
-                    + Add Sign
-                  </button>
-                )}
-              </div>
-
-              <div className="p-2.5 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Director Signature</span>
-                  <span className="text-xs font-bold text-slate-800 dark:text-white truncate block">
-                    {details.directorName || "Director / Manager"}
-                  </span>
+                  )}
                 </div>
-                {details.directorSignatureUrl ? (
-                  <div className="flex items-center gap-2">
-                    <img
-                      src={details.directorSignatureUrl}
-                      alt="Director Sign"
-                      className="h-8 max-w-[80px] object-contain border border-slate-200 dark:border-slate-700 rounded-md p-1 bg-white"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setDetails(p => ({ ...p, directorSignatureUrl: "" }))}
-                      className="text-[10px] text-rose-500 hover:underline"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setShowDigitalSignatureModal(true)}
-                    className="text-[11px] text-indigo-600 dark:text-indigo-400 font-bold hover:underline"
-                  >
-                    + Add Sign
-                  </button>
-                )}
-              </div>
+              ))}
             </div>
           </div>
 
@@ -843,13 +874,33 @@ export const SchoolHeaderEditorModal: React.FC<Props> = ({
         <DigitalSignatureModal
           isOpen={showDigitalSignatureModal}
           onClose={() => setShowDigitalSignatureModal(false)}
-          school={school || { id: targetSchoolId, name: details.schoolName, principalSignatureUrl: details.principalSignatureUrl, directorSignatureUrl: details.directorSignatureUrl } as School}
+          initialTab={digitalSigTab}
+          school={
+            {
+              ...(school || {}),
+              id: targetSchoolId,
+              name: details.schoolName,
+              principalName: details.principalName,
+              directorName: details.directorName,
+              managerName: details.managerName,
+              accountantName: details.accountantName,
+              principalSignatureUrl: details.principalSignatureUrl,
+              directorSignatureUrl: details.directorSignatureUrl,
+              managerSignatureUrl: details.managerSignatureUrl,
+              accountantSignatureUrl: details.accountantSignatureUrl,
+            } as School
+          }
           schoolId={targetSchoolId}
           onSignaturesUpdated={updated => {
             setDetails(p => ({
               ...p,
               principalSignatureUrl: updated.principalSignatureUrl !== undefined ? updated.principalSignatureUrl : p.principalSignatureUrl,
               directorSignatureUrl: updated.directorSignatureUrl !== undefined ? updated.directorSignatureUrl : p.directorSignatureUrl,
+              managerSignatureUrl: updated.managerSignatureUrl !== undefined ? updated.managerSignatureUrl : p.managerSignatureUrl,
+              accountantSignatureUrl: updated.accountantSignatureUrl !== undefined ? updated.accountantSignatureUrl : p.accountantSignatureUrl,
+              directorName: updated.directorName !== undefined ? updated.directorName : p.directorName,
+              managerName: updated.managerName !== undefined ? updated.managerName : p.managerName,
+              accountantName: updated.accountantName !== undefined ? updated.accountantName : p.accountantName,
             }));
           }}
         />

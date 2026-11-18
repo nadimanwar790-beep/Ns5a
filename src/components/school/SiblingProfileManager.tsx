@@ -294,48 +294,45 @@ export const SiblingProfileManager: React.FC<Props> = ({
   return (
     <div className="space-y-5 animate-in fade-in duration-200 pb-16">
       {/* ── TOP BANNER & HEADER ──────────────────────────────────────────────── */}
-      <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-purple-950 rounded-3xl p-5 sm:p-6 text-white border border-indigo-500/30 shadow-2xl relative overflow-hidden">
-        <div className="absolute top-0 right-0 -mt-6 -mr-6 w-56 h-56 rounded-full bg-indigo-500/10 blur-3xl pointer-events-none" />
-        <div className="absolute bottom-0 left-1/3 -mb-6 w-48 h-48 rounded-full bg-blue-500/10 blur-2xl pointer-events-none" />
-
+      <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-sky-50 dark:from-slate-900 dark:via-indigo-950 dark:to-slate-900 rounded-3xl p-5 sm:p-6 text-slate-900 dark:text-white border-2 border-indigo-700 dark:border-indigo-500 shadow-lg relative overflow-hidden">
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="space-y-1.5">
             <div className="flex items-center gap-2.5">
-              <span className="p-2.5 rounded-2xl bg-indigo-500/20 border border-indigo-400/30 text-amber-300">
+              <span className="p-2.5 rounded-2xl bg-indigo-100 dark:bg-indigo-500/20 border-2 border-indigo-600 dark:border-indigo-400/40 text-indigo-700 dark:text-amber-300">
                 <Users className="w-6 h-6" />
               </span>
               <div>
-                <div className="flex items-center gap-2">
-                  <h1 className="text-lg sm:text-2xl font-black tracking-tight text-white">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h1 className="text-lg sm:text-2xl font-black tracking-tight text-slate-900 dark:text-white">
                     भाई-बहन प्रोफाइल (Sibling Profile &amp; Concessions)
                   </h1>
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-500/20 border border-emerald-400/40 text-emerald-300">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 dark:bg-emerald-500/20 border border-emerald-700 dark:border-emerald-400/40 text-emerald-800 dark:text-emerald-300">
                     Auto-Group Engine
                   </span>
                 </div>
-                <p className="text-xs sm:text-sm text-indigo-200/90 font-medium">
+                <p className="text-xs sm:text-sm text-slate-600 dark:text-indigo-200/90 font-medium">
                   समान माता-पिता, आधार कार्ड, मोबाइल व पते के आधार पर स्वतः निर्मित फैमिली प्रोफाइल • 1-क्लिक डिस्काउंट व 100% फ्री शिक्षा
                 </p>
               </div>
             </div>
 
             {/* Smart Detection Rules Ribbon */}
-            <div className="pt-2 flex flex-wrap items-center gap-2 text-[11px] text-indigo-200">
-              <span className="font-bold text-slate-300">ऑटो पहचान नियम:</span>
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-indigo-950/60 border border-indigo-400/30">
-                <Check className="w-3 h-3 text-emerald-400" />
+            <div className="pt-2 flex flex-wrap items-center gap-2 text-[11px] text-indigo-900 dark:text-indigo-200">
+              <span className="font-bold text-slate-700 dark:text-slate-300">ऑटो पहचान नियम:</span>
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white dark:bg-indigo-950/60 border border-indigo-400 dark:border-indigo-400/30 font-semibold">
+                <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
                 <span>समान माता-पिता का नाम</span>
               </span>
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-indigo-950/60 border border-indigo-400/30">
-                <Check className="w-3 h-3 text-emerald-400" />
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white dark:bg-indigo-950/60 border border-indigo-400 dark:border-indigo-400/30 font-semibold">
+                <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
                 <span>समान आधार कार्ड (माता/पिता/छात्र)</span>
               </span>
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-indigo-950/60 border border-indigo-400/30">
-                <Check className="w-3 h-3 text-emerald-400" />
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white dark:bg-indigo-950/60 border border-indigo-400 dark:border-indigo-400/30 font-semibold">
+                <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
                 <span>समान मोबाइल / व्हाट्सएप</span>
               </span>
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-indigo-950/60 border border-indigo-400/30">
-                <Check className="w-3 h-3 text-emerald-400" />
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white dark:bg-indigo-950/60 border border-indigo-400 dark:border-indigo-400/30 font-semibold">
+                <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
                 <span>समान निवास पता</span>
               </span>
             </div>
@@ -345,7 +342,7 @@ export const SiblingProfileManager: React.FC<Props> = ({
             <button
               type="button"
               onClick={onBack}
-              className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs transition cursor-pointer self-start md:self-auto border border-white/10"
+              className="px-4 py-2 rounded-xl bg-white dark:bg-white/10 hover:bg-indigo-100 dark:hover:bg-white/20 text-indigo-900 dark:text-white font-bold text-xs transition cursor-pointer self-start md:self-auto border-2 border-indigo-600 dark:border-white/10 shadow-xs"
             >
               ← वापस डैशबोर्ड
             </button>
@@ -391,15 +388,15 @@ export const SiblingProfileManager: React.FC<Props> = ({
           <p className="text-[10px] text-slate-400 mt-0.5">₹0 ट्यूशन फीस</p>
         </div>
 
-        <div className="col-span-2 sm:col-span-1 bg-gradient-to-br from-indigo-950/70 to-slate-900 border border-indigo-500/30 rounded-2xl p-3.5 shadow-md">
-          <div className="flex items-center justify-between text-emerald-300 mb-1">
+        <div className="col-span-2 sm:col-span-1 bg-gradient-to-br from-emerald-50 to-indigo-50 dark:from-indigo-950/70 dark:to-slate-900 border-2 border-emerald-700 dark:border-indigo-500/40 rounded-2xl p-3.5 shadow-md">
+          <div className="flex items-center justify-between text-emerald-800 dark:text-emerald-300 mb-1">
             <span className="text-[11px] font-bold">मासिक कुल छूट</span>
             <IndianRupee className="w-4 h-4" />
           </div>
-          <p className="text-xl sm:text-2xl font-black text-emerald-300 font-mono">
+          <p className="text-xl sm:text-2xl font-black text-emerald-700 dark:text-emerald-300 font-mono">
             ₹{stats.totalMonthlySavings.toLocaleString("en-IN")}
           </p>
-          <p className="text-[10px] text-indigo-300 mt-0.5">प्रति माह कुल रियायत</p>
+          <p className="text-[10px] text-indigo-800 dark:text-indigo-300 mt-0.5 font-medium">प्रति माह कुल रियायत</p>
         </div>
       </div>
 
@@ -556,35 +553,35 @@ export const SiblingProfileManager: React.FC<Props> = ({
             filteredFamilies.map((family, fIdx) => (
               <div
                 key={family.id}
-                className="bg-slate-900 rounded-3xl border border-slate-800 hover:border-slate-700 shadow-xl overflow-hidden transition"
+                className="bg-white dark:bg-slate-900 rounded-3xl border-2 border-indigo-700 dark:border-slate-800 hover:border-indigo-900 dark:hover:border-slate-700 shadow-lg overflow-hidden transition"
               >
                 {/* Family Header Strip */}
-                <div className="px-5 py-4 bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950/70 border-b border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="px-5 py-4 bg-gradient-to-r from-indigo-50 via-blue-50 to-sky-50 dark:from-slate-950 dark:via-slate-900 dark:to-indigo-950/70 border-b-2 border-indigo-700/30 dark:border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-3">
                   <div className="space-y-1.5">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="w-6 h-6 rounded-lg bg-indigo-500/20 text-indigo-300 flex items-center justify-center text-xs font-black font-mono">
+                      <span className="w-6 h-6 rounded-lg bg-indigo-100 dark:bg-indigo-500/20 text-indigo-900 dark:text-indigo-300 border border-indigo-700/40 dark:border-transparent flex items-center justify-center text-xs font-black font-mono">
                         #{fIdx + 1}
                       </span>
-                      <h2 className="text-base font-black text-white flex items-center gap-2">
+                      <h2 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
                         <span>👨‍👩‍👧‍👦 {family.familyName}</span>
                       </h2>
-                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-indigo-100 dark:bg-indigo-500/20 text-indigo-900 dark:text-indigo-300 border border-indigo-700/50 dark:border-indigo-500/30">
                         {family.totalStudents} भाई-बहन
                       </span>
                       {family.hasFreeEducation && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-emerald-100 dark:bg-emerald-500/20 text-emerald-900 dark:text-emerald-300 border border-emerald-700/50 dark:border-emerald-500/30">
                           100% नि:शुल्क एक्टिव
                         </span>
                       )}
                       {family.hasDiscount && !family.hasFreeEducation && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-amber-100 dark:bg-amber-500/20 text-amber-900 dark:text-amber-300 border border-amber-700/50 dark:border-amber-500/30">
                           छूट एक्टिव
                         </span>
                       )}
                     </div>
 
                     {/* Parents, Contact, Aadhaar & Match Reason */}
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-300">
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-700 dark:text-slate-300 font-medium">
                       {family.fatherName && (
                         <span className="flex items-center gap-1">
                           <span className="text-slate-500 font-bold">पिता:</span>

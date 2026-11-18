@@ -4,17 +4,21 @@ import QRCode from "react-qr-code";
 import type { School, SchoolClass, SchoolStudent, SchoolSession } from "../../school-types";
 import {
   FileText, Printer, ChevronLeft, Plus, Trash2, Calendar, Clock,
-  CheckSquare, Square, Award, AlertCircle, Building2, Layers, Edit3, User, Shield, Sparkles, UserPlus
+  CheckSquare, Square, Award, AlertCircle, Building2, Layers, Edit3, User, Shield, Sparkles, UserPlus, PenTool
 } from "lucide-react";
 import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeaderEditorModal";
 import { QuickAddStudentModal } from "./QuickAddStudentModal";
-import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo, formatAcademicSession } from "./feeReceiptUtils";
+import { TeacherSignatureModal } from "./TeacherSignatureModal";
+import { updateSchool } from "../../school-firebase";
+import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo, getVisibleSchoolRegNo, formatAcademicSession } from "./feeReceiptUtils";
+import { buildAdmitCardQrUrl } from "../../utils/qrVerifyUrl";
 
 interface Props {
   school: School;
   classes: SchoolClass[];
   students: SchoolStudent[];
   activeSession: SchoolSession | null;
+  onSchoolUpdated?: (updated: Partial<School>) => void;
   onBack: () => void;
 }
 
@@ -31,6 +35,7 @@ export const AdmitCardManager: React.FC<Props> = ({
   classes,
   students: initialStudents,
   activeSession,
+  onSchoolUpdated,
   onBack,
 }) => {
   const [studentList, setStudentList] = useState<SchoolStudent[]>(initialStudents);
@@ -43,6 +48,7 @@ export const AdmitCardManager: React.FC<Props> = ({
   // Modals state
   const [showSchoolHeaderModal, setShowSchoolHeaderModal] = useState(false);
   const [showAddStudentModal, setShowAddStudentModal] = useState(false);
+  const [showExamControllerSignModal, setShowExamControllerSignModal] = useState(false);
 
   // School Header Customization State
   const [schoolDetails, setSchoolDetails] = useState<SchoolHeaderDetails>({
@@ -55,7 +61,7 @@ export const AdmitCardManager: React.FC<Props> = ({
     logoUrl: getSavedSchoolLogo(school?.logoUrl, school?.id),
     principalName: school?.principalName || "Principal",
     principalTitle: "Principal",
-    code: school?.code && school?.code !== (school as any)?.lockCode && school?.code !== "0002" ? school.code : "",
+    code: getVisibleSchoolRegNo(school),
     principalSignatureUrl: school?.principalSignatureUrl || "",
     directorSignatureUrl: school?.directorSignatureUrl || "",
   });
@@ -72,7 +78,7 @@ export const AdmitCardManager: React.FC<Props> = ({
       email: school.email || prev.email,
       logoUrl: getSavedSchoolLogo(school.logoUrl || prev.logoUrl, school.id),
       principalName: school.principalName || prev.principalName,
-      code: (school.code && school.code !== (school as any)?.lockCode && school.code !== "0002" ? school.code : "") || prev.code,
+      code: getVisibleSchoolRegNo(school),
       principalSignatureUrl: school.principalSignatureUrl || "",
       directorSignatureUrl: school.directorSignatureUrl || "",
     }));
@@ -85,10 +91,19 @@ export const AdmitCardManager: React.FC<Props> = ({
   const [centerName, setCenterName] = useState(schoolDetails.schoolName + ", Main Campus Examination Hall");
 
   // Signatory & Authority
-  const [examController, setExamController] = useState("Exam Controller");
+  const [examController, setExamController] = useState(school?.examControllerName || "Exam Controller");
+  const [examControllerSignatureUrl, setExamControllerSignatureUrl] = useState(school?.examControllerSignatureUrl || "");
   const [centerSuperintendent, setCenterSuperintendent] = useState("Center Superintendent");
   const [principalTitle, setPrincipalTitle] = useState("Principal / Center Superintendent");
   const [principalName, setPrincipalName] = useState(school?.principalName || "Principal");
+
+  useEffect(() => {
+    if (!school) return;
+    if (school.examControllerName) setExamController(school.examControllerName);
+    if (school.examControllerSignatureUrl !== undefined) {
+      setExamControllerSignatureUrl(school.examControllerSignatureUrl || "");
+    }
+  }, [school]);
 
   // Candidate Details Editable State (Allows overriding student details for print)
   const [candidateName, setCandidateName] = useState("");
@@ -252,15 +267,25 @@ export const AdmitCardManager: React.FC<Props> = ({
     const sPhoto = isSingle ? (candidatePhoto || student?.photoUrl || "") : (student?.photoUrl || "");
     const sClass = isSingle ? (candidateClass || currentClass?.name || "Class 10") : (currentClass?.name || "Class 10");
 
-    const qrData = JSON.stringify({
-      admitCard: true,
-      exam: examName,
-      school: schoolDetails.schoolName,
-      studentId: student?.id || "custom",
+    const qrData = buildAdmitCardQrUrl({
+      schoolId: school?.id || "",
+      schoolName: schoolDetails.schoolName,
+      schoolCode: getVisibleSchoolRegNo(school, schoolDetails.code),
+      schoolAddress: schoolDetails.address,
+      schoolPhone: schoolDetails.phone,
+      examName,
+      session: formatAcademicSession(sessionName),
+      studentId: student?.id || "",
       rollNo: sRoll,
+      admNo: sAdm,
       name: sName,
-      class: sClass,
-      center: centerName
+      fatherName: sFather,
+      phone: sPhone,
+      className: sClass,
+      centerName,
+      examController,
+      principalTitle,
+      timetable,
     });
 
     return (
@@ -295,7 +320,7 @@ export const AdmitCardManager: React.FC<Props> = ({
               <p className="text-[10px] text-slate-500 font-semibold tracking-wide uppercase">
                 {schoolDetails.affiliation || "CBSE Pattern Curriculum"}
                 {schoolDetails.phone ? ` • Helpline: ${schoolDetails.phone}` : ""}
-                {schoolDetails.code && schoolDetails.code !== (school as any)?.lockCode && schoolDetails.code !== "0002" ? ` • Center / Reg Code: ${schoolDetails.code}` : ""}
+                {getVisibleSchoolRegNo(school, schoolDetails.code) ? ` • Center / Reg Code: ${getVisibleSchoolRegNo(school, schoolDetails.code)}` : ""}
               </p>
             </div>
           </div>
@@ -358,7 +383,7 @@ export const AdmitCardManager: React.FC<Props> = ({
               )}
             </div>
             <div className="p-1 bg-white border border-slate-300 rounded shadow-sm">
-              <QRCode value={qrData} size={48} level="M" />
+              <QRCode value={qrData} size={52} level="L" />
             </div>
           </div>
         </div>
@@ -411,7 +436,15 @@ export const AdmitCardManager: React.FC<Props> = ({
           </div>
           <div>
             <div className="h-8 border-b border-slate-400 mb-1 flex items-end justify-center">
-              <span className="text-[11px] font-semibold text-slate-400">Sign / Stamp</span>
+              {examControllerSignatureUrl ? (
+                <img
+                  src={examControllerSignatureUrl}
+                  alt="Exam Controller Signature"
+                  className="max-h-7 max-w-[110px] object-contain mb-0.5"
+                />
+              ) : (
+                <span className="text-[11px] font-semibold text-slate-400">Sign / Stamp</span>
+              )}
             </div>
             <p className="font-bold text-slate-700">{examController || "Exam Controller"}</p>
             <p className="text-[10px] text-slate-500">(परीक्षा नियंत्रक)</p>
@@ -478,32 +511,34 @@ export const AdmitCardManager: React.FC<Props> = ({
         }
       `}</style>
       {/* Top Navbar */}
-      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-blue-900 px-4 py-4 text-white shadow-lg sticky top-0 z-30 print:hidden">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+      <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-sky-50 dark:from-slate-900 dark:via-indigo-950 dark:to-slate-900 px-4 py-4 text-slate-900 dark:text-white border-b-2 border-indigo-700 dark:border-indigo-500 shadow-md sticky top-0 z-30 print:hidden">
+        <div className="max-w-6xl mx-auto flex items-center justify-between flex-wrap gap-2">
           <button
             onClick={onBack}
-            className="flex items-center gap-1.5 text-blue-200 hover:text-white text-sm font-bold transition-colors"
+            className="flex items-center gap-1.5 text-indigo-800 dark:text-blue-200 hover:text-indigo-950 dark:hover:text-white text-sm font-bold transition-colors cursor-pointer"
           >
             <ChevronLeft className="w-4 h-4" /> School Dashboard
           </button>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <button
               onClick={() => setShowSchoolHeaderModal(true)}
-              className="px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 bg-indigo-700/80 hover:bg-indigo-600 text-white shadow transition-all"
+              className="px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white shadow transition-all cursor-pointer"
             >
               <Building2 className="w-3.5 h-3.5 text-amber-300" /> 🏫 School Details Edit
             </button>
             <button
               onClick={() => setBulkMode(!bulkMode)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
-                bulkMode ? "bg-amber-500 text-white shadow" : "bg-white/10 text-white hover:bg-white/20"
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 border transition-all cursor-pointer ${
+                bulkMode
+                  ? "bg-amber-500 text-slate-950 border-amber-700 shadow"
+                  : "bg-white dark:bg-slate-800 text-slate-800 dark:text-white border-indigo-600 dark:border-slate-600 hover:bg-indigo-50 dark:hover:bg-slate-700"
               }`}
             >
               <Layers className="w-3.5 h-3.5" /> {bulkMode ? "Single Mode" : "Bulk Class Print"}
             </button>
             <button
               onClick={handlePrint}
-              className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-black flex items-center gap-1.5 shadow active:scale-95 transition-transform"
+              className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-black flex items-center gap-1.5 shadow active:scale-95 transition-transform cursor-pointer"
             >
               <Printer className="w-3.5 h-3.5" /> Print / Save PDF
             </button>
@@ -609,14 +644,25 @@ export const AdmitCardManager: React.FC<Props> = ({
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-bold text-slate-500 block mb-1">Exam Controller Title:</label>
-                  <input
-                    type="text"
-                    value={examController}
-                    onChange={e => setExamController(e.target.value)}
-                    placeholder="Exam Controller"
-                    className="w-full px-3 py-2 text-xs font-bold bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100 rounded-xl border-0"
-                  />
+                  <label className="text-xs font-bold text-slate-500 block mb-1">Exam Controller Title &amp; Sign:</label>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      value={examController}
+                      onChange={e => setExamController(e.target.value)}
+                      placeholder="Exam Controller"
+                      className="flex-1 min-w-0 px-3 py-2 text-xs font-bold bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100 rounded-xl border-0"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowExamControllerSignModal(true)}
+                      className="px-2.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-black flex items-center gap-1 shrink-0 cursor-pointer"
+                      title="Exam Controller (Exam लेने वाला) का डिजिटल साइन जोड़ें"
+                    >
+                      <PenTool className="w-3.5 h-3.5" />
+                      <span>{examControllerSignatureUrl ? "Edit Sign" : "Add Sign"}</span>
+                    </button>
+                  </div>
                 </div>
                 <div>
                   <label className="text-xs font-bold text-slate-500 block mb-1">Principal / Signatory Name:</label>
@@ -970,6 +1016,28 @@ export const AdmitCardManager: React.FC<Props> = ({
           onStudentAdded={(newStu) => {
             setStudentList(prev => [newStu, ...prev]);
             setSelectedStudentId(newStu.id);
+          }}
+        />
+      )}
+
+      {showExamControllerSignModal && (
+        <TeacherSignatureModal
+          isOpen={showExamControllerSignModal}
+          onClose={() => setShowExamControllerSignModal(false)}
+          title="Exam Controller Signature (परीक्षा नियंत्रक साइन)"
+          subtitle="Admit Card व Marksheet पर Exam Controller स्थान पर प्रिंट होगा"
+          initialSignatureUrl={examControllerSignatureUrl}
+          uploadPrefix={`sig_exam_controller_${school.id}`}
+          onSaveSignature={async (url) => {
+            setExamControllerSignatureUrl(url);
+            await updateSchool(school.id, {
+              examControllerSignatureUrl: url,
+              examControllerName: examController || "Exam Controller",
+            });
+            onSchoolUpdated?.({
+              examControllerSignatureUrl: url,
+              examControllerName: examController || "Exam Controller",
+            });
           }}
         />
       )}

@@ -80,8 +80,11 @@ import {
   updateStudent,
   getAttendance,
   todayStr as getTodayDateStr,
-  getTeachers
+  getTeachers,
+  isDemoSessionId,
+  isDemoRecord
 } from "../../school-firebase";
+import { DEMO_SESSION_ID, setDemoDataEnabled } from "./demoDataStore";
 import { loadMergedStoreSales } from "../../utils/schoolCloudSync";
 import { computePaymentBreakdown } from "../../utils/paymentBreakdown";
 import { toast } from "sonner";
@@ -92,7 +95,9 @@ import { SiblingProfileManager } from "./SiblingProfileManager";
 import { NstaMessengerSuite } from "./NstaMessengerSuite";
 import { ReceiptCancellationModal } from "./ReceiptCancellationModal";
 import { RazorpaySettingsModal } from "./RazorpaySettingsModal";
+import { StudentReAdmissionManager } from "./StudentReAdmissionManager";
 import { printHtmlInIframe } from "./AdmissionFormPrintModal";
+import { TeacherRulesRegulationsView } from "./TeacherRulesRegulationsView";
 import {
   printPosSlipDirect,
   printA6SlipDirect,
@@ -116,18 +121,19 @@ type AccountantTab =
   | "fee_collection"
   | "sibling_profiles"
   | "admissions"
+  | "readmission"
   | "dues_defaulters"
   | "daybook"
   | "expenses"
   | "bus_fees"
-  | "admission_receipt"
   | "qr_pay"
   | "fee_alerts"
   | "class_rates"
   | "receipt_header"
   | "receipt_cancellation"
   | "razorpay_setup"
-  | "messenger";
+  | "messenger"
+  | "rules_regulations";
 
 const DEFAULT_PERMISSIONS: AccountantPermissions = {
   canCollectFee: true,
@@ -150,11 +156,12 @@ export const AccountantPanel: React.FC<Props> = ({
   onOpenPlatformContent
 }) => {
   const handleExploreFullApp = () => {
-    try {
-      localStorage.setItem("nst_app_view_mode", "STUDENT");
-      window.dispatchEvent(new CustomEvent("nst_open_student_dashboard"));
-    } catch {}
+    if (!onOpenPlatformContent && !onBack) return;
     if (onOpenPlatformContent) {
+      try {
+        localStorage.setItem("nst_app_view_mode", "STUDENT");
+        window.dispatchEvent(new CustomEvent("nst_open_student_dashboard"));
+      } catch {}
       onOpenPlatformContent();
     } else if (onBack) {
       onBack();
@@ -164,8 +171,10 @@ export const AccountantPanel: React.FC<Props> = ({
   const [activeTab, setActiveTab] = useState<AccountantTab>("home");
   const [school, setSchool] = useState<School | null>(null);
   const [classes, setClasses] = useState<SchoolClass[]>([]);
+  const [allClasses, setAllClasses] = useState<SchoolClass[]>([]);
   const [sessions, setSessions] = useState<SchoolSession[]>([]);
   const [students, setStudents] = useState<SchoolStudent[]>([]);
+  const [allStudents, setAllStudents] = useState<SchoolStudent[]>([]);
   const [fees, setFees] = useState<MonthlyFee[]>([]);
   const [allHistoryFees, setAllHistoryFees] = useState<MonthlyFee[]>([]);
   const [storeSales, setStoreSales] = useState<StoreSaleRecord[]>([]);
@@ -187,6 +196,30 @@ export const AccountantPanel: React.FC<Props> = ({
   const [loading, setLoading] = useState(true);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [appTheme, setAppTheme] = useState<"current" | "white" | "black">(() => {
+    try {
+      const saved = (localStorage.getItem("nst_app_theme") || localStorage.getItem("nst_student_theme")) as any;
+      if (saved === "white" || saved === "black" || saved === "current") return saved;
+    } catch {}
+    return "current";
+  });
+
+  useEffect(() => {
+    const syncTheme = () => {
+      try {
+        const saved = (localStorage.getItem("nst_app_theme") || localStorage.getItem("nst_student_theme")) as any;
+        if (saved === "white" || saved === "black" || saved === "current") {
+          setAppTheme(saved);
+        }
+      } catch {}
+    };
+    window.addEventListener("nst-dark-theme-change", syncTheme);
+    window.addEventListener("storage", syncTheme);
+    return () => {
+      window.removeEventListener("nst-dark-theme-change", syncTheme);
+      window.removeEventListener("storage", syncTheme);
+    };
+  }, []);
 
   // Quick Expense modal
   const [showExpenseModal, setShowExpenseModal] = useState(false);
@@ -249,19 +282,27 @@ export const AccountantPanel: React.FC<Props> = ({
     const loadAll = async () => {
       setLoading(true);
       try {
-        const [schData, clsData, sessData, expData, accData, tchData] = await Promise.all([
+        const [schData, sessData, expData, accData, tchData] = await Promise.all([
           getSchool(schoolId),
-          getClasses(schoolId),
           getSessions(schoolId),
           getSchoolExpenseVouchers(schoolId),
           getAccountants(schoolId),
           getTeachers(schoolId)
         ]);
 
-        const currentSess = sessData?.find((s: any) => s.active) || sessData?.[0];
+        const savedSessionId = typeof localStorage !== "undefined" ? localStorage.getItem(`nst_active_session_${schoolId}`) : null;
+        const cleanSess = (sessData || []).filter((s: any) => s && s.id && s.name && !isDemoSessionId(s.id));
+        const isSavedDemo = Boolean(savedSessionId && isDemoSessionId(savedSessionId));
+        setDemoDataEnabled(isSavedDemo);
+        const currentSess = isSavedDemo
+          ? { id: DEMO_SESSION_ID, schoolId, name: "🧪 Demo Session (केवल डमी डेटा)", startDate: "2026-04-01", endDate: "2027-03-31", active: true, isDemo: true }
+          : ((savedSessionId && cleanSess.find((s: any) => s.id === savedSessionId)) || cleanSess.find((s: any) => s.active) || cleanSess[0]);
         const targetSessionId = currentSess?.id;
 
-        const [stdData, feeData, histFeeData, storeSalesData] = await Promise.all([
+        const [clsDataAll, clsData, stdDataAll, stdData, feeData, histFeeData, storeSalesData] = await Promise.all([
+          getClasses(schoolId),
+          getClasses(schoolId, targetSessionId),
+          getStudents(schoolId),
           getStudents(schoolId, undefined, undefined, targetSessionId),
           getMonthlyFees(schoolId, currentMonthStr(), undefined, targetSessionId),
           getSchoolFeeHistory(schoolId, targetSessionId).catch(() => []),
@@ -270,11 +311,13 @@ export const AccountantPanel: React.FC<Props> = ({
 
         if (!mounted) return;
         setSchool(schData);
-        setClasses(targetSessionId ? (clsData || []).filter(c => !c.sessionId || c.sessionId === targetSessionId) : (clsData || []));
-        setSessions(sessData || []);
-        setStudents(stdData || []);
-        setFees(feeData || []);
-        setAllHistoryFees(Array.isArray(histFeeData) ? histFeeData : []);
+        setAllClasses(clsDataAll || []);
+        setClasses(targetSessionId && !isDemoSessionId(targetSessionId) ? (clsData || []).filter(c => c.sessionId === targetSessionId) : (clsData || []));
+        setSessions(cleanSess);
+        setAllStudents(stdDataAll || []);
+        setStudents(isDemoSessionId(targetSessionId) ? (stdData || []) : (stdData || []).filter(s => !isDemoRecord(s) && (!targetSessionId || s.sessionId === targetSessionId)));
+        setFees(isDemoSessionId(targetSessionId) ? (feeData || []) : (feeData || []).filter(f => !isDemoRecord(f)));
+        setAllHistoryFees(Array.isArray(histFeeData) ? (isDemoSessionId(targetSessionId) ? histFeeData : histFeeData.filter(f => !isDemoRecord(f))) : []);
         setStoreSales(Array.isArray(storeSalesData) ? storeSalesData : []);
         setExpenses(expData || []);
         setAccountants(accData || []);
@@ -282,13 +325,14 @@ export const AccountantPanel: React.FC<Props> = ({
 
         // Load today's attendance summary across classes
         const todayDateStr = getTodayDateStr();
-        if (clsData && clsData.length > 0) {
+        const attTargetClasses = targetSessionId && !isDemoSessionId(targetSessionId) ? (clsData || []).filter(c => c.sessionId === targetSessionId) : (clsData || []);
+        if (attTargetClasses && attTargetClasses.length > 0) {
           try {
             let pCount = 0;
             let aCount = 0;
             let tMarked = 0;
             const attResults = await Promise.allSettled(
-              clsData.map(c => getAttendance(schoolId, c.id, todayDateStr))
+              attTargetClasses.map(c => getAttendance(schoolId, c.id, todayDateStr))
             );
             attResults.forEach(res => {
               if (res.status === "fulfilled" && res.value?.students) {
@@ -345,10 +389,14 @@ export const AccountantPanel: React.FC<Props> = ({
 
   const permissions: AccountantPermissions = activeAccountant?.permissions || DEFAULT_PERMISSIONS;
 
-  // Active Session
+  // Active Session (respecting localStorage active session, including Demo Session)
   const activeSession = useMemo(() => {
-    return sessions.find(s => s.active) || sessions[0] || { id: "2026-27", name: "2026-27", active: true };
-  }, [sessions]);
+    const savedSessionId = typeof localStorage !== "undefined" ? localStorage.getItem(`nst_active_session_${schoolId}`) : null;
+    if (savedSessionId && isDemoSessionId(savedSessionId)) {
+      return { id: DEMO_SESSION_ID, schoolId, name: "🧪 Demo Session (केवल डमी डेटा)", active: true, isDemo: true } as SchoolSession;
+    }
+    return (savedSessionId && sessions.find(s => s.id === savedSessionId)) || sessions.find(s => s.active) || sessions[0] || { id: "2026-27", name: "2026-27", active: true };
+  }, [sessions, schoolId, refreshTrigger]);
 
   // Today's Date String YYYY-MM-DD
   const todayStr = useMemo(() => {
@@ -442,6 +490,24 @@ export const AccountantPanel: React.FC<Props> = ({
               unpaidMonths: f.month ? [f.month] : []
             });
           }
+        }
+      }
+    });
+    // Include Re-Admission Back-Due & Admission Balance on defaulters list
+    students.forEach(st => {
+      const carryDue = Number(st.previousSessionDue || 0) + Number(st.admissionDueBalance || 0);
+      if (carryDue > 0) {
+        const existing = unpaidMap.get(st.id);
+        const tag = Number(st.previousSessionDue || 0) > 0 ? "Back Session Due" : "Admission Due";
+        if (existing) {
+          existing.unpaidAmount += carryDue;
+          if (!existing.unpaidMonths.includes(tag)) existing.unpaidMonths.unshift(tag);
+        } else {
+          unpaidMap.set(st.id, {
+            student: st,
+            unpaidAmount: carryDue,
+            unpaidMonths: [tag]
+          });
         }
       }
     });
@@ -550,15 +616,34 @@ export const AccountantPanel: React.FC<Props> = ({
     printHtmlInIframe(htmlDoc, `Expense_Voucher_${voucher.voucherNo}`);
   };
 
+  const isWhite = appTheme === "white";
+  const isBlack = appTheme === "black";
+  const navInactiveCls = isWhite
+    ? "text-slate-700 hover:bg-slate-100 hover:text-slate-950"
+    : "text-slate-300 hover:bg-slate-800/70 hover:text-white";
+  const mobileNavInactiveCls = isWhite ? "text-slate-700 hover:bg-slate-100" : "text-slate-300";
+
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans">
+    <div className={`min-h-screen flex flex-col font-sans app-theme-${appTheme} ${
+      isWhite ? "bg-[#eef2f7] text-slate-900" : isBlack ? "dark bg-black text-white" : "dark bg-[#08142c] text-slate-100"
+    }`}>
       {/* ── TOP NAV HEADER ── */}
-      <header className="sticky top-0 z-40 bg-slate-950/90 border-b border-slate-800 backdrop-blur-md px-4 py-3 flex items-center justify-between shadow-md">
+      <header className={`sticky top-0 z-40 border-b backdrop-blur-md px-4 py-3 flex items-center justify-between shadow-sm ${
+        isWhite
+          ? "bg-white/95 border-slate-200 text-slate-900"
+          : isBlack
+          ? "bg-black/95 border-neutral-800 text-white"
+          : "bg-[#0a1935]/95 border-[#1b3564] text-white"
+      }`}>
         <div className="flex items-center gap-3">
           {/* Mobile menu trigger */}
           <button
             onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-            className="md:hidden p-2 rounded-lg bg-slate-800 text-slate-200 hover:bg-slate-700 transition"
+            className={`md:hidden p-2 rounded-lg transition cursor-pointer ${
+              isWhite
+                ? "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                : "bg-slate-800 text-slate-200 hover:bg-slate-700"
+            }`}
             title="Menu"
           >
             <Sliders className="w-5 h-5" />
@@ -571,17 +656,21 @@ export const AccountantPanel: React.FC<Props> = ({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="font-black text-sm md:text-base text-white truncate max-w-[200px] sm:max-w-md">
+                <h1 className={`font-black text-sm md:text-base truncate max-w-[200px] sm:max-w-md ${isWhite ? "text-slate-900" : "text-white"}`}>
                   {school?.name || "School ERP"}
                 </h1>
-                <span className="hidden sm:inline-flex px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                <span className={`hidden sm:inline-flex px-2 py-0.5 rounded-full text-[10px] font-black border ${
+                  isWhite
+                    ? "bg-amber-100 text-amber-900 border-amber-300"
+                    : "bg-amber-500/20 text-amber-300 border-amber-500/30"
+                }`}>
                   ACCOUNTANT / CASHIER PORTAL
                 </span>
               </div>
-              <div className="flex items-center gap-2 text-[11px] text-slate-400">
-                <span className="font-semibold text-amber-400">{activeSession.name}</span>
+              <div className={`flex items-center gap-2 text-[11px] ${isWhite ? "text-slate-600" : "text-slate-400"}`}>
+                <span className={`font-semibold ${isWhite ? "text-amber-700" : "text-amber-400"}`}>{activeSession.name}</span>
                 <span>•</span>
-                <span className="text-slate-300 font-medium truncate max-w-[150px]">
+                <span className={`font-medium truncate max-w-[150px] ${isWhite ? "text-slate-800" : "text-slate-300"}`}>
                   {activeAccountant?.name || "Accountant"}
                 </span>
               </div>
@@ -594,19 +683,26 @@ export const AccountantPanel: React.FC<Props> = ({
           {/* Refresh Data */}
           <button
             onClick={() => setRefreshTrigger(prev => prev + 1)}
-            className="p-2 rounded-lg bg-slate-800/80 hover:bg-slate-800 text-slate-300 hover:text-white transition text-xs font-semibold flex items-center gap-1 cursor-pointer"
+            className={`p-2 rounded-lg transition text-xs font-semibold flex items-center gap-1 cursor-pointer ${
+              isWhite
+                ? "bg-slate-100 hover:bg-slate-200 text-slate-700"
+                : "bg-slate-800/80 hover:bg-slate-800 text-slate-300 hover:text-white"
+            }`}
             title="Refresh Data"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin text-amber-400" : ""}`} />
             <span className="hidden sm:inline">रीफ्रेश</span>
           </button>
 
-          {/* Mobile / Laptop Rotate Toggle Button */}
+          {/* Mobile / Laptop Rotate Toggle Button (Icon-Only) */}
           <button
+            type="button"
             onClick={handleToggleOrientation}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl font-black text-xs transition cursor-pointer active:scale-95 shadow-md border ${
+            className={`inline-flex items-center justify-center p-1.5 rounded-xl transition cursor-pointer active:scale-95 shadow-sm border shrink-0 ${
               isEffectiveLandscape
                 ? "bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 text-white border-cyan-300/60 shadow-cyan-500/30 ring-2 ring-cyan-400/30"
+                : isWhite
+                ? "bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300"
                 : "bg-slate-800 hover:bg-slate-700 text-emerald-300 border-emerald-500/40 shadow-emerald-500/10"
             }`}
             title={
@@ -614,17 +710,16 @@ export const AccountantPanel: React.FC<Props> = ({
                 ? "Mobile (Portrait) Mode me wapas layein"
                 : "Laptop (Desktop) Mode me badlein"
             }
+            aria-label={
+              isEffectiveLandscape
+                ? "Switch to Mobile Mode"
+                : "Switch to Desktop Mode"
+            }
           >
             {isEffectiveLandscape ? (
-              <>
-                <Laptop className="w-3.5 h-3.5 text-cyan-200 animate-pulse" />
-                <span className="inline">💻 Laptop</span>
-              </>
+              <Laptop className="w-4 h-4 text-cyan-200" />
             ) : (
-              <>
-                <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="inline">📱 Mobile</span>
-              </>
+              <Smartphone className={`w-4 h-4 ${isWhite ? "text-emerald-700" : "text-emerald-400"}`} />
             )}
           </button>
 
@@ -643,7 +738,11 @@ export const AccountantPanel: React.FC<Props> = ({
           {onLogout && (
             <button
               onClick={onLogout}
-              className="p-2 rounded-lg bg-rose-500/20 border border-rose-500/30 text-rose-300 hover:bg-rose-500/30 transition cursor-pointer"
+              className={`p-2 rounded-lg border transition cursor-pointer ${
+                isWhite
+                  ? "bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100"
+                  : "bg-rose-500/20 border-rose-500/30 text-rose-300 hover:bg-rose-500/30"
+              }`}
               title="Logout"
             >
               <LogOut className="w-4 h-4" />
@@ -655,19 +754,31 @@ export const AccountantPanel: React.FC<Props> = ({
       {/* ── MAIN WORKSPACE WITH SIDEBAR ── */}
       <div className="flex-1 flex overflow-hidden">
         {/* SIDEBAR NAVIGATION (Desktop) */}
-        <aside className="hidden md:flex flex-col w-64 bg-slate-950 border-r border-slate-800 p-4 space-y-6 shrink-0 overflow-y-auto">
+        <aside className={`hidden md:flex flex-col w-64 border-r p-4 space-y-6 shrink-0 overflow-y-auto ${
+          isWhite
+            ? "bg-white border-slate-200 text-slate-900"
+            : isBlack
+            ? "bg-[#050505] border-neutral-800 text-slate-100"
+            : "bg-[#0a1935] border-[#1b3564] text-slate-100"
+        }`}>
           {/* Cash In Hand Mini Counter */}
-          <div className="p-3.5 rounded-2xl bg-gradient-to-br from-amber-500/15 via-slate-900 to-emerald-500/10 border border-amber-500/30">
-            <div className="flex items-center justify-between text-xs text-amber-400 font-bold mb-1">
+          <div className={`p-3.5 rounded-2xl border ${
+            isWhite
+              ? "bg-gradient-to-br from-amber-50 via-white to-emerald-50 border-amber-300"
+              : "bg-gradient-to-br from-amber-500/15 via-slate-900 to-emerald-500/10 border-amber-500/30"
+          }`}>
+            <div className={`flex items-center justify-between text-xs font-bold mb-1 ${isWhite ? "text-amber-800" : "text-amber-400"}`}>
               <span>आज का नकद (Cash In Hand)</span>
               <Wallet className="w-4 h-4" />
             </div>
-            <div className="text-2xl font-black text-white tabular-nums">
+            <div className={`text-2xl font-black tabular-nums ${isWhite ? "text-slate-900" : "text-white"}`}>
               ₹ {(Number(financialSummary.netCashInHand) || 0).toLocaleString("en-IN")}
             </div>
-            <div className="mt-2 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
+            <div className={`mt-2 pt-2 border-t flex items-center justify-between text-[11px] ${
+              isWhite ? "border-amber-200 text-slate-600" : "border-slate-800/80 text-slate-400"
+            }`}>
               <span>आज फीस: ₹{(Number(financialSummary.todayTotalFee) || 0).toLocaleString("en-IN")}</span>
-              <span className="text-rose-400">खर्च: ₹{(Number(financialSummary.todayExpenseTotal) || 0).toLocaleString("en-IN")}</span>
+              <span className={isWhite ? "text-rose-700 font-semibold" : "text-rose-400"}>खर्च: ₹{(Number(financialSummary.todayExpenseTotal) || 0).toLocaleString("en-IN")}</span>
             </div>
           </div>
 
@@ -682,7 +793,7 @@ export const AccountantPanel: React.FC<Props> = ({
               className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
                 activeTab === "home"
                   ? "bg-amber-500 text-slate-950 shadow-md font-black"
-                  : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+                  : navInactiveCls
               }`}
             >
               <Home className="w-4 h-4" />
@@ -694,7 +805,7 @@ export const AccountantPanel: React.FC<Props> = ({
               className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
                 activeTab === "counter"
                   ? "bg-amber-500 text-slate-950 shadow-md font-black"
-                  : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+                  : navInactiveCls
               }`}
             >
               <IndianRupee className="w-4 h-4" />
@@ -710,7 +821,7 @@ export const AccountantPanel: React.FC<Props> = ({
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
                 activeTab === "absentee"
                   ? "bg-rose-600 text-white shadow-md font-black"
-                  : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+                  : navInactiveCls
               }`}
             >
               <div className="flex items-center gap-3">
@@ -734,7 +845,7 @@ export const AccountantPanel: React.FC<Props> = ({
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
                   activeTab === "fee_collection"
                     ? "bg-amber-500 text-slate-950 shadow-md font-black"
-                    : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+                    : navInactiveCls
                 }`}
               >
                 <Receipt className="w-4 h-4" />
@@ -747,7 +858,7 @@ export const AccountantPanel: React.FC<Props> = ({
               className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
                 activeTab === "sibling_profiles"
                   ? "bg-amber-500 text-slate-950 shadow-md font-black"
-                  : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+                  : navInactiveCls
               }`}
             >
               <Users className="w-4 h-4 text-indigo-400" />
@@ -760,7 +871,7 @@ export const AccountantPanel: React.FC<Props> = ({
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
                   activeTab === "admissions"
                     ? "bg-amber-500 text-slate-950 shadow-md font-black"
-                    : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+                    : navInactiveCls
                 }`}
               >
                 <UserPlus className="w-4 h-4" />
@@ -773,7 +884,7 @@ export const AccountantPanel: React.FC<Props> = ({
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
                 activeTab === "dues_defaulters"
                   ? "bg-amber-500 text-slate-950 shadow-md font-black"
-                  : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+                  : navInactiveCls
               }`}
             >
               <div className="flex items-center gap-3">
@@ -793,7 +904,7 @@ export const AccountantPanel: React.FC<Props> = ({
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
                   activeTab === "daybook"
                     ? "bg-amber-500 text-slate-950 shadow-md font-black"
-                    : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+                    : navInactiveCls
                 }`}
               >
                 <FileText className="w-4 h-4" />
@@ -807,7 +918,7 @@ export const AccountantPanel: React.FC<Props> = ({
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
                   activeTab === "expenses"
                     ? "bg-amber-500 text-slate-950 shadow-md font-black"
-                    : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+                    : navInactiveCls
                 }`}
               >
                 <DollarSign className="w-4 h-4" />
@@ -821,7 +932,7 @@ export const AccountantPanel: React.FC<Props> = ({
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
                   activeTab === "bus_fees"
                     ? "bg-amber-500 text-slate-950 shadow-md font-black"
-                    : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+                    : navInactiveCls
                 }`}
               >
                 <Bus className="w-4 h-4" />
@@ -836,23 +947,11 @@ export const AccountantPanel: React.FC<Props> = ({
             {permissions.canCollectFee && (
               <>
                 <button
-                  onClick={() => setActiveTab("admission_receipt")}
-                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
-                    activeTab === "admission_receipt"
-                      ? "bg-amber-500 text-slate-950 shadow-md font-black"
-                      : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
-                  }`}
-                >
-                  <Receipt className="w-4 h-4 text-emerald-400" />
-                  <span>New Admission Receipt (+ प्रवेश शुल्क)</span>
-                </button>
-
-                <button
                   onClick={() => setActiveTab("qr_pay")}
                   className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
                     activeTab === "qr_pay"
                       ? "bg-amber-500 text-slate-950 shadow-md font-black"
-                      : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+                      : navInactiveCls
                   }`}
                 >
                   <QrCode className="w-4 h-4 text-amber-400" />
@@ -867,7 +966,7 @@ export const AccountantPanel: React.FC<Props> = ({
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
                   activeTab === "fee_alerts"
                     ? "bg-amber-500 text-slate-950 shadow-md font-black"
-                    : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+                    : navInactiveCls
                 }`}
               >
                 <Bell className="w-4 h-4 text-purple-400" />
@@ -880,7 +979,7 @@ export const AccountantPanel: React.FC<Props> = ({
               className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
                 activeTab === "class_rates"
                   ? "bg-amber-500 text-slate-950 shadow-md font-black"
-                  : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+                  : navInactiveCls
               }`}
             >
               <Sparkles className="w-4 h-4 text-blue-400" />
@@ -892,10 +991,10 @@ export const AccountantPanel: React.FC<Props> = ({
               className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
                 activeTab === "receipt_header"
                   ? "bg-amber-500 text-slate-950 shadow-md font-black"
-                  : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+                  : navInactiveCls
               }`}
             >
-              <Building2 className="w-4 h-4 text-slate-300" />
+              <Building2 className={`w-4 h-4 ${isWhite ? "text-slate-500" : "text-slate-300"}`} />
               <span>Receipt Header & Print Settings</span>
             </button>
 
@@ -904,7 +1003,7 @@ export const AccountantPanel: React.FC<Props> = ({
               className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
                 activeTab === "receipt_cancellation"
                   ? "bg-rose-600 text-white shadow-md font-black"
-                  : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+                  : navInactiveCls
               }`}
             >
               <RotateCcw className="w-4 h-4 text-rose-400" />
@@ -916,7 +1015,7 @@ export const AccountantPanel: React.FC<Props> = ({
               className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
                 activeTab === "razorpay_setup"
                   ? "bg-indigo-600 text-white shadow-md font-black"
-                  : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+                  : navInactiveCls
               }`}
             >
               <CreditCard className="w-4 h-4 text-indigo-400" />
@@ -932,11 +1031,23 @@ export const AccountantPanel: React.FC<Props> = ({
               className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
                 activeTab === "messenger"
                   ? "bg-emerald-600 text-white shadow-md font-black"
-                  : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
+                  : navInactiveCls
               }`}
             >
               <MessageCircle className="w-4 h-4 text-emerald-400" />
               <span>NSTA Messenger (मेसेंजर)</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab("rules_regulations")}
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
+                activeTab === "rules_regulations"
+                  ? "bg-amber-500 text-slate-950 shadow-md font-black"
+                  : navInactiveCls
+              }`}
+            >
+              <ShieldCheck className="w-4 h-4 text-amber-400" />
+              <span>📜 School &amp; Teacher Rules (13)</span>
             </button>
           </div>
 
@@ -954,30 +1065,54 @@ export const AccountantPanel: React.FC<Props> = ({
           )}
 
           {/* Explore Full NSTA Learning App */}
-          <button
-            type="button"
-            onClick={handleExploreFullApp}
-            className="w-full p-2.5 rounded-xl bg-gradient-to-r from-indigo-900/70 via-purple-900/60 to-slate-900 border border-indigo-500/40 hover:border-indigo-400 text-left transition flex items-center justify-between gap-2 shadow-md group cursor-pointer active:scale-95"
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              <div className="w-7 h-7 rounded-lg bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center shrink-0 text-amber-300">
-                <Sparkles className="w-3.5 h-3.5 animate-spin" />
+          {onOpenPlatformContent && (
+            <button
+              type="button"
+              onClick={handleExploreFullApp}
+              className={`w-full p-2.5 rounded-xl border-2 text-left transition flex items-center justify-between gap-2 shadow-sm group cursor-pointer active:scale-95 ${
+                isWhite
+                  ? "bg-gradient-to-r from-indigo-50 via-purple-50 to-blue-50 border-indigo-700 hover:border-indigo-900"
+                  : "bg-gradient-to-r from-indigo-900/70 via-purple-900/60 to-slate-900 border-indigo-500/40 hover:border-indigo-400"
+              }`}
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <div className={`w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 ${
+                  isWhite
+                    ? "bg-indigo-100 border-indigo-700/40 text-amber-700"
+                    : "bg-indigo-500/20 border-indigo-400/30 text-amber-300"
+                }`}>
+                  <Sparkles className="w-3.5 h-3.5" />
+                </div>
+                <div className="min-w-0">
+                  <p className={`text-xs font-black truncate ${
+                    isWhite
+                      ? "text-slate-900 group-hover:text-indigo-900"
+                      : "text-white group-hover:text-indigo-200"
+                  }`}>
+                    Explore Full NSTA App
+                  </p>
+                  <p className={`text-[9.5px] font-semibold truncate ${
+                    isWhite ? "text-indigo-800" : "text-indigo-300/80"
+                  }`}>
+                    53+ Books, MCQs &amp; Study Room
+                  </p>
+                </div>
               </div>
-              <div className="min-w-0">
-                <p className="text-xs font-black text-white group-hover:text-indigo-200 truncate">
-                  Explore Full NSTA App
-                </p>
-                <p className="text-[9.5px] text-indigo-300/80 truncate">
-                  53+ Books, MCQs &amp; Study Room
-                </p>
-              </div>
-            </div>
-            <ArrowRight className="w-3.5 h-3.5 text-indigo-400 group-hover:translate-x-1 transition-transform shrink-0" />
-          </button>
+              <ArrowRight className={`w-3.5 h-3.5 group-hover:translate-x-1 transition-transform shrink-0 ${
+                isWhite ? "text-indigo-700" : "text-indigo-400"
+              }`} />
+            </button>
+          )}
 
           {/* Security & Boundary Notice */}
-          <div className="mt-auto p-3 rounded-xl bg-slate-900 border border-slate-800 text-[11px] text-slate-400 space-y-1">
-            <div className="flex items-center gap-1.5 text-emerald-400 font-bold">
+          <div className={`mt-auto p-3 rounded-xl border text-[11px] space-y-1 ${
+            isWhite
+              ? "bg-slate-50 border-slate-200 text-slate-600"
+              : isBlack
+              ? "bg-neutral-900 border-neutral-800 text-slate-400"
+              : "bg-slate-900/90 border-[#1b3564] text-slate-300"
+          }`}>
+            <div className={`flex items-center gap-1.5 font-bold ${isWhite ? "text-emerald-700" : "text-emerald-400"}`}>
               <ShieldCheck className="w-3.5 h-3.5" />
               <span>Role Security: Accountant</span>
             </div>
@@ -991,15 +1126,28 @@ export const AccountantPanel: React.FC<Props> = ({
         {isMobileMenuOpen && (
           <div className="fixed inset-0 z-50 md:hidden flex">
             <div
-              className="fixed inset-0 bg-black/60 backdrop-blur-xs"
+              className="nst-drawer-backdrop fixed inset-0 transition-opacity cursor-pointer"
+              style={{ backgroundColor: isWhite ? "rgba(15, 23, 42, 0.25)" : "rgba(2, 6, 23, 0.35)" }}
               onClick={() => setIsMobileMenuOpen(false)}
             />
-            <div className="relative w-72 max-w-[80vw] bg-slate-950 p-4 flex flex-col space-y-4 z-10 border-r border-slate-800 h-full overflow-y-auto">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-                <div className="font-black text-sm text-amber-400">Accountant Menu</div>
+            <div className={`relative w-72 max-w-[80vw] p-4 flex flex-col space-y-4 z-10 border-r h-full overflow-y-auto ${
+              isWhite
+                ? "bg-white border-slate-200 text-slate-900"
+                : isBlack
+                ? "bg-[#050505] border-neutral-800 text-slate-100"
+                : "bg-[#0a1935] border-[#1b3564] text-slate-100"
+            }`}>
+              <div className={`flex items-center justify-between pb-3 border-b ${
+                isWhite ? "border-slate-200" : isBlack ? "border-neutral-800" : "border-[#1b3564]"
+              }`}>
+                <div className={`font-black text-sm ${isWhite ? "text-amber-700" : "text-amber-400"}`}>Accountant Menu</div>
                 <button
                   onClick={() => setIsMobileMenuOpen(false)}
-                  className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+                  className={`p-1.5 rounded-lg cursor-pointer ${
+                    isWhite
+                      ? "bg-slate-100 text-slate-600 hover:text-slate-900 hover:bg-slate-200"
+                      : "bg-slate-800 text-slate-400 hover:text-white"
+                  }`}
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -1012,7 +1160,7 @@ export const AccountantPanel: React.FC<Props> = ({
                     setIsMobileMenuOpen(false);
                   }}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
-                    activeTab === "home" ? "bg-amber-500 text-slate-950 font-black" : "text-slate-300"
+                    activeTab === "home" ? "bg-amber-500 text-slate-950 font-black" : mobileNavInactiveCls
                   }`}
                 >
                   <Home className="w-4 h-4" />
@@ -1025,7 +1173,7 @@ export const AccountantPanel: React.FC<Props> = ({
                     setIsMobileMenuOpen(false);
                   }}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
-                    activeTab === "counter" ? "bg-amber-500 text-slate-950 font-black" : "text-slate-300"
+                    activeTab === "counter" ? "bg-amber-500 text-slate-950 font-black" : mobileNavInactiveCls
                   }`}
                 >
                   <IndianRupee className="w-4 h-4" />
@@ -1038,7 +1186,7 @@ export const AccountantPanel: React.FC<Props> = ({
                     setIsMobileMenuOpen(false);
                   }}
                   className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
-                    activeTab === "absentee" ? "bg-rose-600 text-white font-black" : "text-slate-300"
+                    activeTab === "absentee" ? "bg-rose-600 text-white font-black" : mobileNavInactiveCls
                   }`}
                 >
                   <div className="flex items-center gap-3">
@@ -1059,7 +1207,7 @@ export const AccountantPanel: React.FC<Props> = ({
                       setIsMobileMenuOpen(false);
                     }}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
-                      activeTab === "fee_collection" ? "bg-amber-500 text-slate-950" : "text-slate-300"
+                      activeTab === "fee_collection" ? "bg-amber-500 text-slate-950" : mobileNavInactiveCls
                     }`}
                   >
                     <Receipt className="w-4 h-4" />
@@ -1074,7 +1222,7 @@ export const AccountantPanel: React.FC<Props> = ({
                       setIsMobileMenuOpen(false);
                     }}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
-                      activeTab === "admissions" ? "bg-amber-500 text-slate-950" : "text-slate-300"
+                      activeTab === "admissions" ? "bg-amber-500 text-slate-950" : mobileNavInactiveCls
                     }`}
                   >
                     <UserPlus className="w-4 h-4" />
@@ -1088,7 +1236,7 @@ export const AccountantPanel: React.FC<Props> = ({
                     setIsMobileMenuOpen(false);
                   }}
                   className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
-                    activeTab === "dues_defaulters" ? "bg-amber-500 text-slate-950" : "text-slate-300"
+                    activeTab === "dues_defaulters" ? "bg-amber-500 text-slate-950" : mobileNavInactiveCls
                   }`}
                 >
                   <div className="flex items-center gap-3">
@@ -1109,7 +1257,7 @@ export const AccountantPanel: React.FC<Props> = ({
                       setIsMobileMenuOpen(false);
                     }}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
-                      activeTab === "daybook" ? "bg-amber-500 text-slate-950" : "text-slate-300"
+                      activeTab === "daybook" ? "bg-amber-500 text-slate-950" : mobileNavInactiveCls
                     }`}
                   >
                     <FileText className="w-4 h-4" />
@@ -1124,7 +1272,7 @@ export const AccountantPanel: React.FC<Props> = ({
                       setIsMobileMenuOpen(false);
                     }}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
-                      activeTab === "expenses" ? "bg-amber-500 text-slate-950" : "text-slate-300"
+                      activeTab === "expenses" ? "bg-amber-500 text-slate-950" : mobileNavInactiveCls
                     }`}
                   >
                     <DollarSign className="w-4 h-4" />
@@ -1139,7 +1287,7 @@ export const AccountantPanel: React.FC<Props> = ({
                       setIsMobileMenuOpen(false);
                     }}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
-                      activeTab === "bus_fees" ? "bg-amber-500 text-slate-950" : "text-slate-300"
+                      activeTab === "bus_fees" ? "bg-amber-500 text-slate-950" : mobileNavInactiveCls
                     }`}
                   >
                     <Bus className="w-4 h-4" />
@@ -1155,15 +1303,15 @@ export const AccountantPanel: React.FC<Props> = ({
                   <>
                     <button
                       onClick={() => {
-                        setActiveTab("admission_receipt");
+                        setActiveTab("readmission");
                         setIsMobileMenuOpen(false);
                       }}
                       className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
-                        activeTab === "admission_receipt" ? "bg-amber-500 text-slate-950 font-black" : "text-slate-300"
+                        activeTab === "readmission" ? "bg-amber-500 text-slate-950 font-black" : mobileNavInactiveCls
                       }`}
                     >
-                      <Receipt className="w-4 h-4 text-emerald-400" />
-                      <span>New Admission Receipt (+ प्रवेश शुल्क)</span>
+                      <UserPlus className="w-4 h-4 text-blue-400" />
+                      <span>Re-Admission (सत्र पुनः प्रवेश)</span>
                     </button>
 
                     <button
@@ -1172,7 +1320,7 @@ export const AccountantPanel: React.FC<Props> = ({
                         setIsMobileMenuOpen(false);
                       }}
                       className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
-                        activeTab === "qr_pay" ? "bg-amber-500 text-slate-950 font-black" : "text-slate-300"
+                        activeTab === "qr_pay" ? "bg-amber-500 text-slate-950 font-black" : mobileNavInactiveCls
                       }`}
                     >
                       <QrCode className="w-4 h-4 text-amber-400" />
@@ -1188,7 +1336,7 @@ export const AccountantPanel: React.FC<Props> = ({
                       setIsMobileMenuOpen(false);
                     }}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
-                      activeTab === "fee_alerts" ? "bg-amber-500 text-slate-950 font-black" : "text-slate-300"
+                      activeTab === "fee_alerts" ? "bg-amber-500 text-slate-950 font-black" : mobileNavInactiveCls
                     }`}
                   >
                     <Bell className="w-4 h-4 text-purple-400" />
@@ -1202,7 +1350,7 @@ export const AccountantPanel: React.FC<Props> = ({
                     setIsMobileMenuOpen(false);
                   }}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
-                    activeTab === "class_rates" ? "bg-amber-500 text-slate-950 font-black" : "text-slate-300"
+                    activeTab === "class_rates" ? "bg-amber-500 text-slate-950 font-black" : mobileNavInactiveCls
                   }`}
                 >
                   <Sparkles className="w-4 h-4 text-blue-400" />
@@ -1215,10 +1363,10 @@ export const AccountantPanel: React.FC<Props> = ({
                     setIsMobileMenuOpen(false);
                   }}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
-                    activeTab === "receipt_header" ? "bg-amber-500 text-slate-950 font-black" : "text-slate-300"
+                    activeTab === "receipt_header" ? "bg-amber-500 text-slate-950 font-black" : mobileNavInactiveCls
                   }`}
                 >
-                  <Building2 className="w-4 h-4 text-slate-300" />
+                  <Building2 className={`w-4 h-4 ${isWhite ? "text-slate-500" : "text-slate-300"}`} />
                   <span>Receipt Header & Print Settings</span>
                 </button>
 
@@ -1228,7 +1376,7 @@ export const AccountantPanel: React.FC<Props> = ({
                     setIsMobileMenuOpen(false);
                   }}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
-                    activeTab === "receipt_cancellation" ? "bg-rose-600 text-white font-black" : "text-slate-300"
+                    activeTab === "receipt_cancellation" ? "bg-rose-600 text-white font-black" : mobileNavInactiveCls
                   }`}
                 >
                   <RotateCcw className="w-4 h-4 text-rose-400" />
@@ -1241,7 +1389,7 @@ export const AccountantPanel: React.FC<Props> = ({
                     setIsMobileMenuOpen(false);
                   }}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
-                    activeTab === "razorpay_setup" ? "bg-indigo-600 text-white font-black" : "text-slate-300"
+                    activeTab === "razorpay_setup" ? "bg-indigo-600 text-white font-black" : mobileNavInactiveCls
                   }`}
                 >
                   <CreditCard className="w-4 h-4 text-indigo-400" />
@@ -1254,86 +1402,119 @@ export const AccountantPanel: React.FC<Props> = ({
                     setIsMobileMenuOpen(false);
                   }}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
-                    activeTab === "messenger" ? "bg-emerald-600 text-white font-black" : "text-slate-300"
+                    activeTab === "messenger" ? "bg-emerald-600 text-white font-black" : mobileNavInactiveCls
                   }`}
                 >
                   <MessageCircle className="w-4 h-4 text-emerald-400" />
                   <span>NSTA Messenger (मेसेंजर)</span>
                 </button>
 
+                <button
+                  onClick={() => {
+                    setActiveTab("rules_regulations");
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left ${
+                    activeTab === "rules_regulations" ? "bg-amber-500 text-slate-950 font-black" : mobileNavInactiveCls
+                  }`}
+                >
+                  <ShieldCheck className="w-4 h-4 text-amber-400" />
+                  <span>📜 School &amp; Teacher Rules (13)</span>
+                </button>
+
                 {/* Explore Full NSTA Learning App */}
-                <div className="pt-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsMobileMenuOpen(false);
-                      handleExploreFullApp();
-                    }}
-                    className="w-full p-2.5 rounded-xl bg-gradient-to-r from-indigo-900/70 via-purple-900/60 to-slate-900 border border-indigo-500/40 hover:border-indigo-400 text-left transition flex items-center justify-between gap-2 shadow-md group cursor-pointer active:scale-95"
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <div className="w-7 h-7 rounded-lg bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center shrink-0 text-amber-300">
-                        <Sparkles className="w-3.5 h-3.5 animate-spin" />
+                {onOpenPlatformContent && (
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsMobileMenuOpen(false);
+                        handleExploreFullApp();
+                      }}
+                      className={`w-full p-2.5 rounded-xl border-2 text-left transition flex items-center justify-between gap-2 shadow-sm group cursor-pointer active:scale-95 ${
+                        isWhite
+                          ? "bg-gradient-to-r from-indigo-50 via-purple-50 to-blue-50 border-indigo-700 hover:border-indigo-900"
+                          : "bg-gradient-to-r from-indigo-900/70 via-purple-900/60 to-slate-900 border-indigo-500/40 hover:border-indigo-400"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className={`w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 ${
+                          isWhite
+                            ? "bg-indigo-100 border-indigo-700/40 text-amber-700"
+                            : "bg-indigo-500/20 border-indigo-400/30 text-amber-300"
+                        }`}>
+                          <Sparkles className="w-3.5 h-3.5" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className={`text-xs font-black truncate ${
+                            isWhite
+                              ? "text-slate-900 group-hover:text-indigo-900"
+                              : "text-white group-hover:text-indigo-200"
+                          }`}>
+                            Explore Full NSTA App
+                          </p>
+                          <p className={`text-[9.5px] font-semibold truncate ${
+                            isWhite ? "text-indigo-800" : "text-indigo-300/80"
+                          }`}>
+                            53+ Books, MCQs &amp; Study Room
+                          </p>
+                        </div>
                       </div>
-                      <div className="min-w-0">
-                        <p className="text-xs font-black text-white group-hover:text-indigo-200 truncate">
-                          Explore Full NSTA App
-                        </p>
-                        <p className="text-[9.5px] text-indigo-300/80 truncate">
-                          53+ Books, MCQs &amp; Study Room
-                        </p>
-                      </div>
-                    </div>
-                    <ArrowRight className="w-3.5 h-3.5 text-indigo-400 group-hover:translate-x-1 transition-transform shrink-0" />
-                  </button>
-                </div>
+                      <ArrowRight className={`w-3.5 h-3.5 group-hover:translate-x-1 transition-transform shrink-0 ${
+                        isWhite ? "text-indigo-700" : "text-indigo-400"
+                      }`} />
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>
         )}
 
         {/* MAIN WORKSPACE CONTENT */}
-        <main className="flex-1 bg-slate-900 overflow-y-auto p-4 sm:p-6 lg:p-8">
+        <main className={`flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 ${
+          isWhite ? "bg-[#eef2f7] text-slate-900" : isBlack ? "bg-black text-white" : "bg-[#08142c] text-slate-100"
+        }`}>
           {/* TAB 0: HOME DASHBOARD (मुख्य विद्यालय व वित्तीय अवलोकन) */}
           {activeTab === "home" && (
             <div className="max-w-6xl mx-auto space-y-6">
               {/* Hero Banner */}
-              <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950 p-6 sm:p-8 rounded-3xl border border-slate-800 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+              <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-sky-50 dark:from-slate-950 dark:via-slate-900 dark:to-indigo-950 p-6 sm:p-8 rounded-3xl border-2 border-indigo-700 dark:border-indigo-500/50 shadow-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
                 <div className="space-y-2">
-                  <div className="flex items-center gap-2 text-amber-400 text-xs font-bold uppercase tracking-wider">
+                  <div className="flex items-center gap-2 text-indigo-800 dark:text-amber-400 text-xs font-bold uppercase tracking-wider">
                     <Sparkles className="w-4 h-4" />
                     <span>Accountant Home Dashboard • {school?.name || "School ERP"}</span>
                   </div>
-                  <h2 className="text-2xl sm:text-4xl font-black text-white">
+                  <h2 className="text-2xl sm:text-4xl font-black text-slate-900 dark:text-white">
                     नमस्ते, {activeAccountant?.name || "Accountant"}
                   </h2>
-                  <p className="text-slate-300 text-xs sm:text-sm max-w-xl">
+                  <p className="text-slate-700 dark:text-slate-300 text-xs sm:text-sm max-w-xl font-medium">
                     दैनिक रोकड़ बही, 3-इंच POS थर्मल फीस रसीद, प्रवेश व छात्र अनुपस्थिति (Absentee Management) का समग्र अवलोकन।
                   </p>
                   <div className="flex items-center gap-3 pt-2 text-xs flex-wrap">
-                    <span className="px-3 py-1 rounded-full bg-slate-800/80 text-slate-300 border border-slate-700 font-bold">
-                      सत्र: <strong className="text-amber-400">{activeSession.name}</strong>
+                    <span className="px-3 py-1 rounded-full bg-white dark:bg-slate-800/80 text-slate-800 dark:text-slate-300 border border-indigo-400 dark:border-slate-700 font-bold">
+                      सत्र: <strong className="text-indigo-800 dark:text-amber-400">{activeSession.name}</strong>
                     </span>
-                    <span className="px-3 py-1 rounded-full bg-slate-800/80 text-slate-300 border border-slate-700 font-bold">
-                      दिनांक: <strong className="text-white">{todayStr}</strong>
+                    <span className="px-3 py-1 rounded-full bg-white dark:bg-slate-800/80 text-slate-800 dark:text-slate-300 border border-indigo-400 dark:border-slate-700 font-bold">
+                      दिनांक: <strong className="text-slate-900 dark:text-white">{todayStr}</strong>
                     </span>
-                    <span className="px-3 py-1 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-bold">
+                    <span className="px-3 py-1 rounded-full bg-emerald-100 dark:bg-emerald-500/15 text-emerald-900 dark:text-emerald-300 border border-emerald-700 dark:border-emerald-500/30 font-bold">
                       Emp ID: {activeAccountant?.employeeId || "ACC-01"}
                     </span>
                   </div>
                 </div>
 
                 {/* Cash in Hand Big Highlight */}
-                <div className="w-full md:w-auto p-5 rounded-3xl bg-amber-500/15 border border-amber-500/30 shadow-lg text-center md:text-right shrink-0">
-                  <span className="text-xs font-bold text-amber-300 uppercase tracking-wider block mb-1">
+                <div className="w-full md:w-auto p-5 rounded-3xl bg-amber-50 dark:bg-amber-500/15 border-2 border-amber-700 dark:border-amber-500/40 shadow-md text-center md:text-right shrink-0">
+                  <span className="text-xs font-bold text-amber-900 dark:text-amber-300 uppercase tracking-wider block mb-1">
                     वर्तमान नकद गल्ला (Cash In Hand)
                   </span>
-                  <div className="text-3xl sm:text-4xl font-black text-white tabular-nums">
+                  <div className="text-3xl sm:text-4xl font-black text-slate-900 dark:text-white tabular-nums">
                     ₹ {(Number(financialSummary.netCashInHand) || 0).toLocaleString("en-IN")}
                   </div>
-                  <div className="mt-2 flex items-center justify-center md:justify-end gap-3 text-xs text-slate-400">
-                    <span>आज की फीस: <strong className="text-emerald-400">₹{(Number(financialSummary.todayTotalFee) || 0).toLocaleString("en-IN")}</strong></span>
-                    <span>खर्च: <strong className="text-rose-400">₹{(Number(financialSummary.todayExpenseTotal) || 0).toLocaleString("en-IN")}</strong></span>
+                  <div className="mt-2 flex items-center justify-center md:justify-end gap-3 text-xs text-slate-700 dark:text-slate-400 font-semibold">
+                    <span>आज की फीस: <strong className="text-emerald-700 dark:text-emerald-400">₹{(Number(financialSummary.todayTotalFee) || 0).toLocaleString("en-IN")}</strong></span>
+                    <span>खर्च: <strong className="text-rose-700 dark:text-rose-400">₹{(Number(financialSummary.todayExpenseTotal) || 0).toLocaleString("en-IN")}</strong></span>
                   </div>
                 </div>
               </div>
@@ -1433,10 +1614,10 @@ export const AccountantPanel: React.FC<Props> = ({
               {/* ── ADMISSION BALANCE & 1-MONTH ADVANCE FEE DUES CARDS ──────── */}
               {(() => {
                 const studentsWithAdmissionDues = students.filter(
-                  (s) => Number(s.admissionDueBalance || 0) > 0
+                  (s) => Number(s.admissionDueBalance || 0) + Number(s.previousSessionDue || 0) > 0
                 );
                 const totalAdmissionDue = studentsWithAdmissionDues.reduce(
-                  (sum, s) => sum + Number(s.admissionDueBalance || 0),
+                  (sum, s) => sum + Number(s.admissionDueBalance || 0) + Number(s.previousSessionDue || 0),
                   0
                 );
 
@@ -1482,18 +1663,23 @@ export const AccountantPanel: React.FC<Props> = ({
                   try {
                     let patch: Partial<SchoolStudent> = {};
                     if (type === "admission") {
-                      const curDue = Number(st.admissionDueBalance || 0);
-                      const applied = Math.min(curDue, payAmt);
-                      const rem = Math.max(0, curDue - applied);
+                      const curBack = Number(st.previousSessionDue || 0);
+                      const curAdm = Number(st.admissionDueBalance || 0);
+                      const appliedBack = Math.min(curBack, payAmt);
+                      const remBack = Math.max(0, curBack - appliedBack);
+                      const leftForAdm = Math.max(0, payAmt - appliedBack);
+                      const appliedAdm = Math.min(curAdm, leftForAdm);
+                      const remAdm = Math.max(0, curAdm - appliedAdm);
                       patch = {
-                        admissionDueBalance: rem,
-                        admissionPaidAmount: Number(st.admissionPaidAmount || 0) + applied,
+                        previousSessionDue: remBack,
+                        admissionDueBalance: remAdm,
+                        admissionPaidAmount: Number(st.admissionPaidAmount || 0) + appliedAdm,
                         admissionBalanceHistory: [
                           ...(st.admissionBalanceHistory || []),
                           {
                             date: todayIso,
-                            paidAmount: applied,
-                            remainingDue: rem,
+                            paidAmount: appliedBack + appliedAdm,
+                            remainingDue: remBack + remAdm,
                             receiptNo,
                             paymentMode: mode,
                           },
@@ -1550,7 +1736,7 @@ export const AccountantPanel: React.FC<Props> = ({
                         ) : (
                           <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                             {studentsWithAdmissionDues.slice(0, 12).map((st) => {
-                              const due = Number(st.admissionDueBalance || 0);
+                              const due = Number(st.admissionDueBalance || 0) + Number(st.previousSessionDue || 0);
                               return (
                                 <div
                                   key={st.id}
@@ -1946,15 +2132,15 @@ export const AccountantPanel: React.FC<Props> = ({
           {activeTab === "counter" && (
             <div className="max-w-6xl mx-auto space-y-6">
               {/* Welcome & Fast Search */}
-              <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950 p-6 rounded-3xl border border-slate-800 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+              <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-sky-50 dark:from-slate-950 dark:via-slate-900 dark:to-indigo-950 p-6 rounded-3xl border-2 border-indigo-700 dark:border-indigo-500/50 shadow-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
                 <div>
-                  <div className="flex items-center gap-2 text-amber-400 text-xs font-bold uppercase tracking-wider">
+                  <div className="flex items-center gap-2 text-indigo-800 dark:text-amber-400 text-xs font-bold uppercase tracking-wider">
                     <span>आज का लेखा-जोखा • {todayStr}</span>
                   </div>
-                  <h2 className="text-2xl sm:text-3xl font-black text-white mt-1">
+                  <h2 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mt-1">
                     Accountant काउंटर (Accounts Desk)
                   </h2>
-                  <p className="text-slate-400 text-xs mt-1">
+                  <p className="text-slate-700 dark:text-slate-400 text-xs mt-1 font-medium">
                     त्वरित फीस संकलन, 3-इंच थर्मल रसीद, प्रवेश सत्यापन व दैनिक रोकड़ बही (Cashbook).
                   </p>
                 </div>
@@ -1972,7 +2158,7 @@ export const AccountantPanel: React.FC<Props> = ({
                   {permissions.canRecordExpenses && (
                     <button
                       onClick={() => setShowExpenseModal(true)}
-                      className="px-4 py-3 rounded-2xl bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/40 text-rose-200 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+                      className="px-4 py-3 rounded-2xl bg-rose-100 dark:bg-rose-600/30 hover:bg-rose-200 dark:hover:bg-rose-600/50 border-2 border-rose-700 dark:border-rose-500/40 text-rose-900 dark:text-rose-200 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
                     >
                       <Plus className="w-4 h-4" />
                       <span>खर्च वाउचर</span>
@@ -2210,9 +2396,29 @@ export const AccountantPanel: React.FC<Props> = ({
             </div>
           )}
 
+          {/* SESSION RE-ADMISSION TAB */}
+          {activeTab === "readmission" && school && (
+            <div className="h-full p-2 sm:p-4">
+              <StudentReAdmissionManager
+                school={school}
+                sessions={sessions}
+                allClasses={allClasses}
+                allStudents={allStudents}
+                activeSession={activeSession}
+                onBack={() => setActiveTab("counter")}
+                onReAdmitted={(newSt) => {
+                  setAllStudents(prev => [newSt, ...prev.filter(s => s.id !== newSt.id)]);
+                  if (newSt.sessionId === activeSession?.id) {
+                    setStudents(prev => [newSt, ...prev.filter(s => s.id !== newSt.id)]);
+                  }
+                  setRefreshTrigger(t => t + 1);
+                }}
+              />
+            </div>
+          )}
+
           {/* FEE TOOL MENU TABS (MOVED FROM FEE TOOLS DROPDOWN) */}
-          {(activeTab === "admission_receipt" ||
-            activeTab === "qr_pay" ||
+          {(activeTab === "qr_pay" ||
             activeTab === "fee_alerts" ||
             activeTab === "class_rates" ||
             activeTab === "receipt_header") && (
@@ -2226,15 +2432,13 @@ export const AccountantPanel: React.FC<Props> = ({
                 userRole="ACCOUNTANT"
                 actorName={activeAccountant?.name || "Accountant"}
                 initialTool={
-                  activeTab === "admission_receipt"
-                    ? "admission_receipt"
-                    : activeTab === "qr_pay"
-                      ? "qr_scanner"
-                      : activeTab === "fee_alerts"
-                        ? "fee_alert"
-                        : activeTab === "class_rates"
-                          ? "class_rates"
-                          : "header"
+                  activeTab === "qr_pay"
+                    ? "qr_scanner"
+                    : activeTab === "fee_alerts"
+                      ? "fee_alert"
+                      : activeTab === "class_rates"
+                        ? "class_rates"
+                        : "header"
                 }
                 onBack={() => setActiveTab("fee_collection")}
               />
@@ -2243,6 +2447,7 @@ export const AccountantPanel: React.FC<Props> = ({
 
           {activeTab === "receipt_cancellation" && (
             <ReceiptCancellationModal
+              asPage={true}
               isOpen={true}
               onClose={() => setActiveTab("fee_collection")}
               school={school || { id: schoolId, name: "School" } as any}
@@ -2645,6 +2850,18 @@ export const AccountantPanel: React.FC<Props> = ({
                 onBack={() => setActiveTab("home")}
               />
             </div>
+          )}
+
+          {/* TAB 9: SCHOOL & TEACHER RULES */}
+          {activeTab === "rules_regulations" && (
+            <TeacherRulesRegulationsView
+              school={school}
+              canEdit={false}
+              currentTeacherId={accountantId || "accountant_staff"}
+              currentTeacherName={activeAccountant?.name || "School Accountant"}
+              currentTeacherRole={activeAccountant?.designation || "Accountant"}
+              onBack={() => setActiveTab("home")}
+            />
           )}
         </main>
       </div>

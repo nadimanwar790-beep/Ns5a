@@ -138,7 +138,7 @@ export const SchoolJoinScreen: React.FC<Props> = ({ uid, displayName, email, onJ
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 pb-16">
       {/* Top Navbar */}
-      <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-purple-950 px-4 py-5 text-white shadow-lg sticky top-0 z-30">
+      <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 dark:from-blue-900 dark:via-indigo-900 dark:to-purple-950 px-4 py-5 text-slate-900 dark:text-white shadow-sm sticky top-0 z-30 border-b-2 border-indigo-700 dark:border-indigo-500/50">
         <div className="max-w-2xl mx-auto flex items-center justify-between">
           <button
             onClick={() => {
@@ -149,11 +149,11 @@ export const SchoolJoinScreen: React.FC<Props> = ({ uid, displayName, email, onJ
                 onBack();
               }
             }}
-            className="flex items-center gap-1.5 text-indigo-200 hover:text-white text-sm font-bold transition-colors"
+            className="flex items-center gap-1.5 text-indigo-800 hover:text-indigo-950 dark:text-indigo-200 dark:hover:text-white text-sm font-black transition-colors"
           >
             <ChevronLeft className="w-4 h-4" /> {selectedSchool ? "Schools List" : "Student Dashboard"}
           </button>
-          <span className="text-xs font-black uppercase tracking-widest text-amber-300">
+          <span className="text-xs font-black uppercase tracking-widest text-amber-800 dark:text-amber-300">
             IIC × NSTA SCHOOL ECOSYSTEM
           </span>
         </div>

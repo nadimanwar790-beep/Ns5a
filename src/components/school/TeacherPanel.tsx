@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import { toast } from "sonner";
 import {
   subscribeToClasses, subscribeToSubjects, subscribeToStudents,
@@ -8,12 +8,16 @@ import {
   saveSubject, saveMultipleSubjects, generateId, deleteSubject,
   getSchoolFeeHistory, getReferralPayouts, getSchoolReferralSettings,
   subscribeToTeachers,
+  updateTeacher,
+  saveStaffLeave,
+  subscribeStaffLeaves,
+  todayStr,
   isStudentBirthdayToday, dispatchOfficialSchoolBirthdayWish
 } from "../../school-firebase";
 import { getDemoSchoolDataset } from "./demoDataStore";
 import type {
   School, SchoolClass, SchoolSubject, SchoolLesson, SchoolStudent, SchoolSession,
-  MonthlyFee, TeacherReferralPayout, SchoolReferralSettings, SchoolTeacher
+  MonthlyFee, TeacherReferralPayout, SchoolReferralSettings, SchoolTeacher, StaffLeave
 } from "../../school-types";
 import { sortSchoolClasses } from "../../school-types";
 import {
@@ -36,7 +40,7 @@ import {
   Sun, Moon, Palette,
   Cake, Gift,
   Smartphone, Laptop, Monitor,
-  Camera, Lock
+  Camera, Lock, ShieldCheck, PenTool
 } from "lucide-react";
 import { TimetableManager } from "./TimetableManager";
 import { ClassroomVideoArchive } from "./ClassroomVideoArchive";
@@ -54,6 +58,10 @@ import { ParentLeaveManager } from "./ParentLeaveManager";
 import { PtmSchedulerModal } from "./PtmSchedulerModal";
 import { UniversalFaceIdStudioModal } from "./UniversalFaceIdStudioModal";
 import { QuestionPaperBuilder } from "./QuestionPaperBuilder";
+import { TeacherAdminGrowthHub } from "./TeacherAdminGrowthHub";
+import { TeacherRulesRegulationsView } from "./TeacherRulesRegulationsView";
+import { TeacherSignatureModal } from "./TeacherSignatureModal";
+import { AppointmentLetterModal } from "./AppointmentLetterModal";
 import { rotateToLandscape, rotateToPortrait, setDesktopMode, useDeviceOrientation } from "../../utils/displayPrefs";
 import { autoSyncSchoolPushIfPermitted } from "../../utils/schoolPushClient";
 import { subscribeUserToPush } from "../NotificationManager";
@@ -92,7 +100,10 @@ type TeacherView =
   | "school_study_room"
   | "leaves_desk"
   | "question_paper_builder"
-  | "ptm_scheduler";
+  | "ptm_scheduler"
+  | "growth_diary"
+  | "rules_regulations"
+  | "my_leaves";
 
 export const COMMON_BOOK_PRESETS = [
   { name: "Hindi", icon: "📖", category: "Language" },
@@ -169,13 +180,14 @@ export const TeacherPanel: React.FC<Props> = ({
   onOpenPlatformContent
 }) => {
   const handleExploreFullApp = () => {
-    try {
-      localStorage.setItem("nst_app_view_mode", "STUDENT");
-      window.dispatchEvent(new CustomEvent("nst_open_student_dashboard"));
-    } catch (err) {
-      console.warn("[TeacherPanel] Explore full app switch warning:", err);
-    }
+    if (!onOpenPlatformContent && !onBack) return;
     if (onOpenPlatformContent) {
+      try {
+        localStorage.setItem("nst_app_view_mode", "STUDENT");
+        window.dispatchEvent(new CustomEvent("nst_open_student_dashboard"));
+      } catch (err) {
+        console.warn("[TeacherPanel] Explore full app switch warning:", err);
+      }
       onOpenPlatformContent();
     } else if (onBack) {
       onBack();
@@ -204,6 +216,42 @@ export const TeacherPanel: React.FC<Props> = ({
       return false;
     }
   });
+
+  // Preserve menu scroll position across drawer close/reopen, collapse/expand, and view switches
+  const menuScrollStorageKey = `nst_teacher_menu_scroll_${schoolId || "default"}`;
+  const desktopMenuScrollRef = useRef<HTMLDivElement | null>(null);
+  const mobileMenuScrollRef = useRef<HTMLDivElement | null>(null);
+  const mainContentScrollRef = useRef<HTMLDivElement | null>(null);
+  const menuScrollTopRef = useRef<number>((() => {
+    try {
+      const raw = sessionStorage.getItem(`nst_teacher_menu_scroll_${schoolId || "default"}`);
+      const n = raw ? Number(raw) : 0;
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    } catch {
+      return 0;
+    }
+  })());
+  const isRestoringMenuScrollRef = useRef(false);
+
+  const saveMenuScrollTop = (scrollTop: number) => {
+    if (isRestoringMenuScrollRef.current) return;
+    const safe = Math.max(0, Math.round(scrollTop));
+    menuScrollTopRef.current = safe;
+    try {
+      sessionStorage.setItem(menuScrollStorageKey, String(safe));
+    } catch {}
+  };
+
+  const captureActiveMenuScrollRef = useRef<() => void>(() => {});
+  captureActiveMenuScrollRef.current = () => {
+    const candidates = [mobileMenuScrollRef.current, desktopMenuScrollRef.current];
+    for (const el of candidates) {
+      if (el && el.clientHeight > 0) {
+        saveMenuScrollTop(el.scrollTop);
+        return;
+      }
+    }
+  };
 
   // Continuous Device Orientation & Screen Width Hook
   const { isLandscape: isClientLandscape, isWideScreen } = useDeviceOrientation();
@@ -237,8 +285,16 @@ export const TeacherPanel: React.FC<Props> = ({
     try {
       localStorage.setItem("nst_app_theme", nextTheme);
       localStorage.setItem("nst_student_theme", nextTheme);
+      localStorage.setItem("nst_dark_mode", nextTheme === "white" ? "false" : "true");
       if (typeof document !== "undefined") {
-        document.documentElement.classList.remove(
+        const root = document.documentElement;
+        root.classList.remove(
+          "student-theme-white",
+          "student-theme-black",
+          "student-theme-current",
+          "admin-theme-white",
+          "admin-theme-black",
+          "admin-theme-current",
           "teacher-theme-white",
           "teacher-theme-black",
           "teacher-theme-current",
@@ -248,14 +304,31 @@ export const TeacherPanel: React.FC<Props> = ({
           "dark-mode-black",
           "dark-mode-blue"
         );
-        document.documentElement.classList.add(`teacher-theme-${nextTheme}`, `app-theme-${nextTheme}`);
+        root.classList.add(`teacher-theme-${nextTheme}`, `app-theme-${nextTheme}`);
+        root.dataset.nstErpTheme = nextTheme;
         if (nextTheme === "white") {
-          document.documentElement.classList.remove("dark", "dark-mode");
+          root.classList.remove("dark", "dark-mode");
+          document.body.classList.remove("dark-mode");
+          document.body.style.backgroundColor = "#eef2f7";
         } else if (nextTheme === "black") {
-          document.documentElement.classList.add("dark", "dark-mode", "dark-mode-black");
+          root.classList.add("dark", "dark-mode", "dark-mode-black");
+          document.body.classList.add("dark-mode");
+          document.body.style.backgroundColor = "#000000";
         } else {
-          document.documentElement.classList.add("dark", "dark-mode", "dark-mode-blue");
+          root.classList.add("dark", "dark-mode", "dark-mode-blue");
+          document.body.classList.add("dark-mode");
+          document.body.style.backgroundColor = "#08142c";
         }
+        let metaTheme = document.querySelector('meta[name="theme-color"]');
+        if (!metaTheme) {
+          metaTheme = document.createElement("meta");
+          metaTheme.setAttribute("name", "theme-color");
+          document.head.appendChild(metaTheme);
+        }
+        metaTheme.setAttribute(
+          "content",
+          nextTheme === "white" ? "#eef2f7" : nextTheme === "black" ? "#000000" : "#08142c"
+        );
       }
       window.dispatchEvent(new Event("nst-dark-theme-change"));
     } catch (err) {
@@ -265,6 +338,28 @@ export const TeacherPanel: React.FC<Props> = ({
 
   useEffect(() => {
     applyTeacherTheme(appTheme);
+    return () => {
+      if (typeof document !== "undefined") {
+        const root = document.documentElement;
+        root.classList.remove(
+          "student-theme-white",
+          "student-theme-black",
+          "student-theme-current",
+          "admin-theme-white",
+          "admin-theme-black",
+          "admin-theme-current",
+          "teacher-theme-white",
+          "teacher-theme-black",
+          "teacher-theme-current",
+          "app-theme-white",
+          "app-theme-black",
+          "app-theme-current",
+          "dark-mode-black",
+          "dark-mode-blue"
+        );
+        delete root.dataset.nstErpTheme;
+      }
+    };
   }, []);
 
   // Students state
@@ -283,11 +378,28 @@ export const TeacherPanel: React.FC<Props> = ({
 
   // Current logged in Teacher record
   const [currentTeacher, setCurrentTeacher] = useState<SchoolTeacher | null>(null);
+  const [showMySignatureModal, setShowMySignatureModal] = useState(false);
+  const [showMyAppointmentLetter, setShowMyAppointmentLetter] = useState(false);
 
   // Teacher 10% Referral Incentive state
   const [schoolFees, setSchoolFees] = useState<MonthlyFee[]>([]);
   const [referralPayouts, setReferralPayouts] = useState<TeacherReferralPayout[]>([]);
   const [referralSettings, setReferralSettings] = useState<SchoolReferralSettings | null>(null);
+
+  // Teacher Self Leave Requests (Teacher -> Admin Leave Requests Hub)
+  const [myStaffLeaves, setMyStaffLeaves] = useState<StaffLeave[]>([]);
+  const [teacherLeaveForm, setTeacherLeaveForm] = useState<{
+    leaveType: StaffLeave["leaveType"];
+    fromDate: string;
+    toDate: string;
+    reason: string;
+  }>({
+    leaveType: "casual",
+    fromDate: todayStr(),
+    toDate: todayStr(),
+    reason: "",
+  });
+  const [submittingTeacherLeave, setSubmittingTeacherLeave] = useState(false);
 
   // Initial load
   useEffect(() => {
@@ -424,6 +536,7 @@ export const TeacherPanel: React.FC<Props> = ({
       if (Math.abs(diffX) > 45 && Math.abs(diffX) > Math.abs(diffY) * 1.2) {
         if (diffX < 0) {
           // Swipe Left -> Hide menu (1% visible strip)
+          captureActiveMenuScrollRef.current();
           setIsSidebarOpen(false);
           setIsSidebarHidden(true);
           try {
@@ -458,6 +571,31 @@ export const TeacherPanel: React.FC<Props> = ({
     };
   }, [isEffectiveLandscape]);
 
+  useLayoutEffect(() => {
+    const saved = menuScrollTopRef.current;
+    if (saved <= 0) return;
+    const visibleTargets = [mobileMenuScrollRef.current, desktopMenuScrollRef.current].filter(
+      (el): el is HTMLDivElement => Boolean(el && el.clientHeight > 0)
+    );
+    if (visibleTargets.length === 0) return;
+    isRestoringMenuScrollRef.current = true;
+    visibleTargets.forEach((el) => {
+      el.scrollTop = saved;
+    });
+    const raf = window.requestAnimationFrame(() => {
+      visibleTargets.forEach((el) => {
+        if (el.clientHeight > 0 && Math.abs(el.scrollTop - saved) > 1) {
+          el.scrollTop = saved;
+        }
+      });
+      isRestoringMenuScrollRef.current = false;
+    });
+    return () => {
+      window.cancelAnimationFrame(raf);
+      isRestoringMenuScrollRef.current = false;
+    };
+  }, [isSidebarOpen, isSidebarHidden, isEffectiveLandscape, view, selectedLesson]);
+
   useEffect(() => {
     if (view !== "referrals") return;
     Promise.all([
@@ -472,6 +610,58 @@ export const TeacherPanel: React.FC<Props> = ({
       })
       .catch(() => {});
   }, [view, schoolId]);
+
+  useEffect(() => {
+    if (!schoolId) return;
+    const normMe = normalizePersonName(teacherName);
+    const unsub = subscribeStaffLeaves(schoolId, (allLeaves) => {
+      const mine = (allLeaves || []).filter(
+        (l) =>
+          l.staffId === teacherId ||
+          (Boolean(normMe) && normalizePersonName(l.staffName) === normMe)
+      );
+      setMyStaffLeaves(mine);
+    });
+    return unsub;
+  }, [schoolId, teacherId, teacherName]);
+
+  const handleSubmitTeacherLeave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!teacherLeaveForm.reason.trim()) {
+      toast.error("कृपया छुट्टी का कारण (Reason) लिखें।");
+      return;
+    }
+    const fromMs = new Date(teacherLeaveForm.fromDate || todayStr()).getTime();
+    const toMs = new Date(teacherLeaveForm.toDate || teacherLeaveForm.fromDate || todayStr()).getTime();
+    const days =
+      Number.isFinite(fromMs) && Number.isFinite(toMs) && toMs >= fromMs
+        ? Math.max(1, Math.round((toMs - fromMs) / 86400000) + 1)
+        : 1;
+    setSubmittingTeacherLeave(true);
+    try {
+      const newLeave: StaffLeave = {
+        id: `tleave_${generateId()}`,
+        schoolId,
+        staffId: teacherId,
+        staffName: currentTeacher?.name || teacherName || "Teacher",
+        designation: currentTeacher?.designation || "Teacher",
+        leaveType: teacherLeaveForm.leaveType,
+        fromDate: teacherLeaveForm.fromDate || todayStr(),
+        toDate: teacherLeaveForm.toDate || teacherLeaveForm.fromDate || todayStr(),
+        days,
+        reason: teacherLeaveForm.reason.trim(),
+        status: "pending",
+        appliedAt: new Date().toISOString(),
+      };
+      await saveStaffLeave(newLeave);
+      setTeacherLeaveForm((prev) => ({ ...prev, reason: "" }));
+      toast.success("✓ छुट्टी आवेदन स्कूल एडमिन (Leave Requests) को भेज दिया गया है!");
+    } catch (err: any) {
+      toast.error("आवेदन भेजने में समस्या: " + (err?.message || "Unknown error"));
+    } finally {
+      setSubmittingTeacherLeave(false);
+    }
+  };
 
   const myReferralSummary = useMemo(() => {
     const normMe = normalizePersonName(teacherName);
@@ -729,6 +919,8 @@ export const TeacherPanel: React.FC<Props> = ({
       },
       items: [
         { id: "dashboard" as TeacherView, label: "Teacher Dashboard", icon: Home, desc: "कक्षा समरी व लाइव मेट्रिक्स" },
+        { id: "my_leaves" as TeacherView, label: "My Leave Requests", icon: Calendar, desc: "Admin को छुट्टी आवेदन भेजें" },
+        { id: "rules_regulations" as TeacherView, label: "School Rules & Bonus", icon: ShieldCheck, desc: "13 नियम, +2 दिन बोनस व सैलरी" },
         { id: "community" as TeacherView, label: "Classroom Community", icon: Megaphone, desc: "फोटो, वीडियो व सर्कुलर्स" },
       ]
     },
@@ -751,6 +943,7 @@ export const TeacherPanel: React.FC<Props> = ({
         { id: "marks" as TeacherView, label: "Marks & Exam Entry", icon: Edit3, desc: "यूनिट टेस्ट व परीक्षा अंक" },
         { id: "question_paper_builder" as TeacherView, label: "Question Paper Builder", icon: FileText, desc: "अर्धवार्षिक व वार्षिक परीक्षा पेपर" },
         { id: "homework" as TeacherView, label: "Daily Homework & Diary", icon: BookOpen, desc: "दैनिक गृहकार्य व डायरी" },
+        { id: "growth_diary" as TeacherView, label: "Student Growth & 6-Skills", icon: Sparkles, desc: "दैनिक डायरी, 6-स्किल्स व हेल्थ" },
         { id: "timetable" as TeacherView, label: "Timetable & Routine", icon: Clock, desc: "साप्ताहिक घंटी व समय सारणी" },
       ]
     },
@@ -833,7 +1026,12 @@ export const TeacherPanel: React.FC<Props> = ({
     } else {
       setView(targetView);
     }
+    captureActiveMenuScrollRef.current();
+    if (targetView === "students" || targetView === "attendance" || targetView === "marks" || targetView === "subjects") {
+      // handled above; no-op
+    }
     setIsSidebarOpen(false);
+    mainContentScrollRef.current?.scrollTo({ top: 0 });
   };
 
   // ── DESKTOP PERMANENT LEFT SIDEBAR (20% SLIMMER: w-52 lg:w-56) ───────────
@@ -889,6 +1087,7 @@ export const TeacherPanel: React.FC<Props> = ({
           <button
             type="button"
             onClick={() => {
+              captureActiveMenuScrollRef.current();
               setIsSidebarHidden(true);
               try {
                 localStorage.setItem("school_teacher_sidebar_hidden", "true");
@@ -904,18 +1103,26 @@ export const TeacherPanel: React.FC<Props> = ({
         </div>
 
         {/* Categories List with Independent Scroll */}
-        <div className="flex-1 px-2.5 py-3 space-y-3.5 overflow-y-auto overscroll-contain">
+        <div
+          ref={desktopMenuScrollRef}
+          onScroll={(e) => {
+            if (!isRestoringMenuScrollRef.current && e.currentTarget.clientHeight > 0) {
+              saveMenuScrollTop(e.currentTarget.scrollTop);
+            }
+          }}
+          className="flex-1 px-2.5 py-3 space-y-3.5 overflow-y-auto overscroll-contain"
+        >
           {navCategories.map((cat, cIdx) => (
             <div key={`cat-${cIdx}`} className="space-y-1">
               {/* Styled Sub Group Pill with Unique Accent Color */}
-              <div className={`px-2 py-1 rounded-lg ${cat.theme.pillBg} flex items-center justify-between gap-1 shadow-xs`}>
+              <div className={`erp-menu-cat-pill px-2 py-1 rounded-lg ${cat.theme.pillBg} flex items-center justify-between gap-1 shadow-xs`}>
                 <div className="flex items-center gap-1.5 min-w-0">
                   <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${cat.theme.accentDot}`} />
-                  <span className={`text-[9.5px] font-black uppercase tracking-wider truncate ${cat.theme.titleColor}`}>
+                  <span className={`erp-menu-cat-title text-[9.5px] font-black uppercase tracking-wider truncate ${cat.theme.titleColor}`}>
                     {cat.title}
                   </span>
                 </div>
-                <span className={`text-[8.5px] font-black px-1.5 py-0.2 rounded-full shrink-0 ${cat.theme.badgeColor}`}>
+                <span className={`erp-menu-cat-badge text-[8.5px] font-black px-1.5 py-0.2 rounded-full shrink-0 ${cat.theme.badgeColor}`}>
                   {cat.items.length}
                 </span>
               </div>
@@ -955,26 +1162,28 @@ export const TeacherPanel: React.FC<Props> = ({
         {/* Bottom Sidebar Action Footer */}
         <div className="p-2.5 border-t border-slate-800 bg-slate-950/80 space-y-1.5 shrink-0">
           {/* Explore Full NSTA Learning App */}
-          <button
-            type="button"
-            onClick={handleExploreFullApp}
-            className="w-full p-2 rounded-xl bg-gradient-to-r from-indigo-900/70 via-purple-900/60 to-slate-900 border border-indigo-500/40 hover:border-indigo-400 text-left transition flex items-center justify-between gap-2 shadow-md group cursor-pointer active:scale-95"
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              <div className="w-7 h-7 rounded-lg bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center shrink-0 text-amber-300">
-                <Sparkles className="w-3.5 h-3.5 animate-spin" />
+          {onOpenPlatformContent && (
+            <button
+              type="button"
+              onClick={handleExploreFullApp}
+              className="w-full p-2 rounded-xl bg-indigo-50 dark:bg-slate-900 border-2 border-indigo-700 dark:border-indigo-500/40 hover:bg-indigo-100 dark:hover:bg-slate-800 text-left transition flex items-center justify-between gap-2 shadow-sm group cursor-pointer active:scale-95"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-7 h-7 rounded-lg bg-indigo-100 dark:bg-indigo-500/20 border border-indigo-700/40 dark:border-indigo-400/30 flex items-center justify-center shrink-0 text-amber-700 dark:text-amber-300">
+                  <Sparkles className="w-3.5 h-3.5 animate-spin" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-black text-slate-900 dark:text-white group-hover:text-indigo-900 dark:group-hover:text-indigo-200 truncate">
+                    Explore Full NSTA App
+                  </p>
+                  <p className="text-[9.5px] text-indigo-800 dark:text-indigo-300/80 font-semibold truncate">
+                    53+ Books, MCQs &amp; Study Room
+                  </p>
+                </div>
               </div>
-              <div className="min-w-0">
-                <p className="text-xs font-black text-white group-hover:text-indigo-200 truncate">
-                  Explore Full NSTA App
-                </p>
-                <p className="text-[9.5px] text-indigo-300/80 truncate">
-                  53+ Books, MCQs &amp; Study Room
-                </p>
-              </div>
-            </div>
-            <ArrowRight className="w-3.5 h-3.5 text-indigo-400 group-hover:translate-x-1 transition-transform shrink-0" />
-          </button>
+              <ArrowRight className="w-3.5 h-3.5 text-indigo-700 dark:text-indigo-400 group-hover:translate-x-1 transition-transform shrink-0" />
+            </button>
+          )}
 
           <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white/5 border border-white/10">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
@@ -1003,7 +1212,10 @@ export const TeacherPanel: React.FC<Props> = ({
         {/* Transparent backdrop: Screen behind remains sharp, bright & visible */}
         <div
           className="fixed inset-0 bg-transparent transition-opacity cursor-pointer"
-          onClick={() => setIsSidebarOpen(false)}
+          onClick={() => {
+            captureActiveMenuScrollRef.current();
+            setIsSidebarOpen(false);
+          }}
         />
         {/* Drawer */}
         <div className="relative w-[228px] max-w-[76vw] bg-slate-900 text-slate-100 flex flex-col h-full h-[100dvh] shadow-2xl z-10 overflow-hidden animate-in slide-in-from-left duration-250 border-r border-slate-800">
@@ -1024,7 +1236,10 @@ export const TeacherPanel: React.FC<Props> = ({
             </div>
             <button
               type="button"
-              onClick={() => setIsSidebarOpen(false)}
+              onClick={() => {
+                captureActiveMenuScrollRef.current();
+                setIsSidebarOpen(false);
+              }}
               className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white cursor-pointer"
               aria-label="Close Menu"
             >
@@ -1033,17 +1248,25 @@ export const TeacherPanel: React.FC<Props> = ({
           </div>
 
           {/* Nav Categories */}
-          <div className="flex-1 px-2.5 py-3 space-y-3.5 overflow-y-auto overscroll-contain">
+          <div
+            ref={mobileMenuScrollRef}
+            onScroll={(e) => {
+              if (!isRestoringMenuScrollRef.current && e.currentTarget.clientHeight > 0) {
+                saveMenuScrollTop(e.currentTarget.scrollTop);
+              }
+            }}
+            className="flex-1 px-2.5 py-3 space-y-3.5 overflow-y-auto overscroll-contain"
+          >
             {navCategories.map((cat, cIdx) => (
               <div key={`m-cat-${cIdx}`} className="space-y-1">
-                <div className={`px-2 py-1 rounded-lg ${cat.theme.pillBg} flex items-center justify-between gap-1 shadow-xs`}>
+                <div className={`erp-menu-cat-pill px-2 py-1 rounded-lg ${cat.theme.pillBg} flex items-center justify-between gap-1 shadow-xs`}>
                   <div className="flex items-center gap-1.5 min-w-0">
                     <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${cat.theme.accentDot}`} />
-                    <span className={`text-[9.5px] font-black uppercase tracking-wider truncate ${cat.theme.titleColor}`}>
+                    <span className={`erp-menu-cat-title text-[9.5px] font-black uppercase tracking-wider truncate ${cat.theme.titleColor}`}>
                       {cat.title}
                     </span>
                   </div>
-                  <span className={`text-[8.5px] font-black px-1.5 py-0.2 rounded-full shrink-0 ${cat.theme.badgeColor}`}>
+                  <span className={`erp-menu-cat-badge text-[8.5px] font-black px-1.5 py-0.2 rounded-full shrink-0 ${cat.theme.badgeColor}`}>
                     {cat.items.length}
                   </span>
                 </div>
@@ -1083,29 +1306,32 @@ export const TeacherPanel: React.FC<Props> = ({
           {/* Footer */}
           <div className="p-2.5 border-t border-slate-800 bg-slate-950/80 space-y-1.5 shrink-0">
             {/* Explore Full NSTA Learning App */}
-            <button
-              type="button"
-              onClick={() => {
-                setIsSidebarOpen(false);
-                handleExploreFullApp();
-              }}
-              className="w-full p-2 rounded-xl bg-gradient-to-r from-indigo-900/70 via-purple-900/60 to-slate-900 border border-indigo-500/40 hover:border-indigo-400 text-left transition flex items-center justify-between gap-2 shadow-md group cursor-pointer active:scale-95"
-            >
-              <div className="flex items-center gap-2 min-w-0">
-                <div className="w-7 h-7 rounded-lg bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center shrink-0 text-amber-300">
-                  <Sparkles className="w-3.5 h-3.5 animate-spin" />
+            {onOpenPlatformContent && (
+              <button
+                type="button"
+                onClick={() => {
+                  captureActiveMenuScrollRef.current();
+                  setIsSidebarOpen(false);
+                  handleExploreFullApp();
+                }}
+                className="w-full p-2 rounded-xl bg-indigo-50 dark:bg-slate-900 border-2 border-indigo-700 dark:border-indigo-500/40 hover:bg-indigo-100 dark:hover:bg-slate-800 text-left transition flex items-center justify-between gap-2 shadow-sm group cursor-pointer active:scale-95"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="w-7 h-7 rounded-lg bg-indigo-100 dark:bg-indigo-500/20 border border-indigo-700/40 dark:border-indigo-400/30 flex items-center justify-center shrink-0 text-amber-700 dark:text-amber-300">
+                    <Sparkles className="w-3.5 h-3.5 animate-spin" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-black text-slate-900 dark:text-white group-hover:text-indigo-900 dark:group-hover:text-indigo-200 truncate">
+                      Explore Full NSTA App
+                    </p>
+                    <p className="text-[9.5px] text-indigo-800 dark:text-indigo-300/80 font-semibold truncate">
+                      53+ Books, MCQs &amp; Study Room
+                    </p>
+                  </div>
                 </div>
-                <div className="min-w-0">
-                  <p className="text-xs font-black text-white group-hover:text-indigo-200 truncate">
-                    Explore Full NSTA App
-                  </p>
-                  <p className="text-[9.5px] text-indigo-300/80 truncate">
-                    53+ Books, MCQs &amp; Study Room
-                  </p>
-                </div>
-              </div>
-              <ArrowRight className="w-3.5 h-3.5 text-indigo-400 group-hover:translate-x-1 transition-transform shrink-0" />
-            </button>
+                <ArrowRight className="w-3.5 h-3.5 text-indigo-700 dark:text-indigo-400 group-hover:translate-x-1 transition-transform shrink-0" />
+              </button>
+            )}
 
             <button
               type="button"
@@ -1178,10 +1404,16 @@ export const TeacherPanel: React.FC<Props> = ({
                 ? "Question Paper & Blueprint Generator"
                 : view === "ptm_scheduler"
                 ? "PTM Slot Scheduler & Appointments"
+                : view === "growth_diary"
+                ? "Student Growth, Daily Diary & 6-Skill Tracker"
                 : view === "online_admission"
                 ? "Online Student Admission (छात्र प्रवेश)"
                 : view === "referrals"
                 ? "10% Student Referral Incentive"
+                : view === "rules_regulations"
+                ? "School Rules & Regulations (नियम व शर्तें)"
+                : view === "my_leaves"
+                ? "My Leave Requests (एडमिन को छुट्टी आवेदन)"
                 : view.replace(/_/g, " ")}
             </h1>
           </div>
@@ -1190,14 +1422,14 @@ export const TeacherPanel: React.FC<Props> = ({
         {/* Right: 3-Theme Switcher, Screen Rotate Toggle & Faculty Badge */}
         <div className="flex items-center gap-2 shrink-0">
           {/* 3-Theme Switcher Segmented Pill */}
-          <div className="inline-flex items-center p-0.5 rounded-xl bg-slate-800/90 border border-slate-700/80 shadow-xs">
+          <div className="inline-flex items-center p-0.5 rounded-xl bg-slate-200 dark:bg-slate-800/90 border border-slate-400 dark:border-slate-700/80 shadow-xs">
             <button
               type="button"
               onClick={() => applyTeacherTheme("white")}
               className={`px-2 py-1 rounded-lg text-[10px] sm:text-xs font-black flex items-center gap-1 transition cursor-pointer ${
                 appTheme === "white"
                   ? "bg-amber-400 text-slate-950 shadow-sm"
-                  : "text-slate-400 hover:text-white"
+                  : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
               }`}
               title="White (Light) थीम - सफेद"
             >
@@ -1210,7 +1442,7 @@ export const TeacherPanel: React.FC<Props> = ({
               className={`px-2 py-1 rounded-lg text-[10px] sm:text-xs font-black flex items-center gap-1 transition cursor-pointer ${
                 appTheme === "black"
                   ? "bg-cyan-400 text-slate-950 shadow-sm"
-                  : "text-slate-400 hover:text-white"
+                  : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
               }`}
               title="Black (AMOLED) थीम - सुपर डार्क"
             >
@@ -1222,21 +1454,21 @@ export const TeacherPanel: React.FC<Props> = ({
               onClick={() => applyTeacherTheme("current")}
               className={`px-2 py-1 rounded-lg text-[10px] sm:text-xs font-black flex items-center gap-1 transition cursor-pointer ${
                 appTheme === "current"
-                  ? "bg-indigo-600 text-white shadow-sm"
-                  : "text-slate-400 hover:text-white"
+                  ? "bg-blue-600 text-white shadow-sm"
+                  : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
               }`}
-              title="Midnight (Default) थीम - डिफ़ॉल्ट"
+              title="Blue (Default) थीम - रॉयल ब्लू"
             >
               <Sparkles className="w-3.5 h-3.5" />
-              <span className="hidden xs:inline">Midnight</span>
+              <span className="hidden xs:inline">Blue</span>
             </button>
           </div>
 
-          {/* Mobile / Laptop Rotate Toggle Button */}
+          {/* Mobile / Laptop Rotate Toggle Button (Icon-Only) */}
           <button
             type="button"
             onClick={handleToggleScreenRotate}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl font-black text-xs transition cursor-pointer active:scale-95 shadow-md border ${
+            className={`inline-flex items-center justify-center p-1.5 rounded-xl transition cursor-pointer active:scale-95 shadow-md border shrink-0 ${
               isEffectiveLandscape
                 ? "bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 text-white border-cyan-300/60 shadow-cyan-500/30 ring-2 ring-cyan-400/30"
                 : "bg-slate-800 hover:bg-slate-700 text-emerald-300 border-emerald-500/40 shadow-emerald-500/10"
@@ -1246,17 +1478,16 @@ export const TeacherPanel: React.FC<Props> = ({
                 ? "Mobile (Portrait) Mode me wapas layein"
                 : "Laptop (Desktop) Mode me badlein"
             }
+            aria-label={
+              isEffectiveLandscape
+                ? "Switch to Mobile Mode"
+                : "Switch to Desktop Mode"
+            }
           >
             {isEffectiveLandscape ? (
-              <>
-                <Laptop className="w-3.5 h-3.5 text-cyan-200 animate-pulse" />
-                <span className="inline">💻 Laptop</span>
-              </>
+              <Laptop className="w-4 h-4 text-cyan-200 animate-pulse" />
             ) : (
-              <>
-                <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="inline">📱 Mobile</span>
-              </>
+              <Smartphone className="w-4 h-4 text-emerald-400" />
             )}
           </button>
 
@@ -1596,6 +1827,222 @@ export const TeacherPanel: React.FC<Props> = ({
           activeSession={activeSession}
           mode="ADMIN_TEACHER"
         />
+      );
+    }
+
+    // 14.5 Student Growth, Diary & 6-Skills Hub
+    if (view === "growth_diary" && school) {
+      return (
+        <TeacherAdminGrowthHub
+          school={school}
+          classes={classes}
+          students={allStudents}
+          actorName={teacherName || "Teacher"}
+          canBroadcastEmergency={false}
+          onBack={() => setView("dashboard")}
+        />
+      );
+    }
+
+    if (view === "rules_regulations") {
+      return (
+        <TeacherRulesRegulationsView
+          school={school}
+          canEdit={false}
+          currentTeacherId={teacherId}
+          currentTeacherName={teacherName}
+          currentTeacherRole={currentTeacher?.designation || "Teacher"}
+          teacherSignatureUrl={currentTeacher?.signatureUrl}
+          onBack={() => setView("dashboard")}
+        />
+      );
+    }
+
+    // Teacher Self Leave Application View (Teacher -> Admin Leave Requests)
+    if (view === "my_leaves") {
+      const pendingCount = myStaffLeaves.filter((l) => l.status === "pending").length;
+      const approvedCount = myStaffLeaves.filter((l) => l.status === "approved").length;
+      const rejectedCount = myStaffLeaves.filter((l) => l.status === "rejected").length;
+      const calcFrom = new Date(teacherLeaveForm.fromDate || todayStr()).getTime();
+      const calcTo = new Date(teacherLeaveForm.toDate || teacherLeaveForm.fromDate || todayStr()).getTime();
+      const previewDays =
+        Number.isFinite(calcFrom) && Number.isFinite(calcTo) && calcTo >= calcFrom
+          ? Math.max(1, Math.round((calcTo - calcFrom) / 86400000) + 1)
+          : 1;
+
+      return (
+        <div className="space-y-4 max-w-4xl mx-auto">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setView("dashboard")}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-bold transition cursor-pointer"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              <span>Back to Dashboard</span>
+            </button>
+            <div className="flex items-center gap-2 text-xs font-bold">
+              <span className="px-2.5 py-1 rounded-lg bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30">
+                Pending: {pendingCount}
+              </span>
+              <span className="px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                Approved: {approvedCount}
+              </span>
+              <span className="px-2.5 py-1 rounded-lg bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/30">
+                Rejected: {rejectedCount}
+              </span>
+            </div>
+          </div>
+
+          <form
+            onSubmit={handleSubmitTeacherLeave}
+            className="bg-white dark:bg-slate-800 rounded-2xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm space-y-4"
+          >
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <h2 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
+                  <Calendar className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                  छुट्टी के लिए आवेदन भेजें (Send Leave Request to Admin)
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  आपका आवेदन सीधे स्कूल एडमिन / प्रिंसिपल के <strong>Leave Requests</strong> पेज पर दिखेगा।
+                </p>
+              </div>
+              <span className="px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 text-xs font-black">
+                {previewDays} दिन की छुट्टी
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="text-xs font-bold text-slate-600 dark:text-slate-300 block mb-1">
+                  छुट्टी का प्रकार (Leave Type)
+                </label>
+                <select
+                  value={teacherLeaveForm.leaveType}
+                  onChange={(e) =>
+                    setTeacherLeaveForm((prev) => ({
+                      ...prev,
+                      leaveType: e.target.value as StaffLeave["leaveType"],
+                    }))
+                  }
+                  className="w-full px-3 py-2 text-xs font-bold bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-white rounded-xl border border-slate-200 dark:border-slate-700"
+                >
+                  <option value="casual">Casual Leave (CL)</option>
+                  <option value="sick">Medical / Sick Leave</option>
+                  <option value="earned">Earned Leave (EL)</option>
+                  <option value="unpaid">Unpaid Leave</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-600 dark:text-slate-300 block mb-1">
+                  कब से (From Date)
+                </label>
+                <input
+                  type="date"
+                  value={teacherLeaveForm.fromDate}
+                  onChange={(e) =>
+                    setTeacherLeaveForm((prev) => ({ ...prev, fromDate: e.target.value }))
+                  }
+                  className="w-full px-3 py-2 text-xs font-bold bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-white rounded-xl border border-slate-200 dark:border-slate-700"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-600 dark:text-slate-300 block mb-1">
+                  कब तक (To Date)
+                </label>
+                <input
+                  type="date"
+                  value={teacherLeaveForm.toDate}
+                  min={teacherLeaveForm.fromDate}
+                  onChange={(e) =>
+                    setTeacherLeaveForm((prev) => ({ ...prev, toDate: e.target.value }))
+                  }
+                  className="w-full px-3 py-2 text-xs font-bold bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-white rounded-xl border border-slate-200 dark:border-slate-700"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-600 dark:text-slate-300 block mb-1">
+                छुट्टी का कारण / संदेश (Reason &amp; Message for Admin)
+              </label>
+              <textarea
+                rows={3}
+                value={teacherLeaveForm.reason}
+                onChange={(e) =>
+                  setTeacherLeaveForm((prev) => ({ ...prev, reason: e.target.value }))
+                }
+                placeholder="उदाहरण: घर में आवश्यक कार्य / बुखार के कारण 2 दिन की छुट्टी चाहिए..."
+                className="w-full px-3 py-2 text-xs font-semibold bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-white rounded-xl border border-slate-200 dark:border-slate-700"
+              />
+            </div>
+
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                शिक्षक: <strong>{currentTeacher?.name || teacherName}</strong> ({currentTeacher?.designation || "Teacher"})
+              </span>
+              <button
+                type="submit"
+                disabled={submittingTeacherLeave}
+                className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-black shadow cursor-pointer transition"
+              >
+                {submittingTeacherLeave ? "भेजा जा रहा है..." : "Admin को Leave Request भेजें"}
+              </button>
+            </div>
+          </form>
+
+          {/* My Sent Leave Requests List */}
+          <div className="space-y-3">
+            <h3 className="text-sm font-black text-slate-800 dark:text-white">
+              मेरे भेजे गए आवेदन ({myStaffLeaves.length})
+            </h3>
+            {myStaffLeaves.length === 0 ? (
+              <div className="bg-white dark:bg-slate-800 rounded-2xl p-8 text-center text-xs text-slate-500 border border-slate-200 dark:border-slate-700">
+                अभी तक कोई छुट्टी आवेदन नहीं भेजा गया है। ऊपर फॉर्म भरकर Admin को आवेदन भेजें।
+              </div>
+            ) : (
+              myStaffLeaves.map((l) => (
+                <div
+                  key={l.id}
+                  className="bg-white dark:bg-slate-800 rounded-2xl p-4 border border-slate-200 dark:border-slate-700 shadow-xs flex items-center justify-between gap-3 flex-wrap"
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">
+                        {l.leaveType}
+                      </span>
+                      <span className="text-xs font-black text-slate-900 dark:text-white tabular-nums">
+                        {l.fromDate} → {l.toDate} ({l.days} दिन)
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-600 dark:text-slate-300">{l.reason}</p>
+                    {l.remarks && (
+                      <p className="text-[11px] text-indigo-600 dark:text-indigo-300 font-semibold">
+                        Admin Note: {l.remarks}
+                      </p>
+                    )}
+                  </div>
+                  <span
+                    className={`px-3 py-1 rounded-xl text-xs font-black shrink-0 ${
+                      l.status === "approved"
+                        ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
+                        : l.status === "rejected"
+                        ? "bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300"
+                        : "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
+                    }`}
+                  >
+                    {l.status === "approved"
+                      ? "✓ Approved"
+                      : l.status === "rejected"
+                      ? "✕ Rejected"
+                      : "⏳ Pending Approval"}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
       );
     }
 
@@ -2341,17 +2788,17 @@ export const TeacherPanel: React.FC<Props> = ({
         )}
 
         {/* Broadcast Studio Quick Card */}
-        <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-indigo-950 via-slate-900 to-purple-950 text-white shadow-xl border-2 border-indigo-500/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5">
+        <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-indigo-50 via-blue-50 to-sky-50 dark:from-slate-900 dark:via-slate-900 dark:to-indigo-950/70 text-slate-900 dark:text-white shadow-md border-2 border-indigo-700 dark:border-indigo-500 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-lg shadow-indigo-600/40 ring-2 ring-indigo-400/50">
+            <div className="w-12 h-12 rounded-2xl bg-indigo-700 text-white flex items-center justify-center shrink-0 shadow-md">
               <Bell className="w-6 h-6 animate-pulse" />
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
-                <h4 className="font-black text-sm sm:text-base text-white">Class Messenger &amp; Push Alerts</h4>
+                <h4 className="font-black text-sm sm:text-base text-slate-900 dark:text-white">Class Messenger &amp; Push Alerts</h4>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-400 text-slate-950">PRO ⚡ LIVE</span>
               </div>
-              <p className="text-xs text-indigo-200 mt-0.5">
+              <p className="text-xs text-indigo-800 dark:text-indigo-200 font-semibold mt-0.5">
                 Apni class ke sabhi students/parents ko instant 1-way broadcast, homework aur notice alerts bhejein.
               </p>
             </div>
@@ -2359,11 +2806,63 @@ export const TeacherPanel: React.FC<Props> = ({
           <button
             type="button"
             onClick={() => setView("messenger_broadcast")}
-            className="py-2.5 px-4 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs transition active:scale-[0.98] shadow-md flex items-center justify-center gap-2 shrink-0 cursor-pointer"
+            className="py-2.5 px-4 rounded-xl bg-indigo-700 hover:bg-indigo-800 text-white font-black text-xs transition active:scale-[0.98] shadow-md flex items-center justify-center gap-2 shrink-0 cursor-pointer"
           >
             <span>Broadcast Studio</span>
             <ChevronRight className="w-4 h-4" />
           </button>
+        </div>
+
+        {/* School Rules & +2 Days Bonus Policy Card */}
+        <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-blue-950 via-indigo-950 to-slate-900 text-white shadow-lg border-2 border-amber-400/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center shrink-0 shadow-md font-black text-xl">
+              📜
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h4 className="font-black text-sm sm:text-base text-white">
+                  School Rules &amp; Regulations for Teachers (13 नियम)
+                </h4>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-400 text-slate-950">
+                  +2 DAYS BONUS
+                </span>
+              </div>
+              <p className="text-xs text-blue-100 font-semibold mt-0.5">
+                पूरा महीना पढ़ाने पर +2 दिन बोनस • सैलरी 15–20 तारीख • 1st Child Tuition Free • Mobile Account Office में जमा • Zero Punishment
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowMySignatureModal(true)}
+              className={`py-2.5 px-3.5 rounded-xl font-black text-xs transition active:scale-[0.98] shadow-md flex items-center justify-center gap-1.5 cursor-pointer ${
+                currentTeacher?.signatureUrl
+                  ? "bg-emerald-500 hover:bg-emerald-400 text-slate-950"
+                  : "bg-white/15 hover:bg-white/25 text-white border border-white/30"
+              }`}
+            >
+              <PenTool className="w-3.5 h-3.5" />
+              <span>{currentTeacher?.signatureUrl ? "✍️ My Sign ✓" : "✍️ My Sign जोड़ें"}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowMyAppointmentLetter(true)}
+              className="py-2.5 px-3.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs transition active:scale-[0.98] shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>📄 Appointment Letter</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setView("rules_regulations")}
+              className="py-2.5 px-4 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs transition active:scale-[0.98] shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <span>सभी 13 नियम देखें</span>
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Launchpad Grid */}
@@ -2566,6 +3065,28 @@ export const TeacherPanel: React.FC<Props> = ({
               </div>
             </button>
 
+            {/* My Leave Requests (Teacher -> Admin) */}
+            <button
+              type="button"
+              onClick={() => setView("my_leaves")}
+              className="bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-indigo-200 dark:border-indigo-800/70 flex flex-col justify-between gap-3 hover:shadow-md hover:border-indigo-500 transition text-left cursor-pointer"
+            >
+              <div className="flex items-center justify-between w-full">
+                <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
+                  <Calendar className="w-5 h-5" />
+                </div>
+                <span className="px-2 py-0.5 rounded text-[10px] font-black bg-indigo-100 text-indigo-700 dark:bg-indigo-950/70 dark:text-indigo-300">
+                  {myStaffLeaves.filter((l) => l.status === "pending").length > 0
+                    ? `${myStaffLeaves.filter((l) => l.status === "pending").length} PENDING`
+                    : "APPLY"}
+                </span>
+              </div>
+              <div>
+                <p className="font-black text-slate-900 dark:text-white text-sm">My Leave Requests</p>
+                <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">Admin को छुट्टी आवेदन भेजें</p>
+              </div>
+            </button>
+
             {/* 10% Referrals (Only shown if Admin explicitly enabled for this teacher) */}
             {isReferralEligible && (
               <button
@@ -2602,8 +3123,8 @@ export const TeacherPanel: React.FC<Props> = ({
         appTheme === "white"
           ? "bg-slate-100 text-slate-900"
           : appTheme === "black"
-          ? "bg-black text-white"
-          : "bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+          ? "dark bg-black text-white"
+          : "dark bg-[#08142c] text-slate-100"
       } w-full relative`}>
         {/* Left Sidebar (fixed on desktop or landscape, never scrolls with page) */}
         {renderDesktopSidebar()}
@@ -2623,7 +3144,9 @@ export const TeacherPanel: React.FC<Props> = ({
         )}
 
         {/* Main Content Area (Independent scroll container) */}
-        <div className={`flex-1 flex flex-col min-w-0 h-screen h-[100dvh] max-h-screen overflow-y-auto ${
+        <div
+          ref={mainContentScrollRef}
+          className={`flex-1 flex flex-col min-w-0 h-screen h-[100dvh] max-h-screen overflow-y-auto ${
           isEffectiveLandscape ? "overflow-x-auto" : "overflow-x-hidden"
         }`}>
           {renderTopHeader()}
@@ -2692,6 +3215,58 @@ export const TeacherPanel: React.FC<Props> = ({
           teachers={currentTeacher ? [currentTeacher] : []}
           classes={classes}
           onEnrollmentUpdated={() => {}}
+        />
+      )}
+      {showMySignatureModal && (
+        <TeacherSignatureModal
+          isOpen={showMySignatureModal}
+          onClose={() => setShowMySignatureModal(false)}
+          title={`My Digital Signature — ${currentTeacher?.name || teacherName}`}
+          subtitle="यह साइन आपके Appointment Letter, 13 Rules Sheet व Marksheet पर ऑटो-प्रिंट होगा"
+          initialSignatureUrl={currentTeacher?.signatureUrl || ""}
+          uploadPrefix={`sig_teacher_${currentTeacher?.id || teacherId}`}
+          onSaveSignature={async (url) => {
+            const targetId = currentTeacher?.id || teacherId;
+            await updateTeacher(schoolId, targetId, { signatureUrl: url });
+            setCurrentTeacher((prev) =>
+              prev
+                ? { ...prev, signatureUrl: url }
+                : ({
+                    id: targetId,
+                    schoolId,
+                    name: teacherName,
+                    subjects: [],
+                    classes: [],
+                    active: true,
+                    createdAt: new Date().toISOString(),
+                    signatureUrl: url,
+                  } as SchoolTeacher)
+            );
+            toast.success("आपका डिजिटल साइन सफलतापूर्वक सेव हो गया!");
+          }}
+        />
+      )}
+      {school && showMyAppointmentLetter && (
+        <AppointmentLetterModal
+          isOpen={showMyAppointmentLetter}
+          onClose={() => setShowMyAppointmentLetter(false)}
+          school={school}
+          canEdit={false}
+          teacher={
+            currentTeacher || {
+              id: teacherId,
+              schoolId,
+              name: teacherName,
+              designation: "Teacher",
+              subjects: [],
+              classes: [],
+              active: true,
+              createdAt: new Date().toISOString(),
+            }
+          }
+          classes={classes}
+          activeSession={activeSession}
+          onOpenTeacherSignaturePad={() => setShowMySignatureModal(true)}
         />
       )}
     </>

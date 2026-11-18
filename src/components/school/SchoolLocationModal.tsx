@@ -156,21 +156,21 @@ export const SchoolLocationModal: React.FC<Props> = ({
     <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-200">
       <div className="relative w-full max-w-xl bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[92vh]">
         {/* Modal Top Header */}
-        <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 bg-gradient-to-r from-blue-900 via-indigo-950 to-slate-900 text-white flex items-center justify-between shrink-0">
+        <div className="px-5 py-4 border-b-2 border-blue-700 dark:border-blue-500 bg-gradient-to-r from-blue-50 via-indigo-50 to-sky-50 dark:from-slate-900 dark:via-indigo-950 dark:to-slate-900 text-slate-900 dark:text-white flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-blue-400 to-indigo-600 text-white flex items-center justify-center shadow-lg shadow-blue-500/30">
+            <div className="w-10 h-10 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-md">
               <MapPin className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h3 className="font-black text-sm sm:text-base text-white">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="font-black text-sm sm:text-base text-slate-900 dark:text-white">
                   स्कूल लाइव लोकेशन व जियोफेंस (School Live GPS)
                 </h3>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-500 text-white">
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-600 text-white">
                   GEOFENCE
                 </span>
               </div>
-              <p className="text-xs text-blue-200/90 font-medium">
+              <p className="text-xs text-slate-600 dark:text-blue-200/90 font-medium">
                 स्कूल परिसर की सटीक GPS लोकेशन सेट करें जिससे हाजिरी परिसर के अंदर ही लग सके
               </p>
             </div>
@@ -179,7 +179,7 @@ export const SchoolLocationModal: React.FC<Props> = ({
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
+            className="p-2 rounded-xl bg-white dark:bg-white/10 hover:bg-blue-100 dark:hover:bg-white/20 text-slate-700 dark:text-white border border-blue-300 dark:border-white/10 transition cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>

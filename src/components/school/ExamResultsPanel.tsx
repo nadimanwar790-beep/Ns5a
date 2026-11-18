@@ -2,9 +2,9 @@
 import React, { useState, useEffect } from "react";
 import {
   getStudents, getExams, saveExam, deleteExam, generateId, todayStr,
-  saveSubject
+  saveSubject, getSchool, getTeachers, getClasses
 } from "../../school-firebase";
-import type { SchoolStudent, SchoolSubject, ExamEntry } from "../../school-types";
+import type { School, SchoolTeacher, SchoolStudent, SchoolSubject, ExamEntry } from "../../school-types";
 import {
   Plus, ChevronLeft, Save, Trash2, Award, FileText, Printer,
   BookOpen, Check, X, BarChart2, Users, AlertCircle, ArrowLeft, Sparkles
@@ -20,6 +20,8 @@ interface Props {
   subjects: SchoolSubject[];
   adminId: string;
   schoolName?: string;
+  school?: School | null;
+  teachers?: SchoolTeacher[];
   onBack?: () => void;
 }
 
@@ -58,11 +60,14 @@ const COMMON_PRESETS = [
 ];
 
 export const ExamResultsPanel: React.FC<Props> = ({
-  schoolId, classId, className, sessionId, subjects: initialSubjects = [], adminId, schoolName, onBack
+  schoolId, classId, className, sessionId, subjects: initialSubjects = [], adminId, schoolName, school: initialSchool, teachers: initialTeachers, onBack
 }) => {
   const [students, setStudents] = useState<SchoolStudent[]>([]);
   const [exams, setExams] = useState<ExamEntry[]>([]);
   const [subjectsList, setSubjectsList] = useState<SchoolSubject[]>(initialSubjects);
+  const [schoolInfo, setSchoolInfo] = useState<School | null>(initialSchool || null);
+  const [teachersList, setTeachersList] = useState<SchoolTeacher[]>(initialTeachers || []);
+  const [classTeacherId, setClassTeacherId] = useState<string>("");
   const [view, setView] = useState<"list" | "entry" | "add" | "class_result">("list");
   const [selectedExam, setSelectedExam] = useState<ExamEntry | null>(null);
   const [marksInput, setMarksInput] = useState<Record<string, { marks: string; absent: boolean }>>({});
@@ -85,18 +90,33 @@ export const ExamResultsPanel: React.FC<Props> = ({
   };
 
   useEffect(() => {
+    if (initialSchool) setSchoolInfo(initialSchool);
+  }, [initialSchool]);
+
+  useEffect(() => {
+    if (initialTeachers && initialTeachers.length > 0) setTeachersList(initialTeachers);
+  }, [initialTeachers]);
+
+  useEffect(() => {
     if (initialSubjects && initialSubjects.length > 0) {
       setSubjectsList(initialSubjects);
     }
   }, [initialSubjects]);
 
   const loadData = async () => {
-    const [sts, exs] = await Promise.all([
+    const [sts, exs, sch, tchs, cls] = await Promise.all([
       getStudents(schoolId, classId),
-      getExams(schoolId, classId)
+      getExams(schoolId, classId),
+      initialSchool ? Promise.resolve(initialSchool) : getSchool(schoolId),
+      initialTeachers && initialTeachers.length > 0 ? Promise.resolve(initialTeachers) : getTeachers(schoolId),
+      getClasses(schoolId),
     ]);
     setStudents(sts.sort((a, b) => (parseInt(a.rollNo) || 0) - (parseInt(b.rollNo) || 0)));
     setExams(exs.sort((a, b) => b.examDate.localeCompare(a.examDate)));
+    if (sch) setSchoolInfo(sch);
+    if (tchs) setTeachersList(tchs);
+    const matchedClass = (cls || []).find((c) => c.id === classId);
+    if (matchedClass?.classTeacherId) setClassTeacherId(matchedClass.classTeacherId);
     setLoading(false);
   };
 
@@ -243,6 +263,20 @@ export const ExamResultsPanel: React.FC<Props> = ({
 
     const cleanSession = formatAcademicSession(sessionId || "2026-27");
 
+    const matchedTeacher =
+      teachersList.find((t) => t.id === classTeacherId) ||
+      teachersList.find((t) => Array.isArray(t.classes) && t.classes.includes(classId)) ||
+      teachersList.find((t) => Boolean(t.signatureUrl));
+    const classTeacherSigHtml = matchedTeacher?.signatureUrl
+      ? `<img src="${matchedTeacher.signatureUrl}" style="max-height:34px;max-width:120px;object-fit:contain;margin-bottom:3px;" />`
+      : (matchedTeacher?.name ? `<div style="font-style:italic;font-family:serif;font-weight:700;font-size:13px;margin-bottom:3px;">${matchedTeacher.name}</div>` : "");
+    const examControllerSigHtml = schoolInfo?.examControllerSignatureUrl
+      ? `<img src="${schoolInfo.examControllerSignatureUrl}" style="max-height:34px;max-width:120px;object-fit:contain;margin-bottom:3px;" />`
+      : (schoolInfo?.examControllerName ? `<div style="font-style:italic;font-family:serif;font-weight:700;font-size:13px;margin-bottom:3px;">${schoolInfo.examControllerName}</div>` : "");
+    const principalSigHtml = schoolInfo?.principalSignatureUrl
+      ? `<img src="${schoolInfo.principalSignatureUrl}" style="max-height:34px;max-width:120px;object-fit:contain;margin-bottom:3px;" />`
+      : (schoolInfo?.principalName ? `<div style="font-style:italic;font-family:serif;font-weight:700;font-size:13px;margin-bottom:3px;">${schoolInfo.principalName}</div>` : "");
+
     const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -266,8 +300,9 @@ export const ExamResultsPanel: React.FC<Props> = ({
   .attendance-bar { display: flex; justify-content: space-between; border: 1.5px solid #334155; background: #f8fafc; padding: 8px 14px; border-radius: 6px; margin: 10px 0; font-size: 12px; font-weight: 700; }
   .result-bar { display: flex; justify-content: space-between; background: #eef2ff; border: 1px solid #c7d2fe; padding: 10px 16px; border-radius: 8px; margin: 10px 0 18px; font-weight: bold; }
   .result-highlight { font-size: 18px; color: ${getGradeColor(pct)}; }
-  .sign-row { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 44px; }
-  .sign-box { text-align: center; }
+  .sign-row { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 32px; }
+  .sign-box { text-align: center; min-width: 155px; }
+  .sign-img-wrap { height: 38px; display: flex; align-items: flex-end; justify-content: center; }
   .sign-line { border-top: 1px solid #1e293b; width: 155px; margin-bottom: 4px; }
   .sign-label { font-size: 12px; color: #0f172a; font-weight: 700; text-transform: uppercase; }
   .footer { text-align: center; margin-top: 24px; font-size: 10px; color: #94a3b8; }
@@ -275,7 +310,7 @@ export const ExamResultsPanel: React.FC<Props> = ({
 </head>
 <body>
 <div class="header">
-  <div class="school-name">${schoolName || "School Name"}</div>
+  <div class="school-name">${schoolInfo?.name || schoolName || "School Name"}</div>
   <div class="sub-title">CBSE Pattern Curriculum &bull; Annual Examination ${cleanSession}</div>
   <div class="marksheet-title">ACADEMIC TRANSCRIPT &amp; PROGRESS REPORT</div>
 </div>
@@ -323,9 +358,9 @@ export const ExamResultsPanel: React.FC<Props> = ({
 </div>
 
 <div class="sign-row">
-  <div class="sign-box"><div class="sign-line"></div><div class="sign-label">Class Teacher</div></div>
-  <div class="sign-box"><div class="sign-line"></div><div class="sign-label">Exam Controller</div></div>
-  <div class="sign-box"><div class="sign-line"></div><div class="sign-label">Principal</div></div>
+  <div class="sign-box"><div class="sign-img-wrap">${classTeacherSigHtml}</div><div class="sign-line"></div><div class="sign-label">Class Teacher</div></div>
+  <div class="sign-box"><div class="sign-img-wrap">${examControllerSigHtml}</div><div class="sign-line"></div><div class="sign-label">${schoolInfo?.examControllerName || "Exam Controller"}</div></div>
+  <div class="sign-box"><div class="sign-img-wrap">${principalSigHtml}</div><div class="sign-line"></div><div class="sign-label">Principal</div></div>
 </div>
 
 <div class="footer">Official Academic Progress Transcript • Session ${cleanSession}</div>

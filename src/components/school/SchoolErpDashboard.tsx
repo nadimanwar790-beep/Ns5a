@@ -118,8 +118,8 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
   }, []);
 
   // Selected Class & Section for directory / marks / attendance
-  const [selectedClassIndex, setSelectedClassIndex] = useState<number>(0); // 0 to 12 (Nursery to Class 10)
-  const [selectedSection, setSelectedSection] = useState<"A" | "B">("A"); // Section A (35) or B (35)
+  const [selectedClassIndex, setSelectedClassIndex] = useState<number>(0); // 0 to 18 (Nursery to Class 12 Streams)
+  const [selectedSection, setSelectedSection] = useState<"A" | "B">("A"); // Section A (20) or B (20)
 
   // Exam state
   const [selectedExamId, setSelectedExamId] = useState<string>("pa1"); // pa1, pa2, half_yearly, pa3, pa4, final
@@ -137,10 +137,13 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
   // Search filter in students table
   const [studentSearch, setStudentSearch] = useState<string>("");
 
+  const activeDemoSessionId = dataset.session?.id || "demo_session_2026_27";
   const currentClassDef = DEMO_CLASS_DEFINITIONS[selectedClassIndex] || DEMO_CLASS_DEFINITIONS[0];
-  const currentClassId = `demo_class_${currentClassDef.key}_sec_${selectedSection.toLowerCase()}`;
+  const currentClassId = `demo_cls_${activeDemoSessionId}_${currentClassDef.key}_sec_${selectedSection.toLowerCase()}`;
+  const sectionTeachersOnly = DEMO_STAFF_MEMBERS.filter(m => !(m as any).isPrincipal);
+  const currentSectionTeacher = sectionTeachersOnly[selectedClassIndex * 2 + (selectedSection === "A" ? 0 : 1)];
 
-  // Current section students (exactly 35 students)
+  // Current section students (20 students per section -> max 40 per class)
   const currentSectionStudents = dataset.students.filter(s => s.classId === currentClassId);
 
   // Filtered by search query if any
@@ -182,14 +185,17 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
     }
   };
 
-  // Compute stats for overview dashboard
-  const totalStudentsCount = dataset.students.length; // 910
-  const totalTeachersCount = dataset.teachers.length; // 26
-  const totalClassesCount = DEMO_CLASS_DEFINITIONS.length; // 13 grades, 26 sections
-  const totalSectionsCount = dataset.classes.length; // 26
+  // Compute stats for overview dashboard (scoped to active demo session)
+  const sessionStudents = dataset.students.filter(s => s.sessionId === activeDemoSessionId);
+  const sessionClasses = dataset.classes.filter(c => c.sessionId === activeDemoSessionId);
+  const sessionTeachers = dataset.teachers.filter(t => t.id?.includes(activeDemoSessionId));
+  const totalStudentsCount = sessionStudents.length; // 760
+  const totalTeachersCount = sessionTeachers.length; // 38 (1:20 ratio)
+  const totalClassesCount = DEMO_CLASS_DEFINITIONS.length; // 19 class entries, 38 sections
+  const totalSectionsCount = sessionClasses.length; // 38
   const totalHolidaysCount = dataset.holidays.length;
 
-  const currentMonthFees = dataset.fees.filter(f => f.month === selectedFeeMonth);
+  const currentMonthFees = dataset.fees.filter(f => f.sessionId === activeDemoSessionId && f.month === selectedFeeMonth);
   const paidFeesCount = currentMonthFees.filter(f => f.paid).length;
   const unpaidFeesCount = currentMonthFees.filter(f => !f.paid).length;
   const collectedFeeTotal = currentMonthFees.filter(f => f.paid).reduce((sum, f) => sum + f.amount, 0);
@@ -237,7 +243,7 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-400 mt-0.5 hidden sm:block">
-                  13 Classes (Nur-10) • 70 Students/Class (35 in A, 35 in B) • Ratio 1/35 • 3-Day Late Deduction • 6 Exams
+                  {totalClassesCount} Classes • Max 40 Students/Class (20 in A, 20 in B) • Ratio 1:20 • 3-Day Late Deduction • 6 Exams
                 </p>
               </div>
             </div>
@@ -267,9 +273,9 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
           <div className="flex items-center gap-1 overflow-x-auto pb-2 scrollbar-none">
             {[
               { id: "dashboard", label: "📊 Overview Dashboard" },
-              { id: "students", label: "🏫 13 Classes & 910 Students" },
+              { id: "students", label: `🏫 ${totalClassesCount} Classes & ${totalStudentsCount} Students` },
               { id: "exams", label: "📝 1-Year Exams & Marks (PA1-Final)" },
-              { id: "staff", label: "👨‍🏫 Teachers & 3-Day Late Rule (1:35)" },
+              { id: "staff", label: "👨‍🏫 Teachers & 3-Day Late Rule (1:20)" },
               { id: "attendance", label: "📅 1-Year Attendance (Leave/Bunk)" },
               { id: "holidays", label: "🎉 Festival Holidays & Chhutti" },
               { id: "fees", label: "💰 1-Year Fees & Defaulters" },
@@ -303,17 +309,17 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
                   <span>TOTAL STUDENTS</span>
                   <Users className="w-4 h-4 text-rose-500" />
                 </div>
-                <p className="text-2xl sm:text-3xl font-black text-white">910</p>
-                <p className="text-[11px] text-slate-400 mt-1">13 Classes × 70 Students (A: 35, B: 35)</p>
+                <p className="text-2xl sm:text-3xl font-black text-white">{totalStudentsCount}</p>
+                <p className="text-[11px] text-slate-400 mt-1">{totalClassesCount} Classes × Max 40 Students (A: 20, B: 20)</p>
               </div>
 
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm hover:border-slate-700 transition">
                 <div className="flex items-center justify-between text-slate-400 text-xs font-bold mb-1">
-                  <span>FACULTY (RATIO 1:35)</span>
+                  <span>FACULTY (RATIO 1:20)</span>
                   <Briefcase className="w-4 h-4 text-teal-400" />
                 </div>
-                <p className="text-2xl sm:text-3xl font-black text-white">26 + 1</p>
-                <p className="text-[11px] text-slate-400 mt-1">26 Teachers (₹5k-15k) + 1 Principal (₹25k)</p>
+                <p className="text-2xl sm:text-3xl font-black text-white">{totalTeachersCount} + 1</p>
+                <p className="text-[11px] text-slate-400 mt-1">{totalTeachersCount} Teachers (1 per 20 students) + 1 Principal</p>
               </div>
 
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm hover:border-slate-700 transition">
@@ -341,10 +347,10 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
                 <div>
                   <h2 className="text-base font-black text-white flex items-center gap-2">
                     <BookOpen className="w-5 h-5 text-rose-500" />
-                    All 13 School Grades (Class Directory)
+                    All School Grades (Class Directory)
                   </h2>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    Har class me 70 students hain, 35 Section A me aur 35 Section B me.
+                    Har class me max 40 students hain, 20 Section A me aur 20 Section B me (1:20 ratio).
                   </p>
                 </div>
                 <div className="flex items-center gap-2 bg-slate-950 p-1 rounded-xl border border-slate-800">
@@ -355,7 +361,7 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
                       selectedSection === "A" ? "bg-rose-600 text-white shadow-xs" : "text-slate-400 hover:text-white"
                     }`}
                   >
-                    Section A (35 Students)
+                    Section A (20 Students)
                   </button>
                   <button
                     onClick={() => setSelectedSection("B")}
@@ -363,16 +369,15 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
                       selectedSection === "B" ? "bg-rose-600 text-white shadow-xs" : "text-slate-400 hover:text-white"
                     }`}
                   >
-                    Section B (35 Students)
+                    Section B (20 Students)
                   </button>
                 </div>
               </div>
 
-              {/* 13 Grade Cards Grid */}
+              {/* Grade Cards Grid */}
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-2.5">
                 {DEMO_CLASS_DEFINITIONS.map((def, idx) => {
                   const isSelected = selectedClassIndex === idx;
-                  const teacherProfile = DEMO_STAFF_MEMBERS[idx * 2 + (selectedSection === "A" ? 1 : 2)];
                   return (
                     <button
                       key={def.key}
@@ -384,12 +389,12 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="text-xs font-black">{def.name}</span>
+                        <span className="text-xs font-black">{def.name}{(def as any).stream ? ` (${(def as any).stream})` : ""}</span>
                         <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-slate-800 text-slate-300">
                           {selectedSection}
                         </span>
                       </div>
-                      <p className="text-[10px] text-slate-400 mt-1">35 Students</p>
+                      <p className="text-[10px] text-slate-400 mt-1">20 Students</p>
                       <p className="text-[9px] text-emerald-400 font-bold mt-0.5 truncate">
                         ₹{def.defaultFee}/mo
                       </p>
@@ -402,10 +407,10 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
               <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
                 <div>
                   <h3 className="font-black text-sm text-white">
-                    {currentClassDef.name} — Section {selectedSection} (35 Students Enrolled)
+                    {currentClassDef.name}{(currentClassDef as any).stream ? ` (${(currentClassDef as any).stream})` : ""} — Section {selectedSection} ({currentSectionStudents.length} Students Enrolled)
                   </h3>
                   <p className="text-slate-400 mt-0.5">
-                    Class Teacher: <strong>{DEMO_STAFF_MEMBERS[selectedClassIndex * 2 + (selectedSection === "A" ? 1 : 2)]?.name}</strong> · Monthly Fee: <strong>₹{currentClassDef.defaultFee}</strong> · Ratio: <strong>1 Teacher / 35 Students</strong>
+                    Class Teacher: <strong>{currentSectionTeacher?.name}</strong> · Monthly Fee: <strong>₹{currentClassDef.defaultFee}</strong> · Ratio: <strong>1 Teacher / 20 Students (1:20)</strong>
                   </p>
                 </div>
                 <div className="flex gap-2">
@@ -413,7 +418,7 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
                     onClick={() => setActiveTab("students")}
                     className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold text-xs flex items-center gap-1 shadow-xs"
                   >
-                    View All 35 Students <ChevronRight className="w-3.5 h-3.5" />
+                    View All {currentSectionStudents.length} Students <ChevronRight className="w-3.5 h-3.5" />
                   </button>
                   <button
                     onClick={() => setActiveTab("exams")}
@@ -503,10 +508,10 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                   <h2 className="text-base font-black text-white">
-                    {currentClassDef.name} — Section {selectedSection} (35 Students Enrolled)
+                    {currentClassDef.name}{(currentClassDef as any).stream ? ` (${(currentClassDef as any).stream})` : ""} — Section {selectedSection} ({currentSectionStudents.length} Students Enrolled)
                   </h2>
                   <p className="text-xs text-slate-400">
-                    Total in Grade: 70 Students (Section A: 35, Section B: 35) • Class Teacher: {DEMO_STAFF_MEMBERS[selectedClassIndex * 2 + (selectedSection === "A" ? 1 : 2)]?.name}
+                    Max in Class: 40 Students (Section A: 20, Section B: 20) • Class Teacher: {currentSectionTeacher?.name} (1:20)
                   </p>
                 </div>
 
@@ -518,7 +523,7 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
                       selectedSection === "A" ? "bg-rose-600 text-white shadow-xs" : "text-slate-400 hover:text-white"
                     }`}
                   >
-                    Section A (35)
+                    Section A (20)
                   </button>
                   <button
                     onClick={() => setSelectedSection("B")}
@@ -526,7 +531,7 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
                       selectedSection === "B" ? "bg-rose-600 text-white shadow-xs" : "text-slate-400 hover:text-white"
                     }`}
                   >
-                    Section B (35)
+                    Section B (20)
                   </button>
                 </div>
               </div>
@@ -794,7 +799,7 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
           </div>
         )}
 
-        {/* TAB 4: TEACHERS & 3-DAY LATE ENTRY RULE (1:35 RATIO) */}
+        {/* TAB 4: TEACHERS & 3-DAY LATE ENTRY RULE (1:20 RATIO) */}
         {activeTab === "staff" && (
           <StaffHRMManager
             school={{
@@ -875,13 +880,13 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
                     onClick={() => setSelectedSection("A")}
                     className={`px-3 py-1 rounded-lg text-xs font-black ${selectedSection === "A" ? "bg-rose-600 text-white" : "text-slate-400"}`}
                   >
-                    Sec A (35)
+                    Sec A (20)
                   </button>
                   <button
                     onClick={() => setSelectedSection("B")}
                     className={`px-3 py-1 rounded-lg text-xs font-black ${selectedSection === "B" ? "bg-rose-600 text-white" : "text-slate-400"}`}
                   >
-                    Sec B (35)
+                    Sec B (20)
                   </button>
                 </div>
               </div>
@@ -891,7 +896,7 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
             <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
               <div className="p-4 border-b border-slate-800 flex items-center justify-between flex-wrap gap-2">
                 <div className="text-xs text-slate-400">
-                  Showing 35 Students of <strong>{currentClassDef.name} — Section {selectedSection}</strong>
+                  Showing {currentSectionStudents.length} Students of <strong>{currentClassDef.name} — Section {selectedSection}</strong>
                 </div>
                 <div className="flex items-center gap-2 text-xs">
                   <button
@@ -909,8 +914,8 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
 
               <div className="divide-y divide-slate-800">
                 {currentSectionStudents.map((student, idx) => {
-                  // Default sample status: 27 present, 2 late, 2 leave, 1 bunk, 3 absent
-                  const defaultStatus = idx < 27 ? "present" : idx < 29 ? "late" : idx < 31 ? "leave" : idx === 31 ? "bunk" : "absent";
+                  // Default sample status: 16 present, 1 late, 1 leave, 1 bunk, 1 absent
+                  const defaultStatus = idx < 16 ? "present" : idx === 16 ? "late" : idx === 17 ? "leave" : idx === 18 ? "bunk" : "absent";
                   const currentStatus = studentStatusMap[student.id] || defaultStatus;
 
                   return (
@@ -1320,7 +1325,7 @@ export function SchoolErpDashboard({ onNavigate }: { onNavigate?: (view: string)
             <span>• Session {getDynamicAcademicSessionLabel()} (1-Year Auto-Filled Demo Mode)</span>
           </div>
           <div>
-            13 Classes • 70 Students/Class (A:35, B:35) • 1:35 Ratio • 3-Day Late Rule • 6 Exams
+            {totalClassesCount} Classes • Max 40 Students/Class (A:20, B:20) • 1:20 Ratio • 3-Day Late Rule • 6 Exams
           </div>
         </div>
       </footer>

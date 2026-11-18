@@ -115,83 +115,95 @@ export const DEMO_CLASSES_CONFIG = [
   },
   {
     key: "11_sci",
-    name: "Class 11",
-    section: "Science",
+    name: "Class 11 (Science)",
+    section: "A & B",
     stream: "Science",
     subjects: ["Physics", "Chemistry", "Mathematics", "Biology", "English Core", "Computer Science"],
     feeStructure: { admissionFee: 80000, tuitionFee: 26000, cautionMoney: 70000, annualCharges: 30000, busFee: 12000 }
   },
   {
     key: "11_com",
-    name: "Class 11",
-    section: "Commerce",
+    name: "Class 11 (Commerce)",
+    section: "A & B",
     stream: "Commerce",
     subjects: ["Accountancy", "Business Studies", "Economics", "English Core", "Applied Mathematics"],
     feeStructure: { admissionFee: 78000, tuitionFee: 25000, cautionMoney: 70000, annualCharges: 29000, busFee: 12000 }
   },
   {
     key: "11_arts",
-    name: "Class 11",
-    section: "Arts",
+    name: "Class 11 (Arts)",
+    section: "A & B",
     stream: "Arts",
     subjects: ["History", "Political Science", "Geography", "Economics", "English Core"],
     feeStructure: { admissionFee: 76000, tuitionFee: 24000, cautionMoney: 70000, annualCharges: 28000, busFee: 12000 }
   },
   {
     key: "12_sci",
-    name: "Class 12",
-    section: "Science",
+    name: "Class 12 (Science)",
+    section: "A & B",
     stream: "Science",
     subjects: ["Physics", "Chemistry", "Mathematics", "Biology", "English Core", "Computer Science"],
     feeStructure: { admissionFee: 85000, tuitionFee: 28000, cautionMoney: 75000, annualCharges: 32000, busFee: 12500 }
   },
   {
     key: "12_com",
-    name: "Class 12",
-    section: "Commerce",
+    name: "Class 12 (Commerce)",
+    section: "A & B",
     stream: "Commerce",
     subjects: ["Accountancy", "Business Studies", "Economics", "English Core", "Applied Mathematics"],
     feeStructure: { admissionFee: 82000, tuitionFee: 27000, cautionMoney: 75000, annualCharges: 31000, busFee: 12500 }
   },
   {
     key: "12_arts",
-    name: "Class 12",
-    section: "Arts",
+    name: "Class 12 (Arts)",
+    section: "A & B",
     stream: "Arts",
     subjects: ["History", "Political Science", "Geography", "Economics", "English Core"],
     feeStructure: { admissionFee: 80000, tuitionFee: 26000, cautionMoney: 75000, annualCharges: 30000, busFee: 12500 }
   }
 ];
 
-// 26 Section teachers (1 teacher per 35 students -> 1:35 ratio) + 1 Principal
+// 38 Section teachers (1 teacher per 20 students across 38 sections -> Exact 1:20 ratio) + 1 Principal
 const DEMO_STAFF_MEMBERS = [
   { name: "Dr. Arvind Swaminathan", role: "Principal", designation: "Principal & Academic Director", salary: 25000, phone: "9811023450", email: "principal@dps.edu.in", dept: "Administration", lateEntries: 0 },
   { name: "Priya Sharma", role: "Teacher", designation: "PRT Primary Teacher", salary: 8500, phone: "9871234001", email: "priya.s@dps.edu.in", dept: "Pre-Primary", lateEntries: 1 },
-  { name: "Rajesh Kumar", role: "Teacher", designation: "PRT Primary Teacher", salary: 9000, phone: "9871234002", email: "rajesh.k@dps.edu.in", dept: "Pre-Primary", lateEntries: 4 }, // 4 lates = 1 day deducted
+  { name: "Rajesh Kumar", role: "Teacher", designation: "PRT Primary Teacher", salary: 9000, phone: "9871234002", email: "rajesh.k@dps.edu.in", dept: "Pre-Primary", lateEntries: 4 },
   { name: "Neha Verma", role: "Teacher", designation: "PRT Primary Teacher", salary: 8200, phone: "9871234003", email: "neha.v@dps.edu.in", dept: "Pre-Primary", lateEntries: 0 },
-  { name: "Amit Gupta", role: "Teacher", designation: "PRT Primary Teacher", salary: 8800, phone: "9871234004", email: "amit.g@dps.edu.in", dept: "Pre-Primary", lateEntries: 3 }, // 3 lates = 1 day deducted
-  { name: "Anjali Singh", role: "Teacher", designation: "PRT Primary Teacher", salary: 8500, phone: "9871234005", email: "anjali.s@dps.edu.in", dept: "Primary", lateEntries: 2 },
-  { name: "Vikram Patel", role: "Teacher", designation: "PRT Primary Teacher", salary: 9200, phone: "9871234006", email: "vikram.p@dps.edu.in", dept: "Primary", lateEntries: 6 }, // 6 lates = 2 days deducted
+  { name: "Amit Gupta", role: "Teacher", designation: "PRT Primary Teacher", salary: 8800, phone: "9871234004", email: "amit.g@dps.edu.in", dept: "Pre-Primary", lateEntries: 3 },
+  { name: "Anjali Singh", role: "Teacher", designation: "PRT Primary Teacher", salary: 8500, phone: "9871234005", email: "anjali.s@dps.edu.in", dept: "Pre-Primary", lateEntries: 2 },
+  { name: "Vikram Patel", role: "Teacher", designation: "PRT Primary Teacher", salary: 9200, phone: "9871234006", email: "vikram.p@dps.edu.in", dept: "Pre-Primary", lateEntries: 6 },
   { name: "Sunita Rao", role: "Teacher", designation: "PRT Primary Teacher", salary: 8700, phone: "9871234007", email: "sunita.r@dps.edu.in", dept: "Primary", lateEntries: 1 },
   { name: "Manoj Joshi", role: "Teacher", designation: "PRT Primary Teacher", salary: 9500, phone: "9871234008", email: "manoj.j@dps.edu.in", dept: "Primary", lateEntries: 0 },
-  { name: "Kavita Mishra", role: "Teacher", designation: "PRT Primary Teacher", salary: 9100, phone: "9871234009", email: "kavita.m@dps.edu.in", dept: "Primary", lateEntries: 3 }, // 3 lates = 1 day deducted
-  { name: "Rahul Yadav", role: "Teacher", designation: "TGT Mathematics", salary: 11500, phone: "9871234010", email: "rahul.y@dps.edu.in", dept: "Mathematics", lateEntries: 1 },
-  { name: "Pooja Tiwari", role: "Teacher", designation: "TGT Science", salary: 11800, phone: "9871234011", email: "pooja.t@dps.edu.in", dept: "Science", lateEntries: 2 },
-  { name: "Deepak Mehta", role: "Teacher", designation: "TGT Social Science", salary: 11000, phone: "9871234012", email: "deepak.m@dps.edu.in", dept: "Social Studies", lateEntries: 5 }, // 5 lates = 1 day deducted
-  { name: "Swati Pandey", role: "Teacher", designation: "TGT English", salary: 11200, phone: "9871234013", email: "swati.p@dps.edu.in", dept: "Languages", lateEntries: 0 },
-  { name: "Suresh Nair", role: "Teacher", designation: "TGT Hindi & Sanskrit", salary: 10500, phone: "9871234014", email: "suresh.n@dps.edu.in", dept: "Languages", lateEntries: 4 }, // 4 lates = 1 day deducted
-  { name: "Ritu Saxena", role: "Teacher", designation: "TGT Computer Science", salary: 12000, phone: "9871234015", email: "ritu.s@dps.edu.in", dept: "Computer Science", lateEntries: 1 },
-  { name: "Sandeep Chauhan", role: "Teacher", designation: "TGT Mathematics", salary: 12500, phone: "9871234016", email: "sandeep.c@dps.edu.in", dept: "Mathematics", lateEntries: 7 }, // 7 lates = 2 days deducted
-  { name: "Meenakshi Bhat", role: "Teacher", designation: "TGT General Science", salary: 12200, phone: "9871234017", email: "meenakshi.b@dps.edu.in", dept: "Science", lateEntries: 0 },
-  { name: "Alok Srivastava", role: "Teacher", designation: "PGT Physics", salary: 14500, phone: "9871234018", email: "alok.s@dps.edu.in", dept: "Senior Science", lateEntries: 2 },
-  { name: "Preeti Dubey", role: "Teacher", designation: "PGT Chemistry", salary: 14200, phone: "9871234019", email: "preeti.d@dps.edu.in", dept: "Senior Science", lateEntries: 3 }, // 3 lates = 1 day deducted
-  { name: "Sanjay Kulkarni", role: "Teacher", designation: "PGT Mathematics", salary: 15000, phone: "9871234020", email: "sanjay.k@dps.edu.in", dept: "Senior Mathematics", lateEntries: 0 },
-  { name: "Geeta Menon", role: "Teacher", designation: "PGT Biology", salary: 14000, phone: "9871234021", email: "geeta.m@dps.edu.in", dept: "Senior Science", lateEntries: 1 },
-  { name: "Harish Rawat", role: "Teacher", designation: "PGT English Literature", salary: 13500, phone: "9871234022", email: "harish.r@dps.edu.in", dept: "Senior Languages", lateEntries: 4 }, // 4 lates = 1 day deducted
-  { name: "Rashmi Kapoor", role: "Teacher", designation: "PGT History & Pol Science", salary: 13800, phone: "9871234023", email: "rashmi.k@dps.edu.in", dept: "Senior Social Science", lateEntries: 2 },
-  { name: "Manish Thakur", role: "Teacher", designation: "PGT Economics", salary: 13500, phone: "9871234024", email: "manish.t@dps.edu.in", dept: "Senior Social Science", lateEntries: 0 },
-  { name: "Sangeeta Das", role: "Teacher", designation: "PGT Computer & IT", salary: 14800, phone: "9871234025", email: "sangeeta.d@dps.edu.in", dept: "Computer Science", lateEntries: 1 },
-  { name: "Ramesh Iyer", role: "Teacher", designation: "Physical Education Director", salary: 12500, phone: "9871234026", email: "ramesh.i@dps.edu.in", dept: "Sports", lateEntries: 3 }
+  { name: "Kavita Mishra", role: "Teacher", designation: "PRT Primary Teacher", salary: 9100, phone: "9871234009", email: "kavita.m@dps.edu.in", dept: "Primary", lateEntries: 3 },
+  { name: "Rahul Yadav", role: "Teacher", designation: "PRT Mathematics", salary: 10500, phone: "9871234010", email: "rahul.y@dps.edu.in", dept: "Primary", lateEntries: 1 },
+  { name: "Pooja Tiwari", role: "Teacher", designation: "PRT Science", salary: 10800, phone: "9871234011", email: "pooja.t@dps.edu.in", dept: "Primary", lateEntries: 2 },
+  { name: "Deepak Mehta", role: "Teacher", designation: "PRT Social Science", salary: 10000, phone: "9871234012", email: "deepak.m@dps.edu.in", dept: "Primary", lateEntries: 5 },
+  { name: "Swati Pandey", role: "Teacher", designation: "PRT English", salary: 11200, phone: "9871234013", email: "swati.p@dps.edu.in", dept: "Primary", lateEntries: 0 },
+  { name: "Suresh Nair", role: "Teacher", designation: "PRT Hindi & Sanskrit", salary: 10500, phone: "9871234014", email: "suresh.n@dps.edu.in", dept: "Primary", lateEntries: 4 },
+  { name: "Ritu Saxena", role: "Teacher", designation: "PRT Computer Science", salary: 11000, phone: "9871234015", email: "ritu.s@dps.edu.in", dept: "Primary", lateEntries: 1 },
+  { name: "Sandeep Chauhan", role: "Teacher", designation: "TGT Mathematics", salary: 12500, phone: "9871234016", email: "sandeep.c@dps.edu.in", dept: "Primary", lateEntries: 7 },
+  { name: "Meenakshi Bhat", role: "Teacher", designation: "TGT General Science", salary: 12200, phone: "9871234017", email: "meenakshi.b@dps.edu.in", dept: "Middle", lateEntries: 0 },
+  { name: "Alok Srivastava", role: "Teacher", designation: "TGT Physics", salary: 12500, phone: "9871234018", email: "alok.s@dps.edu.in", dept: "Middle", lateEntries: 2 },
+  { name: "Preeti Dubey", role: "Teacher", designation: "TGT Chemistry", salary: 12200, phone: "9871234019", email: "preeti.d@dps.edu.in", dept: "Middle", lateEntries: 3 },
+  { name: "Sanjay Kulkarni", role: "Teacher", designation: "TGT Mathematics", salary: 13000, phone: "9871234020", email: "sanjay.k@dps.edu.in", dept: "Middle", lateEntries: 0 },
+  { name: "Geeta Menon", role: "Teacher", designation: "TGT Biology", salary: 13000, phone: "9871234021", email: "geeta.m@dps.edu.in", dept: "Middle", lateEntries: 1 },
+  { name: "Harish Rawat", role: "Teacher", designation: "TGT English Literature", salary: 13500, phone: "9871234022", email: "harish.r@dps.edu.in", dept: "Middle", lateEntries: 4 },
+  { name: "Rashmi Kapoor", role: "Teacher", designation: "PGT History & Pol Science", salary: 13800, phone: "9871234023", email: "rashmi.k@dps.edu.in", dept: "Secondary", lateEntries: 2 },
+  { name: "Manish Thakur", role: "Teacher", designation: "PGT Economics", salary: 13500, phone: "9871234024", email: "manish.t@dps.edu.in", dept: "Secondary", lateEntries: 0 },
+  { name: "Sangeeta Das", role: "Teacher", designation: "PGT Computer & IT", salary: 14800, phone: "9871234025", email: "sangeeta.d@dps.edu.in", dept: "Secondary", lateEntries: 1 },
+  { name: "Ramesh Iyer", role: "Teacher", designation: "PGT Mathematics & Sports", salary: 14500, phone: "9871234026", email: "ramesh.i@dps.edu.in", dept: "Secondary", lateEntries: 3 },
+  { name: "Prof. Nitin Deshmukh", role: "Teacher", designation: "PGT Senior Physics", salary: 14800, phone: "9871234027", email: "nitin.d@dps.edu.in", dept: "Senior Science", lateEntries: 0 },
+  { name: "Dr. Vandana Malhotra", role: "Teacher", designation: "PGT Senior Chemistry", salary: 14800, phone: "9871234028", email: "vandana.m@dps.edu.in", dept: "Senior Science", lateEntries: 1 },
+  { name: "CA Anurag Bansal", role: "Teacher", designation: "PGT Accountancy", salary: 14200, phone: "9871234029", email: "anurag.b@dps.edu.in", dept: "Senior Commerce", lateEntries: 0 },
+  { name: "Seema Khanna", role: "Teacher", designation: "PGT Business Studies", salary: 14000, phone: "9871234030", email: "seema.k@dps.edu.in", dept: "Senior Commerce", lateEntries: 2 },
+  { name: "Dr. Pankaj Tripathi", role: "Teacher", designation: "PGT History", salary: 13800, phone: "9871234031", email: "pankaj.t@dps.edu.in", dept: "Senior Humanities", lateEntries: 0 },
+  { name: "Nandini Bose", role: "Teacher", designation: "PGT Geography", salary: 13600, phone: "9871234032", email: "nandini.b@dps.edu.in", dept: "Senior Humanities", lateEntries: 1 },
+  { name: "Er. Siddharth Sengupta", role: "Teacher", designation: "PGT Board Mathematics", salary: 15000, phone: "9871234033", email: "siddharth.s@dps.edu.in", dept: "Senior Science", lateEntries: 0 },
+  { name: "Dr. Kavita Chatterjee", role: "Teacher", designation: "PGT Board Biology", salary: 15000, phone: "9871234034", email: "kavita.c@dps.edu.in", dept: "Senior Science", lateEntries: 0 },
+  { name: "Rajiv Choudhary", role: "Teacher", designation: "PGT Corporate Accounts", salary: 14600, phone: "9871234035", email: "rajiv.c@dps.edu.in", dept: "Senior Commerce", lateEntries: 1 },
+  { name: "Priyanka Banerjee", role: "Teacher", designation: "PGT Macro Economics", salary: 14500, phone: "9871234036", email: "priyanka.b@dps.edu.in", dept: "Senior Commerce", lateEntries: 0 },
+  { name: "Devendra Mukherjee", role: "Teacher", designation: "PGT Political Science", salary: 14200, phone: "9871234037", email: "devendra.m@dps.edu.in", dept: "Senior Humanities", lateEntries: 2 },
+  { name: "Shalini Sinha", role: "Teacher", designation: "PGT Sociology & Pol Sci", salary: 14200, phone: "9871234038", email: "shalini.s@dps.edu.in", dept: "Senior Humanities", lateEntries: 0 },
 ];
 
 // Authentic Indian student first names & last names
@@ -295,7 +307,7 @@ export async function seedDemoSchoolData(schoolId: string, adminUid: string) {
   const today = new Date().toISOString().slice(0, 10);
   const currentMonth = currentMonthStr();
 
-  // 2. Staff Members & Teachers (Ratio 1:35 -> 26 teachers for 26 sections + 1 Principal)
+  // 2. Staff Members & Teachers (Ratio 1:20 -> 38 teachers for 38 sections + 1 Principal)
   const staffList: StaffEmployee[] = DEMO_STAFF_MEMBERS.map((member, idx) => ({
     id: `demo_staff_${String(idx + 1).padStart(2, "0")}`,
     schoolId,
@@ -314,6 +326,7 @@ export async function seedDemoSchoolData(schoolId: string, adminUid: string) {
 
   // Save all staff members
   await Promise.all(staffList.map(saveStaffEmployee));
+  const teachersOnlyList = staffList.slice(1); // Exclude Principal (index 0)
 
   // 3. Cleanup any old demo classes from previous runs (e.g. split _a or _b classes)
   try {
@@ -327,9 +340,8 @@ export async function seedDemoSchoolData(schoolId: string, adminUid: string) {
     console.warn("Class cleanup warning:", err);
   }
 
-  // 4. Classes and Sections: 13 Classes (Nursery, KG 1, KG 2, Class 1 to 10)
-  // Each class has exactly 70 students (Total: 13 x 70 = 910 students)
-  // Teacher-Student Ratio = 1:35 -> 2 teachers per class (70 / 35 = 2)
+  // 4. Classes and Sections: Max 40 students per class across 2 sections (Section A: 20, Section B: 20)
+  // Teacher-Student Ratio = 1:20 -> 2 teachers per 40-student class (1 per 20-student section)
   const createdClasses: SchoolClass[] = [];
   const createdSubjects: SchoolSubject[] = [];
   const createdStudents: SchoolStudent[] = [];
@@ -341,10 +353,9 @@ export async function seedDemoSchoolData(schoolId: string, adminUid: string) {
     const classId = `demo_class_${classKey}`;
     const className = classCfg.name;
 
-    // 2 teachers per class (Teacher-Student Ratio 1:35 -> 70 students / 35 = 2 teachers)
-    // Teachers 1 to 26 (Teacher 0 is Principal)
-    const leadTeacher = staffList[(classIdx * 2 + 1) % staffList.length];
-    const coTeacher = staffList[(classIdx * 2 + 2) % staffList.length];
+    // 2 teachers per 40-student class (Teacher-Student Ratio 1:20 -> 40 students / 20 = 2 teachers)
+    const leadTeacher = teachersOnlyList[(classIdx * 2) % teachersOnlyList.length];
+    const coTeacher = teachersOnlyList[(classIdx * 2 + 1) % teachersOnlyList.length];
 
     const schoolClass: SchoolClass = {
       id: classId,
@@ -373,15 +384,15 @@ export async function seedDemoSchoolData(schoolId: string, adminUid: string) {
     }));
     createdSubjects.push(...classSubjects);
 
-    // EXACTLY 70 Students in this class (sNo 1 to 70)
-    // Section A: Roll 01-35 (Teacher: Lead Teacher)
-    // Section B: Roll 36-70 (Teacher: Co-Teacher)
+    // MAX 40 Students in this class across 2 Sections (sNo 1 to 40)
+    // Section A: Roll 01-20 (20 Students, Lead Teacher)
+    // Section B: Roll 21-40 (20 Students, Co-Teacher)
     const classStudents: SchoolStudent[] = [];
-    for (let sNo = 1; sNo <= 70; sNo++) {
+    for (let sNo = 1; sNo <= 40; sNo++) {
       const studentSuffix = String(sNo).padStart(2, "0");
       const firstName = FIRST_NAMES[(classIdx * 7 + sNo * 3) % FIRST_NAMES.length];
       const lastName = LAST_NAMES[(classIdx * 5 + sNo * 2) % LAST_NAMES.length];
-      const sectionName = (classCfg as any).section ? (classCfg as any).section : (sNo <= 35 ? "A" : "B");
+      const sectionName = sNo <= 20 ? "A" : "B";
       const rollNo = `${classCfg.name.replace(/[^0-9A-Za-z]/g, "")}-${sectionName}-${studentSuffix}`;
       const admissionNo = `DPS-ADM-${140000 + classIdx * 100 + sNo}`;
 
@@ -389,7 +400,7 @@ export async function seedDemoSchoolData(schoolId: string, adminUid: string) {
         id: `demo_student_${classKey}_${studentSuffix}`,
         schoolId,
         sessionId: session.id,
-        classId, // All 70 students share this same class!
+        classId, // All 40 students share this class across Section A & Section B
         name: `${firstName} ${lastName}`,
         rollNo,
         admissionNo,
@@ -413,7 +424,7 @@ export async function seedDemoSchoolData(schoolId: string, adminUid: string) {
       for (const sub of classSubjects) {
         const studentMarks: ExamEntry["studentMarks"] = {};
         classStudents.forEach((st, sIdx) => {
-          const isAbsent = (sIdx === 69 || sIdx === 34) && (examCfg.term === "PA2" || examCfg.term === "PA4");
+          const isAbsent = (sIdx === 39 || sIdx === 19) && (examCfg.term === "PA2" || examCfg.term === "PA4");
           let score = 0;
           if (!isAbsent) {
             if (examCfg.maxMarks === 40) {
@@ -453,17 +464,17 @@ export async function seedDemoSchoolData(schoolId: string, adminUid: string) {
     // 6. 1-Year Fee Records & Receipts with Varied Pending Dues:
     // Requirement: "kuchh student ka 8 10 12 6 4 5 7 3 month ke baki rahenge fee"
     classStudents.forEach((student, sIdx) => {
-      // Assign pending months based on student index pattern
+      // Assign pending months based on student index pattern across both sections (0-19 = Sec A, 20-39 = Sec B)
       let pendingMonthsCount = 0;
-      if (sIdx === 69 || sIdx === 34) pendingMonthsCount = 12; // 12 months due
-      else if (sIdx === 68 || sIdx === 33) pendingMonthsCount = 10; // 10 months due
-      else if (sIdx === 67 || sIdx === 32 || sIdx === 31) pendingMonthsCount = 8; // 8 months due
-      else if (sIdx === 66 || sIdx === 30) pendingMonthsCount = 7; // 7 months due
-      else if (sIdx === 65 || sIdx === 29 || sIdx === 28) pendingMonthsCount = 6; // 6 months due
-      else if (sIdx === 64 || sIdx === 27) pendingMonthsCount = 5; // 5 months due
-      else if (sIdx === 63 || sIdx === 26 || sIdx === 25) pendingMonthsCount = 4; // 4 months due
-      else if (sIdx === 62 || sIdx === 24 || sIdx === 23) pendingMonthsCount = 3; // 3 months due
-      else if (sIdx % 5 === 0) pendingMonthsCount = 1; // 1 month due
+      if (sIdx === 39 || sIdx === 19) pendingMonthsCount = 12; // 12 months due
+      else if (sIdx === 38 || sIdx === 18) pendingMonthsCount = 10; // 10 months due
+      else if (sIdx === 37 || sIdx === 17) pendingMonthsCount = 8; // 8 months due
+      else if (sIdx === 36 || sIdx === 16) pendingMonthsCount = 7; // 7 months due
+      else if (sIdx === 35 || sIdx === 15) pendingMonthsCount = 6; // 6 months due
+      else if (sIdx === 34 || sIdx === 14) pendingMonthsCount = 5; // 5 months due
+      else if (sIdx === 33 || sIdx === 13) pendingMonthsCount = 4; // 4 months due
+      else if (sIdx === 32 || sIdx === 12) pendingMonthsCount = 3; // 3 months due
+      else if (sIdx % 7 === 0) pendingMonthsCount = 1; // 1 month due
       else pendingMonthsCount = 0; // completely up-to-date!
 
       // Generate fee records for all 12 session months
@@ -572,10 +583,10 @@ export async function seedDemoSchoolData(schoolId: string, adminUid: string) {
       const studentMap: AttendanceRecord["students"] = {};
       classStudents.forEach((st, idx) => {
         let status: any = "present";
-        if (idx === 34) status = "bunk"; // bunk
-        else if (idx === 33) status = "leave"; // approved leave
-        else if (idx === 32 || idx === 31) status = "late"; // late entry
-        else if (idx === 30) status = "absent"; // absent
+        if (idx === 39 || idx === 19) status = "bunk"; // bunk
+        else if (idx === 38 || idx === 18) status = "leave"; // approved leave
+        else if (idx === 37 || idx === 17) status = "late"; // late entry
+        else if (idx === 36 || idx === 16) status = "absent"; // absent
         else status = "present";
 
         studentMap[st.id] = {

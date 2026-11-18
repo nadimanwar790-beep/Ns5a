@@ -249,29 +249,29 @@ export const ParentTeacherQueryManager: React.FC<Props> = ({
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 pb-20">
       {/* Header */}
-      <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white px-4 py-4 sm:py-6 shadow-md border-b border-indigo-800/40">
+      <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-sky-50 dark:from-blue-900 dark:via-indigo-900 dark:to-slate-900 text-slate-900 dark:text-white px-4 py-4 sm:py-6 shadow-sm border-b-2 border-blue-700 dark:border-indigo-800/40">
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3">
             {onBack && (
               <button
                 type="button"
                 onClick={onBack}
-                className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
+                className="p-2 rounded-xl bg-white hover:bg-blue-100 dark:bg-white/10 dark:hover:bg-white/20 text-slate-900 dark:text-white border border-blue-700/40 dark:border-transparent transition cursor-pointer"
               >
                 <ChevronLeft className="w-5 h-5" />
               </button>
             )}
             <div>
-              <div className="flex items-center gap-2">
-                <span className="px-2.5 py-0.5 rounded-md bg-blue-500/20 text-blue-300 text-[11px] font-black uppercase tracking-wider border border-blue-400/30">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="px-2.5 py-0.5 rounded-md bg-blue-100 dark:bg-blue-500/20 text-blue-900 dark:text-blue-300 text-[11px] font-black uppercase tracking-wider border border-blue-700/50 dark:border-blue-400/30">
                   Two-Way Communication
                 </span>
-                <span className="text-slate-300 text-xs font-semibold">
+                <span className="text-slate-700 dark:text-slate-300 text-xs font-bold">
                   School Helpdesk & Leave Portal
                 </span>
               </div>
-              <h1 className="text-xl sm:text-2xl font-black text-white mt-0.5 flex items-center gap-2">
-                <MessageSquare className="w-6 h-6 text-blue-400" />
+              <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-0.5 flex items-center gap-2">
+                <MessageSquare className="w-6 h-6 text-blue-700 dark:text-blue-400" />
                 <span>Parent-Teacher Query & Helpdesk (संवाद व आवेदन)</span>
               </h1>
             </div>

@@ -228,15 +228,15 @@ export const StudentPromotionManager: React.FC<Props> = ({
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 pb-16">
       {/* Top Navbar */}
-      <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-violet-950 px-4 py-4 text-white shadow-lg sticky top-0 z-30">
+      <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-violet-50 dark:from-blue-900 dark:via-indigo-900 dark:to-violet-950 px-4 py-4 text-slate-900 dark:text-white shadow-sm sticky top-0 z-30 border-b-2 border-indigo-700 dark:border-indigo-500/50">
         <div className="max-w-5xl mx-auto flex items-center justify-between">
           <button
             onClick={onBack}
-            className="flex items-center gap-1.5 text-indigo-200 hover:text-white text-sm font-bold transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 text-indigo-800 hover:text-indigo-950 dark:text-indigo-200 dark:hover:text-white text-sm font-black transition-colors cursor-pointer"
           >
             <ChevronLeft className="w-4 h-4" /> स्कूल डैशबोर्ड पर लौटें
           </button>
-          <span className="text-xs px-2.5 py-1 rounded-full bg-indigo-500/30 text-indigo-200 border border-indigo-400/30 font-bold">
+          <span className="text-xs px-2.5 py-1 rounded-full bg-indigo-100 dark:bg-indigo-500/30 text-indigo-900 dark:text-indigo-200 border border-indigo-700 dark:border-indigo-400/30 font-bold">
             🎓 Annual Roll-Over Engine
           </span>
         </div>

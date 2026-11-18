@@ -1,18 +1,19 @@
 // @ts-nocheck
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import QRCode from "react-qr-code";
-import type { School, SchoolClass, SchoolStudent, SchoolSession, ExamEntry } from "../../school-types";
-import { getExams, promoteStudents, isStudentInClass, getMonthlyAttendance, currentMonthStr } from "../../school-firebase";
+import type { School, SchoolClass, SchoolStudent, SchoolSession, ExamEntry, SchoolTeacher } from "../../school-types";
+import { getExams, promoteStudents, isStudentInClass, getMonthlyAttendance, currentMonthStr, updateSchool } from "../../school-firebase";
 import {
   FileSpreadsheet, Printer, ChevronLeft, Plus, Trash2, Award, Calendar,
   CheckCircle2, Sparkles, RefreshCw, User, BookOpen, Layers, Edit3, Shield,
   Building2, UserPlus, Zap, TrendingUp, ArrowRight, CheckSquare, Square, AlertCircle,
-  Wand2, Image as ImageIcon, Quote
+  Wand2, Image as ImageIcon, Quote, PenTool
 } from "lucide-react";
 import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeaderEditorModal";
 import { schoolPrintFieldEnabled, isBoardClass } from "../../school-types";
 import { QuickAddStudentModal } from "./QuickAddStudentModal";
-import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo, formatAcademicSession } from "./feeReceiptUtils";
+import { TeacherSignatureModal } from "./TeacherSignatureModal";
+import { cleanLogoUrl, isAppLogo, getSavedSchoolLogo, getVisibleSchoolRegNo, formatAcademicSession } from "./feeReceiptUtils";
 import { printHtmlInIframe, extractDocumentStylesHtml } from "./AdmissionFormPrintModal";
 import {
   SchoolPosterHalfCard,
@@ -30,12 +31,15 @@ import {
   type SchoolPosterConfig,
   type StudentCutoutSettings,
 } from "./marksheetBacksideUtils";
+import { getQrBaseOrigin } from "../../utils/qrVerifyUrl";
 
 interface Props {
   school: School;
   classes: SchoolClass[];
   students: SchoolStudent[];
+  teachers?: SchoolTeacher[];
   activeSession: SchoolSession | null;
+  onSchoolUpdated?: (updated: Partial<School>) => void;
   onBack: () => void;
 }
 
@@ -170,7 +174,9 @@ export const MarksheetGenerator: React.FC<Props> = ({
   school,
   classes,
   students: initialStudents,
+  teachers = [],
   activeSession,
+  onSchoolUpdated,
   onBack,
 }) => {
   const [studentList, setStudentList] = useState<SchoolStudent[]>(initialStudents);
@@ -255,7 +261,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
     logoUrl: getSavedSchoolLogo(school?.logoUrl, school?.id),
     principalName: school?.principalName || "",
     principalTitle: "Principal",
-    code: school?.code || "",
+    code: getVisibleSchoolRegNo(school),
     principalPhone: school?.principalPhone || "",
     directorName: school?.directorName || "",
     directorPhone: school?.directorPhone || "",
@@ -279,7 +285,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
       email: school.email || "",
       logoUrl: getSavedSchoolLogo(school.logoUrl || previous.logoUrl, school.id),
       principalName: school.principalName || "",
-      code: school.code || "",
+      code: getVisibleSchoolRegNo(school),
       principalPhone: school.principalPhone || "",
       directorName: school.directorName || "",
       directorPhone: school.directorPhone || "",
@@ -359,8 +365,30 @@ export const MarksheetGenerator: React.FC<Props> = ({
 
   // 3 Official Signatures: Class Teacher, Exam Controller, Principal (with Round Stamp)
   const [teacherName, setTeacherName] = useState("Class Teacher");
-  const [examControllerName, setExamControllerName] = useState("Exam Controller");
+  const [teacherSignatureUrl, setTeacherSignatureUrl] = useState("");
+  const [examControllerName, setExamControllerName] = useState(school?.examControllerName || "Exam Controller");
+  const [examControllerSignatureUrl, setExamControllerSignatureUrl] = useState(school?.examControllerSignatureUrl || "");
   const [teacherRemark, setTeacherRemark] = useState("");
+  const [sigModalMode, setSigModalMode] = useState<"teacher" | "exam_controller" | null>(null);
+
+  useEffect(() => {
+    if (!school) return;
+    if (school.examControllerName) setExamControllerName(school.examControllerName);
+    if (school.examControllerSignatureUrl !== undefined) {
+      setExamControllerSignatureUrl(school.examControllerSignatureUrl || "");
+    }
+  }, [school]);
+
+  useEffect(() => {
+    if (!teachers || teachers.length === 0) return;
+    const assignedTeacher =
+      teachers.find((t) => currentClass?.classTeacherId && t.id === currentClass.classTeacherId) ||
+      teachers.find((t) => selectedClassId && Array.isArray(t.classes) && t.classes.includes(selectedClassId));
+    if (assignedTeacher) {
+      setTeacherName(assignedTeacher.name || "Class Teacher");
+      setTeacherSignatureUrl(assignedTeacher.signatureUrl || "");
+    }
+  }, [selectedClassId, currentClass?.classTeacherId, teachers]);
 
   // Subject rows
   const [subjects, setSubjects] = useState<MarksheetSubjectRow[]>(() => {
@@ -1371,47 +1399,79 @@ export const MarksheetGenerator: React.FC<Props> = ({
         ? sPhoto
         : undefined;
 
+    const originUrl = getQrBaseOrigin();
+    const safeWorkingForQr = Math.max(0, Number(totalWorkingDays) || 0);
+    const safePresentForQr = Math.max(0, Math.min(safeWorkingForQr || 999, Number(studentAttendance) || 0));
+    const compactSubjects = subjects.slice(0, 14).map((sub) => [
+      String(sub.name || "").slice(0, 22),
+      Number(sub.totalMax || 100),
+      Number(sub.totalObt || 0),
+      String(sub.grade || ""),
+    ]);
+
     const verifiedPayload: Record<string, unknown> = {
       type: "marksheet",
       officialVerified: true,
-      school: (schoolDetails.schoolName || school?.name || "School").slice(0, 80),
-      schoolCode: (schoolDetails.code || school?.code || "SCH-001").slice(0, 32),
-      student: sName.slice(0, 60),
-      fatherName: sFather.slice(0, 60),
-      roll: sRoll.slice(0, 20),
-      regNo: sReg.slice(0, 32),
-      class: cName.slice(0, 32),
-      session: sessionName.slice(0, 24),
+      sid: school?.id || "",
+      uid: activeStudent?.id || "",
+      school: (schoolDetails.schoolName || school?.name || "School").slice(0, 60),
+      schoolCode: getVisibleSchoolRegNo(school, schoolDetails.code).slice(0, 28),
+      student: sName.slice(0, 48),
+      fatherName: sFather.slice(0, 48),
+      roll: sRoll.slice(0, 18),
+      regNo: sReg.slice(0, 28),
+      class: cName.slice(0, 24),
+      sec: sSection.slice(0, 10),
+      session: sessionName.slice(0, 20),
+      ex: (examTitle || `Annual Examination`).slice(0, 48),
+      wing: resolvedWing,
       classRank: `${sClassRank}/${sClassStrength}`,
       sectionRank: `${sSectionRank}/${sSectionStrength}`,
       total: `${totals.grandTotal}/${totals.grandMax}`,
+      pct: totals.overallPct,
       gpa: totals.gpa,
       grade: totals.overallGrade,
       status: totals.resultStatus,
+      att: safeWorkingForQr > 0 ? `${safePresentForQr}/${safeWorkingForQr}` : undefined,
+      tn: (teacherName && teacherName !== "Class Teacher" ? teacherName : "").slice(0, 28) || undefined,
+      ecn: (examControllerName && examControllerName !== "Exam Controller" ? examControllerName : "").slice(0, 28) || undefined,
+      pn: (principalName || schoolDetails.principalName || "").slice(0, 28) || undefined,
       date: publishDate,
+      subjs: compactSubjects,
       ...(safeQrPhotoUrl ? { photoUrl: safeQrPhotoUrl } : {}),
     };
 
-    // Live verification URL encoded in QR Code (strict length guard to prevent QR version-40 overflow)
-    const originUrl = typeof window !== "undefined" ? window.location.origin : "https://school.portal";
-    let qrVerifyUrl = `${originUrl}/?verify=doc&type=marksheet&data=${encodeURIComponent(JSON.stringify(verifiedPayload))}`;
-    if (qrVerifyUrl.length > 1200) {
+    const baseVerifyParams = `verify=doc&type=marksheet${school?.id ? `&s=${encodeURIComponent(school.id)}` : ""}${activeStudent?.id ? `&u=${encodeURIComponent(activeStudent.id)}` : ""}`;
+    let qrVerifyUrl = `${originUrl}/?${baseVerifyParams}&data=${encodeURIComponent(JSON.stringify(verifiedPayload))}`;
+    if (qrVerifyUrl.length > 1350) {
       const compactPayload = {
+        ...verifiedPayload,
+        school: (schoolDetails.schoolName || school?.name || "School").slice(0, 42),
+        subjs: compactSubjects.slice(0, 9).map(([nm, mx, ob, gr]) => [String(nm).slice(0, 14), mx, ob, gr]),
+        photoUrl: undefined,
+      };
+      qrVerifyUrl = `${originUrl}/?${baseVerifyParams}&data=${encodeURIComponent(JSON.stringify(compactPayload))}`;
+    }
+    if (qrVerifyUrl.length > 1550) {
+      const minimalPayload = {
         type: "marksheet",
         officialVerified: true,
-        school: (schoolDetails.schoolName || school?.name || "School").slice(0, 48),
-        student: sName.slice(0, 40),
-        roll: sRoll.slice(0, 16),
-        regNo: sReg.slice(0, 24),
-        class: cName.slice(0, 24),
+        sid: school?.id || "",
+        uid: activeStudent?.id || "",
+        school: (schoolDetails.schoolName || school?.name || "School").slice(0, 40),
+        student: sName.slice(0, 36),
+        roll: sRoll.slice(0, 14),
+        regNo: sReg.slice(0, 22),
+        class: cName.slice(0, 20),
+        ex: (examTitle || "").slice(0, 32),
         total: `${totals.grandTotal}/${totals.grandMax}`,
+        pct: totals.overallPct,
+        gpa: totals.gpa,
         grade: totals.overallGrade,
         status: totals.resultStatus,
+        subjs: compactSubjects.slice(0, 6).map(([nm, mx, ob, gr]) => [String(nm).slice(0, 10), mx, ob, gr]),
       };
-      qrVerifyUrl = `${originUrl}/?verify=doc&type=marksheet&data=${encodeURIComponent(JSON.stringify(compactPayload))}`;
-    }
-    if (qrVerifyUrl.length > 1400) {
-      qrVerifyUrl = `${originUrl}/?verify=doc&type=marksheet&student=${encodeURIComponent(sName.slice(0, 40))}&roll=${encodeURIComponent(sRoll.slice(0, 16))}&grade=${encodeURIComponent(totals.overallGrade)}`;
+      qrVerifyUrl = `${originUrl}/?${baseVerifyParams}&data=${encodeURIComponent(JSON.stringify(minimalPayload))}`;
     }
 
     const isCompact = subjects.length > 8;
@@ -1821,7 +1881,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                     )}
                     <p className="text-[7.5px] text-slate-600 font-bold tracking-wide uppercase truncate">
                       {cleanCurriculumLine || "CBSE Pattern"}
-                      {schoolDetails.code ? ` • Code: ${schoolDetails.code}` : ""}
+                      {getVisibleSchoolRegNo(school, schoolDetails.code) ? ` • Code: ${getVisibleSchoolRegNo(school, schoolDetails.code)}` : ""}
                     </p>
                   </div>
                 </div>
@@ -1975,7 +2035,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                   <span className="text-[7px] font-bold text-emerald-700">QR</span>
                 </div>
                 <div className="p-0.5 bg-white border border-slate-400 rounded shrink-0">
-                  <QRCode value={qrVerifyUrl} size={26} level="M" />
+                  <QRCode value={qrVerifyUrl} size={32} level="L" />
                 </div>
               </div>
             </div>
@@ -1984,7 +2044,13 @@ export const MarksheetGenerator: React.FC<Props> = ({
             <div className="pt-1.5 border-t border-slate-900 grid grid-cols-3 gap-2 items-end text-center text-[7.5px]">
               <div>
                 <div className="h-5 mb-0.5 flex items-end justify-center">
-                  {teacherName && teacherName !== "Class Teacher" ? (
+                  {teacherSignatureUrl ? (
+                    <img
+                      src={teacherSignatureUrl}
+                      alt="Class Teacher Signature"
+                      className="max-h-5 max-w-[72px] object-contain"
+                    />
+                  ) : teacherName && teacherName !== "Class Teacher" ? (
                     <span className="italic font-serif font-bold text-slate-800 text-[8px]">{teacherName}</span>
                   ) : null}
                 </div>
@@ -1992,7 +2058,13 @@ export const MarksheetGenerator: React.FC<Props> = ({
               </div>
               <div>
                 <div className="h-5 mb-0.5 flex items-end justify-center">
-                  {examControllerName && examControllerName !== "Exam Controller" ? (
+                  {examControllerSignatureUrl ? (
+                    <img
+                      src={examControllerSignatureUrl}
+                      alt="Exam Controller Signature"
+                      className="max-h-5 max-w-[72px] object-contain"
+                    />
+                  ) : examControllerName && examControllerName !== "Exam Controller" ? (
                     <span className="italic font-serif font-bold text-slate-800 text-[8px]">{examControllerName}</span>
                   ) : null}
                 </div>
@@ -2449,7 +2521,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                           )}
                           <p className="text-[8.5px] text-slate-600 font-bold tracking-wide uppercase mt-0.5">
                             {cleanCurriculumLine || "CBSE Pattern Curriculum"}
-                            {schoolDetails.code ? ` • Reg. No: ${schoolDetails.code}` : ""}
+                            {getVisibleSchoolRegNo(school, schoolDetails.code) ? ` • Reg. No: ${getVisibleSchoolRegNo(school, schoolDetails.code)}` : ""}
                           </p>
                         </div>
                       </div>
@@ -2564,7 +2636,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                         </span>
                       </div>
                       <div className="p-0.5 bg-white border border-slate-400 rounded shadow-2xs">
-                        <QRCode value={qrVerifyUrl} size={30} level="M" />
+                        <QRCode value={qrVerifyUrl} size={34} level="L" />
                       </div>
                     </div>
                   </div>
@@ -2648,7 +2720,13 @@ export const MarksheetGenerator: React.FC<Props> = ({
                 <div className="pt-1.5 border-t-2 border-slate-900 grid grid-cols-3 gap-3 items-end text-center text-[9px]">
                   <div>
                     <div className="h-6 mb-0.5 flex items-end justify-center">
-                      {teacherName && teacherName !== "Class Teacher" ? (
+                      {teacherSignatureUrl ? (
+                        <img
+                          src={teacherSignatureUrl}
+                          alt="Class Teacher Signature"
+                          className="max-h-6 max-w-[90px] object-contain mb-0.5"
+                        />
+                      ) : teacherName && teacherName !== "Class Teacher" ? (
                         <span className="italic font-serif font-bold text-slate-800 text-[9.5px] mb-0.5">{teacherName}</span>
                       ) : null}
                     </div>
@@ -2656,7 +2734,13 @@ export const MarksheetGenerator: React.FC<Props> = ({
                   </div>
                   <div>
                     <div className="h-6 mb-0.5 flex items-end justify-center">
-                      {examControllerName && examControllerName !== "Exam Controller" ? (
+                      {examControllerSignatureUrl ? (
+                        <img
+                          src={examControllerSignatureUrl}
+                          alt="Exam Controller Signature"
+                          className="max-h-6 max-w-[90px] object-contain mb-0.5"
+                        />
+                      ) : examControllerName && examControllerName !== "Exam Controller" ? (
                         <span className="italic font-serif font-bold text-slate-800 text-[9.5px] mb-0.5">{examControllerName}</span>
                       ) : null}
                     </div>
@@ -2712,7 +2796,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                       )}
                       <p className="text-[9.5px] text-slate-600 font-bold tracking-wide uppercase mt-0.5">
                         {showSchoolDetail("affiliation") ? (cleanCurriculumLine || "CBSE Pattern Curriculum") : "CBSE Pattern Curriculum"}
-                        {(showSchoolDetail("code") && schoolDetails.code && schoolDetails.code !== (school as any)?.lockCode && schoolDetails.code !== "0002") ? ` • Reg. No: ${schoolDetails.code}` : ""}
+                        {(showSchoolDetail("code") && getVisibleSchoolRegNo(school, schoolDetails.code)) ? ` • Reg. No: ${getVisibleSchoolRegNo(school, schoolDetails.code)}` : ""}
                       </p>
                       {((showSchoolDetail("phone") && schoolDetails.phone) || (showSchoolDetail("email") && schoolDetails.email)) ? (
                         <p className="text-[9px] text-slate-600 mt-0.5">
@@ -2867,7 +2951,7 @@ export const MarksheetGenerator: React.FC<Props> = ({
                       </span>
                     </div>
                     <div className="p-1 bg-white border border-slate-400 rounded shadow-2xs">
-                      <QRCode value={qrVerifyUrl} size={40} level="M" />
+                      <QRCode value={qrVerifyUrl} size={42} level="L" />
                     </div>
                   </div>
                 </div>
@@ -2877,7 +2961,13 @@ export const MarksheetGenerator: React.FC<Props> = ({
               <div className={`${isCompact ? "pt-2.5" : "pt-3.5"} border-t-2 border-slate-900 grid grid-cols-3 gap-6 items-end text-center text-xs`}>
                 <div>
                   <div className="h-9 mb-1 flex items-end justify-center">
-                    {teacherName && teacherName !== "Class Teacher" ? (
+                    {teacherSignatureUrl ? (
+                      <img
+                        src={teacherSignatureUrl}
+                        alt="Class Teacher Signature"
+                        className="max-h-8 max-w-[110px] object-contain mb-0.5"
+                      />
+                    ) : teacherName && teacherName !== "Class Teacher" ? (
                       <span className="italic font-serif font-bold text-slate-800 text-[11px] mb-0.5">{teacherName}</span>
                     ) : null}
                   </div>
@@ -2885,7 +2975,13 @@ export const MarksheetGenerator: React.FC<Props> = ({
                 </div>
                 <div>
                   <div className="h-9 mb-1 flex items-end justify-center">
-                    {examControllerName && examControllerName !== "Exam Controller" ? (
+                    {examControllerSignatureUrl ? (
+                      <img
+                        src={examControllerSignatureUrl}
+                        alt="Exam Controller Signature"
+                        className="max-h-8 max-w-[110px] object-contain mb-0.5"
+                      />
+                    ) : examControllerName && examControllerName !== "Exam Controller" ? (
                       <span className="italic font-serif font-bold text-slate-800 text-[11px] mb-0.5">{examControllerName}</span>
                     ) : null}
                   </div>
@@ -3330,17 +3426,6 @@ export const MarksheetGenerator: React.FC<Props> = ({
               <span>{bulkMode ? "Single" : "Bulk Print"}</span>
             </button>
             <button
-              onClick={() => {
-                setPromoFromClassId(selectedClassId);
-                setShowPromotionModal(true);
-              }}
-              className="px-2 py-1 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 shadow-sm active:scale-95 transition cursor-pointer shrink-0"
-              title="वार्षिक परीक्षा के बाद सभी छात्रों को 1-Click में अगले सत्र में प्रमोट करें"
-            >
-              <TrendingUp className="w-3 h-3 text-yellow-300" />
-              <span>Next Session</span>
-            </button>
-            <button
               onClick={() => handlePrint()}
               className="px-2.5 py-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-lg text-[11px] font-extrabold flex items-center gap-1 shadow-sm shadow-emerald-500/20 active:scale-95 transition-transform cursor-pointer shrink-0"
             >
@@ -3590,13 +3675,13 @@ export const MarksheetGenerator: React.FC<Props> = ({
             )}
 
             {/* 2-PART BULK PDF & BACKSIDE STUDIO BAR (Part 1 Front Marks + Part 2 Backside Poster & Student Cutout/Thoughts) */}
-            <div className="mt-2.5 p-3 rounded-2xl bg-gradient-to-r from-indigo-950 via-slate-900 to-fuchsia-950 text-white border border-indigo-500/40 shadow-md space-y-2.5">
+            <div className="mt-2.5 p-3 rounded-2xl bg-gradient-to-r from-indigo-50 via-blue-50 to-fuchsia-50 dark:from-indigo-950 dark:via-slate-900 dark:to-fuchsia-950 text-slate-900 dark:text-white border-2 border-indigo-700 dark:border-indigo-500/40 shadow-md space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <span className="text-[10px] font-black uppercase tracking-widest text-amber-300 flex items-center gap-1">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-indigo-800 dark:text-amber-300 flex items-center gap-1">
                     <Sparkles className="w-3 h-3" /> 2-Part Bulk PDF &amp; Backside System (Part 1 Front + Part 2 Same-Serial Back)
                   </span>
-                  <p className="text-[11px] text-slate-200 mt-0.5">
+                  <p className="text-[11px] text-slate-700 dark:text-slate-200 font-medium mt-0.5">
                     {isOuterSingleSlip
                       ? "PA-1..4: Part 1 = 2 Students/Page (Front) • Part 2 = Matching School Posters (Back, cut in half)"
                       : "Half-Yearly & Annual: Part 1 = Front Marks (1..N) • Part 2 = School Poster + White-BG Student Cutout & 6 English Thoughts (1..N)"}
@@ -4014,21 +4099,72 @@ export const MarksheetGenerator: React.FC<Props> = ({
             </div>
             <div>
               <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">Class Teacher (Sign 1):</label>
-              <input
-                type="text"
-                value={teacherName}
-                onChange={e => setTeacherName(e.target.value)}
-                className="w-full px-3 py-1.5 text-xs font-bold bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl border border-slate-300 dark:border-slate-600 focus:ring-2 focus:ring-indigo-500 outline-none"
-              />
+              <div className="flex items-center gap-1.5">
+                {teachers.length > 0 && (
+                  <select
+                    value={teachers.find((t) => t.name === teacherName)?.id || ""}
+                    onChange={(e) => {
+                      const picked = teachers.find((t) => t.id === e.target.value);
+                      if (picked) {
+                        setTeacherName(picked.name);
+                        setTeacherSignatureUrl(picked.signatureUrl || "");
+                      }
+                    }}
+                    className="max-w-[110px] px-2 py-1.5 text-[11px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-800 dark:text-indigo-200 rounded-xl border border-indigo-200 dark:border-indigo-800 outline-none"
+                    title="Select Teacher to auto-fill Name & Signature"
+                  >
+                    <option value="">Teacher...</option>
+                    {teachers.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name} {t.signatureUrl ? "✓" : ""}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <input
+                  type="text"
+                  value={teacherName}
+                  onChange={e => setTeacherName(e.target.value)}
+                  className="flex-1 min-w-0 px-3 py-1.5 text-xs font-bold bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl border border-slate-300 dark:border-slate-600 focus:ring-2 focus:ring-indigo-500 outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setSigModalMode("teacher")}
+                  className={`px-2 py-1.5 rounded-xl text-[11px] font-black flex items-center gap-1 shrink-0 cursor-pointer border ${
+                    teacherSignatureUrl
+                      ? "bg-emerald-50 border-emerald-300 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+                      : "bg-indigo-600 border-indigo-600 text-white"
+                  }`}
+                  title="Class Teacher का डिजिटल साइन ड्रा / अपलोड करें"
+                >
+                  <PenTool className="w-3 h-3" />
+                  <span>{teacherSignatureUrl ? "Sign ✓" : "Sign"}</span>
+                </button>
+              </div>
             </div>
             <div>
               <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">Exam Controller (Sign 2):</label>
-              <input
-                type="text"
-                value={examControllerName}
-                onChange={e => setExamControllerName(e.target.value)}
-                className="w-full px-3 py-1.5 text-xs font-bold bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl border border-slate-300 dark:border-slate-600 focus:ring-2 focus:ring-indigo-500 outline-none"
-              />
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="text"
+                  value={examControllerName}
+                  onChange={e => setExamControllerName(e.target.value)}
+                  className="flex-1 min-w-0 px-3 py-1.5 text-xs font-bold bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl border border-slate-300 dark:border-slate-600 focus:ring-2 focus:ring-indigo-500 outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setSigModalMode("exam_controller")}
+                  className={`px-2 py-1.5 rounded-xl text-[11px] font-black flex items-center gap-1 shrink-0 cursor-pointer border ${
+                    examControllerSignatureUrl
+                      ? "bg-emerald-50 border-emerald-300 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+                      : "bg-purple-600 border-purple-600 text-white"
+                  }`}
+                  title="Exam Controller (Exam लेने वाला) का डिजिटल साइन जोड़ें"
+                >
+                  <PenTool className="w-3 h-3" />
+                  <span>{examControllerSignatureUrl ? "Sign ✓" : "Sign"}</span>
+                </button>
+              </div>
             </div>
             <div>
               <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">Principal Name (Sign 3):</label>
@@ -4923,6 +5059,35 @@ export const MarksheetGenerator: React.FC<Props> = ({
         studentThoughtsMap={studentThoughtsMap}
         onUpdateThoughtsMap={updateStudentThoughtsMap}
       />
+
+      {sigModalMode && (
+        <TeacherSignatureModal
+          isOpen={Boolean(sigModalMode)}
+          onClose={() => setSigModalMode(null)}
+          title={
+            sigModalMode === "teacher"
+              ? `Class Teacher Signature — ${teacherName || "Class Teacher"}`
+              : `Exam Controller Signature — ${examControllerName || "Exam Controller"}`
+          }
+          initialSignatureUrl={sigModalMode === "teacher" ? teacherSignatureUrl : examControllerSignatureUrl}
+          uploadPrefix={sigModalMode === "teacher" ? `sig_classteacher_${school.id}` : `sig_exam_controller_${school.id}`}
+          onSaveSignature={async (url) => {
+            if (sigModalMode === "teacher") {
+              setTeacherSignatureUrl(url);
+            } else {
+              setExamControllerSignatureUrl(url);
+              await updateSchool(school.id, {
+                examControllerSignatureUrl: url,
+                examControllerName: examControllerName || "Exam Controller",
+              });
+              onSchoolUpdated?.({
+                examControllerSignatureUrl: url,
+                examControllerName: examControllerName || "Exam Controller",
+              });
+            }
+          }}
+        />
+      )}
     </div>
   );
 };

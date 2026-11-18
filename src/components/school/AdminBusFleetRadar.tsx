@@ -3,7 +3,7 @@ import React, { useState, useEffect } from "react";
 import {
   Bus, Navigation, MapPin, Gauge, Phone, ExternalLink,
   RefreshCw, Radio, CheckCircle2, Clock, AlertCircle,
-  Sliders, Shield, Play, Map as MapIcon, Plus, Copy, Link2, X, Home, Crosshair, QrCode
+  Sliders, Shield, Play, Map as MapIcon, Plus, Copy, Link2, X, Home, Crosshair, QrCode, Edit3, Trash2
 } from "lucide-react";
 import type { School, BusLiveLocation, SchoolStudent } from "../../school-types";
 import { shouldUseDemoForSchool, updateStudent } from "../../school-firebase";
@@ -12,11 +12,18 @@ import { rtdb } from "../../firebase";
 import { ref as dbRef, onValue, set as rtdbSet } from "firebase/database";
 import { toast } from "sonner";
 import { syncSchoolSubcollection } from "../../utils/schoolCloudSync";
+import {
+  saveVehicleRecord,
+  deleteVehicleRecord,
+  saveDriverRecord,
+  saveRouteRecord,
+  buildMergedFleetList,
+} from "../../utils/schoolTransportStore";
 import { LiveBusGoogleMap } from "./LiveBusGoogleMap";
 import { DriverIdCardModal, type DriverIdCardData } from "./DriverIdCardModal";
 import {
   type StudentHomePin,
-  parseLatLngInput,
+  resolveGoogleMapsLocationInput,
   haversineMeters,
   computeBearingDeg,
   formatDistanceShort,
@@ -101,6 +108,7 @@ export const AdminBusFleetRadar: React.FC<Props> = ({
   const [visualizerMode, setVisualizerMode] = useState<"map" | "radar">("radar");
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
   const [showAddBusModal, setShowAddBusModal] = useState<boolean>(false);
+  const [editingBusId, setEditingBusId] = useState<string | null>(null);
   const [newBusNumber, setNewBusNumber] = useState("");
   const [newBusRoute, setNewBusRoute] = useState("");
   const [newBusStops, setNewBusStops] = useState("");
@@ -140,7 +148,7 @@ export const AdminBusFleetRadar: React.FC<Props> = ({
     }
   };
 
-  const handleAddQuickBus = (e: React.FormEvent) => {
+  const handleAddQuickBus = async (e: React.FormEvent) => {
     e.preventDefault();
     const sid = school?.id || "default";
     if (!newBusNumber.trim()) {
@@ -151,48 +159,57 @@ export const AdminBusFleetRadar: React.FC<Props> = ({
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
-    const busId = `bus_${Date.now()}`;
+    const resolvedStops = stopsArr.length > 0 ? stopsArr : ["Start Point", "Main Chowk", "School Main Gate"];
+    const busId = editingBusId || `bus_${Date.now()}`;
     const newRecord: any = {
       id: busId,
       schoolId: sid,
       vehicleNumber: newBusNumber.trim(),
       model: "School Bus",
       route: newBusRoute.trim() || "Main School Route",
-      stops: stopsArr.length > 0 ? stopsArr : ["Start Point", "Main Chowk", "School Main Gate"],
+      stops: resolvedStops,
       driverName: newDriverName.trim() || "Driver",
       driverPhone: newDriverPhone.trim(),
-      fitnessExpiryDate: "",
-      insuranceExpiryDate: "",
-      pollutionPucExpiryDate: "",
-      roadTaxExpiryDate: "",
+      fitnessExpiryDate: "2027-06-30",
+      insuranceExpiryDate: "2027-03-31",
+      pollutionPucExpiryDate: "2026-12-31",
+      roadTaxExpiryDate: "2027-03-31",
       permitExpiryDate: "",
     };
 
-    try {
-      const existingRaw = localStorage.getItem(`bus_fitness_${sid}`);
-      const existingList = existingRaw ? JSON.parse(existingRaw) : [];
-      const nextFitnessList = Array.isArray(existingList) ? [newRecord, ...existingList] : [newRecord];
-      localStorage.setItem(`bus_fitness_${sid}`, JSON.stringify(nextFitnessList));
-      syncSchoolSubcollection(sid, "bus_fitness", nextFitnessList);
-
-      if (rtdb && sid) {
-        const fleetObj: Record<string, any> = {};
-        nextFitnessList.forEach((r: any) => {
-          if (!r?.id) return;
-          fleetObj[r.id] = {
-            id: r.id,
-            vehicleNumber: r.vehicleNumber || "",
-            route: r.route || r.model || "Main Route",
-            stops: Array.isArray(r.stops) ? r.stops : [],
-            driverName: r.driverName || "",
-            driverPhone: r.driverPhone || "",
-          };
-        });
-        rtdbSet(dbRef(rtdb, `schools/${sid}/bus_fleet`), fleetObj).catch(() => {});
-      }
-    } catch (err) {
-      console.warn("[AdminBusFleetRadar] Quick add bus warning:", err);
+    await saveVehicleRecord(sid, newRecord);
+    if (newDriverName.trim()) {
+      await saveDriverRecord(sid, {
+        id: `drv_${busId}`,
+        schoolId: sid,
+        name: newDriverName.trim(),
+        phone: newDriverPhone.trim(),
+        licenseNo: "VERIFIED",
+        licenseExpiry: "2028-12-31",
+        assignedBusId: busId,
+        assignedBusNumber: newRecord.vehicleNumber,
+        status: "ACTIVE",
+        updatedAt: new Date().toISOString(),
+      });
     }
+    await saveRouteRecord(sid, {
+      id: `route_${busId}`,
+      schoolId: sid,
+      routeName: newRecord.route,
+      busId,
+      busNumber: newRecord.vehicleNumber,
+      driverName: newRecord.driverName,
+      driverPhone: newRecord.driverPhone,
+      monthlyFee: 900,
+      stops: resolvedStops.map((s, idx) => ({
+        id: `stp_${busId}_${idx}`,
+        stopName: s,
+        pickupTime: `07:${String(10 + idx * 10).padStart(2, "0")}`,
+        dropTime: `14:${String(30 - Math.min(25, idx * 8)).padStart(2, "0")}`,
+      })),
+      active: true,
+      updatedAt: new Date().toISOString(),
+    });
 
     const liveEntry: BusLiveLocation = {
       busId,
@@ -200,20 +217,21 @@ export const AdminBusFleetRadar: React.FC<Props> = ({
       route: newRecord.route,
       driverName: newRecord.driverName,
       driverPhone: newRecord.driverPhone,
-      latitude: 0,
-      longitude: 0,
+      latitude: 28.6139,
+      longitude: 77.209,
       speed: 0,
       heading: 0,
       accuracy: 0,
       tripStatus: "idle",
       tripType: "morning_pickup",
       lastUpdated: new Date().toISOString(),
-      currentStop: newRecord.stops[0] || "Depot",
-      totalStops: newRecord.stops.length,
+      currentStop: resolvedStops[0] || "Depot",
+      totalStops: resolvedStops.length,
       completedStops: [],
     };
     setBuses((prev) => [liveEntry, ...prev.filter((b) => b.busId !== busId)]);
     setSelectedBusId(busId);
+    setEditingBusId(null);
     setNewBusNumber("");
     setNewBusRoute("");
     setNewBusStops("");
@@ -226,99 +244,45 @@ export const AdminBusFleetRadar: React.FC<Props> = ({
       route: liveEntry.route,
       driverName: liveEntry.driverName,
       driverPhone: liveEntry.driverPhone,
-      stops: newRecord.stops,
+      stops: resolvedStops,
     });
-    toast.success(`Bus "${liveEntry.busNumber}" add ho gayi aur Driver ID Card (QR) ban gaya!`);
+    toast.success(editingBusId ? `Bus "${liveEntry.busNumber}" update ho gayi!` : `Bus "${liveEntry.busNumber}" add ho gayi aur Driver ID Card (QR) ban gaya!`);
+  };
+
+  const handleOpenEditBus = (bus: BusLiveLocation) => {
+    setEditingBusId(bus.busId);
+    setNewBusNumber(bus.busNumber || "");
+    setNewBusRoute(bus.route || "");
+    setNewDriverName(bus.driverName || "");
+    setNewDriverPhone(bus.driverPhone || "");
+    setNewBusStops("");
+    setShowAddBusModal(true);
+  };
+
+  const handleDeleteBus = async (busId: string) => {
+    const sid = school?.id || "default";
+    await deleteVehicleRecord(sid, busId);
+    setBuses((prev) => {
+      const remaining = prev.filter((b) => b.busId !== busId);
+      if (selectedBusId === busId) setSelectedBusId(remaining[0]?.busId || "");
+      return remaining;
+    });
+    toast.success("Bus vehicle record delete ho gaya.");
   };
 
   // Subscribe to live bus updates
   useEffect(() => {
     const sid = school?.id || "";
-    const demoMode = shouldUseDemoForSchool(sid);
 
-    // 1. Check local bus states
+    // 1. Unified fleet loader (never clobbers newly added/edited buses in demo OR real schools)
     const loadLocalBuses = () => {
-      if (demoMode) {
-        const updated = DEFAULT_BUS_FLEET.map((baseBus) => {
-          try {
-            const raw = localStorage.getItem(`nst_live_bus_${sid || "default"}_${baseBus.busId}`);
-            if (raw) {
-              const parsed = JSON.parse(raw);
-              return { ...baseBus, ...parsed };
-            }
-          } catch (err) {
-            console.warn("[AdminBusFleetRadar] Demo bus parse warning:", err);
-          }
-          return baseBus;
-        });
-        setBuses(updated);
-        setLastRefreshed(new Date());
-        return;
-      }
-
-      // Real school: load from configured fitness vehicles + any live bus telemetry keys
-      const map = new Map<string, BusLiveLocation>();
-      try {
-        const fitRaw = sid ? localStorage.getItem(`bus_fitness_${sid}`) : null;
-        if (fitRaw) {
-          const fitList = JSON.parse(fitRaw);
-          if (Array.isArray(fitList)) {
-            fitList.forEach((v: any, idx: number) => {
-              const busId = v.id || `bus_${idx + 1}`;
-              map.set(busId, {
-                busId,
-                busNumber: v.vehicleNumber || `Bus #${idx + 1}`,
-                route: v.route || "Configured Route",
-                driverName: v.driverName || "—",
-                driverPhone: v.driverPhone || "",
-                latitude: Number(v.latitude || 0),
-                longitude: Number(v.longitude || 0),
-                speed: 0,
-                heading: 0,
-                accuracy: 0,
-                tripStatus: "idle",
-                tripType: "morning_pickup",
-                lastUpdated: new Date().toISOString(),
-                currentStop: "Depot",
-                totalStops: 0,
-                completedStops: [],
-              });
-            });
-          }
-        }
-      } catch (err) {
-        console.warn("[AdminBusFleetRadar] Fitness list parse warning:", err);
-      }
-
-      if (sid) {
-        try {
-          const livePrefix = `nst_live_bus_${sid}_`;
-          for (let i = 0; i < localStorage.length; i++) {
-            const k = localStorage.key(i);
-            if (k && k.startsWith(livePrefix)) {
-              const raw = localStorage.getItem(k);
-              if (raw) {
-                const parsed = JSON.parse(raw) as BusLiveLocation;
-                const bid = parsed.busId || k.slice(livePrefix.length);
-                map.set(bid, { ...(map.get(bid) || {}), ...parsed, busId: bid });
-              }
-            }
-          }
-        } catch (err) {
-          console.warn("[AdminBusFleetRadar] Live bus storage warning:", err);
-        }
-      }
-
-      setBuses((prev) => {
-        // Preserve any RTDB entries already loaded in memory while merging local updates
-        const merged = new Map<string, BusLiveLocation>(prev.map((b) => [b.busId, b]));
-        map.forEach((val, key) => merged.set(key, { ...(merged.get(key) || {}), ...val }));
-        return Array.from(merged.values());
-      });
+      const merged = buildMergedFleetList(sid);
+      setBuses(merged);
       setLastRefreshed(new Date());
     };
 
     loadLocalBuses();
+    window.addEventListener("school-transport-updated", loadLocalBuses);
 
     // 2. Window event listener for instant local sync
     const handleBusUpdate = (e: any) => {
@@ -413,6 +377,7 @@ export const AdminBusFleetRadar: React.FC<Props> = ({
 
     return () => {
       window.removeEventListener("nst_bus_location_update", handleBusUpdate);
+      window.removeEventListener("school-transport-updated", loadLocalBuses);
       clearInterval(interval);
       if (typeof unsubRtdbLoc1 === "function") unsubRtdbLoc1();
       if (typeof unsubRtdbLoc2 === "function") unsubRtdbLoc2();
@@ -561,8 +526,8 @@ export const AdminBusFleetRadar: React.FC<Props> = ({
     );
   };
 
-  const handleSaveSelfPinLink = () => {
-    const parsed = parseLatLngInput(selfPinInput);
+  const handleSaveSelfPinLink = async () => {
+    const parsed = await resolveGoogleMapsLocationInput(selfPinInput);
     if (!parsed) {
       toast.error("Valid Google Maps location link ya 'lat, lng' daalein.");
       return;
@@ -836,6 +801,26 @@ export const AdminBusFleetRadar: React.FC<Props> = ({
                 >
                   <ExternalLink size={13} /> Maps App
                 </button>
+              )}
+              {canManageFleet && currentSelectedBus && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenEditBus(currentSelectedBus)}
+                    className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1 border border-slate-700 cursor-pointer"
+                    title="Edit Bus & Driver"
+                  >
+                    <Edit3 size={13} /> Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteBus(currentSelectedBus.busId)}
+                    className="px-2.5 py-1.5 rounded-xl bg-rose-950/60 hover:bg-rose-900/70 text-rose-300 text-xs font-bold flex items-center gap-1 border border-rose-500/30 cursor-pointer"
+                    title="Delete Bus"
+                  >
+                    <Trash2 size={13} /> Delete
+                  </button>
+                </>
               )}
               {currentSelectedBus.driverPhone && (
                 <a
@@ -1125,11 +1110,14 @@ export const AdminBusFleetRadar: React.FC<Props> = ({
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
               <h3 className="text-base font-black text-white flex items-center gap-2">
                 <Bus className="w-5 h-5 text-emerald-400" />
-                <span>Add School Bus &amp; Driver</span>
+                <span>{editingBusId ? "Edit School Bus & Driver" : "Add School Bus & Driver"}</span>
               </h3>
               <button
                 type="button"
-                onClick={() => setShowAddBusModal(false)}
+                onClick={() => {
+                  setShowAddBusModal(false);
+                  setEditingBusId(null);
+                }}
                 className="text-slate-400 hover:text-white cursor-pointer"
               >
                 <X className="w-4 h-4" />
@@ -1197,7 +1185,10 @@ export const AdminBusFleetRadar: React.FC<Props> = ({
               <div className="pt-2 flex justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setShowAddBusModal(false)}
+                  onClick={() => {
+                    setShowAddBusModal(false);
+                    setEditingBusId(null);
+                  }}
                   className="px-4 py-2 bg-slate-800 rounded-xl text-slate-300 cursor-pointer"
                 >
                   Cancel
@@ -1206,7 +1197,7 @@ export const AdminBusFleetRadar: React.FC<Props> = ({
                   type="submit"
                   className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl cursor-pointer"
                 >
-                  Save Bus &amp; Driver
+                  {editingBusId ? "Update Bus & Driver" : "Save Bus & Driver"}
                 </button>
               </div>
             </form>

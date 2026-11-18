@@ -135,14 +135,15 @@ function parseDecodedAttendanceString(
         } catch {}
       }
 
-      // 1C. Hash token #NSTA-SCHOOL:schoolId:studentId:rollNo:classId
+      // 1C. Hash token #NSTA-SCHOOL:schoolId:studentId:rollNo:classId:name
       if (url.hash && url.hash.includes("NSTA-SCHOOL:")) {
-        const token = url.hash.split("NSTA-SCHOOL:")[1];
+        const token = url.hash.split("NSTA-SCHOOL:")[1].split(/[\r\n]/)[0];
         const parts = token.split(":");
         if (parts[0] && !schoolId) schoolId = decodeTokenPart(parts[0]);
         if (parts[1] && !studentId) studentId = decodeTokenPart(parts[1]);
         if (parts[2] && !rollNo) rollNo = decodeTokenPart(parts[2]);
         if (parts[3] && !classId) classId = decodeTokenPart(parts[3]);
+        if (parts[4] && !studentName) studentName = decodeTokenPart(parts[4]);
       }
 
       // 1D. Hash token #NSTA-ATTENDANCE:schoolId:classId:date
@@ -159,12 +160,13 @@ function parseDecodedAttendanceString(
 
   // Case 2: Standalone NSTA-SCHOOL token
   if (!studentId && text.includes("NSTA-SCHOOL:")) {
-    const token = text.split("NSTA-SCHOOL:")[1];
+    const token = text.split("NSTA-SCHOOL:")[1].split(/[\r\n]/)[0];
     const parts = token.split(":");
     if (parts[0] && !schoolId) schoolId = decodeTokenPart(parts[0]);
     if (parts[1] && !studentId) studentId = decodeTokenPart(parts[1]);
     if (parts[2] && !rollNo) rollNo = decodeTokenPart(parts[2]);
     if (parts[3] && !classId) classId = decodeTokenPart(parts[3]);
+    if (parts[4] && !studentName) studentName = decodeTokenPart(parts[4]);
   }
 
   // Case 3: Standalone NSTA-ATTENDANCE token

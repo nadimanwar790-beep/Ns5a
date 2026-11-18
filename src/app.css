@@ -1078,13 +1078,13 @@ html.dark, html.dark body, body.dark-mode, .dark-mode body {
     color: #f8fafc !important;
 }
 
-.dark-mode .bg-white {
+.dark-mode :not(.nst-auth-shell):not(.nst-auth-shell *).bg-white {
     background-color: #0d0d0d !important;
     border-color: #1c1c1c !important;
 }
 
-.dark-mode .bg-slate-50,
-.dark-mode .bg-slate-100 {
+.dark-mode :not(.nst-auth-shell):not(.nst-auth-shell *).bg-slate-50,
+.dark-mode :not(.nst-auth-shell):not(.nst-auth-shell *).bg-slate-100 {
     background-color: #111111 !important;
     border-color: #1f1f1f !important;
 }
@@ -1173,54 +1173,55 @@ html.dark, html.dark body, body.dark-mode, .dark-mode body {
     outline: none !important;
 }
 
-.dark-mode .text-slate-900,
-.dark-mode .text-slate-800,
-.dark-mode .text-slate-700,
-.dark-mode .text-slate-600 {
+.dark-mode :not(.nst-auth-shell):not(.nst-auth-shell *).text-slate-900,
+.dark-mode :not(.nst-auth-shell):not(.nst-auth-shell *).text-slate-800,
+.dark-mode :not(.nst-auth-shell):not(.nst-auth-shell *).text-slate-700,
+.dark-mode :not(.nst-auth-shell):not(.nst-auth-shell *).text-slate-600 {
     color: #e2e8f0 !important;
 }
 
-.dark-mode .text-slate-500,
-.dark-mode .text-slate-400 {
+.dark-mode :not(.nst-auth-shell):not(.nst-auth-shell *).text-slate-500,
+.dark-mode :not(.nst-auth-shell):not(.nst-auth-shell *).text-slate-400 {
     color: #94a3b8 !important;
 }
 
 /* Ensure inputs are visible */
-.dark-mode input, 
-.dark-mode select, 
-.dark-mode textarea {
+.dark-mode :not(.nst-auth-shell):not(.nst-auth-shell *) input, 
+.dark-mode :not(.nst-auth-shell):not(.nst-auth-shell *) select, 
+.dark-mode :not(.nst-auth-shell):not(.nst-auth-shell *) textarea {
     background-color: #161616 !important;
     color: #f8fafc !important;
     border-color: #2a2a2a !important;
     box-shadow: inset 0 1px 3px rgba(0,0,0,0.6) !important;
 }
-.dark-mode input:focus,
-.dark-mode select:focus,
-.dark-mode textarea:focus {
+.dark-mode :not(.nst-auth-shell):not(.nst-auth-shell *) input:focus,
+.dark-mode :not(.nst-auth-shell):not(.nst-auth-shell *) select:focus,
+.dark-mode :not(.nst-auth-shell):not(.nst-auth-shell *) textarea:focus {
     border-color: #3b82f6 !important;
     box-shadow: 0 0 0 3px rgba(59,130,246,0.12), inset 0 1px 3px rgba(0,0,0,0.5) !important;
 }
 
 /* Dialogs & Modals */
-.dark-mode .bg-white.rounded-2xl,
-.dark-mode .bg-white.rounded-3xl {
+.dark-mode :not(.nst-auth-shell):not(.nst-auth-shell *).bg-white.rounded-2xl,
+.dark-mode :not(.nst-auth-shell):not(.nst-auth-shell *).bg-white.rounded-3xl {
     background-color: #0d0d0d !important;
     border: 1px solid #222222 !important;
     box-shadow: 0 8px 32px rgba(0,0,0,0.9), 0 0 0 1px rgba(255,255,255,0.03) !important;
 }
 
 /* Premium shadows — deep blacks with micro-border */
-.dark-mode .shadow-sm  { box-shadow: 0 1px 3px rgba(0,0,0,0.8) !important; border: 1px solid #1a1a1a !important; }
-.dark-mode .shadow-md  { box-shadow: 0 2px 10px rgba(0,0,0,0.85) !important; border: 1px solid #1e1e1e !important; }
-.dark-mode .shadow-lg  { box-shadow: 0 4px 20px rgba(0,0,0,0.9) !important; border: 1px solid #222222 !important; }
-.dark-mode .shadow-xl  { box-shadow: 0 6px 28px rgba(0,0,0,0.92) !important; border: 1px solid #252525 !important; }
-.dark-mode .shadow-2xl { box-shadow: 0 8px 40px rgba(0,0,0,0.95) !important; border: 1px solid #282828 !important; }
+.dark-mode :not(.nst-auth-shell):not(.nst-auth-shell *).shadow-sm  { box-shadow: 0 1px 3px rgba(0,0,0,0.8) !important; border: 1px solid #1a1a1a !important; }
+.dark-mode :not(.nst-auth-shell):not(.nst-auth-shell *).shadow-md  { box-shadow: 0 2px 10px rgba(0,0,0,0.85) !important; border: 1px solid #1e1e1e !important; }
+.dark-mode :not(.nst-auth-shell):not(.nst-auth-shell *).shadow-lg  { box-shadow: 0 4px 20px rgba(0,0,0,0.9) !important; border: 1px solid #222222 !important; }
+.dark-mode :not(.nst-auth-shell):not(.nst-auth-shell *).shadow-xl  { box-shadow: 0 6px 28px rgba(0,0,0,0.92) !important; border: 1px solid #252525 !important; }
+.dark-mode :not(.nst-auth-shell):not(.nst-auth-shell *).shadow-2xl { box-shadow: 0 8px 40px rgba(0,0,0,0.95) !important; border: 1px solid #282828 !important; }
 
 /* GLOBAL UI STABILITY FIXES */
-button {
-  cursor: pointer;
-  white-space: normal; /* Force wrapping */
-  overflow-wrap: break-word; /* Prevent overflow */
+@layer base {
+  button {
+    cursor: pointer;
+    overflow-wrap: break-word; /* Prevent overflow */
+  }
 }
 
 /* Prevent layout shifts */
@@ -4057,131 +4058,301 @@ select:focus {
 }
 
 /* ========================================================
-   GLOBAL 3-THEME ENGINE (White / AMOLED Black / Current Midnight)
-   Supported across Student, Teacher, and Admin Portals
+   GLOBAL 3-THEME ENGINE (White / AMOLED Black / Royal Blue)
+   Supported across Student, Teacher, Accountant, and Admin Portals
    ======================================================== */
 
-/* 1. WHITE THEME (Clean Crisp Day Mode) */
+/* 1. WHITE THEME (Clean Crisp Day Mode — Soft Tints + Deep Borders) */
 .student-theme-white,
 .admin-theme-white,
 .teacher-theme-white,
 .app-theme-white {
-  background-color: #f1f5f9 !important;
-  color: #0f172a !important;
-}
-.student-theme-white .bg-slate-950,
-.admin-theme-white .bg-slate-950,
-.teacher-theme-white .bg-slate-950,
-.app-theme-white .bg-slate-950,
-.student-theme-white .bg-slate-950\/70,
-.admin-theme-white .bg-slate-950\/70,
-.teacher-theme-white .bg-slate-950\/70,
-.app-theme-white .bg-slate-950\/70,
-.student-theme-white .bg-slate-950\/80,
-.admin-theme-white .bg-slate-950\/80,
-.teacher-theme-white .bg-slate-950\/80,
-.app-theme-white .bg-slate-950\/80,
-.student-theme-white .bg-slate-950\/90,
-.admin-theme-white .bg-slate-950\/90,
-.teacher-theme-white .bg-slate-950\/90,
-.app-theme-white .bg-slate-950\/90 {
-  background-color: #f8fafc !important;
-  color: #0f172a !important;
-}
-.student-theme-white .bg-slate-900,
-.admin-theme-white .bg-slate-900,
-.teacher-theme-white .bg-slate-900,
-.app-theme-white .bg-slate-900,
-.student-theme-white .bg-slate-900\/70,
-.admin-theme-white .bg-slate-900\/70,
-.teacher-theme-white .bg-slate-900\/70,
-.app-theme-white .bg-slate-900\/70,
-.student-theme-white .bg-slate-900\/80,
-.admin-theme-white .bg-slate-900\/80,
-.teacher-theme-white .bg-slate-900\/80,
-.app-theme-white .bg-slate-900\/80,
-.student-theme-white .bg-slate-900\/90,
-.admin-theme-white .bg-slate-900\/90,
-.teacher-theme-white .bg-slate-900\/90,
-.app-theme-white .bg-slate-900\/90,
-.student-theme-white .bg-slate-900\/95,
-.admin-theme-white .bg-slate-900\/95,
-.teacher-theme-white .bg-slate-900\/95,
-.app-theme-white .bg-slate-900\/95 {
-  background-color: #ffffff !important;
-  color: #0f172a !important;
-}
-.student-theme-white .bg-slate-800,
-.admin-theme-white .bg-slate-800,
-.teacher-theme-white .bg-slate-800,
-.app-theme-white .bg-slate-800,
-.student-theme-white .bg-slate-800\/80,
-.admin-theme-white .bg-slate-800\/80,
-.teacher-theme-white .bg-slate-800\/80,
-.app-theme-white .bg-slate-800\/80,
-.student-theme-white .bg-slate-800\/90,
-.admin-theme-white .bg-slate-800\/90,
-.teacher-theme-white .bg-slate-800\/90,
-.app-theme-white .bg-slate-800\/90 {
-  background-color: #f1f5f9 !important;
-  color: #0f172a !important;
-}
-.student-theme-white .border-slate-800,
-.admin-theme-white .border-slate-800,
-.teacher-theme-white .border-slate-800,
-.app-theme-white .border-slate-800,
-.student-theme-white .border-slate-700,
-.admin-theme-white .border-slate-700,
-.teacher-theme-white .border-slate-700,
-.app-theme-white .border-slate-700 {
-  border-color: #e2e8f0 !important;
-}
-.student-theme-white .border-slate-600,
-.admin-theme-white .border-slate-600,
-.teacher-theme-white .border-slate-600,
-.app-theme-white .border-slate-600 {
-  border-color: #cbd5e1 !important;
-}
-.student-theme-white .text-slate-100,
-.admin-theme-white .text-slate-100,
-.teacher-theme-white .text-slate-100,
-.app-theme-white .text-slate-100,
-.student-theme-white .text-slate-200,
-.admin-theme-white .text-slate-200,
-.teacher-theme-white .text-slate-200,
-.app-theme-white .text-slate-200,
-.student-theme-white .text-white,
-.admin-theme-white .text-white,
-.teacher-theme-white .text-white,
-.app-theme-white .text-white {
-  color: #0f172a !important;
-}
-.student-theme-white .text-slate-300,
-.admin-theme-white .text-slate-300,
-.teacher-theme-white .text-slate-300,
-.app-theme-white .text-slate-300,
-.student-theme-white .text-slate-400,
-.admin-theme-white .text-slate-400,
-.teacher-theme-white .text-slate-400,
-.app-theme-white .text-slate-400 {
-  color: #475569 !important;
-}
-.student-theme-white .text-slate-500,
-.admin-theme-white .text-slate-500,
-.teacher-theme-white .text-slate-500,
-.app-theme-white .text-slate-500 {
-  color: #64748b !important;
-}
-.student-theme-white header,
-.admin-theme-white header,
-.teacher-theme-white header,
-.app-theme-white header {
-  background-color: rgba(255, 255, 255, 0.95) !important;
-  border-color: #e2e8f0 !important;
+  background-color: #eef2f7 !important;
   color: #0f172a !important;
 }
 
-/* 2. BLACK THEME (AMOLED Pure Pitch Black Mode) */
+/* Neutral Dark Surfaces -> Crisp Light Surfaces (also catches dark:bg-slate-* if any ancestor lags; excludes fixed translucent scrims and .nst-isolated-modal) */
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white)
+  :is(.bg-slate-950, .dark\:bg-slate-950):not(.nst-isolated-modal):not(.nst-isolated-modal *):not(.nst-drawer-backdrop),
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white)
+  :is([class^="bg-slate-950/"], [class*=" bg-slate-950/"], [class*=" dark:bg-slate-950/"]):not(.nst-isolated-modal):not(.nst-isolated-modal *):not(.fixed):not(.nst-drawer-backdrop) {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+}
+
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white)
+  :is(.bg-slate-900, .dark\:bg-slate-900):not(.nst-isolated-modal):not(.nst-isolated-modal *):not(.nst-drawer-backdrop),
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white)
+  :is([class^="bg-slate-900/"], [class*=" bg-slate-900/"], [class*=" dark:bg-slate-900/"]):not(.nst-isolated-modal):not(.nst-isolated-modal *):not(.fixed):not(.nst-drawer-backdrop) {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+}
+
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white)
+  :is(.bg-slate-800, .bg-slate-700, .dark\:bg-slate-800):not(.nst-isolated-modal):not(.nst-isolated-modal *):not(.nst-drawer-backdrop),
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white)
+  :is([class^="bg-slate-800/"], [class*=" bg-slate-800/"], [class^="bg-slate-700/"], [class*=" bg-slate-700/"], [class*=" dark:bg-slate-800/"]):not(.nst-isolated-modal):not(.nst-isolated-modal *):not(.fixed):not(.nst-drawer-backdrop) {
+  background-color: #eef2f6 !important;
+  color: #0f172a !important;
+}
+
+/* Deep clear structural borders in White Theme */
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white)
+  :is(.border-slate-800, [class^="border-slate-800/"], [class*=" border-slate-800/"], .divide-slate-800, [class^="divide-slate-800/"], [class*=" divide-slate-800/"], .dark\:border-slate-800, [class*=" dark:border-slate-800/"]):not(.nst-isolated-modal):not(.nst-isolated-modal *) {
+  border-color: #cbd5e1 !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white)
+  :is(.border-slate-700, [class^="border-slate-700/"], [class*=" border-slate-700/"], .border-slate-600, [class^="border-slate-600/"], [class*=" border-slate-600/"], .dark\:border-slate-700, [class*=" dark:border-slate-700/"]):not(.nst-isolated-modal):not(.nst-isolated-modal *) {
+  border-color: #94a3b8 !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.erp-menu-cat-pill):not(.nst-isolated-modal):not(.nst-isolated-modal *):is([class^="border-indigo-500/"], [class*=" border-indigo-500/"], [class^="border-blue-500/"], [class*=" border-blue-500/"]) {
+  border-color: #3730a3 !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.erp-menu-cat-pill):not(.nst-isolated-modal):not(.nst-isolated-modal *):is([class^="border-emerald-500/"], [class*=" border-emerald-500/"], [class^="border-teal-500/"], [class*=" border-teal-500/"]) {
+  border-color: #047857 !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.erp-menu-cat-pill):not(.nst-isolated-modal):not(.nst-isolated-modal *):is([class^="border-amber-500/"], [class*=" border-amber-500/"]) {
+  border-color: #b45309 !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.erp-menu-cat-pill):not(.nst-isolated-modal):not(.nst-isolated-modal *):is([class^="border-rose-500/"], [class*=" border-rose-500/"], [class^="border-red-500/"], [class*=" border-red-500/"]) {
+  border-color: #be123c !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.erp-menu-cat-pill):not(.nst-isolated-modal):not(.nst-isolated-modal *):is([class^="border-cyan-500/"], [class*=" border-cyan-500/"], [class^="border-sky-500/"], [class*=" border-sky-500/"]) {
+  border-color: #0369a1 !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.erp-menu-cat-pill):not(.nst-isolated-modal):not(.nst-isolated-modal *):is([class^="border-purple-500/"], [class*=" border-purple-500/"]) {
+  border-color: #7e22ce !important;
+}
+
+/* Convert any dark-blue / dark-indigo / dark-slate / dark-red gradient cards (including dark:from-*) to soft pastel tint + deep border in White Theme */
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.nst-isolated-modal):not(.nst-isolated-modal *):is(
+  [class^="from-slate-9"], [class*=" from-slate-9"],
+  [class^="from-blue-9"], [class*=" from-blue-9"],
+  [class^="from-indigo-9"], [class*=" from-indigo-9"],
+  [class^="from-purple-9"], [class*=" from-purple-9"],
+  [class^="dark:from-slate-9"], [class*=" dark:from-slate-9"],
+  [class^="dark:from-blue-9"], [class*=" dark:from-blue-9"],
+  [class^="dark:from-indigo-9"], [class*=" dark:from-indigo-9"],
+  [class^="dark:from-purple-9"], [class*=" dark:from-purple-9"]
+) {
+  background: linear-gradient(135deg, #eff6ff 0%, #eef2ff 55%, #f0f9ff 100%) !important;
+  border-color: #1d4ed8 !important;
+  color: #0f172a !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.nst-isolated-modal):not(.nst-isolated-modal *):is(
+  [class^="from-emerald-9"], [class*=" from-emerald-9"],
+  [class^="dark:from-emerald-9"], [class*=" dark:from-emerald-9"]
+) {
+  background: linear-gradient(135deg, #ecfdf5 0%, #f0fdfa 100%) !important;
+  border-color: #047857 !important;
+  color: #0f172a !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.nst-isolated-modal):not(.nst-isolated-modal *):is(
+  [class^="from-red-9"], [class*=" from-red-9"],
+  [class^="from-rose-9"], [class*=" from-rose-9"],
+  [class^="dark:from-red-9"], [class*=" dark:from-red-9"],
+  [class^="dark:from-rose-9"], [class*=" dark:from-rose-9"]
+) {
+  background: linear-gradient(135deg, #fff1f2 0%, #fef2f2 100%) !important;
+  border-color: #be123c !important;
+  color: #0f172a !important;
+}
+
+/* Convert dark 900/950 & faint /15-/30 tinted chips & action pills to crisp pastel tint + deep border in White Theme */
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.erp-menu-cat-pill):not(.erp-menu-cat-badge):not(.nst-isolated-modal):not(.nst-isolated-modal *):is(.bg-indigo-950, [class^="bg-indigo-950/"], [class*=" bg-indigo-950/"], .bg-indigo-900, [class^="bg-indigo-900/"], [class*=" bg-indigo-900/"], [class^="bg-indigo-500/"], [class*=" bg-indigo-500/"], [class^="bg-indigo-600/"], [class*=" bg-indigo-600/"]) {
+  background-color: #e0e7ff !important;
+  border-color: #3730a3 !important;
+  color: #1e1b4b !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.erp-menu-cat-pill):not(.erp-menu-cat-badge):not(.nst-isolated-modal):not(.nst-isolated-modal *):is(.bg-blue-950, [class^="bg-blue-950/"], [class*=" bg-blue-950/"], .bg-blue-900, [class^="bg-blue-900/"], [class*=" bg-blue-900/"], [class^="bg-blue-500/"], [class*=" bg-blue-500/"], [class^="bg-blue-600/"], [class*=" bg-blue-600/"]) {
+  background-color: #dbeafe !important;
+  border-color: #1d4ed8 !important;
+  color: #1e3a8a !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.erp-menu-cat-pill):not(.erp-menu-cat-badge):not(.nst-isolated-modal):not(.nst-isolated-modal *):is(.bg-emerald-950, [class^="bg-emerald-950/"], [class*=" bg-emerald-950/"], .bg-teal-950, [class^="bg-teal-950/"], [class*=" bg-teal-950/"], [class^="bg-emerald-500/"], [class*=" bg-emerald-500/"], [class^="bg-emerald-600/"], [class*=" bg-emerald-600/"], [class^="bg-teal-600/"], [class*=" bg-teal-600/"]) {
+  background-color: #d1fae5 !important;
+  border-color: #047857 !important;
+  color: #064e3b !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.erp-menu-cat-pill):not(.erp-menu-cat-badge):not(.nst-isolated-modal):not(.nst-isolated-modal *):is(.bg-amber-950, [class^="bg-amber-950/"], [class*=" bg-amber-950/"], [class^="bg-amber-500/"], [class*=" bg-amber-500/"]) {
+  background-color: #fef3c7 !important;
+  border-color: #b45309 !important;
+  color: #78350f !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.erp-menu-cat-pill):not(.erp-menu-cat-badge):not(.nst-isolated-modal):not(.nst-isolated-modal *):is(.bg-purple-950, [class^="bg-purple-950/"], [class*=" bg-purple-950/"], [class^="bg-purple-500/"], [class*=" bg-purple-500/"]) {
+  background-color: #f3e8ff !important;
+  border-color: #7e22ce !important;
+  color: #581c87 !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.erp-menu-cat-pill):not(.erp-menu-cat-badge):not(.nst-isolated-modal):not(.nst-isolated-modal *):is(.bg-rose-950, [class^="bg-rose-950/"], [class*=" bg-rose-950/"], [class^="bg-rose-500/"], [class*=" bg-rose-500/"], [class^="bg-rose-600/"], [class*=" bg-rose-600/"], [class^="bg-red-500/"], [class*=" bg-red-500/"]) {
+  background-color: #ffe4e6 !important;
+  border-color: #be123c !important;
+  color: #881337 !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.erp-menu-cat-pill):not(.erp-menu-cat-badge):not(.nst-isolated-modal):not(.nst-isolated-modal *):is(.bg-sky-950, [class^="bg-sky-950/"], [class*=" bg-sky-950/"], [class^="bg-cyan-500/"], [class*=" bg-cyan-500/"], [class^="bg-sky-500/"], [class*=" bg-sky-500/"]) {
+  background-color: #e0f2fe !important;
+  border-color: #0369a1 !important;
+  color: #0c4a6e !important;
+}
+
+/* White Theme Text Hierarchy — darken light text on converted light cards/headers/nav */
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :where(
+  .bg-slate-900, [class^="bg-slate-900/"], [class*=" bg-slate-900/"],
+  .bg-slate-950, [class^="bg-slate-950/"], [class*=" bg-slate-950/"],
+  .bg-slate-800, [class^="bg-slate-800/"], [class*=" bg-slate-800/"],
+  .nst-card-animated,
+  header,
+  nav,
+  [class^="from-slate-9"], [class*=" from-slate-9"],
+  [class^="from-blue-9"], [class*=" from-blue-9"],
+  [class^="from-indigo-9"], [class*=" from-indigo-9"],
+  [class^="from-purple-9"], [class*=" from-purple-9"],
+  [class^="from-red-9"], [class*=" from-red-9"],
+  [class^="from-rose-9"], [class*=" from-rose-9"],
+  [class^="from-emerald-9"], [class*=" from-emerald-9"],
+  [class^="dark:from-slate-9"], [class*=" dark:from-slate-9"],
+  [class^="dark:from-blue-9"], [class*=" dark:from-blue-9"],
+  [class^="dark:from-indigo-9"], [class*=" dark:from-indigo-9"]
+):not(.nst-isolated-modal):not(.nst-isolated-modal *) :is(.text-white, .dark\:text-white):not(.nst-isolated-modal):not(.nst-isolated-modal *) {
+  color: #0f172a !important;
+}
+
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.nst-isolated-modal):not(.nst-isolated-modal *):is(.text-slate-100, .text-slate-200) {
+  color: #0f172a !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.nst-isolated-modal):not(.nst-isolated-modal *).text-slate-300 {
+  color: #334155 !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.nst-isolated-modal):not(.nst-isolated-modal *).text-slate-400 {
+  color: #475569 !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.nst-isolated-modal):not(.nst-isolated-modal *).text-slate-500 {
+  color: #64748b !important;
+}
+
+/* Deep readable accent colors on light backgrounds in White Mode */
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.nst-isolated-modal):not(.nst-isolated-modal *):is(.text-emerald-200, .text-emerald-300, .text-emerald-400):not(.erp-menu-cat-title):not(.erp-menu-cat-badge) {
+  color: #047857 !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.nst-isolated-modal):not(.nst-isolated-modal *):is(.text-indigo-200, .text-indigo-300, .text-indigo-400):not(.erp-menu-cat-title):not(.erp-menu-cat-badge) {
+  color: #3730a3 !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.nst-isolated-modal):not(.nst-isolated-modal *):is(.text-blue-200, .text-blue-300, .text-blue-400):not(.erp-menu-cat-title):not(.erp-menu-cat-badge) {
+  color: #1d4ed8 !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.nst-isolated-modal):not(.nst-isolated-modal *):is(.text-sky-300, .text-sky-400, .text-cyan-300, .text-cyan-400):not(.erp-menu-cat-title):not(.erp-menu-cat-badge) {
+  color: #0369a1 !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.nst-isolated-modal):not(.nst-isolated-modal *):is(.text-teal-300, .text-teal-400):not(.erp-menu-cat-title):not(.erp-menu-cat-badge) {
+  color: #0f766e !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.nst-isolated-modal):not(.nst-isolated-modal *):is(.text-amber-200, .text-amber-300, .text-amber-400):not(.erp-menu-cat-title):not(.erp-menu-cat-badge) {
+  color: #b45309 !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.nst-isolated-modal):not(.nst-isolated-modal *):is(.text-rose-200, .text-rose-300, .text-rose-400, .text-red-300, .text-red-400):not(.erp-menu-cat-title):not(.erp-menu-cat-badge) {
+  color: #be123c !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :not(.nst-isolated-modal):not(.nst-isolated-modal *):is(.text-purple-200, .text-purple-300, .text-purple-400):not(.erp-menu-cat-title):not(.erp-menu-cat-badge) {
+  color: #6b21a8 !important;
+}
+
+/* Preserve Original Rich Category Filter Colors (.erp-menu-cat-pill) in White Mode too */
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) .erp-menu-cat-pill[class*="bg-indigo-950"] {
+  background-color: rgba(30, 27, 75, 0.92) !important;
+  border-color: rgba(99, 102, 241, 0.55) !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) .erp-menu-cat-pill[class*="bg-blue-950"] {
+  background-color: rgba(23, 37, 84, 0.92) !important;
+  border-color: rgba(59, 130, 246, 0.55) !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) .erp-menu-cat-pill[class*="bg-violet-950"] {
+  background-color: rgba(46, 16, 101, 0.92) !important;
+  border-color: rgba(139, 92, 246, 0.55) !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) .erp-menu-cat-pill[class*="bg-emerald-950"] {
+  background-color: rgba(2, 44, 34, 0.92) !important;
+  border-color: rgba(16, 185, 129, 0.55) !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) .erp-menu-cat-pill[class*="bg-amber-950"] {
+  background-color: rgba(69, 26, 3, 0.92) !important;
+  border-color: rgba(245, 158, 11, 0.55) !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) .erp-menu-cat-pill[class*="bg-teal-950"] {
+  background-color: rgba(4, 47, 46, 0.92) !important;
+  border-color: rgba(20, 184, 166, 0.55) !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) .erp-menu-cat-pill[class*="bg-purple-950"] {
+  background-color: rgba(59, 7, 100, 0.92) !important;
+  border-color: rgba(168, 85, 247, 0.55) !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) .erp-menu-cat-pill[class*="bg-orange-950"] {
+  background-color: rgba(67, 20, 7, 0.92) !important;
+  border-color: rgba(249, 115, 22, 0.55) !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) .erp-menu-cat-pill[class*="bg-rose-950"] {
+  background-color: rgba(76, 5, 25, 0.92) !important;
+  border-color: rgba(244, 63, 94, 0.55) !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) .erp-menu-cat-pill[class*="bg-cyan-950"] {
+  background-color: rgba(8, 51, 68, 0.92) !important;
+  border-color: rgba(6, 182, 212, 0.55) !important;
+}
+
+/* Preserve bright white text ONLY on truly solid saturated buttons & active pills (higher specificity + placed AFTER) */
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :is(button, a, span, div):is(
+  .bg-indigo-600, .bg-indigo-700,
+  .bg-blue-600, .bg-blue-700,
+  .bg-emerald-600, .bg-emerald-700,
+  .bg-amber-600, .bg-amber-700,
+  .bg-rose-600, .bg-rose-700,
+  .bg-red-600, .bg-red-700,
+  .bg-purple-600, .bg-purple-700,
+  .bg-teal-600, .bg-teal-700,
+  .bg-sky-600, .bg-sky-700,
+  .bg-cyan-600, .bg-cyan-700,
+  .bg-violet-600, .bg-green-600,
+  [class^="from-indigo-6"], [class*=" from-indigo-6"],
+  [class^="from-blue-6"], [class*=" from-blue-6"],
+  [class^="from-emerald-6"], [class*=" from-emerald-6"],
+  [class^="from-cyan-6"], [class*=" from-cyan-6"],
+  [class^="from-purple-6"], [class*=" from-purple-6"]
+),
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :is(button, a, span, div):is(
+  .bg-indigo-600, .bg-indigo-700,
+  .bg-blue-600, .bg-blue-700,
+  .bg-emerald-600, .bg-emerald-700,
+  .bg-amber-600, .bg-amber-700,
+  .bg-rose-600, .bg-rose-700,
+  .bg-red-600, .bg-red-700,
+  .bg-purple-600, .bg-purple-700,
+  .bg-teal-600, .bg-teal-700,
+  .bg-sky-600, .bg-sky-700,
+  .bg-cyan-600, .bg-cyan-700,
+  .bg-violet-600, .bg-green-600,
+  [class^="from-indigo-6"], [class*=" from-indigo-6"],
+  [class^="from-blue-6"], [class*=" from-blue-6"],
+  [class^="from-emerald-6"], [class*=" from-emerald-6"],
+  [class^="from-cyan-6"], [class*=" from-cyan-6"],
+  [class^="from-purple-6"], [class*=" from-purple-6"]
+) :is(*, .text-white) {
+  color: #ffffff !important;
+}
+
+/* Header & Bottom Nav in White Mode */
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) :is(header, nav.fixed):not(.nst-isolated-modal):not(.nst-isolated-modal *) {
+  background-color: rgba(255, 255, 255, 0.97) !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) input:not([type="checkbox"]):not([type="radio"]):not(.nst-isolated-modal):not(.nst-isolated-modal *),
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) select:not(.nst-isolated-modal):not(.nst-isolated-modal *),
+:is(.student-theme-white, .admin-theme-white, .teacher-theme-white, .app-theme-white) textarea:not(.nst-isolated-modal):not(.nst-isolated-modal *) {
+  background-color: #ffffff !important;
+  border-color: #94a3b8 !important;
+  color: #0f172a !important;
+}
+
+/* 2. BLACK THEME (AMOLED Pure Pitch Black Mode — Sleek Obsidian & Crisp Zinc Contrast) */
 .student-theme-black,
 .admin-theme-black,
 .teacher-theme-black,
@@ -4189,97 +4360,272 @@ select:focus {
   background-color: #000000 !important;
   color: #ffffff !important;
 }
-.student-theme-black .bg-slate-950,
-.admin-theme-black .bg-slate-950,
-.teacher-theme-black .bg-slate-950,
-.app-theme-black .bg-slate-950,
-.student-theme-black .bg-slate-950\/70,
-.admin-theme-black .bg-slate-950\/70,
-.teacher-theme-black .bg-slate-950\/70,
-.app-theme-black .bg-slate-950\/70,
-.student-theme-black .bg-slate-950\/80,
-.admin-theme-black .bg-slate-950\/80,
-.teacher-theme-black .bg-slate-950\/80,
-.app-theme-black .bg-slate-950\/80,
-.student-theme-black .bg-slate-950\/90,
-.admin-theme-black .bg-slate-950\/90,
-.teacher-theme-black .bg-slate-950\/90,
-.app-theme-black .bg-slate-950\/90 {
-  background-color: #050505 !important;
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black)
+  :not(.nst-drawer-backdrop)
+  :is(.bg-slate-950, .dark\:bg-slate-950),
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black)
+  :not(.fixed):not(.nst-drawer-backdrop)
+  :is([class^="bg-slate-950/"], [class*=" bg-slate-950/"], [class^="dark:bg-slate-950/"], [class*=" dark:bg-slate-950/"]) {
+  background-color: #07070a !important;
   color: #ffffff !important;
 }
-.student-theme-black .bg-slate-900,
-.admin-theme-black .bg-slate-900,
-.teacher-theme-black .bg-slate-900,
-.app-theme-black .bg-slate-900,
-.student-theme-black .bg-slate-900\/70,
-.admin-theme-black .bg-slate-900\/70,
-.teacher-theme-black .bg-slate-900\/70,
-.app-theme-black .bg-slate-900\/70,
-.student-theme-black .bg-slate-900\/80,
-.admin-theme-black .bg-slate-900\/80,
-.teacher-theme-black .bg-slate-900\/80,
-.app-theme-black .bg-slate-900\/80,
-.student-theme-black .bg-slate-900\/90,
-.admin-theme-black .bg-slate-900\/90,
-.teacher-theme-black .bg-slate-900\/90,
-.app-theme-black .bg-slate-900\/90,
-.student-theme-black .bg-slate-900\/95,
-.admin-theme-black .bg-slate-900\/95,
-.teacher-theme-black .bg-slate-900\/95,
-.app-theme-black .bg-slate-900\/95 {
-  background-color: #0c0c0c !important;
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black)
+  :not(.nst-drawer-backdrop)
+  :is(.bg-slate-900, .dark\:bg-slate-900),
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black)
+  :not(.fixed):not(.nst-drawer-backdrop)
+  :is([class^="bg-slate-900/"], [class*=" bg-slate-900/"], [class^="dark:bg-slate-900/"], [class*=" dark:bg-slate-900/"]) {
+  background-color: #101015 !important;
   color: #ffffff !important;
 }
-.student-theme-black .bg-slate-800,
-.admin-theme-black .bg-slate-800,
-.teacher-theme-black .bg-slate-800,
-.app-theme-black .bg-slate-800,
-.student-theme-black .bg-slate-800\/80,
-.admin-theme-black .bg-slate-800\/80,
-.teacher-theme-black .bg-slate-800\/80,
-.app-theme-black .bg-slate-800\/80,
-.student-theme-black .bg-slate-800\/90,
-.admin-theme-black .bg-slate-800\/90,
-.teacher-theme-black .bg-slate-800\/90,
-.app-theme-black .bg-slate-800\/90 {
-  background-color: #171717 !important;
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black)
+  :not(.nst-drawer-backdrop)
+  :is(.bg-slate-800, .bg-slate-700, .dark\:bg-slate-800),
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black)
+  :not(.fixed):not(.nst-drawer-backdrop)
+  :is([class^="bg-slate-800/"], [class*=" bg-slate-800/"], [class^="bg-slate-700/"], [class*=" bg-slate-700/"], [class^="dark:bg-slate-800/"], [class*=" dark:bg-slate-800/"]) {
+  background-color: #1b1b23 !important;
   color: #ffffff !important;
 }
-.student-theme-black .border-slate-800,
-.admin-theme-black .border-slate-800,
-.teacher-theme-black .border-slate-800,
-.app-theme-black .border-slate-800,
-.student-theme-black .border-slate-700,
-.admin-theme-black .border-slate-700,
-.teacher-theme-black .border-slate-700,
-.app-theme-black .border-slate-700 {
-  border-color: #262626 !important;
-}
-.student-theme-black header,
-.admin-theme-black header,
-.teacher-theme-black header,
-.app-theme-black header {
-  background-color: rgba(0, 0, 0, 0.95) !important;
-  border-color: #262626 !important;
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) :is(
+  [class^="from-slate-9"], [class*=" from-slate-9"],
+  [class^="from-blue-9"], [class*=" from-blue-9"],
+  [class^="from-indigo-9"], [class*=" from-indigo-9"],
+  [class^="from-purple-9"], [class*=" from-purple-9"],
+  [class^="dark:from-slate-9"], [class*=" dark:from-slate-9"],
+  [class^="dark:from-blue-9"], [class*=" dark:from-blue-9"],
+  [class^="dark:from-indigo-9"], [class*=" dark:from-indigo-9"]
+) {
+  background: linear-gradient(135deg, #0b0b10 0%, #15151d 100%) !important;
+  border-color: #3f3f4e !important;
   color: #ffffff !important;
 }
-.student-theme-black .text-slate-300,
-.admin-theme-black .text-slate-300,
-.teacher-theme-black .text-slate-300,
-.app-theme-black .text-slate-300,
-.student-theme-black .text-slate-400,
-.admin-theme-black .text-slate-400,
-.teacher-theme-black .text-slate-400,
-.app-theme-black .text-slate-400 {
-  color: #a3a3a3 !important;
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) :is(
+  .border-slate-800, [class^="border-slate-800/"], [class*=" border-slate-800/"],
+  .dark\:border-slate-800, [class^="dark:border-slate-800/"], [class*=" dark:border-slate-800/"]
+) {
+  border-color: #2c2c38 !important;
+}
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) :is(
+  .border-slate-700, [class^="border-slate-700/"], [class*=" border-slate-700/"],
+  .dark\:border-slate-700, [class^="dark:border-slate-700/"], [class*=" dark:border-slate-700/"]
+) {
+  border-color: #424252 !important;
+}
+/* Explicit tinted pills & dark text immunity in Black Theme */
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) :not(.erp-menu-cat-pill):not(.erp-menu-cat-badge):is(.bg-indigo-950, [class^="bg-indigo-950/"], [class*=" bg-indigo-950/"], [class^="bg-indigo-600/"], [class*=" bg-indigo-600/"], [class^="bg-indigo-500/"], [class*=" bg-indigo-500/"]) {
+  background-color: rgba(49, 46, 129, 0.45) !important;
+  border-color: rgba(129, 140, 248, 0.45) !important;
+  color: #c7d2fe !important;
+}
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) :not(.erp-menu-cat-pill):not(.erp-menu-cat-badge):is(.bg-blue-950, [class^="bg-blue-950/"], [class*=" bg-blue-950/"], [class^="bg-blue-600/"], [class*=" bg-blue-600/"], [class^="bg-blue-500/"], [class*=" bg-blue-500/"]) {
+  background-color: rgba(30, 58, 138, 0.45) !important;
+  border-color: rgba(96, 165, 250, 0.45) !important;
+  color: #bfdbfe !important;
+}
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) :not(.erp-menu-cat-pill):not(.erp-menu-cat-badge):is(.bg-emerald-950, [class^="bg-emerald-950/"], [class*=" bg-emerald-950/"], .bg-teal-950, [class^="bg-teal-950/"], [class*=" bg-teal-950/"], [class^="bg-emerald-600/"], [class*=" bg-emerald-600/"], [class^="bg-emerald-500/"], [class*=" bg-emerald-500/"], [class^="bg-teal-600/"], [class*=" bg-teal-600/"]) {
+  background-color: rgba(6, 78, 59, 0.48) !important;
+  border-color: rgba(52, 211, 153, 0.42) !important;
+  color: #a7f3d0 !important;
+}
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) :not(.erp-menu-cat-pill):not(.erp-menu-cat-badge):is(.bg-amber-950, [class^="bg-amber-950/"], [class*=" bg-amber-950/"], [class^="bg-amber-500/"], [class*=" bg-amber-500/"]) {
+  background-color: rgba(120, 53, 15, 0.45) !important;
+  border-color: rgba(251, 191, 36, 0.42) !important;
+  color: #fde68a !important;
+}
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) :not(.erp-menu-cat-pill):not(.erp-menu-cat-badge):is(.bg-purple-950, [class^="bg-purple-950/"], [class*=" bg-purple-950/"], [class^="bg-purple-500/"], [class*=" bg-purple-500/"]) {
+  background-color: rgba(88, 28, 135, 0.45) !important;
+  border-color: rgba(192, 132, 252, 0.42) !important;
+  color: #e9d5ff !important;
+}
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) :not(.erp-menu-cat-pill):not(.erp-menu-cat-badge):is(.bg-rose-950, [class^="bg-rose-950/"], [class*=" bg-rose-950/"], [class^="bg-rose-500/"], [class*=" bg-rose-500/"], [class^="bg-rose-600/"], [class*=" bg-rose-600/"], [class^="bg-red-500/"], [class*=" bg-red-500/"]) {
+  background-color: rgba(136, 19, 55, 0.45) !important;
+  border-color: rgba(251, 113, 133, 0.42) !important;
+  color: #fecdd3 !important;
+}
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) :not(.erp-menu-cat-pill):not(.erp-menu-cat-badge):is(.bg-sky-950, [class^="bg-sky-950/"], [class*=" bg-sky-950/"], [class^="bg-cyan-500/"], [class*=" bg-cyan-500/"], [class^="bg-sky-500/"], [class*=" bg-sky-500/"]) {
+  background-color: rgba(12, 74, 110, 0.45) !important;
+  border-color: rgba(56, 189, 248, 0.42) !important;
+  color: #bae6fd !important;
+}
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) :is(header, nav.fixed) {
+  background-color: rgba(6, 6, 9, 0.96) !important;
+  border-color: #2c2c38 !important;
+  color: #ffffff !important;
+}
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) :not(.a4-sheet):not(.a4-sheet *):not(.marksheet-sheet-box):not(.marksheet-sheet-box *):not(.adm-box):not(.adm-box *):is(.text-white, .dark\:text-white) {
+  color: #ffffff !important;
+}
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) :is(.text-slate-100, .text-slate-200) {
+  color: #f4f4f6 !important;
+}
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) .text-slate-300 {
+  color: #e4e4ed !important;
+}
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) .text-slate-400 {
+  color: #b8b8c8 !important;
+}
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) .text-slate-500 {
+  color: #9696aa !important;
+}
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) :is(.text-emerald-200, .text-emerald-300, .text-emerald-400) { color: #6ee7b7 !important; }
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) :is(.text-teal-200, .text-teal-300, .text-teal-400) { color: #5eead4 !important; }
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) :is(.text-indigo-200, .text-indigo-300, .text-indigo-400) { color: #a5b4fc !important; }
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) :is(.text-blue-200, .text-blue-300, .text-blue-400) { color: #93c5fd !important; }
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) :is(.text-sky-300, .text-sky-400, .text-cyan-300, .text-cyan-400) { color: #7dd3fc !important; }
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) :is(.text-amber-200, .text-amber-300, .text-amber-400) { color: #fcd34d !important; }
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) :is(.text-rose-200, .text-rose-300, .text-rose-400, .text-red-300, .text-red-400) { color: #fda4af !important; }
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) :is(.text-purple-200, .text-purple-300, .text-purple-400) { color: #d8b4fe !important; }
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black) :is(
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  select,
+  textarea
+) {
+  background-color: #0d0d13 !important;
+  border-color: #3f3f4e !important;
+  color: #ffffff !important;
 }
 
-/* 3. CURRENT THEME (Midnight Slate / Indigo Navy Mode) */
+/* 3. BLUE / MIDNIGHT THEME (Royal Sapphire Navy Mode — Crisp Surface Separation + High Contrast) */
 .student-theme-current,
 .admin-theme-current,
 .teacher-theme-current,
 .app-theme-current {
-  background-color: #020617 !important;
+  background-color: #08142c !important;
   color: #f8fafc !important;
 }
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current)
+  :not(.nst-drawer-backdrop)
+  :is(.bg-slate-950, .dark\:bg-slate-950),
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current)
+  :not(.fixed):not(.nst-drawer-backdrop)
+  :is([class^="bg-slate-950/"], [class*=" bg-slate-950/"], [class^="dark:bg-slate-950/"], [class*=" dark:bg-slate-950/"]) {
+  background-color: #0b1936 !important;
+  color: #f8fafc !important;
+}
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current)
+  :not(.nst-drawer-backdrop)
+  :is(.bg-slate-900, .dark\:bg-slate-900),
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current)
+  :not(.fixed):not(.nst-drawer-backdrop)
+  :is([class^="bg-slate-900/"], [class*=" bg-slate-900/"], [class^="dark:bg-slate-900/"], [class*=" dark:bg-slate-900/"]) {
+  background-color: #112447 !important;
+  color: #f8fafc !important;
+}
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current)
+  :not(.nst-drawer-backdrop)
+  :is(.bg-slate-800, .bg-slate-700, .dark\:bg-slate-800),
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current)
+  :not(.fixed):not(.nst-drawer-backdrop)
+  :is([class^="bg-slate-800/"], [class*=" bg-slate-800/"], [class^="bg-slate-700/"], [class*=" bg-slate-700/"], [class^="dark:bg-slate-800/"], [class*=" dark:bg-slate-800/"]) {
+  background-color: #1a3668 !important;
+  color: #f8fafc !important;
+}
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) :is(
+  [class^="from-slate-9"], [class*=" from-slate-9"],
+  [class^="from-blue-9"], [class*=" from-blue-9"],
+  [class^="from-indigo-9"], [class*=" from-indigo-9"],
+  [class^="dark:from-slate-9"], [class*=" dark:from-slate-9"],
+  [class^="dark:from-blue-9"], [class*=" dark:from-blue-9"],
+  [class^="dark:from-indigo-9"], [class*=" dark:from-indigo-9"]
+) {
+  background: linear-gradient(135deg, #132952 0%, #173466 55%, #112347 100%) !important;
+  border-color: #3b6cc2 !important;
+  color: #ffffff !important;
+}
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) :is(
+  .border-slate-800, [class^="border-slate-800/"], [class*=" border-slate-800/"],
+  .dark\:border-slate-800, [class^="dark:border-slate-800/"], [class*=" dark:border-slate-800/"]
+) {
+  border-color: #2c5296 !important;
+}
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) :is(
+  .border-slate-700, [class^="border-slate-700/"], [class*=" border-slate-700/"],
+  .dark\:border-slate-700, [class^="dark:border-slate-700/"], [class*=" dark:border-slate-700/"]
+) {
+  border-color: #3f6ec0 !important;
+}
+/* Explicit tinted pills & dark text immunity in Blue Theme */
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) :not(.erp-menu-cat-pill):not(.erp-menu-cat-badge):is(.bg-indigo-950, [class^="bg-indigo-950/"], [class*=" bg-indigo-950/"], [class^="bg-indigo-600/"], [class*=" bg-indigo-600/"], [class^="bg-indigo-500/"], [class*=" bg-indigo-500/"]) {
+  background-color: rgba(49, 46, 129, 0.52) !important;
+  border-color: rgba(129, 140, 248, 0.45) !important;
+  color: #e0e7ff !important;
+}
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) :not(.erp-menu-cat-pill):not(.erp-menu-cat-badge):is(.bg-blue-950, [class^="bg-blue-950/"], [class*=" bg-blue-950/"], [class^="bg-blue-600/"], [class*=" bg-blue-600/"], [class^="bg-blue-500/"], [class*=" bg-blue-500/"]) {
+  background-color: rgba(30, 58, 138, 0.55) !important;
+  border-color: rgba(96, 165, 250, 0.45) !important;
+  color: #dbeafe !important;
+}
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) :not(.erp-menu-cat-pill):not(.erp-menu-cat-badge):is(.bg-emerald-950, [class^="bg-emerald-950/"], [class*=" bg-emerald-950/"], .bg-teal-950, [class^="bg-teal-950/"], [class*=" bg-teal-950/"], [class^="bg-emerald-600/"], [class*=" bg-emerald-600/"], [class^="bg-emerald-500/"], [class*=" bg-emerald-500/"], [class^="bg-teal-600/"], [class*=" bg-teal-600/"]) {
+  background-color: rgba(6, 78, 59, 0.52) !important;
+  border-color: rgba(52, 211, 153, 0.42) !important;
+  color: #a7f3d0 !important;
+}
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) :not(.erp-menu-cat-pill):not(.erp-menu-cat-badge):is(.bg-amber-950, [class^="bg-amber-950/"], [class*=" bg-amber-950/"], [class^="bg-amber-500/"], [class*=" bg-amber-500/"]) {
+  background-color: rgba(120, 53, 15, 0.5) !important;
+  border-color: rgba(251, 191, 36, 0.42) !important;
+  color: #fde68a !important;
+}
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) :not(.erp-menu-cat-pill):not(.erp-menu-cat-badge):is(.bg-purple-950, [class^="bg-purple-950/"], [class*=" bg-purple-950/"], [class^="bg-purple-500/"], [class*=" bg-purple-500/"]) {
+  background-color: rgba(88, 28, 135, 0.5) !important;
+  border-color: rgba(192, 132, 252, 0.42) !important;
+  color: #e9d5ff !important;
+}
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) :not(.erp-menu-cat-pill):not(.erp-menu-cat-badge):is(.bg-rose-950, [class^="bg-rose-950/"], [class*=" bg-rose-950/"], [class^="bg-rose-500/"], [class*=" bg-rose-500/"], [class^="bg-rose-600/"], [class*=" bg-rose-600/"], [class^="bg-red-500/"], [class*=" bg-red-500/"]) {
+  background-color: rgba(136, 19, 55, 0.5) !important;
+  border-color: rgba(251, 113, 133, 0.42) !important;
+  color: #fecdd3 !important;
+}
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) :not(.erp-menu-cat-pill):not(.erp-menu-cat-badge):is(.bg-sky-950, [class^="bg-sky-950/"], [class*=" bg-sky-950/"], [class^="bg-cyan-500/"], [class*=" bg-cyan-500/"], [class^="bg-sky-500/"], [class*=" bg-sky-500/"]) {
+  background-color: rgba(12, 74, 110, 0.5) !important;
+  border-color: rgba(56, 189, 248, 0.42) !important;
+  color: #bae6fd !important;
+}
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) :is(header, nav.fixed) {
+  background-color: rgba(11, 25, 54, 0.96) !important;
+  border-color: #2c5296 !important;
+  color: #f8fafc !important;
+}
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) :not(.a4-sheet):not(.a4-sheet *):not(.marksheet-sheet-box):not(.marksheet-sheet-box *):not(.adm-box):not(.adm-box *):is(.text-white, .dark\:text-white) {
+  color: #ffffff !important;
+}
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) :is(.text-slate-100, .text-slate-200) {
+  color: #f1f5f9 !important;
+}
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) .text-slate-300 {
+  color: #e2eeff !important;
+}
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) .text-slate-400 {
+  color: #bdd2f2 !important;
+}
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) .text-slate-500 {
+  color: #9bb8e6 !important;
+}
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) :is(.text-emerald-200, .text-emerald-300, .text-emerald-400) { color: #6ee7b7 !important; }
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) :is(.text-teal-200, .text-teal-300, .text-teal-400) { color: #5eead4 !important; }
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) :is(.text-indigo-200, .text-indigo-300, .text-indigo-400) { color: #c7d2fe !important; }
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) :is(.text-blue-200, .text-blue-300, .text-blue-400) { color: #93c5fd !important; }
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) :is(.text-sky-300, .text-sky-400, .text-cyan-300, .text-cyan-400) { color: #7dd3fc !important; }
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) :is(.text-amber-200, .text-amber-300, .text-amber-400) { color: #fcd34d !important; }
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) :is(.text-rose-200, .text-rose-300, .text-rose-400, .text-red-300, .text-red-400) { color: #fda4af !important; }
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) :is(.text-purple-200, .text-purple-300, .text-purple-400) { color: #e9d5ff !important; }
+:is(.student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current) :is(
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  select,
+  textarea
+) {
+  background-color: #0b1b3d !important;
+  border-color: #3b6cc2 !important;
+  color: #f8fafc !important;
+}
+
+/* Always keep printable document sheets (A4 / ID cards / Marksheets / Receipts) crisp black-on-white regardless of active dark theme */
+:is(.student-theme-black, .admin-theme-black, .teacher-theme-black, .app-theme-black,
+    .student-theme-current, .admin-theme-current, .teacher-theme-current, .app-theme-current)
+  :is(.a4-sheet, .marksheet-sheet-box, .adm-box, .print-only-container) :is(input, select, textarea) {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #cbd5e1 !important;
+}
+
+

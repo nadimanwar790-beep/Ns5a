@@ -36,12 +36,13 @@ export async function renderHtmlToCanvasSafe(
   // Create isolated iframe detached from parent's Tailwind CSS stylesheets
   const iframe = document.createElement("iframe");
   iframe.style.position = "fixed";
-  iframe.style.left = "-9999px";
+  iframe.style.left = "-100000px";
   iframe.style.top = "0";
   iframe.style.width = `${widthPx}px`;
   iframe.style.height = "1123px";
   iframe.style.border = "none";
-  iframe.style.opacity = "0";
+  iframe.style.opacity = "1";
+  iframe.style.visibility = "visible";
   iframe.style.pointerEvents = "none";
   iframe.style.zIndex = "-9999";
   document.body.appendChild(iframe);
@@ -64,33 +65,58 @@ export async function renderHtmlToCanvasSafe(
       html, body {
         margin: 0;
         padding: 0;
+        width: ${widthPx}px;
         background-color: ${bgColor};
         color: #0f172a;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        font-family: "Noto Sans Devanagari", Arial, Helvetica, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        -webkit-font-smoothing: antialiased;
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
       }
       ${sanitizedCss}
     </style>
   </head>
-  <body style="background-color: ${bgColor};">
+  <body style="background-color: ${bgColor}; margin: 0; padding: 0; width: ${widthPx}px;">
     ${htmlContent}
   </body>
 </html>`);
     iframeDoc.close();
 
-    // Ensure all images in iframe have CORS anonymous flag
-    const images = iframeDoc.querySelectorAll("img");
-    images.forEach((img) => {
+    // Ensure all images in iframe have CORS anonymous flag and wait for load (with timeout)
+    const images = Array.from(iframeDoc.querySelectorAll("img"));
+    const imgPromises = images.map((img) => {
       img.setAttribute("crossorigin", "anonymous");
+      if (img.complete) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        const done = () => resolve();
+        img.addEventListener("load", done, { once: true });
+        img.addEventListener("error", done, { once: true });
+        setTimeout(done, 1500);
+      });
     });
 
-    // Small delay to allow fonts and images to settle in iframe
-    await new Promise<void>((resolve) => setTimeout(resolve, 80));
+    await Promise.all([
+      Promise.all(imgPromises),
+      (iframeDoc as any).fonts?.ready?.catch?.(() => {}) || Promise.resolve(),
+      new Promise<void>((resolve) => setTimeout(resolve, 140)),
+    ]);
 
     const targetNode = options.selector
-      ? ((iframeDoc.querySelector(options.selector) as HTMLElement) || (iframeDoc.body.firstElementChild as HTMLElement) || iframeDoc.body)
-      : ((iframeDoc.body.firstElementChild as HTMLElement) || iframeDoc.body);
+      ? ((iframeDoc.querySelector(options.selector) as HTMLElement) || iframeDoc.body)
+      : (iframeDoc.body.children.length === 1
+          ? (iframeDoc.body.firstElementChild as HTMLElement)
+          : iframeDoc.body);
+
+    const measuredHeight = Math.max(
+      targetNode?.scrollHeight || 0,
+      iframeDoc.body?.scrollHeight || 0,
+      1123
+    );
+    iframe.style.height = `${measuredHeight + 24}px`;
+
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
 
     const canvas = await html2canvas(targetNode, {
       scale,
@@ -98,7 +124,12 @@ export async function renderHtmlToCanvasSafe(
       allowTaint: true,
       backgroundColor: bgColor,
       logging: false,
+      x: 0,
+      y: 0,
+      scrollX: 0,
+      scrollY: 0,
       windowWidth: widthPx,
+      windowHeight: measuredHeight + 24,
       onclone: (clonedDoc) => {
         // Strict safety: sanitize any foreign stylesheets in cloned document
         const styles = Array.from(clonedDoc.querySelectorAll("style, link[rel='stylesheet']"));

@@ -22,10 +22,18 @@ import {
   BadgeCheck,
   User
 } from "lucide-react";
-import type { School, SecurityVisitorPass, StudentEarlyGatePass, SchoolStudent, SchoolClass } from "../../school-types";
+import type {
+  School,
+  SecurityVisitorPass,
+  StudentEarlyGatePass,
+  SchoolStudent,
+  SchoolClass,
+  AuthorizedPickupPerson,
+} from "../../school-types";
 import { loadSchoolSubcollection, syncSchoolSubcollection } from "../../utils/schoolCloudSync";
 import { shouldUseDemoForSchool } from "../../school-firebase";
 import { printElementInIframe } from "./AdmissionFormPrintModal";
+import { buildGatePassQrUrl } from "../../utils/qrVerifyUrl";
 
 interface Props {
   school: School;
@@ -124,7 +132,10 @@ export const VisitorGateSecurityManager: React.FC<Props> = ({
   classes = [],
   onBack,
 }) => {
-  const [activeTab, setActiveTab] = useState<"visitors" | "early_exit">("visitors");
+  const [activeTab, setActiveTab] = useState<"visitors" | "early_exit" | "authorized_pickup">("visitors");
+  const [pickupPersons, setPickupPersons] = useState<AuthorizedPickupPerson[]>([]);
+  const [pickupSearch, setPickupSearch] = useState("");
+  const [verifyCodeInput, setVerifyCodeInput] = useState("");
 
   const isDemo = shouldUseDemoForSchool(school?.id);
 
@@ -162,6 +173,9 @@ export const VisitorGateSecurityManager: React.FC<Props> = ({
     });
     loadSchoolSubcollection<StudentEarlyGatePass>(sid, "gate_early_passes", `gate_early_passes_${suffix}`).then((data) => {
       if (active && data.length > 0) setEarlyPasses(data);
+    });
+    loadSchoolSubcollection<AuthorizedPickupPerson>(sid, "authorized_pickup_persons", `nst_pickup_persons_${sid}`).then((data) => {
+      if (active) setPickupPersons(data);
     });
     return () => { active = false; };
   }, [school?.id]);
@@ -410,6 +424,19 @@ export const VisitorGateSecurityManager: React.FC<Props> = ({
           <UserX className="w-4 h-4" />
           <span>Student Early Exit Desk ({earlyPasses.length})</span>
         </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab("authorized_pickup")}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition cursor-pointer ${
+            activeTab === "authorized_pickup"
+              ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/20"
+              : "bg-slate-800/80 text-slate-400 hover:text-white"
+          }`}
+        >
+          <BadgeCheck className="w-4 h-4" />
+          <span>Authorized Pickup Desk ({pickupPersons.length})</span>
+        </button>
       </div>
 
       {/* TAB 1: VISITOR REGISTER */}
@@ -556,6 +583,130 @@ export const VisitorGateSecurityManager: React.FC<Props> = ({
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* TAB 3: AUTHORIZED PICKUP VERIFICATION DESK */}
+      {activeTab === "authorized_pickup" && (
+        <div className="space-y-4">
+          <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
+            <div className="relative flex-1 max-w-md">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={pickupSearch}
+                onChange={(e) => setPickupSearch(e.target.value)}
+                placeholder="Search student, guardian name, phone, or Pickup Code (PKP-...)..."
+                className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={verifyCodeInput}
+                onChange={(e) => setVerifyCodeInput(e.target.value.toUpperCase())}
+                placeholder="Enter PKP-XXXX"
+                className="px-3 py-2 rounded-xl bg-slate-900 border border-indigo-500/40 text-xs font-mono font-bold text-white w-36"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const found = pickupPersons.find(
+                    (p) => p.pickupCode.toUpperCase() === verifyCodeInput.trim().toUpperCase() && p.active !== false
+                  );
+                  if (!found) {
+                    toast.error("Invalid or inactive Pickup Verification Code!");
+                    return;
+                  }
+                  const st = students.find((s) => s.id === found.studentId);
+                  toast.success(`VERIFIED: ${found.name} (${found.relation}) authorized to pick up ${st?.name || "Student"}!`);
+                }}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black cursor-pointer"
+              >
+                Verify Code
+              </button>
+            </div>
+          </div>
+
+          {pickupPersons.length === 0 ? (
+            <div className="bg-slate-950/60 border border-slate-800 rounded-2xl p-8 text-center text-xs text-slate-400">
+              No parent-approved pickup guardians registered yet. Parents can add authorized guardians and generate QR Pickup Codes from their Student Safety Portal.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {pickupPersons
+                .filter((p) => {
+                  const q = pickupSearch.trim().toLowerCase();
+                  if (!q) return true;
+                  const st = students.find((s) => s.id === p.studentId);
+                  return (
+                    p.name.toLowerCase().includes(q) ||
+                    p.pickupCode.toLowerCase().includes(q) ||
+                    p.phone.toLowerCase().includes(q) ||
+                    (st?.name || "").toLowerCase().includes(q)
+                  );
+                })
+                .map((p) => {
+                  const st = students.find((s) => s.id === p.studentId);
+                  return (
+                    <div key={p.id} className="bg-slate-950/70 border border-slate-800 rounded-2xl p-4 space-y-2.5">
+                      <div className="flex items-start gap-3">
+                        <div className="w-12 h-14 rounded-xl bg-slate-900 border border-slate-700 overflow-hidden flex items-center justify-center shrink-0">
+                          {p.photoUrl ? (
+                            <img src={p.photoUrl} alt={p.name} className="w-full h-full object-cover" />
+                          ) : (
+                            <User className="w-5 h-5 text-indigo-400" />
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <h4 className="text-sm font-black text-white truncate">{p.name}</h4>
+                            <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-mono text-[10px] font-black">
+                              {p.pickupCode}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-400">
+                            {p.relation} · Aadhaar ****{p.aadhaarLast4} · {p.phone}
+                          </p>
+                          <p className="text-xs font-bold text-emerald-400 mt-1">
+                            Student: {st?.name || "Student"} {st?.className ? `(${st.className})` : ""}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const passNo = `PK-${Math.floor(1000 + Math.random() * 9000)}`;
+                          const nowTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+                          const newEntry: SecurityVisitorPass = {
+                            id: `vp_pk_${Date.now()}`,
+                            passNumber: passNo,
+                            schoolId: school.id,
+                            visitorName: `${p.name} (${p.relation})`,
+                            visitorPhone: p.phone,
+                            visitorType: "PARENT",
+                            purpose: `Verified Guardian Pickup (Code ${p.pickupCode})`,
+                            personToMeet: st?.name || "Student Pickup",
+                            studentName: st?.name,
+                            studentClass: st?.className,
+                            inTime: `${nowTime}, Today`,
+                            outTime: `${nowTime}, Today`,
+                            idProofType: `Aadhaar ****${p.aadhaarLast4}`,
+                            status: "CHECKED_OUT",
+                            guardName: vGuard.trim() || "Main Gate Guard",
+                          };
+                          saveVisitors([newEntry, ...visitors]);
+                          toast.success(`Safe Pickup Logged for ${st?.name || "Student"} by ${p.name}`);
+                        }}
+                        className="w-full py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-300 text-xs font-black cursor-pointer"
+                      >
+                        ✓ Confirm Identity &amp; Log Safe Pickup
+                      </button>
+                    </div>
+                  );
+                })}
+            </div>
+          )}
         </div>
       )}
 
@@ -846,7 +997,22 @@ export const VisitorGateSecurityManager: React.FC<Props> = ({
             </div>
 
             <div className="p-2 bg-slate-100 rounded-xl inline-block border border-slate-300">
-              <QRCode value={`https://nsta.app/gate-verify?pass=${printPass.passNumber}`} size={80} level="M" />
+              <QRCode
+                value={buildGatePassQrUrl({
+                  schoolId: school?.id || "",
+                  schoolName: school?.name || "",
+                  passNumber: printPass.passNumber,
+                  name: "visitorName" in printPass ? printPass.visitorName : printPass.studentName,
+                  phone: "visitorPhone" in printPass ? printPass.visitorPhone : "",
+                  purpose: "purpose" in printPass ? printPass.purpose : "",
+                  personToMeet: "personToMeet" in printPass ? printPass.personToMeet : "",
+                  reason: "reason" in printPass ? printPass.reason : "",
+                  timeStamp: "inTime" in printPass ? printPass.inTime : printPass.requestTime,
+                  passKind: "visitorName" in printPass ? "visitor" : "student_exit",
+                })}
+                size={84}
+                level="L"
+              />
             </div>
 
             <div className="pt-2 border-t border-slate-300 flex items-center justify-between text-[10px] font-bold text-slate-600">

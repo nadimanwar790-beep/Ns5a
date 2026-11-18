@@ -78,6 +78,10 @@ import {
   deleteNstaMessage,
   deleteNstaMessageForMe,
   deleteNstaMessageForEveryone,
+  bulkDeleteNstaMessagesForMe,
+  bulkDeleteNstaMessagesForEveryone,
+  bulkPermanentDeleteNstaMessages,
+  NSTA_MESSAGE_RETENTION_DAYS,
   toggleNstaMessageReaction,
   markNstaMessagesDeliveredOrRead,
   subscribeToNstaMessages,
@@ -88,6 +92,7 @@ import {
 } from "../../school-firebase";
 import { uploadToCloudinary } from "../../services/cloudinaryService";
 import { formatMonthLabel } from "../../utils/feeFifoAllocation";
+import { getSchoolFeeDiscountSlabs, computeSlabDiscountAmount } from "../../utils/feeDiscountSlabs";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 import { speakNotification, stopVoiceNotification } from "../../utils/voiceNotifyEngine";
 import { OfficialFeeReceiptModal } from "./OfficialFeeReceiptModal";
@@ -461,8 +466,10 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     });
   };
 
-  // Staff / Teacher Directory Drawer for Admin & Accountant
-  const [showStaffDirectoryModal, setShowStaffDirectoryModal] = useState<boolean>(false);
+  // Direct Teacher Chat selection state (3rd tab shows all teachers directly; tap any teacher to open 1-on-1 chat)
+  const [isTeacherChatOpen, setIsTeacherChatOpen] = useState<boolean>(false);
+  const [teacherSearchQuery, setTeacherSearchQuery] = useState<string>("");
+  const [websiteDeskVisitors, setWebsiteDeskVisitors] = useState<Array<{ id: string; name: string; className?: string; lastAt: string }>>([]);
 
   // Message Tracking Refs for Auto-Voice Readout
   const knownMsgIdsRef = useRef<Set<string>>(new Set());
@@ -483,7 +490,10 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       }
       if (detail.classId) setSelectedClassId(detail.classId);
       if (detail.studentId) setSelectedStudentId(detail.studentId);
-      if (detail.teacherId) setSelectedTeacherId(detail.teacherId);
+      if (detail.teacherId) {
+        setSelectedTeacherId(detail.teacherId);
+        setIsTeacherChatOpen(true);
+      }
     };
     window.addEventListener("nsta-messenger-open-thread", handleOpenThreadEvent);
     return () => window.removeEventListener("nsta-messenger-open-thread", handleOpenThreadEvent);
@@ -494,7 +504,10 @@ export const NstaMessengerSuite: React.FC<Props> = ({
 
   // Automatic Real-Time Read & Delivered Receipts Synchronization
   useEffect(() => {
-    if (!messages || messages.length === 0 || !currentUserId) return;
+    // Do not mark teacher messages as read while merely browsing the Teachers Roster list
+    const isBrowsingTeacherRoster =
+      activeTab === "teacher" && !isTeacherChatOpen && currentUserRole !== "TEACHER";
+    if (isBrowsingTeacherRoster || !messages || messages.length === 0 || !currentUserId) return;
     const unreadIncoming = messages.filter(
       (m) =>
         m &&
@@ -541,30 +554,65 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     );
   }, [selectedMsgs, currentUserRole, currentUserId, currentUserName, teacher]);
 
-  // Execute Delete for Everyone (Delete for all)
-  const handleDeleteForEveryone = async () => {
+  const [isDeletingMessages, setIsDeletingMessages] = useState(false);
+
+  // Execute Delete Permanently (completely removes messages from chat & database)
+  const handleDeletePermanently = async () => {
     const ids = [...selectedMessageIds];
+    if (ids.length === 0 || isDeletingMessages) return;
+    setIsDeletingMessages(true);
     setShowDeleteModal(false);
     setSelectedMessageIds([]);
     setFloatingReactionMsgId(null);
-    for (const id of ids) {
-      await deleteNstaMessageForEveryone(school?.id || "default", id);
+    try {
+      const count = await bulkPermanentDeleteNstaMessages(school?.id || "default", ids);
+      setToastNotification(`🗑️ ${count} संदेश पूरी तरह हटा दिए गए (Permanently deleted)`);
+    } catch {
+      setToastNotification("⚠️ कुछ संदेश हटाने में समस्या आई, कृपया पुनः प्रयास करें");
+    } finally {
+      setIsDeletingMessages(false);
+      setTimeout(() => setToastNotification(null), 3500);
     }
-    setToastNotification("🗑️ संदेश सभी के लिए हटा दिया गया (Deleted for everyone)");
-    setTimeout(() => setToastNotification(null), 3000);
   };
 
-  // Execute Delete for Me (Hides strictly for current user)
-  const handleDeleteForMe = async () => {
+  // Execute Delete for Everyone (Bulk optimized for 1000+ messages)
+  const handleDeleteForEveryone = async () => {
     const ids = [...selectedMessageIds];
+    if (ids.length === 0 || isDeletingMessages) return;
+    setIsDeletingMessages(true);
     setShowDeleteModal(false);
     setSelectedMessageIds([]);
     setFloatingReactionMsgId(null);
-    for (const id of ids) {
-      await deleteNstaMessageForMe(school?.id || "default", id, currentUserId);
+    try {
+      const count = await bulkDeleteNstaMessagesForEveryone(school?.id || "default", ids, {
+        permanentOnBulk: true,
+      });
+      setToastNotification(`🗑️ ${count} संदेश सभी के लिए हटा दिए गए (Deleted for everyone)`);
+    } catch {
+      setToastNotification("⚠️ कुछ संदेश हटाने में समस्या आई, कृपया पुनः प्रयास करें");
+    } finally {
+      setIsDeletingMessages(false);
+      setTimeout(() => setToastNotification(null), 3500);
     }
-    setToastNotification("🗑️ संदेश आपके लिए हटा दिया गया (Deleted for me)");
-    setTimeout(() => setToastNotification(null), 3000);
+  };
+
+  // Execute Delete for Me (Hides strictly for current user, bulk optimized for 1000+ messages)
+  const handleDeleteForMe = async () => {
+    const ids = [...selectedMessageIds];
+    if (ids.length === 0 || isDeletingMessages) return;
+    setIsDeletingMessages(true);
+    setShowDeleteModal(false);
+    setSelectedMessageIds([]);
+    setFloatingReactionMsgId(null);
+    try {
+      const count = await bulkDeleteNstaMessagesForMe(school?.id || "default", ids, currentUserId);
+      setToastNotification(`🗑️ ${count} संदेश आपके लिए हटा दिए गए (Deleted for me)`);
+    } catch {
+      setToastNotification("⚠️ कुछ संदेश हटाने में समस्या आई, कृपया पुनः प्रयास करें");
+    } finally {
+      setIsDeletingMessages(false);
+      setTimeout(() => setToastNotification(null), 3500);
+    }
   };
 
   // Copy selected messages
@@ -1116,12 +1164,22 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     }
     if (currentUserRole === "STUDENT" && student) return student;
     if (selectedStudentId === "all") return null;
+    if (selectedStudentId && selectedStudentId.startsWith("web_adm_")) {
+      const matchedVisitor = websiteDeskVisitors.find((v) => v.id === selectedStudentId);
+      return {
+        id: selectedStudentId,
+        name: matchedVisitor?.name || "Website Admission Visitor",
+        className: matchedVisitor?.className || "Website Admissions",
+        rollNo: "WEB",
+        photoUrl: ""
+      } as any;
+    }
     const found = safeStudents.find(s => s.id === selectedStudentId);
     if (found) return found;
     if (currentUserRole !== "ADMIN" && safeStudents[0]) return safeStudents[0];
     if (student) return student;
     return null;
-  }, [safeStudents, selectedStudentId, student, currentUserRole, school?.logoUrl]);
+  }, [safeStudents, selectedStudentId, student, currentUserRole, school?.logoUrl, websiteDeskVisitors]);
 
   const activeTeacher = useMemo(() => {
     if (currentUserRole === "TEACHER" && teacher) return teacher;
@@ -1184,6 +1242,9 @@ export const NstaMessengerSuite: React.FC<Props> = ({
   const isTeacherQuotaExceeded = activeTab === "teacher" && currentUserRole !== "ADMIN" && messagesTodayCount >= dailyTeacherStudentLimit;
 
   // Real-time message subscription based on activeTab
+  const isTeacherDirectoryView =
+    activeTab === "teacher" && !isTeacherChatOpen && currentUserRole !== "TEACHER";
+
   useEffect(() => {
     const effectiveSchoolId = school?.id || "default";
 
@@ -1198,13 +1259,18 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     } else if (activeTab === "school") {
       filter = {
         threadType: "SCHOOL_DESK",
-        studentId: activeStudent?.id || "general"
+        // Admin on "All" receives all School Desk + Website Admissions visitor messages
+        studentId:
+          currentUserRole === "ADMIN" && (!selectedStudentId || selectedStudentId === "all")
+            ? undefined
+            : activeStudent?.id || "general"
       };
     } else {
       filter = {
         threadType: "TEACHER_CHAT",
         studentId: currentUserRole === "ADMIN" ? "STAFF_ADMIN" : activeStudent?.id,
-        teacherId: activeTeacher?.id
+        // When browsing all teachers directly, load all threads for current user to show unread counts & last preview
+        teacherId: isTeacherDirectoryView ? undefined : activeTeacher?.id
       };
     }
 
@@ -1220,6 +1286,33 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     const unsub = subscribeToNstaMessages(effectiveSchoolId, filter, (newMsgs) => {
       const msgList = newMsgs || [];
       setMessages(msgList);
+
+      // Keep track of Website Admissions visitors messaging School Admin
+      if (activeTab === "school" && currentUserRole === "ADMIN") {
+        const visitorMap = new Map<string, { id: string; name: string; className?: string; lastAt: string }>();
+        msgList.forEach((m) => {
+          if (m?.studentId && m.studentId.startsWith("web_adm_")) {
+            const label = m.studentName || m.senderName || "Website Visitor";
+            const existing = visitorMap.get(m.studentId);
+            if (!existing || (m.createdAt || "") > existing.lastAt) {
+              visitorMap.set(m.studentId, {
+                id: m.studentId,
+                name: label,
+                className: m.className,
+                lastAt: m.createdAt || ""
+              });
+            }
+          }
+        });
+        if (visitorMap.size > 0) {
+          setWebsiteDeskVisitors((prev) => {
+            const merged = new Map<string, { id: string; name: string; className?: string; lastAt: string }>();
+            prev.forEach((v) => merged.set(v.id, v));
+            visitorMap.forEach((v, k) => merged.set(k, v));
+            return Array.from(merged.values()).sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+          });
+        }
+      }
 
       // On initial load of thread, seed known message IDs so history is not spoken aloud
       if (isInitialLoadRef.current) {
@@ -1255,9 +1348,9 @@ export const NstaMessengerSuite: React.FC<Props> = ({
     });
 
     return () => unsub();
-  }, [school?.id, activeTab, activeClass?.id, activeStudent?.id, activeTeacher?.id, currentUserRole, isVoiceAnnounceEnabled, currentUserId]);
+  }, [school?.id, activeTab, activeClass?.id, activeStudent?.id, activeTeacher?.id, selectedStudentId, isTeacherDirectoryView, currentUserRole, isVoiceAnnounceEnabled, currentUserId]);
 
-  // Background unread count for School (Desk) tab (where attendance, fee & school alerts arrive)
+  // Background unread count for School (Desk) tab (where attendance, fee, website admissions & school alerts arrive)
   const [unreadSchoolDeskCount, setUnreadSchoolDeskCount] = useState(0);
   useEffect(() => {
     if (activeTab === "school") {
@@ -1265,7 +1358,10 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       return;
     }
     const effectiveSchoolId = school?.id || "default";
-    const studentFilterId = activeStudent?.id || (currentUserRole === "STUDENT" ? currentUserId : "general") || "general";
+    const studentFilterId =
+      currentUserRole === "ADMIN"
+        ? undefined
+        : activeStudent?.id || (currentUserRole === "STUDENT" ? currentUserId : "general") || "general";
     return subscribeToNstaMessages(
       effectiveSchoolId,
       { threadType: "SCHOOL_DESK", studentId: studentFilterId },
@@ -1291,9 +1387,18 @@ export const NstaMessengerSuite: React.FC<Props> = ({
 
   // Switch tab with instant state reset to prevent cross-page message bleeding
   const handleSwitchTab = (tab: "class" | "school" | "teacher") => {
-    if (tab === activeTab) return;
+    if (tab === activeTab) {
+      if (tab === "teacher" && currentUserRole !== "TEACHER") {
+        setIsTeacherChatOpen(false);
+      }
+      return;
+    }
     setMessages([]);
     setActiveTab(tab);
+    if (tab === "teacher") {
+      setIsTeacherChatOpen(currentUserRole === "TEACHER");
+      setTeacherSearchQuery("");
+    }
     isUserScrolledUpRef.current = false;
     setShowScrollBottomBtn(false);
   };
@@ -2420,7 +2525,10 @@ export const NstaMessengerSuite: React.FC<Props> = ({
 
       // 3. School Desk matching
       if (targetThreadType === "SCHOOL_DESK") {
-        const sId = activeStudent?.id;
+        const sId =
+          currentUserRole === "ADMIN" && (!selectedStudentId || selectedStudentId === "all")
+            ? undefined
+            : activeStudent?.id;
         if (sId && m.studentId && m.studentId !== sId && m.studentId !== "all" && m.studentId !== "general") {
           return false;
         }
@@ -2428,7 +2536,11 @@ export const NstaMessengerSuite: React.FC<Props> = ({
 
       // 4. Teacher Doubt matching
       if (targetThreadType === "TEACHER_CHAT") {
-        if (activeStudent?.id && m.studentId && m.studentId !== activeStudent.id) return false;
+        if (currentUserRole === "ADMIN") {
+          if (m.studentId && m.studentId !== "STAFF_ADMIN") return false;
+        } else if (activeStudent?.id && m.studentId && m.studentId !== activeStudent.id) {
+          return false;
+        }
         if (activeTeacher?.id && m.teacherId && m.teacherId !== activeTeacher.id) return false;
       }
 
@@ -2442,7 +2554,19 @@ export const NstaMessengerSuite: React.FC<Props> = ({
       (m.senderName || "").toLowerCase().includes(q) ||
       (m.feeSlip?.monthLabel || "").toLowerCase().includes(q)
     );
-  }, [messages, searchQuery, activeTab, activeClass?.id, activeStudent?.id, activeTeacher?.id]);
+  }, [messages, searchQuery, activeTab, activeClass?.id, activeStudent?.id, activeTeacher?.id, currentUserRole, selectedStudentId]);
+
+  const filteredTeachersList = useMemo(() => {
+    const q = teacherSearchQuery.trim().toLowerCase();
+    if (!q) return safeTeachers;
+    return safeTeachers.filter((t) => {
+      const name = String(t.name || "").toLowerCase();
+      const subj = Array.isArray(t.subjects) ? t.subjects.join(" ").toLowerCase() : String((t as any).subject || "").toLowerCase();
+      const desig = String(t.designation || "").toLowerCase();
+      const cls = Array.isArray(t.classes) ? t.classes.join(" ").toLowerCase() : "";
+      return name.includes(q) || subj.includes(q) || desig.includes(q) || cls.includes(q);
+    });
+  }, [safeTeachers, teacherSearchQuery]);
 
   return (
     <div className="fixed inset-0 z-50 w-screen h-screen flex flex-col bg-slate-950 font-sans select-none overflow-hidden">
@@ -2565,16 +2689,26 @@ export const NstaMessengerSuite: React.FC<Props> = ({
         <div className="bg-slate-900 border-b border-slate-800 px-2.5 sm:px-4 py-2 flex items-center justify-between gap-2 shrink-0 z-20">
           {/* Left: Back button + DP + Class & Messenger info */}
           <div className="flex items-center gap-2 min-w-0 flex-1">
-            {onBack && (
+            {activeTab === "teacher" && isTeacherChatOpen && currentUserRole !== "TEACHER" ? (
+              <button
+                type="button"
+                onClick={() => setIsTeacherChatOpen(false)}
+                className="px-2.5 py-1.5 rounded-xl bg-purple-600/20 hover:bg-purple-600/35 text-purple-200 border border-purple-500/40 transition cursor-pointer active:scale-95 shrink-0 flex items-center gap-1 text-xs font-bold min-h-[40px]"
+                title="Sabhi Teachers Ki List Par Wapas Jaayein"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                <span>Teachers</span>
+              </button>
+            ) : onBack ? (
               <button
                 type="button"
                 onClick={onBack}
-                className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer active:scale-95 shrink-0"
+                className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer active:scale-95 shrink-0 min-h-[40px] min-w-[40px] flex items-center justify-center"
                 title="Wapas Jaayein"
               >
                 <ChevronLeft className="w-5 h-5" />
               </button>
-            )}
+            ) : null}
 
             {/* DP / Group Avatar - Tap to open Group Info */}
             <button
@@ -2582,7 +2716,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
               onClick={() => {
                 if (activeTab === "class") setShowMemberDrawer(true);
               }}
-              className={`w-9 h-9 sm:w-10 sm:h-10 rounded-2xl flex items-center justify-center font-black text-sm shrink-0 shadow-md transition active:scale-95 cursor-pointer ${
+              className={`w-9 h-9 sm:w-10 sm:h-10 rounded-2xl flex items-center justify-center font-black text-sm shrink-0 shadow-md transition active:scale-95 cursor-pointer overflow-hidden ${
                 activeTab === "class"
                   ? "bg-gradient-to-tr from-emerald-600 to-teal-500 text-white shadow-emerald-900/30"
                   : activeTab === "school"
@@ -2591,20 +2725,28 @@ export const NstaMessengerSuite: React.FC<Props> = ({
               }`}
               title={activeTab === "class" ? "Group Info & Members Dekhein" : ""}
             >
-              {activeTab === "class"
-                ? (activeClass?.name?.slice(0, 2).toUpperCase() || "CL")
-                : activeTab === "school"
-                ? "🏫"
-                : "👨‍🏫"}
+              {activeTab === "class" ? (
+                activeClass?.name?.slice(0, 2).toUpperCase() || "CL"
+              ) : activeTab === "school" ? (
+                "🏫"
+              ) : isTeacherChatOpen && activeTeacher?.photoUrl ? (
+                <img
+                  src={activeTeacher.photoUrl}
+                  alt={activeTeacher.name}
+                  referrerPolicy="no-referrer"
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                "👨‍🏫"
+              )}
             </button>
 
             {/* Titles: Class name, NSTA Messenger & Members */}
             <div
               onClick={() => {
                 if (activeTab === "class") setShowMemberDrawer(true);
-                else if (activeTab === "teacher" && currentUserRole === "ADMIN") setShowStaffDirectoryModal(true);
               }}
-              className={`min-w-0 ${activeTab === "class" || (activeTab === "teacher" && currentUserRole === "ADMIN") ? "cursor-pointer" : ""}`}
+              className={`min-w-0 ${activeTab === "class" ? "cursor-pointer" : ""}`}
             >
               <div className="flex items-center gap-1.5 flex-wrap">
                 <span className="text-white font-black text-xs sm:text-sm tracking-tight truncate">
@@ -2612,31 +2754,42 @@ export const NstaMessengerSuite: React.FC<Props> = ({
                     ? `${activeClass?.name || "Class Group"} ${activeClass?.section ? `(${activeClass.section})` : ""}`
                     : activeTab === "school"
                     ? "School Desk"
-                    : currentUserRole === "ADMIN"
-                    ? `👨‍🏫 ${activeTeacher?.name || "Teacher"} (Staff Chat)`
-                    : currentUserRole === "TEACHER" && selectedStudentId === "STAFF_ADMIN"
-                    ? "🏫 School Administration (Principal)"
-                    : (activeTeacher?.name || "Teacher Doubt")}
+                    : currentUserRole === "TEACHER"
+                    ? selectedStudentId === "STAFF_ADMIN"
+                      ? "🏫 School Administration (Principal)"
+                      : (activeStudent?.name || "Student Doubt")
+                    : !isTeacherChatOpen
+                    ? `All Teachers (${safeTeachers.length})`
+                    : `${activeTeacher?.name || "Teacher"}${currentUserRole === "ADMIN" ? " (Staff Chat)" : ""}`}
                 </span>
                 <span className="px-1.5 py-0.2 rounded text-[8px] sm:text-[9px] font-mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 shrink-0">
                   LIVE
+                </span>
+                <span
+                  className="px-1.5 py-0.2 rounded text-[8px] sm:text-[9px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 shrink-0 flex items-center gap-0.5"
+                  title={`NSTA Messenger में कोई भी संदेश अधिकतम ${NSTA_MESSAGE_RETENTION_DAYS} दिन तक ही सुरक्षित रहता है, 7 दिन बाद स्वतः हट जाता है।`}
+                >
+                  <Clock className="w-2.5 h-2.5" />
+                  <span>{NSTA_MESSAGE_RETENTION_DAYS}d Auto-Delete</span>
                 </span>
               </div>
               <p className="text-[10px] sm:text-[11px] text-slate-400 truncate">
                 {activeTab === "class"
                   ? `${classStudents.length} Students • ${school?.name || "School Group"}`
                   : activeTab === "school"
-                  ? (school?.name || "Official School Desk")
-                  : currentUserRole === "ADMIN"
-                  ? `${activeTeacher?.subject || "Faculty"} • 1-on-1 Direct Chat`
-                  : currentUserRole === "TEACHER" && selectedStudentId === "STAFF_ADMIN"
-                  ? "Direct Management & Principal Desk"
-                  : `${activeTeacher?.subject || "Subject Teacher"} • 1-on-1 Doubt`}
+                  ? `${school?.name || "Official School Desk"}${websiteDeskVisitors.length > 0 && currentUserRole === "ADMIN" ? ` · ${websiteDeskVisitors.length} Web Inbox` : ""}`
+                  : currentUserRole === "TEACHER"
+                  ? selectedStudentId === "STAFF_ADMIN"
+                    ? "Direct Management & Principal Desk"
+                    : "Student Doubt Session"
+                  : !isTeacherChatOpen
+                  ? "Kisi bhi teacher par tap karke seedhe baat karein"
+                  : `${(activeTeacher?.subjects && activeTeacher.subjects.length > 0 ? activeTeacher.subjects.join(", ") : activeTeacher?.subject || activeTeacher?.designation || "Subject Teacher")} • 1-on-1 Chat`}
               </p>
             </div>
           </div>
 
-          {/* Right: Voice Toggle + Staff Directory / Class Selectors + Theme */}
+          {/* Right: Voice Toggle + Class / School Desk Selectors + Theme */}
           <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
             {/* Auto-Voice Readout Mute/Unmute Toggle */}
             <button
@@ -2698,46 +2851,30 @@ export const NstaMessengerSuite: React.FC<Props> = ({
               </select>
             )}
 
-            {/* Admin Recipient Selector for School Desk */}
+            {/* Admin Recipient Selector for School Desk (Includes Website Admissions Visitors) */}
             {currentUserRole === "ADMIN" && activeTab === "school" && (
               <select
                 value={selectedStudentId || "all"}
                 onChange={e => setSelectedStudentId(e.target.value)}
-                className="px-2 py-1.5 rounded-xl bg-blue-900/60 text-blue-100 border border-blue-500/60 text-xs font-bold cursor-pointer max-w-[120px] sm:max-w-[170px] truncate"
+                className="px-2 py-1.5 rounded-xl bg-blue-900/60 text-blue-100 border border-blue-500/60 text-xs font-bold cursor-pointer max-w-[130px] sm:max-w-[190px] truncate"
                 title="School Desk Praptkarta Chunein"
               >
-                <option value="all">📢 Sabhi Chhatra (Broadcast)</option>
-                {safeStudents.map(s => (
-                  <option key={s.id} value={s.id}>{s.name} ({s.rollNo ? `Roll ${s.rollNo}` : "Std"})</option>
-                ))}
-              </select>
-            )}
-
-            {/* Admin Teacher Selector (Staff Chat 1-on-1) */}
-            {activeTab === "teacher" && currentUserRole === "ADMIN" && safeTeachers.length > 0 && (
-              <div className="flex items-center gap-1">
-                <select
-                  value={selectedTeacherId}
-                  onChange={e => setSelectedTeacherId(e.target.value)}
-                  className="px-2 py-1.5 rounded-xl bg-purple-900/60 text-purple-100 border border-purple-500/60 text-xs font-bold cursor-pointer max-w-[110px] sm:max-w-[160px] truncate"
-                  title="Teacher Chunein (Staff 1-on-1)"
-                >
-                  {safeTeachers.map(t => (
-                    <option key={t.id} value={t.id}>
-                      👨‍🏫 {t.name} ({t.subjects && t.subjects.length > 0 ? t.subjects.join(", ") : t.designation || "Faculty"})
-                    </option>
+                <option value="all">📢 Sabhi Chhatra &amp; Inbox (All)</option>
+                {websiteDeskVisitors.length > 0 && (
+                  <optgroup label="Website Admissions Desk">
+                    {websiteDeskVisitors.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        🌐 {v.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                <optgroup label="Enrolled Students">
+                  {safeStudents.map(s => (
+                    <option key={s.id} value={s.id}>{s.name} ({s.rollNo ? `Roll ${s.rollNo}` : "Std"})</option>
                   ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={() => setShowStaffDirectoryModal(true)}
-                  className="p-1.5 px-2 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 text-xs font-bold transition active:scale-95 cursor-pointer flex items-center gap-1"
-                  title="Sabhi Teachers Ki List Dekhein"
-                >
-                  <Users className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline text-[11px]">Staff ({safeTeachers.length})</span>
-                </button>
-              </div>
+                </optgroup>
+              </select>
             )}
 
             {/* Recipient Selector for Teacher (Student Doubt OR School Admin Chat) */}
@@ -2753,20 +2890,6 @@ export const NstaMessengerSuite: React.FC<Props> = ({
                   <option key={s.id} value={s.id}>
                     🎓 {s.name} ({s.className || (s.rollNo ? `Roll ${s.rollNo}` : "Std")})
                   </option>
-                ))}
-              </select>
-            )}
-
-            {/* Teacher Selector for Student Doubt Desk */}
-            {activeTab === "teacher" && currentUserRole === "STUDENT" && safeTeachers.length > 0 && (
-              <select
-                value={selectedTeacherId}
-                onChange={e => setSelectedTeacherId(e.target.value)}
-                className="px-2 py-1.5 rounded-xl bg-purple-900/40 text-purple-200 border border-purple-700/60 text-xs font-bold cursor-pointer max-w-[100px] sm:max-w-[130px] truncate"
-                title="Teacher Chunein"
-              >
-                {safeTeachers.map(t => (
-                  <option key={t.id} value={t.id}>{t.name}</option>
                 ))}
               </select>
             )}
@@ -2852,7 +2975,160 @@ export const NstaMessengerSuite: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* ── CHAT MESSAGE BODY (WITH WALLPAPER & CRISP CONTRAST) ─────────────── */}
+      {/* ── CHAT MESSAGE BODY OR DIRECT TEACHERS ROSTER ─────────────── */}
+      {isTeacherDirectoryView ? (
+        <div className="flex-1 overflow-y-auto p-3 sm:p-6 bg-slate-950">
+          <div className="max-w-5xl mx-auto space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <div>
+                <h3 className="text-sm sm:text-base font-extrabold text-white">
+                  {currentUserRole === "ADMIN" ? "Sabhi Teachers — 1-on-1 Direct Staff Chat" : "Apne Teachers Se Seedhe Baat Karein"}
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Jis teacher se baat karni ho un par tap karein · {safeTeachers.length} Teachers Available
+                </p>
+              </div>
+              <div className="relative w-full sm:w-64">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={teacherSearchQuery}
+                  onChange={(e) => setTeacherSearchQuery(e.target.value)}
+                  placeholder="Teacher name ya subject khojein..."
+                  className="w-full min-h-[42px] pl-9 pr-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500"
+                />
+              </div>
+            </div>
+
+            {filteredTeachersList.length === 0 ? (
+              <div className="text-center py-16 bg-slate-900/50 border border-slate-800 rounded-2xl space-y-2">
+                <GraduationCap className="w-10 h-10 text-slate-600 mx-auto" />
+                <p className="text-sm font-bold text-slate-300">
+                  {safeTeachers.length === 0 ? "Abhi is school me koi teacher registered nahi hai." : "Is search se koi teacher nahi mila."}
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {filteredTeachersList.map((t) => {
+                  const teacherMsgs = messages.filter(
+                    (m) =>
+                      m.threadType === "TEACHER_CHAT" &&
+                      m.teacherId === t.id &&
+                      (!m.deletedFor || !m.deletedFor.includes(currentUserId))
+                  );
+                  const lastMsg = teacherMsgs.length > 0 ? teacherMsgs[teacherMsgs.length - 1] : null;
+                  const unreadCount = teacherMsgs.filter(
+                    (m) =>
+                      m.senderId !== currentUserId &&
+                      (!m.readBy || !m.readBy.some((r) => r.userId === currentUserId))
+                  ).length;
+                  const subjectText =
+                    t.subjects && t.subjects.length > 0
+                      ? t.subjects.join(", ")
+                      : (t as any).subject || t.designation || "Subject Teacher";
+
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedTeacherId(t.id);
+                        setIsTeacherChatOpen(true);
+                      }}
+                      className="w-full min-h-[76px] p-3.5 rounded-2xl bg-slate-900 hover:bg-slate-800/90 border border-slate-800 hover:border-purple-500/50 text-left flex items-center justify-between gap-3 transition cursor-pointer active:scale-[0.99]"
+                    >
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        {t.photoUrl ? (
+                          <img
+                            src={t.photoUrl}
+                            alt={t.name}
+                            referrerPolicy="no-referrer"
+                            className="w-12 h-12 rounded-2xl object-cover border border-purple-500/30 shrink-0"
+                          />
+                        ) : (
+                          <div className="w-12 h-12 rounded-2xl bg-purple-600/25 text-purple-200 border border-purple-500/30 flex items-center justify-center font-black text-sm shrink-0">
+                            {t.name?.slice(0, 2).toUpperCase() || "TC"}
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1 space-y-0.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <h4 className="text-sm font-bold text-white truncate">{t.name}</h4>
+                            {unreadCount > 0 && (
+                              <span className="px-1.5 py-0.5 rounded-md bg-purple-600 text-white text-[10px] font-bold font-mono tabular-nums shrink-0">
+                                {unreadCount}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-purple-300 font-medium truncate">
+                            {subjectText}
+                            {t.classes && t.classes.length > 0 ? ` · ${t.classes.slice(0, 2).join(", ")}` : ""}
+                          </p>
+                          <p className="text-[11px] text-slate-400 truncate">
+                            {lastMsg ? lastMsg.text || "[Attachment]" : "Tap karke baat karein →"}
+                          </p>
+                        </div>
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-slate-500 shrink-0" />
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+      <div className="flex-1 flex overflow-hidden">
+        {activeTab === "teacher" && isTeacherChatOpen && currentUserRole !== "TEACHER" && safeTeachers.length > 1 && (
+          <aside className="hidden lg:flex lg:w-72 shrink-0 flex-col border-r border-slate-800 bg-slate-900/95">
+            <div className="p-3 border-b border-slate-800 flex items-center justify-between gap-2">
+              <span className="text-xs font-bold text-slate-300">All Teachers ({safeTeachers.length})</span>
+              <button
+                type="button"
+                onClick={() => setIsTeacherChatOpen(false)}
+                className="text-[11px] font-bold text-purple-400 hover:underline cursor-pointer"
+              >
+                Grid View
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-2 space-y-1">
+              {safeTeachers.map((t) => {
+                const isSel = t.id === activeTeacher?.id;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setSelectedTeacherId(t.id)}
+                    className={`w-full p-2.5 rounded-xl flex items-center gap-2.5 text-left transition cursor-pointer ${
+                      isSel
+                        ? "bg-purple-600/20 border border-purple-500/40 text-white"
+                        : "hover:bg-slate-800/70 border border-transparent text-slate-300"
+                    }`}
+                  >
+                    {t.photoUrl ? (
+                      <img
+                        src={t.photoUrl}
+                        alt={t.name}
+                        referrerPolicy="no-referrer"
+                        className="w-9 h-9 rounded-xl object-cover shrink-0"
+                      />
+                    ) : (
+                      <div className="w-9 h-9 rounded-xl bg-purple-600/30 text-purple-200 flex items-center justify-center font-bold text-xs shrink-0">
+                        {t.name?.slice(0, 2).toUpperCase() || "TC"}
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-bold truncate">{t.name}</p>
+                      <p className="text-[10px] text-slate-400 truncate">
+                        {t.subjects && t.subjects.length > 0 ? t.subjects.join(", ") : (t as any).subject || t.designation || "Faculty"}
+                      </p>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
+        )}
+
       <div
         ref={messagesContainerRef}
         onScroll={handleMessagesScroll}
@@ -2882,7 +3158,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
             🔒 {activeTab === "class"
               ? "Official Class Notice & Announcements Group"
               : activeTab === "school"
-              ? "Direct Communication Desk • Fees, Receipts & Official Alerts"
+              ? "Direct Communication Desk • Admissions, Fees & Official Alerts"
               : `Teacher-Student 1-to-1 Chat (${dailyTeacherStudentLimit} messages daily quota)`}
           </div>
         </div>
@@ -2904,12 +3180,12 @@ export const NstaMessengerSuite: React.FC<Props> = ({
                 ? "Is class group me abhi koi naya message nahi hai."
                 : activeTab === "school"
                 ? "School desk par abhi koi active message nahi hai."
-                : "Apne teacher se doubt poochhne ke liye neeche sandesh likhein."}
+                : "Apne teacher se baat karne ke liye neeche sandesh likhein."}
             </p>
             <p className={`text-xs max-w-sm mx-auto ${activeWallpaper.isLight ? "text-slate-600 font-medium" : "text-slate-500"}`}>
               {activeTab === "class" && "Jab bhi Teacher ya Admin circular ya homework bhejenge, yahan turant dikhega."}
-              {activeTab === "school" && "A6 fee due slip ya fee receipt generate hone par auto message yahan drop hoga."}
-              {activeTab === "teacher" && "Student rozana 5 academic sawal seedhe teacher se poochh sakte hain."}
+              {activeTab === "school" && "Website Contact Admissions Office ke messages aur A6 fee slips yahan turant aayenge."}
+              {activeTab === "teacher" && "Seedhe 1-on-1 message bhejkar academic doubts aur updates poochh sakte hain."}
             </p>
           </div>
         )}
@@ -3032,9 +3308,9 @@ export const NstaMessengerSuite: React.FC<Props> = ({
                   </div>
                 )}
 
-                {/* Sender Name & Role (Shown for non-self in groups) */}
+                {/* Sender Name & Role (Shown for non-self in groups & website visitor quick reply) */}
                 {!isMe && (
-                  <div className="flex items-center gap-1.5 mb-1 px-1">
+                  <div className="flex items-center gap-1.5 mb-1 px-1 flex-wrap">
                     <span
                       className={`text-[11px] font-bold ${
                         activeWallpaper.isLight ? "text-slate-800 font-black drop-shadow-xs" : "text-slate-300"
@@ -3044,15 +3320,32 @@ export const NstaMessengerSuite: React.FC<Props> = ({
                     </span>
                     <span
                       className={`text-[9px] font-mono px-1.5 py-0.2 rounded font-bold uppercase ${
-                        msg.senderRole === "ADMIN"
+                        msg.studentId?.startsWith("web_adm_")
+                          ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30"
+                          : msg.senderRole === "ADMIN"
                           ? "bg-blue-500/20 text-blue-500 border border-blue-500/30"
                           : msg.senderRole === "TEACHER"
                           ? "bg-purple-500/20 text-purple-500 border border-purple-500/30"
                           : "bg-emerald-500/20 text-emerald-500 border border-emerald-500/30"
                       }`}
                     >
-                      {msg.senderRole}
+                      {msg.studentId?.startsWith("web_adm_") ? "WEBSITE ADMISSIONS" : msg.senderRole}
                     </span>
+                    {currentUserRole === "ADMIN" &&
+                      activeTab === "school" &&
+                      msg.studentId?.startsWith("web_adm_") &&
+                      selectedStudentId !== msg.studentId && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedStudentId(msg.studentId!);
+                          }}
+                          className="text-[10px] font-bold text-indigo-400 hover:text-indigo-300 underline cursor-pointer ml-1"
+                        >
+                          Reply directly →
+                        </button>
+                      )}
                   </div>
                 )}
 
@@ -3330,48 +3623,76 @@ export const NstaMessengerSuite: React.FC<Props> = ({
                             </div>
                           </div>
 
-                          {/* Early Payment 5% Discount Callout */}
+                          {/* Date-Limited Multi-Tier Discount Slabs Callout */}
                           {!isReceipt &&
-                            (msg.feeSlip.earlyDiscount
-                              ? msg.feeSlip.earlyDiscount > 0
-                              : new Date().getDate() <= 10) && (
-                              <div className="p-2.5 rounded-xl bg-emerald-950/60 border border-emerald-500/40 text-[11px] space-y-1">
-                                <div className="flex items-center justify-between font-black text-emerald-300">
-                                  <span className="flex items-center gap-1">
-                                    <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-                                    10 तारीख तक 5% OFF
-                                  </span>
-                                  <span className="text-emerald-400 font-mono">
-                                    -₹
-                                    {Number(
-                                      msg.feeSlip.earlyDiscount ||
-                                        Math.round(
-                                          (msg.feeSlip.monthlyAmount ||
-                                            msg.feeSlip.amount ||
-                                            msg.feeSlip.balanceDue ||
-                                            0) * 0.05
-                                        )
-                                    ).toLocaleString("en-IN")}
-                                  </span>
-                                </div>
-                                <div className="flex items-center justify-between text-slate-300 text-[10px]">
-                                  <span>छूट के बाद कुल देय:</span>
-                                  <span className="font-bold text-white text-xs">
-                                    ₹
-                                    {Number(
-                                      msg.feeSlip.netPayableWithDiscount ||
-                                        (msg.feeSlip.balanceDue || 0) - (msg.feeSlip.earlyDiscount || 0)
-                                    ).toLocaleString("en-IN")}
-                                  </span>
-                                </div>
-                                {Boolean(msg.feeSlip.oldArrears && msg.feeSlip.oldArrears > 0) && (
-                                  <p className="text-[9px] text-amber-300/90 leading-tight">
-                                    * 5% छूट केवल चालू माह शुल्क पर लागू है। पुराने बकाए (₹
-                                    {msg.feeSlip.oldArrears?.toLocaleString("en-IN")}) पर छूट नहीं।
+                            (() => {
+                              const slipSlabs =
+                                Array.isArray(msg.feeSlip.discountSlabs) && msg.feeSlip.discountSlabs.length > 0
+                                  ? [...msg.feeSlip.discountSlabs].sort((a, b) => a.uptoDay - b.uptoDay)
+                                  : getSchoolFeeDiscountSlabs(school?.id, school);
+                              if (!slipSlabs || slipSlabs.length === 0) return null;
+                              const todayNum = new Date().getDate();
+                              const curFeeBase = Number(
+                                msg.feeSlip.monthlyAmount || msg.feeSlip.amount || msg.feeSlip.balanceDue || 0
+                              );
+                              const totalDueAmt = Number(msg.feeSlip.balanceDue || 0);
+                              const activeMatched = slipSlabs.find((s) => todayNum <= s.uptoDay) || null;
+                              return (
+                                <div className="p-2.5 rounded-xl bg-emerald-950/60 border border-emerald-500/40 text-[11px] space-y-1.5">
+                                  <div className="flex items-center justify-between font-black text-emerald-300">
+                                    <span className="flex items-center gap-1">
+                                      <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                                      तारीख के अनुसार छूट ऑफर
+                                    </span>
+                                    {activeMatched ? (
+                                      <span className="px-1.5 py-0.5 rounded bg-emerald-500/30 text-emerald-200 text-[9px] font-black">
+                                        ACTIVE TODAY
+                                      </span>
+                                    ) : (
+                                      <span className="px-1.5 py-0.5 rounded bg-rose-500/30 text-rose-200 text-[9px] font-black">
+                                        तिथि समाप्त
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="space-y-1">
+                                    {slipSlabs.map((slab) => {
+                                      const discAmt = computeSlabDiscountAmount(slab, curFeeBase);
+                                      const netOnSlab = Math.max(0, totalDueAmt - discAmt);
+                                      const isExpired = todayNum > slab.uptoDay;
+                                      const isCurrent = activeMatched?.id === slab.id && activeMatched?.uptoDay === slab.uptoDay;
+                                      const valTxt =
+                                        slab.discountType === "fixed"
+                                          ? `₹${slab.discountValue} OFF`
+                                          : `${slab.discountValue}% OFF`;
+                                      return (
+                                        <div
+                                          key={slab.id || slab.uptoDay}
+                                          className={`flex items-center justify-between text-[10px] px-2 py-1 rounded-lg ${
+                                            isCurrent
+                                              ? "bg-emerald-500/25 border border-emerald-400/50 text-white font-bold"
+                                              : isExpired
+                                              ? "bg-black/20 text-slate-400 line-through opacity-70"
+                                              : "bg-black/20 text-slate-200"
+                                          }`}
+                                        >
+                                          <span>
+                                            📅 {slab.uptoDay} तारीख तक ({valTxt})
+                                          </span>
+                                          <span className="font-mono font-black">
+                                            देय: ₹{netOnSlab.toLocaleString("en-IN")}
+                                          </span>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                  <p className="text-[9px] text-amber-300/95 leading-tight font-medium">
+                                    {activeMatched
+                                      ? `* तय तिथि के भीतर जमा करने पर ही छूट मिलेगी, अन्यथा स्लिप की पूरी राशि ₹${totalDueAmt.toLocaleString("en-IN")} देय होगी।`
+                                      : `⚠️ छूट की अंतिम तिथि समाप्त हो चुकी है — अब स्लिप की पूरी राशि ₹${totalDueAmt.toLocaleString("en-IN")} देय है।`}
                                   </p>
-                                )}
-                              </div>
-                            )}
+                                </div>
+                              );
+                            })()}
 
                           {/* Action buttons on Slip card: View PDF + WhatsApp Pay */}
                           <div className="flex items-center gap-2 pt-1 flex-wrap">
@@ -3747,8 +4068,11 @@ export const NstaMessengerSuite: React.FC<Props> = ({
 
         <div ref={messagesEndRef} />
       </div>
+      </div>
+      )}
 
-      {/* ── BOTTOM INPUT / ACTION BAR ────────────────────────────────────── */}
+      {/* ── BOTTOM INPUT / ACTION BAR (Hidden on Teachers Roster view until a teacher is tapped) ── */}
+      {!isTeacherDirectoryView && (
       <div className="bg-slate-900 border-t border-slate-800 p-2.5 sm:p-3 shrink-0 z-20">
         {/* 1. Student Read-Only Lock in Class Group or School Desk */}
         {currentUserRole === "STUDENT" && (activeTab === "class" || activeTab === "school") ? (
@@ -4171,6 +4495,7 @@ export const NstaMessengerSuite: React.FC<Props> = ({
           </form>
         )}
       </div>
+      )}
 
       {/* ── DRAWER / MODAL: GROUP MEMBERS & CLASS TEACHER INFO ───────────── */}
       {showMemberDrawer && (
@@ -4674,32 +4999,52 @@ export const NstaMessengerSuite: React.FC<Props> = ({
                 </h3>
                 <p className="text-xs text-slate-400 mt-0.5">
                   {canDeleteForEveryone
-                    ? "आप यह संदेश सभी के लिए या सिर्फ अपने लिए हटा सकते हैं।"
+                    ? selectedMessageIds.length > 5
+                      ? "चयनित सभी संदेश तेज़ बैच प्रक्रिया से सभी के लिए पूरी तरह हट जाएंगे।"
+                      : "आप यह संदेश सभी के लिए या सिर्फ अपने लिए हटा सकते हैं।"
                     : "यह संदेश सिर्फ आपके चैट से हटाया जाएगा।"}
                 </p>
               </div>
             </div>
 
             <div className="space-y-2 pt-1">
-              {/* If user is the sender (or Admin), show Delete for everyone! */}
+              {/* If user is the sender (or Admin), show Delete for everyone / Permanent Delete! */}
               {canDeleteForEveryone && (
-                <button
-                  type="button"
-                  onClick={handleDeleteForEveryone}
-                  className="w-full py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-rose-900/30 transition cursor-pointer active:scale-95"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  <span>Delete for everyone (सभी के लिए हटाएं)</span>
-                </button>
+                <>
+                  <button
+                    type="button"
+                    disabled={isDeletingMessages}
+                    onClick={handleDeleteForEveryone}
+                    className="w-full py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-60 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-rose-900/30 transition cursor-pointer active:scale-95"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>
+                      {selectedMessageIds.length > 5
+                        ? `Delete All ${selectedMessageIds.length} Messages (सभी के लिए हटाएं)`
+                        : "Delete for everyone (सभी के लिए हटाएं)"}
+                    </span>
+                  </button>
+                  {selectedMessageIds.length <= 5 && currentUserRole === "ADMIN" && (
+                    <button
+                      type="button"
+                      disabled={isDeletingMessages}
+                      onClick={handleDeletePermanently}
+                      className="w-full py-2 px-4 rounded-xl bg-rose-950/60 hover:bg-rose-900/70 disabled:opacity-60 text-rose-200 border border-rose-700/60 font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer active:scale-95"
+                    >
+                      <span>पूरी तरह मिटाएं (Remove Permanently)</span>
+                    </button>
+                  )}
+                </>
               )}
 
               {/* Delete for me is ALWAYS available for receivers and senders */}
               <button
                 type="button"
+                disabled={isDeletingMessages}
                 onClick={handleDeleteForMe}
-                className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer active:scale-95"
+                className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-60 text-slate-200 border border-slate-700 font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer active:scale-95"
               >
-                <span>Delete for me (सिर्फ मेरे लिए हटाएं)</span>
+                <span>Delete for me ({selectedMessageIds.length} सिर्फ मेरे लिए हटाएं)</span>
               </button>
 
               <button
@@ -5169,111 +5514,6 @@ export const NstaMessengerSuite: React.FC<Props> = ({
         birthdayData={selectedBirthdayData}
         onOpenSchoolDesk={() => setActiveTab("school")}
       />
-
-      {/* ── STAFF / TEACHER DIRECTORY MODAL (Admin & Accountant 1-on-1 Chat) ── */}
-      {showStaffDirectoryModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-in fade-in">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-lg max-h-[85vh] flex flex-col overflow-hidden shadow-2xl">
-            {/* Header */}
-            <div className="p-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-2xl bg-purple-600/20 text-purple-400 border border-purple-500/30 flex items-center justify-center">
-                  <GraduationCap className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-white font-extrabold text-sm sm:text-base">शिक्षक डायरेक्टरी (Staff Directory)</h3>
-                  <p className="text-xs text-slate-400">किसी भी शिक्षक को चुनें और सीधा 1-on-1 चैट करें</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowStaffDirectoryModal(false)}
-                className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Teacher List */}
-            <div className="p-4 overflow-y-auto space-y-2.5 flex-1">
-              {safeTeachers.length === 0 ? (
-                <div className="text-center py-10 text-slate-400">
-                  <p className="text-sm font-semibold">कोई शिक्षक पंजीकृत नहीं है।</p>
-                </div>
-              ) : (
-                safeTeachers.map((t) => {
-                  const isSelected = t.id === selectedTeacherId;
-                  return (
-                    <div
-                      key={t.id}
-                      onClick={() => {
-                        setSelectedTeacherId(t.id);
-                        setActiveTab("teacher");
-                        setShowStaffDirectoryModal(false);
-                      }}
-                      className={`p-3 rounded-2xl border transition flex items-center justify-between gap-3 cursor-pointer ${
-                        isSelected
-                          ? "bg-purple-950/40 border-purple-500/50 shadow-md"
-                          : "bg-slate-950/60 border-slate-800/80 hover:bg-slate-800/60 hover:border-slate-700"
-                      }`}
-                    >
-                      <div className="flex items-center gap-3 min-w-0">
-                        {t.photoUrl ? (
-                          <img
-                            src={t.photoUrl}
-                            alt={t.name}
-                            className="w-11 h-11 rounded-2xl object-cover border border-purple-500/30 shrink-0"
-                          />
-                        ) : (
-                          <div className="w-11 h-11 rounded-2xl bg-purple-600/30 text-purple-200 border border-purple-500/30 flex items-center justify-center font-black text-sm shrink-0">
-                            {t.name?.slice(0, 2).toUpperCase() || "TC"}
-                          </div>
-                        )}
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <h4 className="text-white font-bold text-sm truncate">{t.name}</h4>
-                            <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                              ACTIVE
-                            </span>
-                          </div>
-                          <p className="text-xs text-purple-300 font-medium truncate">
-                            {(t.subjects && t.subjects.length > 0 ? t.subjects.join(", ") : t.designation || "Faculty")}
-                            {t.classes && t.classes.length > 0 ? ` • Class ${t.classes.join(", ")}` : ""}
-                          </p>
-                          {t.phone && (
-                            <p className="text-[11px] text-slate-400 font-mono mt-0.5">📞 {t.phone}</p>
-                          )}
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedTeacherId(t.id);
-                          setActiveTab("teacher");
-                          setShowStaffDirectoryModal(false);
-                        }}
-                        className="px-3.5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-purple-900/30 transition cursor-pointer active:scale-95 shrink-0"
-                      >
-                        <MessageSquare className="w-3.5 h-3.5" />
-                        <span>चैट करें</span>
-                      </button>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-
-            {/* Footer */}
-            <div className="p-3 bg-slate-950 border-t border-slate-800 text-center">
-              <p className="text-[11px] text-slate-500">
-                कुल {safeTeachers.length} शिक्षक उपलब्ध • संदेश सीधे उनके टीचर पोर्टल में पहुंचेगा
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

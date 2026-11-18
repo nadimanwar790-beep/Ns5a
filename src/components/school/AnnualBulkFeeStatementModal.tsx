@@ -19,6 +19,7 @@ import {
 import type { School, SchoolStudent } from "../../school-types";
 import {
   getSavedSchoolLogo,
+  getVisibleSchoolRegNo,
   numberToIndianWords,
   formatAcademicSession,
 } from "./feeReceiptUtils";
@@ -65,7 +66,7 @@ export const AnnualBulkFeeStatementModal: React.FC<Props> = ({
   const resolvedPhone = school?.mobile || school?.phone || "—";
   const resolvedEmail = school?.email || "—";
   const resolvedAffiliation = school?.affiliation || "";
-  const resolvedCode = school?.code || "";
+  const resolvedCode = getVisibleSchoolRegNo(school);
 
   const studentName = student?.name || "Student";
   const admissionNo = student?.admissionNo || "—";
@@ -244,21 +245,21 @@ export const AnnualBulkFeeStatementModal: React.FC<Props> = ({
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-2 sm:p-4 bg-slate-950/85 backdrop-blur-xs animate-in fade-in duration-150">
       <div className="w-full max-w-5xl bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[96vh]">
         {/* Top Header Bar */}
-        <div className="px-4 sm:px-6 py-3.5 bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950 text-white flex items-center justify-between shrink-0 border-b border-white/10">
+        <div className="px-4 sm:px-6 py-3.5 bg-gradient-to-r from-blue-50 via-indigo-50 to-sky-50 dark:from-slate-950 dark:via-slate-900 dark:to-indigo-950 text-slate-900 dark:text-white flex items-center justify-between shrink-0 border-b-2 border-indigo-700 dark:border-white/10">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-300 font-bold text-lg shrink-0">
+            <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-500/20 border-2 border-emerald-700/50 dark:border-emerald-500/40 flex items-center justify-center text-emerald-700 dark:text-emerald-300 font-bold text-lg shrink-0">
               📊
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-sm sm:text-base font-black text-white leading-tight truncate">
+                <h2 className="text-sm sm:text-base font-black text-slate-900 dark:text-white leading-tight truncate">
                   Annual Session Fee Demand + Receipt Ledger (Bulk A4 Dossier)
                 </h2>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 dark:bg-emerald-500/20 text-emerald-900 dark:text-emerald-300 border border-emerald-700/50 dark:border-emerald-500/30">
                   Full Session A4 Print
                 </span>
               </div>
-              <p className="text-xs text-slate-300 truncate mt-0.5">
+              <p className="text-xs text-slate-700 dark:text-slate-300 truncate mt-0.5 font-medium">
                 छात्र: <strong>{studentName}</strong> • {className} • Roll #{rollNo} • कुल सत्र मांग + रसीदें
               </p>
             </div>

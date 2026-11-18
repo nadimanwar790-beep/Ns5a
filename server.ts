@@ -763,6 +763,113 @@ async function startServer() {
     });
   });
 
+  // Resolve shortened Google Maps links (e.g. https://maps.app.goo.gl/...) to coordinates
+  const handleResolveMapsLink = async (rawUrl: string) => {
+    const trimmed = String(rawUrl || "").trim();
+    if (!trimmed) return { ok: false, error: "Empty URL" };
+
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(trimmed);
+    } catch {
+      return { ok: false, error: "Invalid URL format" };
+    }
+
+    if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+      return { ok: false, error: "Unsupported protocol" };
+    }
+
+    const host = parsedUrl.hostname.toLowerCase();
+    const isAllowedHost =
+      host === "maps.app.goo.gl" ||
+      host === "goo.gl" ||
+      host === "g.co" ||
+      host === "maps.google.com" ||
+      host === "google.com" ||
+      host === "www.google.com" ||
+      /^(maps\.)?google\.[a-z.]{2,6}$/i.test(host);
+
+    if (!isAllowedHost) {
+      return { ok: false, error: "Only Google Maps URLs are supported" };
+    }
+
+    const extractCoordsFromText = (text: string): { lat: number; lng: number } | null => {
+      if (!text) return null;
+      const normalized = text.replace(/%2C/gi, ",").replace(/\\u0026/gi, "&").replace(/&amp;/gi, "&");
+      const patterns = [
+        /@(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i,
+        /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/i,
+        /[?&](?:q|query|ll|center|sll|destination|daddr)=(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i,
+        /\/(?:search|place|dir)\/[^/?#]*?(-?\d{1,2}\.\d{3,})\s*,\s*(-?\d{1,3}\.\d{3,})/i,
+        /center=(-?\d{1,2}\.\d{3,})\s*,\s*(-?\d{1,3}\.\d{3,})/i,
+        /\[null,null,(-?\d{1,2}\.\d{4,}),(-?\d{1,3}\.\d{4,})\]/,
+      ];
+      for (const re of patterns) {
+        const m = normalized.match(re);
+        if (m) {
+          const lat = Number(m[1]);
+          const lng = Number(m[2]);
+          if (
+            Number.isFinite(lat) &&
+            Number.isFinite(lng) &&
+            lat >= -90 &&
+            lat <= 90 &&
+            lng >= -180 &&
+            lng <= 180 &&
+            (Math.abs(lat) > 0.001 || Math.abs(lng) > 0.001)
+          ) {
+            return { lat: Number(lat.toFixed(6)), lng: Number(lng.toFixed(6)) };
+          }
+        }
+      }
+      return null;
+    };
+
+    const direct = extractCoordsFromText(trimmed);
+    if (direct) return { ok: true, ...direct, resolvedUrl: trimmed };
+
+    try {
+      const resp = await fetch(trimmed, {
+        method: "GET",
+        redirect: "follow",
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9",
+        },
+        signal: AbortSignal.timeout(7000),
+      });
+
+      const finalUrl = resp.url || trimmed;
+      const fromFinalUrl = extractCoordsFromText(finalUrl);
+      if (fromFinalUrl) {
+        return { ok: true, ...fromFinalUrl, resolvedUrl: finalUrl };
+      }
+
+      const body = await resp.text();
+      const fromBody = extractCoordsFromText(body.slice(0, 200000));
+      if (fromBody) {
+        return { ok: true, ...fromBody, resolvedUrl: finalUrl };
+      }
+
+      return { ok: false, error: "Could not find coordinates in link", resolvedUrl: finalUrl };
+    } catch (err: any) {
+      return { ok: false, error: err?.message || "Failed to resolve Google Maps link" };
+    }
+  };
+
+  app.post("/api/resolve-maps-link", async (req, res) => {
+    const url = typeof req.body?.url === "string" ? req.body.url : "";
+    const result = await handleResolveMapsLink(url);
+    res.status(result.ok ? 200 : 400).json(result);
+  });
+
+  app.get("/api/resolve-maps-link", async (req, res) => {
+    const url = typeof req.query?.url === "string" ? req.query.url : "";
+    const result = await handleResolveMapsLink(url);
+    res.status(result.ok ? 200 : 400).json(result);
+  });
+
   // 2. Subscribe or update linked students for a device (supports Multi-Student under 1 User ID)
   app.post("/api/school-push/subscribe", async (req, res) => {
     try {

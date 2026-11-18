@@ -140,17 +140,22 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
     }
   }, [schoolId, today]);
 
-  const handleTeacherPunch = async (teacher: SchoolTeacher, action: "in" | "out" | "absent") => {
+  const handleTeacherPunch = async (teacher: SchoolTeacher, action: "in" | "late" | "out" | "absent") => {
     if (!schoolId) return;
-    const nowTime = new Date().toLocaleTimeString("en-IN", {
+    const nowD = new Date();
+    const nowTime = nowD.toLocaleTimeString("en-IN", {
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",
       hour12: true,
     });
+    const [cH, cM] = String(inCutoffTime || "08:15").split(":").map(Number);
+    const cutoffMin = (Number.isFinite(cH) ? cH : 8) * 60 + (Number.isFinite(cM) ? cM : 15);
+    const isPastCutoff = nowD.getHours() * 60 + nowD.getMinutes() > cutoffMin;
 
     const currentRecords = { ...staffAttendance.records };
     const existing = currentRecords[teacher.id];
+    let isLateEntry = false;
 
     if (action === "absent") {
       currentRecords[teacher.id] = {
@@ -160,19 +165,26 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
         employeeId: teacher.employeeId || teacher.id,
         present: false,
         status: "absent",
+        isLate: false,
         inTime: undefined,
         outTime: undefined,
-      };
+      } as any;
     } else {
       const nowMs = Date.now();
-      const inTime = action === "in" ? nowTime : (existing?.inTime || nowTime);
-      const inTs = action === "in" ? nowMs : (existing?.inTimestamp || nowMs);
+      const inTime = action === "in" || action === "late" ? nowTime : (existing?.inTime || nowTime);
+      const inTs = action === "in" || action === "late" ? nowMs : (existing?.inTimestamp || nowMs);
       const outTime = action === "out" ? nowTime : existing?.outTime;
       const outTs = action === "out" ? nowMs : existing?.outTimestamp;
       let stayDuration = existing?.stayDuration;
       if (action === "out" && existing?.inTime) {
         stayDuration = calculateStayDuration(inTime, outTime, inTs, outTs);
       }
+      isLateEntry =
+        action === "late"
+          ? true
+          : action === "in"
+          ? isPastCutoff
+          : Boolean(existing?.status === "late" || (existing as any)?.isLate);
 
       currentRecords[teacher.id] = {
         id: teacher.id,
@@ -180,14 +192,15 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
         role: "TEACHER",
         employeeId: teacher.employeeId || teacher.id,
         present: true,
-        status: "present",
+        status: isLateEntry ? "late" : "present",
+        isLate: isLateEntry,
         inTime,
         outTime,
         inTimestamp: inTs,
         outTimestamp: outTs,
         stayDuration,
-        scanType: action,
-      };
+        scanType: action === "out" ? "out" : "in",
+      } as any;
     }
 
     const updated = {
@@ -202,7 +215,7 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
 
     setToastMessage({
       type: "success",
-      text: `✓ शिक्षक ${teacher.name} का ${action === "in" ? "आगमन" : action === "out" ? "प्रस्थान" : "अनुपस्थिति"} दर्ज हुआ!`,
+      text: `✓ शिक्षक ${teacher.name} का ${action === "late" || (action === "in" && isLateEntry) ? "लेट आगमन" : action === "in" ? "आगमन" : action === "out" ? "प्रस्थान" : "अनुपस्थिति"} दर्ज हुआ!`,
     });
     setTimeout(() => setToastMessage(null), 3000);
   };
@@ -761,13 +774,17 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
                             {teacher.name}
                           </h4>
                           <span
-                            className={`px-1.5 py-0.2 rounded text-[9px] font-black uppercase ${
-                              isPresent
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase ${
+                              rec?.status === "late"
+                                ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                                : isPresent
                                 ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+                                : rec?.present === false
+                                ? "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300"
                                 : "bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300"
                             }`}
                           >
-                            {isPresent ? "In" : "Pending"}
+                            {rec?.status === "late" ? "Late" : isPresent ? "In" : rec?.present === false ? "Abs" : "Pending"}
                           </span>
                         </div>
                         <p className="text-[10px] text-slate-400 truncate">
@@ -793,6 +810,14 @@ export const UniversalAttendanceDesk: React.FC<Props> = ({
                         title="Punch In (आगमन)"
                       >
                         <LogIn className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleTeacherPunch(teacher, "late")}
+                        className="p-2 rounded-xl bg-orange-500 hover:bg-orange-400 text-white text-xs font-bold transition active:scale-95 cursor-pointer"
+                        title="Mark Late (देर से आगमन)"
+                      >
+                        <Clock className="w-3.5 h-3.5" />
                       </button>
                       <button
                         type="button"

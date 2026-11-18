@@ -9,6 +9,7 @@ import type { School } from "../../school-types";
 import { getSavedSchoolLogo, cleanLogoUrl, formatAcademicSession } from "./feeReceiptUtils";
 import { printElementInIframe } from "./AdmissionFormPrintModal";
 import { safeOpenExternalUrl } from "../../utils/safeBrowserActions";
+import { buildDriverIdCardQrUrl } from "../../utils/qrVerifyUrl";
 
 export interface DriverIdCardData {
   busId: string;
@@ -55,18 +56,17 @@ export const DriverIdCardModal: React.FC<Props> = ({
   const cleanPhone = phone.replace(/\D/g, "").slice(-10);
   const driverIdCode = `DRV-${(cleanPhone || busId).slice(-5).toUpperCase()}`;
 
-  // Standardized Driver Login QR Payload
-  // Format: NSTA-SCHOOL-DRIVER:schoolId:busId:busNumber:route:driverName:driverPhone:schoolCode:schoolName
-  const qrVerifyPayload = `NSTA-SCHOOL-DRIVER:${[
-    encodeURIComponent(school?.id || ""),
-    encodeURIComponent(busId),
-    encodeURIComponent(busNumber),
-    encodeURIComponent(route),
-    encodeURIComponent(driverName),
-    encodeURIComponent(phone),
-    encodeURIComponent(schoolCode),
-    encodeURIComponent(schoolName),
-  ].join(":")}`;
+  // Standardized Driver Chrome Verify + Login QR Payload
+  const qrVerifyPayload = buildDriverIdCardQrUrl({
+    schoolId: school?.id || "",
+    busId,
+    busNumber,
+    route,
+    driverName,
+    driverPhone: phone,
+    schoolCode,
+    schoolName,
+  });
 
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard?.writeText(text);
@@ -274,7 +274,7 @@ export const DriverIdCardModal: React.FC<Props> = ({
 
                     <div className="flex flex-col items-center justify-center shrink-0 w-[80px]">
                       <div className="p-1 bg-white border border-slate-300 rounded-lg shadow-2xs flex items-center justify-center">
-                        <QRCode value={qrVerifyPayload} size={66} level="M" />
+                        <QRCode value={qrVerifyPayload} size={66} level="L" />
                       </div>
                       <span className="text-[6.5px] font-black text-amber-700 uppercase tracking-tighter mt-0.5">
                         Scan to Login
@@ -346,7 +346,7 @@ export const DriverIdCardModal: React.FC<Props> = ({
 
                     <div className="flex flex-col items-center justify-center shrink-0 w-[78px]">
                       <div className="p-1 bg-white border border-slate-300 rounded-lg shadow-2xs flex items-center justify-center">
-                        <QRCode value={qrVerifyPayload} size={64} level="M" />
+                        <QRCode value={qrVerifyPayload} size={64} level="L" />
                       </div>
                       <span className="text-[6.5px] text-amber-700 font-black uppercase tracking-tighter mt-0.5">
                         Scan to Login

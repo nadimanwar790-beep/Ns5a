@@ -802,7 +802,7 @@ export const TimetableManager: React.FC<Props> = ({
         }
       `}</style>
       {/* Header */}
-      <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white px-4 py-4 sm:py-5 shadow-md border-b border-indigo-800/40 print:hidden">
+      <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-sky-50 dark:from-slate-900 dark:via-slate-900 dark:to-indigo-950 text-slate-900 dark:text-white px-4 py-4 sm:py-5 shadow-sm border-b-2 border-blue-700 dark:border-blue-500 print:hidden">
         <div className="max-w-6xl mx-auto space-y-3">
           {/* Top row: Title + Session + Print Icon Only */}
           <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -811,7 +811,7 @@ export const TimetableManager: React.FC<Props> = ({
                 <button
                   type="button"
                   onClick={onBack}
-                  className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
+                  className="p-2 rounded-xl bg-white hover:bg-blue-100 text-blue-800 border border-blue-700/40 dark:bg-white/10 dark:hover:bg-white/20 dark:text-white dark:border-white/20 transition cursor-pointer"
                   title="Go Back"
                 >
                   <ChevronLeft className="w-5 h-5" />
@@ -819,17 +819,17 @@ export const TimetableManager: React.FC<Props> = ({
               )}
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="px-2.5 py-0.5 rounded-md bg-blue-500/20 text-blue-300 text-[11px] font-black uppercase tracking-wider border border-blue-400/30">
+                  <span className="px-2.5 py-0.5 rounded-md bg-blue-100 text-blue-900 border border-blue-700/50 dark:bg-blue-500/20 dark:text-blue-300 text-[11px] font-black uppercase tracking-wider dark:border-blue-400/30">
                     Academic Routine
                   </span>
                   {activeSession && (
-                    <span className="text-slate-300 text-xs font-semibold">
+                    <span className="text-slate-700 dark:text-slate-300 text-xs font-bold">
                       Session: {activeSession.name}
                     </span>
                   )}
                 </div>
-                <h1 className="text-xl sm:text-2xl font-black text-white mt-0.5 flex items-center gap-2">
-                  <Clock className="w-6 h-6 text-amber-400" />
+                <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-0.5 flex items-center gap-2">
+                  <Clock className="w-6 h-6 text-blue-700 dark:text-amber-400" />
                   <span>Class Timetable & Period Routine (समय-सारणी)</span>
                 </h1>
               </div>

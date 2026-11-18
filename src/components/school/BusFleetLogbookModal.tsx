@@ -18,10 +18,12 @@ import {
   Phone,
   ShieldAlert,
   Share2,
-  QrCode
+  QrCode,
+  Trash2,
 } from "lucide-react";
 import type { School, VehicleFuelLog, VehicleFitnessRecord } from "../../school-types";
 import { loadSchoolSubcollection, syncSchoolSubcollection } from "../../utils/schoolCloudSync";
+import { deleteVehicleRecord, saveVehicleRecord } from "../../utils/schoolTransportStore";
 import { rtdb } from "../../firebase";
 import { ref as dbRef, set as rtdbSet } from "firebase/database";
 import { DriverIdCardModal, type DriverIdCardData } from "./DriverIdCardModal";
@@ -245,6 +247,7 @@ export const BusFleetLogbookModal: React.FC<Props> = ({ school, onClose }) => {
     };
     const updated = [created, ...fitnessRecords];
     saveFitnessRecords(updated);
+    if (school?.id) void saveVehicleRecord(school.id, created);
     if (!fuelVehicle) setFuelVehicle(created.vehicleNumber);
     setNewBusNumber("");
     setNewBusModel("");
@@ -573,6 +576,19 @@ export const BusFleetLogbookModal: React.FC<Props> = ({ school, onClose }) => {
                       >
                         <Share2 className="w-3.5 h-3.5" />
                         <span>Alert</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const next = fitnessRecords.filter((f) => f.id !== bus.id);
+                          saveFitnessRecords(next);
+                          if (school?.id) await deleteVehicleRecord(school.id, bus.id);
+                          toast.success(`Vehicle "${bus.vehicleNumber}" delete ho gayi.`);
+                        }}
+                        className="p-1.5 rounded-xl bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/30 text-rose-300 cursor-pointer"
+                        title="Delete Vehicle"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>

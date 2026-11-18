@@ -321,12 +321,12 @@ export const SchoolBirthdayCalendar: React.FC<Props> = ({
     <div className="space-y-4">
       {/* ── TOAST ALERT ── */}
       {toastMessage && (
-        <div className="p-3.5 rounded-2xl bg-gradient-to-r from-indigo-900 via-purple-900 to-slate-900 text-white text-xs sm:text-sm font-bold shadow-xl border border-indigo-500/40 flex items-center justify-between gap-3 animate-in slide-in-from-top-2">
+        <div className="p-3.5 rounded-2xl bg-gradient-to-r from-indigo-50 via-purple-50 to-blue-50 dark:from-indigo-900 dark:via-purple-900 dark:to-slate-900 text-slate-900 dark:text-white text-xs sm:text-sm font-bold shadow-md border-2 border-indigo-700 dark:border-indigo-500/40 flex items-center justify-between gap-3 animate-in slide-in-from-top-2">
           <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-amber-300 shrink-0" />
+            <Sparkles className="w-4 h-4 text-amber-600 dark:text-amber-300 shrink-0" />
             <span>{toastMessage}</span>
           </div>
-          <button type="button" onClick={() => setToastMessage(null)} className="p-1 hover:bg-white/20 rounded">
+          <button type="button" onClick={() => setToastMessage(null)} className="p-1 hover:bg-indigo-100 dark:hover:bg-white/20 rounded text-slate-700 dark:text-white">
             ✕
           </button>
         </div>
@@ -655,16 +655,16 @@ export const SchoolBirthdayCalendar: React.FC<Props> = ({
         <div className="fixed inset-0 z-[600] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white dark:bg-slate-900 w-full max-w-lg rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
             {/* Modal Header */}
-            <div className="p-4 sm:p-5 bg-gradient-to-r from-indigo-900 to-slate-900 text-white flex items-center justify-between">
+            <div className="p-4 sm:p-5 bg-gradient-to-r from-indigo-50 via-blue-50 to-sky-50 dark:from-indigo-900 dark:to-slate-900 text-slate-900 dark:text-white border-b-2 border-indigo-700 dark:border-indigo-500/40 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center text-lg">
+                <div className="w-9 h-9 rounded-xl bg-indigo-100 dark:bg-white/20 border border-indigo-700/40 dark:border-transparent flex items-center justify-center text-lg">
                   📌
                 </div>
                 <div>
-                  <h4 className="font-black text-sm sm:text-base text-white">
+                  <h4 className="font-black text-sm sm:text-base text-slate-900 dark:text-white">
                     नया स्कूल कार्यक्रम / मीटिंग जोड़ें
                   </h4>
-                  <p className="text-xs text-indigo-200">
+                  <p className="text-xs text-slate-700 dark:text-indigo-200 font-medium">
                     मीटिंग, परीक्षा, रिजल्ट डे या स्कूल का कोई भी महत्वपूर्ण कार्य
                   </p>
                 </div>
@@ -672,7 +672,7 @@ export const SchoolBirthdayCalendar: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => setShowAddEventModal(false)}
-                className="p-1 hover:bg-white/20 rounded-xl transition text-slate-300"
+                className="p-1 hover:bg-indigo-100 dark:hover:bg-white/20 rounded-xl transition text-slate-700 dark:text-slate-300"
               >
                 <X className="w-5 h-5" />
               </button>

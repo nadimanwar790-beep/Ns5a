@@ -11,14 +11,21 @@ import {
 } from "lucide-react";
 import {
   getStudentFees, getMonthlyAttendance, currentMonthStr, saveFee,
-  markFeePaid, updateStudent, getExams, getStudents
+  markFeePaid, updateStudent, getExams, getStudents, getAccountants
 } from "../../school-firebase";
 import { BLOOD_GROUPS } from "../../school-types";
-import type { School, SchoolClass, SchoolStudent, MonthlyFee, AttendanceRecord, ExamEntry } from "../../school-types";
+import type { School, SchoolClass, SchoolStudent, MonthlyFee, AttendanceRecord, ExamEntry, SchoolAccountant } from "../../school-types";
 import { toast } from "sonner";
 import { OfficialFeeReceiptModal } from "./OfficialFeeReceiptModal";
 import { getSavedSchoolLogo } from "./feeReceiptUtils";
 import { AdmissionFormPrintModal, printHtmlInIframe, calculateAgeOnAprilFirst } from "./AdmissionFormPrintModal";
+import {
+  getSchoolFeeDiscountSlabs,
+  resolveSlabForDay,
+  formatSlabsHeadline,
+  computeSlabDiscountAmount,
+} from "../../utils/feeDiscountSlabs";
+import { buildStudentIdCardQrUrl } from "../../utils/qrVerifyUrl";
 
 export type StudentQuickActionTab =
   | "profile"
@@ -86,6 +93,8 @@ export const StudentQuickActionModal: React.FC<Props> = ({
   const [siblingSearchQuery, setSiblingSearchQuery] = useState("");
   const [linkingSiblingId, setLinkingSiblingId] = useState<string | null>(null);
   const [discountEdits, setDiscountEdits] = useState<Record<string, { amount: string; pct: string; saving?: boolean }>>({});
+  const [quickAccountants, setQuickAccountants] = useState<SchoolAccountant[]>([]);
+  const [quickCollectorRole, setQuickCollectorRole] = useState<"accountant" | "manager">("accountant");
 
   // Quick Inline Edit Form
   const [savingEdit, setSavingEdit] = useState(false);
@@ -220,8 +229,9 @@ export const StudentQuickActionModal: React.FC<Props> = ({
   useEffect(() => {
     if (!isOpen || !student || !school?.id) return;
 
-    // Fetch fee records for this student
+    // Fetch fee records and accountants for this student/school
     setLoadingFees(true);
+    getAccountants(school.id).then(list => setQuickAccountants(list || [])).catch(() => {});
     getStudentFees(school.id, student.id)
       .then(fees => {
         setFeeRecords(fees || []);
@@ -510,7 +520,11 @@ export const StudentQuickActionModal: React.FC<Props> = ({
 
   const currentMonthFee = feeRecords.find(f => f.month === selectedMonth);
   const isCurrentMonthPaid = Boolean(currentMonthFee?.paid);
-  const earlyBirdDiscountAmount = Math.round((cur.monthlyFee || 0) * 0.05);
+  const schoolSlabs = getSchoolFeeDiscountSlabs(school?.id, school);
+  const todayDayOfMonth = new Date().getDate();
+  const todaySlabMatch = resolveSlabForDay(schoolSlabs, todayDayOfMonth, Number(cur.monthlyFee || 0));
+  const slabsHeadlineText = formatSlabsHeadline(schoolSlabs);
+  const earlyBirdDiscountAmount = todaySlabMatch.discountAmount;
 
   // Class Rank Calculation
   const studentTotalMarks = examRecords
@@ -538,17 +552,41 @@ export const StudentQuickActionModal: React.FC<Props> = ({
       const paidDate = newPaid ? new Date().toISOString() : undefined;
       const receiptNo = newPaid ? (fee.receiptNo || `DPS-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`) : undefined;
 
+      const activeAcc =
+        quickAccountants.find(a => a.id === adminUid) ||
+        quickAccountants.find(a => a.active !== false) ||
+        quickAccountants[0];
+      const colInfo = newPaid
+        ? (quickCollectorRole === "manager"
+            ? {
+                collectedBy: school?.managerName || "Manager",
+                collectedByRole: "manager" as const,
+                collectedByName: school?.managerName || "Manager",
+                collectorSignatureUrl: school?.managerSignatureUrl || "",
+              }
+            : {
+                collectedBy: activeAcc?.name || school?.accountantName || "Accountant",
+                collectedByRole: "accountant" as const,
+                collectedByName: activeAcc?.name || school?.accountantName || "Accountant",
+                collectorSignatureUrl: activeAcc?.signatureUrl || school?.accountantSignatureUrl || "",
+              })
+        : undefined;
+
       const updatedFee: MonthlyFee = {
         ...fee,
         paid: newPaid,
         receiptNo,
         paidDate,
         paidBy: newPaid ? adminUid : undefined,
+        collectedBy: colInfo?.collectedBy,
+        collectedByRole: colInfo?.collectedByRole,
+        collectedByName: colInfo?.collectedByName,
+        collectorSignatureUrl: colInfo?.collectorSignatureUrl,
       };
 
       await saveFee(updatedFee);
       if (newPaid) {
-        await markFeePaid(school.id, cur.id, fee.month, adminUid);
+        await markFeePaid(school.id, cur.id, fee.month, adminUid, colInfo);
       }
 
       setFeeRecords(prev => prev.map(f => f.month === fee.month ? updatedFee : f));
@@ -562,23 +600,23 @@ export const StudentQuickActionModal: React.FC<Props> = ({
 
   // Print ID Card
   const handlePrintIdCard = () => {
-    const qrPayload = `NSTA-SCHOOL:${[
-      encodeURIComponent(school?.id || cur.schoolId || ""),
-      encodeURIComponent(cur.id || ""),
-      encodeURIComponent(cur.rollNo || ""),
-      encodeURIComponent(cur.classId || ""),
-      encodeURIComponent(cur.name || ""),
-      encodeURIComponent(cur.admissionNo || ""),
-      encodeURIComponent(cur.phone || ""),
-      encodeURIComponent(cur.fatherName || ""),
-      encodeURIComponent(cur.motherName || ""),
-      encodeURIComponent(cur.bloodGroup || ""),
-      encodeURIComponent(cur.dateOfBirth || ""),
-      encodeURIComponent(cur.address || ""),
-      encodeURIComponent(String(cur.monthlyFee || 0)),
-      encodeURIComponent(className),
-      encodeURIComponent(schoolName)
-    ].join(":")}`;
+    const qrPayload = buildStudentIdCardQrUrl({
+      schoolId: school?.id || cur.schoolId || "",
+      studentId: cur.id || "",
+      rollNo: cur.rollNo || "",
+      classId: cur.classId || "",
+      studentName: cur.name || "",
+      admissionNo: cur.admissionNo || "",
+      phone: cur.phone || "",
+      fatherName: cur.fatherName || "",
+      motherName: cur.motherName || "",
+      bloodGroup: cur.bloodGroup || "",
+      dob: cur.dateOfBirth || "",
+      address: cur.address || "",
+      monthlyFee: cur.monthlyFee || 0,
+      className,
+      schoolName,
+    });
     const qrImgUrl = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&margin=2&data=${encodeURIComponent(qrPayload)}`;
 
     const htmlDoc = `<!doctype html>
@@ -805,9 +843,9 @@ export const StudentQuickActionModal: React.FC<Props> = ({
         onClick={e => e.stopPropagation()}
       >
         {/* 1. AT-A-GLANCE QUICK HEADER BAR (Fixed at Top) */}
-        <div className="p-4 bg-gradient-to-r from-blue-950 via-indigo-900 to-slate-900 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-indigo-950 shadow-md">
+        <div className="p-4 bg-gradient-to-r from-blue-50 via-indigo-50 to-sky-50 dark:from-slate-900 dark:via-indigo-950 dark:to-slate-900 text-slate-900 dark:text-white flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b-2 border-indigo-700 dark:border-indigo-500 shadow-sm">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-14 h-14 rounded-xl bg-white/10 border-2 border-white/20 flex items-center justify-center font-black text-xl text-white overflow-hidden shadow-inner shrink-0 relative">
+            <div className="w-14 h-14 rounded-xl bg-white dark:bg-white/10 border-2 border-indigo-700 dark:border-white/20 flex items-center justify-center font-black text-xl text-indigo-800 dark:text-white overflow-hidden shadow-inner shrink-0 relative">
               {cur.photoUrl ? (
                 <img src={cur.photoUrl} alt={cur.name} className="w-full h-full object-cover" />
               ) : (
@@ -816,27 +854,27 @@ export const StudentQuickActionModal: React.FC<Props> = ({
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <h3 className="text-lg font-black leading-tight text-white">{cur.name}</h3>
+                <h3 className="text-lg font-black leading-tight text-slate-900 dark:text-white">{cur.name}</h3>
                 {cur.rollNo && (
-                  <span className="bg-blue-500/30 border border-blue-400/40 text-blue-200 text-[11px] px-2 py-0.5 rounded-full font-bold">
+                  <span className="bg-blue-100 dark:bg-blue-500/30 border border-blue-700 dark:border-blue-400/40 text-blue-900 dark:text-blue-200 text-[11px] px-2 py-0.5 rounded-full font-bold">
                     Roll #{cur.rollNo}
                   </span>
                 )}
-                <span className="bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 text-[11px] px-2 py-0.5 rounded-full font-bold">
+                <span className="bg-emerald-100 dark:bg-emerald-500/20 border border-emerald-700 dark:border-emerald-400/30 text-emerald-900 dark:text-emerald-300 text-[11px] px-2 py-0.5 rounded-full font-bold">
                   {className} {cur.section ? `(${cur.section})` : ""}
                 </span>
                 {cur.admissionNo && (
-                  <span className="text-[11px] text-slate-300 font-mono">
+                  <span className="text-[11px] text-slate-700 dark:text-slate-300 font-mono font-semibold">
                     Adm: {cur.admissionNo}
                   </span>
                 )}
                 {cur.active === false && (
-                  <span className="bg-rose-500/30 text-rose-300 text-[10px] px-2 py-0.5 rounded-full font-black border border-rose-400/40">
+                  <span className="bg-rose-100 dark:bg-rose-500/30 text-rose-800 dark:text-rose-300 text-[10px] px-2 py-0.5 rounded-full font-black border border-rose-700 dark:border-rose-400/40">
                     INACTIVE / TC
                   </span>
                 )}
               </div>
-              <p className="text-xs text-blue-200/90 mt-1 flex items-center gap-2 flex-wrap">
+              <p className="text-xs text-slate-700 dark:text-blue-200/90 mt-1 flex items-center gap-2 flex-wrap font-medium">
                 <span>👨‍💼 <strong>पिता:</strong> {cur.fatherName || "—"}</span>
                 <span className="opacity-60">•</span>
                 <span>👩‍💼 <strong>माता:</strong> {cur.motherName || "—"}</span>
@@ -1313,16 +1351,29 @@ export const StudentQuickActionModal: React.FC<Props> = ({
                 </div>
               </div>
 
-              {/* 5% Early Bird Offer Banner (10 तारीख तक 5% छूट) */}
+              {/* Date-Limited Offer Banner */}
               <div className="p-3 bg-gradient-to-r from-amber-50 to-emerald-50 dark:from-amber-950/30 dark:to-emerald-950/30 border border-amber-300 dark:border-amber-800 rounded-xl flex items-center justify-between gap-3 text-xs">
                 <div className="flex items-center gap-2">
                   <Sparkles className="w-4 h-4 text-amber-500 shrink-0" />
                   <div>
                     <span className="font-extrabold text-amber-900 dark:text-amber-200">
-                      ⚡ 5% Early Bird Offer (10 तारीख तक विशेष छूट):
+                      {schoolSlabs.length > 0
+                        ? `⚡ Date-Limited Fee Offer (${slabsHeadlineText}):`
+                        : "📌 Fee Payment Policy:"}
                     </span>
                     <p className="text-slate-600 dark:text-slate-300 text-[11px]">
-                      प्रत्येक माह की 10 तारीख तक शुल्क जमा करने पर 5% की सीधी छूट मिलती है। (मासिक बचत: ₹{earlyBirdDiscountAmount})
+                      {schoolSlabs.length > 0 ? (
+                        <>
+                          {schoolSlabs.map((sl) => {
+                            const val = sl.discountType === "fixed" ? `₹${sl.discountValue} OFF` : `${sl.discountValue}% OFF`;
+                            const save = computeSlabDiscountAmount(sl, Number(cur.monthlyFee || 0));
+                            return `${sl.uptoDay} तारीख तक ${val} (बचत ₹${save})`;
+                          }).join(" • ")}
+                          {" — तय तिथि के बाद स्लिप पर लिखी पूरी राशि देय होगी।"}
+                        </>
+                      ) : (
+                        "स्लिप पर लिखी पूरी बकाया राशि देय है।"
+                      )}
                     </p>
                   </div>
                 </div>
@@ -1331,7 +1382,11 @@ export const StudentQuickActionModal: React.FC<Props> = ({
                     type="button"
                     onClick={() =>
                       handleWhatsAppMessage(
-                        `Fee Reminder — ${schoolName}\nStudent: ${cur.name} (${className}, Roll: ${cur.rollNo || "—"})\nTotal Due Amount: ₹${totalPendingFee.toLocaleString("en-IN")}\n⚡ Reminder: 10 तारीख तक जमा करने पर 5% Early Bird डिस्काउंट मिलता है।`
+                        `Fee Reminder — ${schoolName}\nStudent: ${cur.name} (${className}, Roll: ${cur.rollNo || "—"})\nTotal Due Amount (Full): ₹${totalPendingFee.toLocaleString("en-IN")}${
+                          schoolSlabs.length > 0
+                            ? `\n⚡ Date-Limited Offer: ${slabsHeadlineText}\n(नियम: तय तिथि के बाद स्लिप पर लिखा पूरा पेमेंट करना होगा)`
+                            : ""
+                        }`
                       )
                     }
                     className="inline-flex items-center gap-1 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg font-bold text-[11px] shrink-0"
@@ -1344,9 +1399,36 @@ export const StudentQuickActionModal: React.FC<Props> = ({
 
               {/* Detailed Month-wise Fee Ledger Table */}
               <div>
-                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">
-                  माह-वार फीस लेजर विवरण (Fee Ledger Passbook)
-                </span>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    माह-वार फीस लेजर विवरण (Fee Ledger Passbook)
+                  </span>
+                  <div className="flex items-center gap-1.5 text-[11px]">
+                    <span className="font-bold text-slate-500">Collected By:</span>
+                    <button
+                      type="button"
+                      onClick={() => setQuickCollectorRole("accountant")}
+                      className={`px-2 py-0.5 rounded-md font-black border cursor-pointer ${
+                        quickCollectorRole === "accountant"
+                          ? "bg-emerald-600 text-white border-emerald-600"
+                          : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-600"
+                      }`}
+                    >
+                      🧾 Accountant
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setQuickCollectorRole("manager")}
+                      className={`px-2 py-0.5 rounded-md font-black border cursor-pointer ${
+                        quickCollectorRole === "manager"
+                          ? "bg-amber-600 text-white border-amber-600"
+                          : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-600"
+                      }`}
+                    >
+                      🛡️ Manager
+                    </button>
+                  </div>
+                </div>
 
                 {loadingFees ? (
                   <div className="text-center py-8 text-slate-400 text-xs">Loading fee records...</div>
@@ -1362,7 +1444,7 @@ export const StudentQuickActionModal: React.FC<Props> = ({
                           <th className="p-2.5">Month</th>
                           <th className="p-2.5">Tuition</th>
                           <th className="p-2.5">Bus</th>
-                          <th className="p-2.5">5% Disc.</th>
+                          <th className="p-2.5">Disc.</th>
                           <th className="p-2.5">Paid Amt</th>
                           <th className="p-2.5">Status</th>
                           <th className="p-2.5 text-right">Action / Receipt</th>
@@ -1376,7 +1458,9 @@ export const StudentQuickActionModal: React.FC<Props> = ({
                           });
                           const tFee = Number(fee.monthlyAmount ?? fee.amount ?? cur.monthlyFee ?? 0);
                           const bFee = Number(fee.busFee ?? cur.busFee ?? 0);
-                          const disc = Math.round(tFee * 0.05);
+                          const disc = fee.paid
+                            ? Number(fee.earlyDiscount ?? fee.concession ?? 0)
+                            : todaySlabMatch.discountAmount;
 
                           return (
                             <tr
@@ -1744,12 +1828,12 @@ export const StudentQuickActionModal: React.FC<Props> = ({
             <div className="space-y-4 flex flex-col items-center">
               <div className="w-full max-w-sm bg-white dark:bg-slate-800 rounded-2xl border-2 border-indigo-900 shadow-xl overflow-hidden">
                 {/* ID Header */}
-                <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-blue-800 text-white p-3 flex items-center justify-between">
+                <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-sky-50 dark:from-blue-900 dark:via-indigo-900 dark:to-blue-800 text-slate-900 dark:text-white border-b-2 border-indigo-700 p-3 flex items-center justify-between">
                   <div>
-                    <h5 className="font-black text-xs uppercase tracking-wider">{schoolName}</h5>
-                    {school?.address && <p className="text-[9px] text-blue-200">{school.address}</p>}
+                    <h5 className="font-black text-xs uppercase tracking-wider text-indigo-950 dark:text-white">{schoolName}</h5>
+                    {school?.address && <p className="text-[9px] text-slate-700 dark:text-blue-200 font-medium">{school.address}</p>}
                   </div>
-                  <span className="px-2 py-0.5 rounded bg-amber-400 text-slate-950 font-black text-[9px]">STUDENT ID</span>
+                  <span className="px-2 py-0.5 rounded bg-amber-400 text-slate-950 font-black text-[9px] border border-amber-700">STUDENT ID</span>
                 </div>
 
                 {/* ID Body */}
@@ -1782,8 +1866,25 @@ export const StudentQuickActionModal: React.FC<Props> = ({
 
                   <div className="w-16 flex flex-col items-center justify-center shrink-0">
                     <QRCode
-                      value={`NSTA-ID:${cur.id}:${cur.rollNo || ""}:${cur.name}`}
+                      value={buildStudentIdCardQrUrl({
+                        schoolId: school?.id || cur.schoolId || "",
+                        studentId: cur.id || "",
+                        rollNo: cur.rollNo || "",
+                        classId: cur.classId || "",
+                        studentName: cur.name || "",
+                        admissionNo: cur.admissionNo || "",
+                        phone: cur.phone || "",
+                        fatherName: cur.fatherName || "",
+                        motherName: cur.motherName || "",
+                        bloodGroup: cur.bloodGroup || "",
+                        dob: cur.dateOfBirth || "",
+                        address: cur.address || "",
+                        monthlyFee: cur.monthlyFee || 0,
+                        className,
+                        schoolName,
+                      })}
                       size={60}
+                      level="L"
                       className="border p-1 rounded bg-white"
                     />
                     <span className="text-[8px] text-slate-400 mt-1 font-mono">SCAN ID</span>
@@ -2860,7 +2961,7 @@ export const StudentQuickActionModal: React.FC<Props> = ({
           student={cur}
           className={className}
           sessionName="2026-27"
-          initialMode="classic_box_grid"
+          initialMode="form_only"
           feeRecord={
             feeRecords.find(
               (f) => f.feeType === "admission" || f.receiptCategory === "admission"

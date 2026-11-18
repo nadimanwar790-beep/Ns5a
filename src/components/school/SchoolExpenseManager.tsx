@@ -373,27 +373,27 @@ export const SchoolExpenseManager: React.FC<Props> = ({ school, activeSession })
         </div>
 
         {/* Net Cash in Hand */}
-        <div className="bg-gradient-to-br from-indigo-950 via-slate-900 to-slate-900 border border-indigo-500/40 rounded-2xl p-4 sm:p-5 relative overflow-hidden shadow-lg">
-          <div className="flex items-center justify-between text-xs text-indigo-300 font-bold mb-2">
+        <div className="bg-gradient-to-br from-indigo-50 via-blue-50 to-sky-50 dark:from-indigo-950 dark:via-slate-900 dark:to-slate-900 border-2 border-indigo-700 dark:border-indigo-500/40 rounded-2xl p-4 sm:p-5 relative overflow-hidden shadow-md">
+          <div className="flex items-center justify-between text-xs text-indigo-900 dark:text-indigo-300 font-bold mb-2">
             <span className="flex items-center gap-1.5">
-              <Wallet className="w-4 h-4 text-amber-400" />
+              <Wallet className="w-4 h-4 text-amber-700 dark:text-amber-400" />
               नेट नकद शेष (Cash In Hand)
             </span>
-            <span className="text-[10px] px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-200">
+            <span className="text-[10px] px-2 py-0.5 rounded bg-indigo-100 dark:bg-indigo-500/20 text-indigo-900 dark:text-indigo-200 border border-indigo-700/40 dark:border-indigo-500/30 font-bold">
               क्लोजिंग बैलेंस
             </span>
           </div>
-          <div className={`text-2xl font-black ${dateExpensesSummary.netCashInHand >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+          <div className={`text-2xl font-black ${dateExpensesSummary.netCashInHand >= 0 ? "text-emerald-700 dark:text-emerald-400" : "text-rose-700 dark:text-rose-400"}`}>
             ₹{dateExpensesSummary.netCashInHand.toLocaleString("en-IN")}
           </div>
-          <div className="text-[11px] text-indigo-200/70 mt-2">
+          <div className="text-[11px] text-slate-700 dark:text-indigo-200/70 font-medium mt-2">
             शाम को काउंटर बंद करते समय तिजोरी/दराज में इतना कैश होना चाहिए।
           </div>
         </div>
       </div>
 
       {/* Filter and Search Bar */}
-      <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <div className="bg-white dark:bg-slate-900/70 border border-slate-300 dark:border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3">
         <div className="relative w-full sm:w-80">
           <Search className="w-4 h-4 absolute left-3 top-3 text-slate-500" />
           <input

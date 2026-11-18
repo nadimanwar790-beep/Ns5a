@@ -18,6 +18,7 @@ import {
   type FeeReceiptItem,
 } from "./feeReceiptUtils";
 import { safeOpenExternalUrl, getDynamicAcademicSessionLabel } from "../../utils/safeBrowserActions";
+import { getSchoolFeeDiscountSlabs, computeSlabDiscountAmount } from "../../utils/feeDiscountSlabs";
 
 interface FeeDocumentOptions {
   fee: MonthlyFee;
@@ -27,6 +28,7 @@ interface FeeDocumentOptions {
   feeHistory?: MonthlyFee[];
   isDueDemand?: boolean;
   mode?: "4in1" | "full" | "pos" | "a6";
+  receiptDataOverride?: DpsReceiptData;
   schoolDetails?: {
     schoolId?: string;
     schoolName?: string;
@@ -41,6 +43,10 @@ interface FeeDocumentOptions {
     principalSignatureUrl?: string;
     directorName?: string;
     directorSignatureUrl?: string;
+    managerName?: string;
+    managerSignatureUrl?: string;
+    accountantName?: string;
+    accountantSignatureUrl?: string;
   };
 }
 
@@ -55,8 +61,13 @@ export function buildDpsReceiptData({
   feeHistory,
   schoolDetails,
 }: FeeDocumentOptions): DpsReceiptData {
-  const baseMonthlyAmount = Number(fee.monthlyAmount ?? fee.amount ?? 0);
   const arrears = Number(fee.arrearsAmount || 0);
+  const rawTotalAmount = Number(fee.amount ?? 0);
+  const baseMonthlyAmount = Number(
+    fee.monthlyAmount !== undefined
+      ? fee.monthlyAmount
+      : Math.max(0, rawTotalAmount - arrears)
+  );
 
   // Format month name cleanly (e.g. "NOV 2026")
   const installment = fee.month
@@ -166,12 +177,30 @@ export function buildDpsReceiptData({
     },
 
     note: fee.note || (isDueDemandSlip ? "Pay by 10th of month" : "Thank you"),
-    showDigitalSignature: Boolean(schoolDetails?.principalSignatureUrl || schoolDetails?.directorSignatureUrl),
+    showDigitalSignature: Boolean(
+      schoolDetails?.principalSignatureUrl ||
+      schoolDetails?.accountantSignatureUrl ||
+      schoolDetails?.managerSignatureUrl ||
+      schoolDetails?.directorSignatureUrl ||
+      fee.collectorSignatureUrl
+    ),
     principalSignatureUrl: schoolDetails?.principalSignatureUrl,
     principalName: schoolDetails?.principalName || "Principal",
     principalTitle: "Principal",
     directorSignatureUrl: schoolDetails?.directorSignatureUrl,
     directorName: schoolDetails?.directorName || "Director",
+    managerSignatureUrl: schoolDetails?.managerSignatureUrl,
+    managerName: schoolDetails?.managerName || "Manager",
+    accountantSignatureUrl: schoolDetails?.accountantSignatureUrl,
+    accountantName: schoolDetails?.accountantName || "Accountant",
+    collectedByRole: fee.collectedByRole || "accountant",
+    collectedByName: fee.collectedByName,
+    collectorSignatureUrl: fee.collectorSignatureUrl,
+    signatoryMode: isDueDemandSlip ? "principal_only" : "both",
+    cashierTitle:
+      fee.collectedByRole === "manager"
+        ? (fee.collectedByName || schoolDetails?.managerName || "Manager")
+        : (fee.collectedByName || schoolDetails?.accountantName || "Accountant"),
     signatoryTitle: schoolDetails?.principalName || "Principal",
   };
 }
@@ -180,11 +209,11 @@ export function buildDpsReceiptData({
  * Downloads official DPS-Format Monthly Fee Receipt as high-resolution PDF
  */
 export async function downloadFeeDocument(options: FeeDocumentOptions & { mode?: "4in1" | "full" | "pos" | "a6" }): Promise<void> {
-  const receiptData = buildDpsReceiptData(options);
+  const receiptData = options.receiptDataOverride || buildDpsReceiptData(options);
   const safeName = (receiptData.studentName || "student").replace(/[^a-z0-9-_]+/gi, "_");
   const receiptNumber = receiptData.receiptNo;
   const mode = options.mode || (options.isDueDemand ? "a6" : "pos");
-  const isA6 = mode === "a6" || Boolean(options.isDueDemand && mode !== "pos");
+  const isA6 = mode === "a6" || Boolean(options.isDueDemand && mode !== "pos" && mode !== "4in1" && mode !== "full");
   const isPos = mode === "pos";
 
   let htmlContent = "";
@@ -214,7 +243,7 @@ export async function downloadFeeDocument(options: FeeDocumentOptions & { mode?:
       backgroundColor: "#ffffff",
     });
 
-    const imgData = canvas.toDataURL("image/jpeg", 0.95);
+    const imgData = canvas.toDataURL("image/jpeg", 0.96);
     const pdf = new jsPDF({
       orientation: "portrait",
       unit: "mm",
@@ -225,7 +254,16 @@ export async function downloadFeeDocument(options: FeeDocumentOptions & { mode?:
     const pdfHeight = pdf.internal.pageSize.getHeight();
 
     if (isA6 || mode === "4in1") {
-      pdf.addImage(imgData, "JPEG", 0, 0, pdfWidth, pdfHeight);
+      const imgAspect = canvas.width / Math.max(1, canvas.height);
+      let drawW = pdfWidth;
+      let drawH = drawW / imgAspect;
+      if (drawH > pdfHeight) {
+        drawH = pdfHeight;
+        drawW = drawH * imgAspect;
+      }
+      const offsetX = Math.max(0, (pdfWidth - drawW) / 2);
+      const offsetY = Math.max(0, (pdfHeight - drawH) / 2);
+      pdf.addImage(imgData, "JPEG", offsetX, offsetY, drawW, drawH);
     } else if (isPos) {
       const printWidth = 84;
       const printHeight = Math.min(pdfHeight - 20, (canvas.height * printWidth) / canvas.width);
@@ -233,10 +271,15 @@ export async function downloadFeeDocument(options: FeeDocumentOptions & { mode?:
       pdf.addImage(imgData, "JPEG", marginX, 12, printWidth, printHeight);
     } else {
       const marginX = 14;
-      const printWidth = pdfWidth - marginX * 2;
-      const printHeight = (canvas.height * printWidth) / canvas.width;
-      const marginY = Math.max(14, (pdfHeight - printHeight) / 2);
-      pdf.addImage(imgData, "JPEG", marginX, marginY, printWidth, printHeight);
+      let printWidth = pdfWidth - marginX * 2;
+      let printHeight = (canvas.height * printWidth) / canvas.width;
+      if (printHeight > pdfHeight - 20) {
+        printHeight = pdfHeight - 20;
+        printWidth = (canvas.width * printHeight) / canvas.height;
+      }
+      const resolvedX = Math.max(8, (pdfWidth - printWidth) / 2);
+      const marginY = Math.max(10, (pdfHeight - printHeight) / 2);
+      pdf.addImage(imgData, "JPEG", resolvedX, marginY, printWidth, printHeight);
     }
     const docPrefix = isA6 ? "Fee_Demand_Slip" : isPos ? "Fee_POS_Receipt" : "Fee_Receipt";
     pdf.save(`${docPrefix}_${safeName}_${receiptNumber}.pdf`);
@@ -270,11 +313,11 @@ export function printFeeDocument(options: FeeDocumentOptions): void {
 export async function generateFeeDocumentPdfBlob(
   options: FeeDocumentOptions & { mode?: "4in1" | "full" | "pos" | "a6" }
 ): Promise<{ blob: Blob; filename: string; receiptData: DpsReceiptData }> {
-  const receiptData = buildDpsReceiptData(options);
+  const receiptData = options.receiptDataOverride || buildDpsReceiptData(options);
   const safeName = (receiptData.studentName || "student").replace(/[^a-z0-9-_]+/gi, "_");
   const receiptNumber = receiptData.receiptNo;
   const mode = options.mode || (options.isDueDemand ? "a6" : "pos");
-  const isA6 = mode === "a6" || Boolean(options.isDueDemand && mode !== "pos");
+  const isA6 = mode === "a6" || Boolean(options.isDueDemand && mode !== "pos" && mode !== "4in1" && mode !== "full");
   const isPos = mode === "pos";
   const filename = isA6
     ? `Fee_Demand_Slip_${safeName}_${receiptNumber}.pdf`
@@ -308,9 +351,9 @@ export async function generateFeeDocumentPdfBlob(
     backgroundColor: "#ffffff",
   });
 
-  const imgData = canvas.toDataURL("image/jpeg", 0.95);
+  const imgData = canvas.toDataURL("image/jpeg", 0.96);
 
-  // If A6 mode, produce an authentic A6 PDF
+  // If A6 mode, produce an authentic A6 PDF with exact aspect ratio
   if (isA6) {
     const a6Pdf = new jsPDF({
       orientation: "portrait",
@@ -319,7 +362,16 @@ export async function generateFeeDocumentPdfBlob(
     });
     const pdfWidth = a6Pdf.internal.pageSize.getWidth();
     const pdfHeight = a6Pdf.internal.pageSize.getHeight();
-    a6Pdf.addImage(imgData, "JPEG", 0, 0, pdfWidth, pdfHeight);
+    const imgAspect = canvas.width / Math.max(1, canvas.height);
+    let drawW = pdfWidth;
+    let drawH = drawW / imgAspect;
+    if (drawH > pdfHeight) {
+      drawH = pdfHeight;
+      drawW = drawH * imgAspect;
+    }
+    const offsetX = Math.max(0, (pdfWidth - drawW) / 2);
+    const offsetY = Math.max(0, (pdfHeight - drawH) / 2);
+    a6Pdf.addImage(imgData, "JPEG", offsetX, offsetY, drawW, drawH);
     const blob = a6Pdf.output("blob");
     return { blob, filename, receiptData };
   }
@@ -348,13 +400,27 @@ export async function generateFeeDocumentPdfBlob(
   const pdfHeight = pdf.internal.pageSize.getHeight();
 
   if (mode === "4in1") {
-    pdf.addImage(imgData, "JPEG", 0, 0, pdfWidth, pdfHeight);
+    const imgAspect = canvas.width / Math.max(1, canvas.height);
+    let drawW = pdfWidth;
+    let drawH = drawW / imgAspect;
+    if (drawH > pdfHeight) {
+      drawH = pdfHeight;
+      drawW = drawH * imgAspect;
+    }
+    const offsetX = Math.max(0, (pdfWidth - drawW) / 2);
+    const offsetY = Math.max(0, (pdfHeight - drawH) / 2);
+    pdf.addImage(imgData, "JPEG", offsetX, offsetY, drawW, drawH);
   } else {
     const marginX = 14;
-    const printWidth = pdfWidth - marginX * 2;
-    const printHeight = (canvas.height * printWidth) / canvas.width;
-    const marginY = Math.max(14, (pdfHeight - printHeight) / 2);
-    pdf.addImage(imgData, "JPEG", marginX, marginY, printWidth, printHeight);
+    let printWidth = pdfWidth - marginX * 2;
+    let printHeight = (canvas.height * printWidth) / canvas.width;
+    if (printHeight > pdfHeight - 20) {
+      printHeight = pdfHeight - 20;
+      printWidth = (canvas.width * printHeight) / canvas.height;
+    }
+    const resolvedX = Math.max(8, (pdfWidth - printWidth) / 2);
+    const marginY = Math.max(10, (pdfHeight - printHeight) / 2);
+    pdf.addImage(imgData, "JPEG", resolvedX, marginY, printWidth, printHeight);
   }
 
   const blob = pdf.output("blob");
@@ -436,6 +502,7 @@ export function buildWhatsAppReceiptMessage(
         `📚 *Class:* ${receiptData.className}${receiptData.rollNo ? ` (Roll: ${receiptData.rollNo})` : ""}\n` +
         (receiptData.fatherName ? `👨 *Father:* ${receiptData.fatherName}\n` : "") +
         `💳 *Pay Mode:* ${receiptData.payModeInfo.payMode || "Cash"}\n` +
+        `🧾 *Collected By:* ${receiptData.collectedByRole === "manager" ? `Manager (${receiptData.collectedByName || receiptData.managerName || "Manager"})` : `Accountant (${receiptData.collectedByName || receiptData.accountantName || "Accountant"})`}\n` +
         `--------------------------------\n` +
         `*FEE HEADS / मद विवरण:*\n` +
         `${itemLines}\n` +
@@ -463,8 +530,16 @@ export function buildWhatsAppReceiptMessage(
       const lastDueDt = receiptData.lastDueDate || "";
       const netPayableTotal = Math.max(balanceDue, totalBill);
       const curMonthRate = Number(options.fee.monthlyAmount) || 0;
-      const earlyDisc = curMonthRate > 0 ? Math.round(curMonthRate * 0.05) : 0;
-      const earlyPayable = Math.max(0, netPayableTotal - earlyDisc);
+      const slabs = getSchoolFeeDiscountSlabs(options.schoolDetails?.schoolId);
+      const slabOfferLines = slabs
+        .map((s) => {
+          const dAmt = computeSlabDiscountAmount(s, curMonthRate);
+          if (dAmt <= 0) return "";
+          const afterAmt = Math.max(0, netPayableTotal - dAmt);
+          const valTxt = s.discountType === "fixed" ? `₹${s.discountValue} OFF` : `${s.discountValue}% OFF`;
+          return `⚡ *${s.uptoDay} तारीख तक (${valTxt}):* ₹${afterAmt.toLocaleString("en-IN")} देय (-₹${dAmt.toLocaleString("en-IN")})\n`;
+        })
+        .join("");
 
       message = `🏫 *${schoolName.toUpperCase()}*\n` +
         `⚠️ *FEE DEMAND SLIP / बकाया शुल्क तकादा पर्ची*\n` +
@@ -479,8 +554,10 @@ export function buildWhatsAppReceiptMessage(
         `----------------------------------------\n` +
         `✅ *Last Paid (पिछला जमा):* ₹${lastPaidAmt.toLocaleString("en-IN")}${lastPaidAmt > 0 && lastPaidDt ? ` (${lastPaidDt})` : " (कोई पिछला जमा नहीं)"}\n` +
         `📌 *Last Due (पिछला बकाया):* ₹${lastDueAmt.toLocaleString("en-IN")}${lastDueAmt > 0 && lastDueDt ? ` (${lastDueDt})` : " (Clear)"}\n` +
-        `💰 *Gross Total Due (कुल देय):* ₹${netPayableTotal.toLocaleString("en-IN")}\n` +
-        (earlyDisc > 0 ? `⚡ *10 तारीख के पहले जमा करें और पाएं 5% OFF!* (-₹${earlyDisc.toLocaleString("en-IN")})\n🎉 *10 तारीख तक छूट के बाद देय:* *₹${earlyPayable.toLocaleString("en-IN")}*\n` : "") +
+        `💰 *Gross Total Due (स्लिप पर कुल देय):* ₹${netPayableTotal.toLocaleString("en-IN")}\n` +
+        (slabOfferLines
+          ? `${slabOfferLines}⚠️ _तय तिथि के बाद जमा करने पर पूरा भुगतान ₹${netPayableTotal.toLocaleString("en-IN")} देय होगा।_\n`
+          : "") +
         `----------------------------------------\n` +
         `🙏 *कृपया निर्धारित तिथि तक शुल्क स्कूल काउंटर या UPI QR द्वारा जमा करें।*`;
     } else {
@@ -489,7 +566,7 @@ export function buildWhatsAppReceiptMessage(
         ? `🎓 *100% Sibling Free / नि:शुल्क शिक्षा:*`
         : (options.student?.siblingDiscountPct || options.student?.siblingDiscountAmount)
         ? `🎁 *Sibling Concession (भाई-बहन छूट):*`
-        : `🎁 *5% Early Bird Concession:*`;
+        : `🎁 *Early Payment Concession:*`;
 
       message = `🏫 *${schoolName.toUpperCase()}*\n` +
         `🧾 *OFFICIAL FEE PAYMENT RECEIPT / फीस रसीद*\n` +

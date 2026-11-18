@@ -252,23 +252,23 @@ export const PtmSchedulerModal: React.FC<Props> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-xs">
       <div className="bg-slate-900 border border-slate-700 rounded-3xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Header */}
-        <div className="p-5 bg-gradient-to-r from-indigo-950 via-slate-900 to-slate-900 border-b border-indigo-500/30 flex items-center justify-between">
+        <div className="p-5 bg-gradient-to-r from-blue-50 via-indigo-50 to-sky-50 dark:from-indigo-950 dark:via-slate-900 dark:to-slate-900 border-b-2 border-indigo-700 dark:border-indigo-500/40 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+            <div className="p-2.5 rounded-xl bg-indigo-100 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-400 border-2 border-indigo-600 dark:border-indigo-500/30">
               <Users className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-black text-white flex items-center gap-2">
+              <h3 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
                 पीटीएम (PTM) स्लॉट शेड्यूलर व बुकिंग इंजन
               </h3>
-              <p className="text-xs text-indigo-200/80">
+              <p className="text-xs text-slate-600 dark:text-indigo-200/80 font-medium">
                 अभिभावक-शिक्षक बैठक समय सारणी • लाइन रहित डिजिटल स्लॉट बुकिंग
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-white p-2 rounded-lg text-lg font-bold"
+            className="text-slate-700 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white p-2 rounded-lg text-lg font-bold cursor-pointer"
           >
             ✕
           </button>

@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import {
   subscribeToSessions, subscribeToClasses, subscribeToSubjects, subscribeToTeachers,
   subscribeToAllStudents, saveSession, saveClass, saveSubject, saveMultipleSubjects, saveTeacher, saveStudent,
@@ -7,10 +7,14 @@ import {
   updateSchool, updateSession, updateClass, updateTeacher,
   generateId, getSchool, getSessions, setSchoolLockCode,
   assignSchoolSubAdminByEmail, getSchoolAdmins, removeSchoolUserByUid,
-  getAllMonthlyFees, getSchoolFeeHistory, currentMonthStr, saveFee, markFeePaid, isStudentInClass, isDemoRecord,
+  getAllMonthlyFees, getSchoolFeeHistory, currentMonthStr, saveFee, markFeePaid, isStudentInClass, isDemoRecord, isDemoSessionId,
   shouldUseDemoForSchool, getLocalAttendance, getLocalFees,
   isStudentBirthdayToday, dispatchOfficialSchoolBirthdayWish, checkAndDispatchTodaysBirthdays,
-  getStaffDailyAttendance, saveStaffDailyAttendance, todayStr, calculateStayDuration
+  getStaffDailyAttendance, saveStaffDailyAttendance, todayStr, calculateStayDuration,
+  isActiveSchoolTeacherRecord, isActiveStaffRecord, getDeletedTeacherIds,
+  subscribeToRecycleBin, restoreTeacherFromRecycleBin, restoreStudentFromRecycleBin,
+  permanentDeleteTeacherFromBin, permanentDeleteStudentFromBin,
+  subscribeStaffLeaves
 } from "../../school-firebase";
 import {
   subscribeAttendanceSchedule,
@@ -21,6 +25,7 @@ import {
   DEFAULT_OUT_START_TIME,
 } from "../../utils/schoolAttendanceSchedule";
 import { loadMergedStoreSales } from "../../utils/schoolCloudSync";
+import { buildMergedFleetList } from "../../utils/schoolTransportStore";
 import { computePaymentBreakdown } from "../../utils/paymentBreakdown";
 import { COMMON_BOOK_PRESETS, PRESET_BOOK_BUNDLES } from "./TeacherPanel";
 import type { SchoolUserProfile } from "../../school-types";
@@ -47,17 +52,19 @@ import { IdCardManager } from "./IdCardManager";
 import { AdmitCardManager } from "./AdmitCardManager";
 import { CertificateManager } from "./CertificateManager";
 import { MarksheetGenerator } from "./MarksheetGenerator";
-import { StudentPromotionManager } from "./StudentPromotionManager";
+import { StudentReAdmissionManager } from "./StudentReAdmissionManager";
 import { NoticeBoardManager } from "./NoticeBoardManager";
 import { StaffHRMManager } from "./StaffHRMManager";
 import { SchoolReportsHub } from "./SchoolReportsHub";
 import { PublicSchoolWebsite } from "./PublicSchoolWebsite";
+import { SchoolWebsiteCms } from "./SchoolWebsiteCms";
 import { OnlineAdmissionManager } from "./OnlineAdmissionManager";
-import { getStaffEmployees, saveStaffEmployee } from "../../school-firebase";
-import type { MonthlyFee, StaffEmployee, StoreSaleRecord } from "../../school-types";
+import { getStaffEmployees, saveStaffEmployee, getAccountants, saveAccountant, subscribeToAccountants, deleteAccountant, unassignTeacherForAccountantRole, saveSchoolGalleryItem, deleteSchoolGalleryItem } from "../../school-firebase";
+import { compressImageFileToDataUrl } from "../../utils/imageCompression";
+import type { MonthlyFee, StaffEmployee, StoreSaleRecord, SchoolAccountant } from "../../school-types";
 import { SchoolHeaderEditorModal, type SchoolHeaderDetails } from "./SchoolHeaderEditorModal";
-import { DigitalSignatureModal } from "./DigitalSignatureModal";
-import { getSavedSchoolLogo, isAppLogo, cleanLogoUrl } from "./feeReceiptUtils";
+import { DigitalSignatureModal, type DigitalSignatureTab } from "./DigitalSignatureModal";
+import { getSavedSchoolLogo, getVisibleSchoolRegNo, isAppLogo, cleanLogoUrl } from "./feeReceiptUtils";
 import { TimetableManager } from "./TimetableManager";
 import { ClassroomVideoArchive } from "./ClassroomVideoArchive";
 import { HomeworkManager } from "./HomeworkManager";
@@ -70,6 +77,9 @@ import { SchoolMessengerBroadcastStudio } from "./SchoolMessengerBroadcastStudio
 import { NstaMessengerSuite } from "./NstaMessengerSuite";
 import { AbsenteeActionPage } from "./AbsenteeActionPage";
 import { GroupStudyModal } from "../GroupStudyModal";
+import { TeacherRulesRegulationsView } from "./TeacherRulesRegulationsView";
+import { TeacherSignatureModal } from "./TeacherSignatureModal";
+import { AppointmentLetterModal } from "./AppointmentLetterModal";
 import {
   Users, BookOpen, Calendar, IndianRupee, Plus, Trash2, Settings,
   ChevronRight, ChevronLeft, X, Edit3, FileText, Award,
@@ -110,13 +120,16 @@ import { PtmSchedulerModal } from "./PtmSchedulerModal";
 import { StaffPayrollManager } from "./StaffPayrollManager";
 import { QuestionPaperBuilder } from "./QuestionPaperBuilder";
 import { SiblingProfileManager } from "./SiblingProfileManager";
-import { SessionRollOverModal } from "./SessionRollOverModal";
 import { MultiBranchManager } from "./MultiBranchManager";
 import { HostelMessManager } from "./HostelMessManager";
 import { SyllabusPacingTracker } from "./SyllabusPacingTracker";
 import { BusFleetLogbookModal } from "./BusFleetLogbookModal";
 import { VisitorGateSecurityManager } from "./VisitorGateSecurityManager";
 import { DocumentVerificationView } from "./DocumentVerificationView";
+import { AdmissionEnquiryCrm } from "./AdmissionEnquiryCrm";
+import { TeacherAdminGrowthHub } from "./TeacherAdminGrowthHub";
+import { EntranceTestAdminManager } from "./EntranceTestAdminManager";
+import { evaluateEntranceScore, saveEntranceAdmissionPrefill } from "../../utils/entranceTestEngine";
 import { ShieldCheck, Receipt } from "lucide-react";
 import { rotateToLandscape, rotateToPortrait, isDesktopModeOn, setDesktopMode, useDeviceOrientation } from "../../utils/displayPrefs";
 import { toast } from "sonner";
@@ -148,8 +161,8 @@ type AdminView =
   | "content" | "class_notes_manager" | "attendance" | "fees" | "fee_class" | "fee_all" | "fee_structure" | "bus_transport" | "qr_pay" | "fee_alerts" | "receipt_header" | "discount_list" | "report_card" | "marks" | "results"
   | "sibling_profiles"
   | "store" | "subscription"
-  | "id_cards" | "admit_cards" | "certificates" | "marksheet_hub" | "promotion" | "notices" | "holidays" | "staff_hrm" | "reports_hub"
-  | "public_website" | "online_admissions" | "online_admission_fee"
+  | "id_cards" | "admit_cards" | "certificates" | "marksheet_hub" | "readmission" | "notices" | "holidays" | "staff_hrm" | "reports_hub"
+  | "public_website" | "website_cms" | "online_admissions" | "online_admission_fee"
   | "nsta_broadcast" | "video_lectures" | "classroom_videos" | "school_study_room"
   | "account_hub"
   | "backup_recovery"
@@ -167,8 +180,10 @@ type AdminView =
   | "bus_logbook"
   | "visitor_security"
   | "doc_verify"
-  | "admission_receipt"
-  | "razorpay_setup";
+  | "razorpay_setup"
+  | "admission_crm"
+  | "student_growth_safety"
+  | "entrance_test_hub";
 
 
 export const SchoolAdminPanel: React.FC<Props> = ({
@@ -187,13 +202,14 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const canExitSchool = Boolean(isSuperAdmin && onLeaveSchool);
 
   const handleExploreFullApp = () => {
-    try {
-      localStorage.setItem("nst_app_view_mode", "STUDENT");
-      window.dispatchEvent(new CustomEvent("nst_open_student_dashboard"));
-    } catch (e) {
-      console.warn("Failed to switch app view mode:", e);
-    }
+    if (!onOpenPlatformContent && !onBack) return;
     if (onOpenPlatformContent) {
+      try {
+        localStorage.setItem("nst_app_view_mode", "STUDENT");
+        window.dispatchEvent(new CustomEvent("nst_open_student_dashboard"));
+      } catch (e) {
+        console.warn("Failed to switch app view mode:", e);
+      }
       onOpenPlatformContent();
     } else if (onBack) {
       onBack();
@@ -208,8 +224,10 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const [classes, setClasses] = useState<SchoolClass[]>([]);
   const [subjects, setSubjects] = useState<SchoolSubject[]>([]);
   const [teachers, setTeachers] = useState<SchoolTeacher[]>([]);
+  const [selectedTeacherIds, setSelectedTeacherIds] = useState<string[]>([]);
   const [students, setStudents] = useState<SchoolStudent[]>([]);
   const [staffList, setStaffList] = useState<StaffEmployee[]>([]);
+  const [accountants, setAccountants] = useState<SchoolAccountant[]>([]);
   const [activeSession, setActiveSession] = useState<SchoolSession | null>(null);
   const [selectedClass, setSelectedClass] = useState<SchoolClass | null>(null);
   const [selectedSubject, setSelectedSubject] = useState<SchoolSubject | null>(null);
@@ -217,9 +235,19 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const [smartClassLesson, setSmartClassLesson] = useState<any>(null);
   const [smartClassMode, setSmartClassMode] = useState<"reading" | "writing" | "pdf" | "mcq">("reading");
   const [saving, setSaving] = useState(false);
-  const [showSessionRollOverModal, setShowSessionRollOverModal] = useState(false);
   const [showExpiryPopup, setShowExpiryPopup] = useState(false);
   const [showFaceStudioModal, setShowFaceStudioModal] = useState(false);
+  const [showTeacherRulesModal, setShowTeacherRulesModal] = useState(false);
+  const [showTeacherReferralModal, setShowTeacherReferralModal] = useState(false);
+  const [digitalSignatureInitialTab, setDigitalSignatureInitialTab] = useState<DigitalSignatureTab>("principal");
+  const [signatureTargetTeacher, setSignatureTargetTeacher] = useState<any | null>(null);
+  const [appointmentLetterTeacher, setAppointmentLetterTeacher] = useState<any | null>(null);
+  const [teachersHubTab, setTeachersHubTab] = useState<
+    | "directory"
+    | "leaves"
+    | "payroll"
+    | "hrm_payslip"
+  >("directory");
   const [faceStudioInitialTab, setFaceStudioInitialTab] = useState<"STUDENTS" | "TEACHERS" | "TEST">("STUDENTS");
   const [faceStudioTargetPerson, setFaceStudioTargetPerson] = useState<any | null>(null);
   const [faceStudioTargetType, setFaceStudioTargetType] = useState<"STUDENT" | "TEACHER">("STUDENT");
@@ -230,11 +258,21 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     schoolId ? getStaffDailyAttendance(schoolId, todayStr()) : { schoolId: "", date: todayStr(), records: {} }
   );
 
+  const [pendingStaffLeavesCount, setPendingStaffLeavesCount] = useState(0);
+
   useEffect(() => {
     if (schoolId) {
       setTeacherAttRecords(getStaffDailyAttendance(schoolId, teacherAttendanceDate));
     }
   }, [schoolId, teacherAttendanceDate]);
+
+  useEffect(() => {
+    if (!schoolId) return;
+    const unsub = subscribeStaffLeaves(schoolId, (list) => {
+      setPendingStaffLeavesCount((list || []).filter((l) => l.status === "pending").length);
+    });
+    return unsub;
+  }, [schoolId]);
 
   const handleOpenTeacherFaceEnrollment = (teacher: any) => {
     setFaceStudioInitialTab("TEACHERS");
@@ -321,10 +359,29 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const [showFullSchoolProfileEditor, setShowFullSchoolProfileEditor] = useState(false);
   const [showDigitalSignatureModal, setShowDigitalSignatureModal] = useState(false);
   const [schoolInfoForm, setSchoolInfoForm] = useState({
-    principalName: "", principalPhone: "", directorName: "", directorPhone: "", mobile: "", address: "",
-    tagline: "", bannerColor: ""
+    principalName: "", principalPhone: "", directorName: "", directorPhone: "",
+    managerName: "", managerPhone: "", accountantName: "",
+    mobile: "", address: "", tagline: "", bannerColor: ""
   });
   const [savingSchoolInfo, setSavingSchoolInfo] = useState(false);
+
+  useEffect(() => {
+    if (school && !editingSchoolInfo) {
+      setSchoolInfoForm({
+        principalName: school.principalName || "",
+        principalPhone: school.principalPhone || "",
+        directorName: school.directorName || "",
+        directorPhone: school.directorPhone || "",
+        managerName: school.managerName || "",
+        managerPhone: school.managerPhone || "",
+        accountantName: school.accountantName || "",
+        mobile: school.mobile || school.phone || "",
+        address: school.address || "",
+        tagline: school.tagline || "",
+        bannerColor: school.bannerColor || "",
+      });
+    }
+  }, [school, editingSchoolInfo]);
 
   // Lock code
   const [lockCodeInput, setLockCodeInput]     = useState('');
@@ -345,6 +402,42 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       return false;
     }
   });
+
+  // Preserve menu scroll position across drawer close/reopen, collapse/expand, and view switches
+  const menuScrollStorageKey = `nst_admin_menu_scroll_${schoolId || "default"}`;
+  const desktopMenuScrollRef = useRef<HTMLDivElement | null>(null);
+  const mobileMenuScrollRef = useRef<HTMLDivElement | null>(null);
+  const mainContentScrollRef = useRef<HTMLDivElement | null>(null);
+  const menuScrollTopRef = useRef<number>((() => {
+    try {
+      const raw = sessionStorage.getItem(`nst_admin_menu_scroll_${schoolId || "default"}`);
+      const n = raw ? Number(raw) : 0;
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    } catch {
+      return 0;
+    }
+  })());
+  const isRestoringMenuScrollRef = useRef(false);
+
+  const saveMenuScrollTop = (scrollTop: number) => {
+    if (isRestoringMenuScrollRef.current) return;
+    const safe = Math.max(0, Math.round(scrollTop));
+    menuScrollTopRef.current = safe;
+    try {
+      sessionStorage.setItem(menuScrollStorageKey, String(safe));
+    } catch {}
+  };
+
+  const captureActiveMenuScrollRef = useRef<() => void>(() => {});
+  captureActiveMenuScrollRef.current = () => {
+    const candidates = [mobileMenuScrollRef.current, desktopMenuScrollRef.current];
+    for (const el of candidates) {
+      if (el && el.clientHeight > 0) {
+        saveMenuScrollTop(el.scrollTop);
+        return;
+      }
+    }
+  };
 
   // Continuous Device Orientation & Screen Width Hook
   const { isLandscape: isClientLandscape, isWideScreen } = useDeviceOrientation();
@@ -373,31 +466,58 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     }
     return "current";
   });
+  const [showHeaderSettingsMenu, setShowHeaderSettingsMenu] = useState(false);
+  const [showHeaderNotificationMenu, setShowHeaderNotificationMenu] = useState(false);
 
   const applyAdminTheme = (nextTheme: "current" | "white" | "black") => {
     setAppTheme(nextTheme);
     try {
       localStorage.setItem("nst_app_theme", nextTheme);
       localStorage.setItem("nst_student_theme", nextTheme);
+      localStorage.setItem("nst_dark_mode", nextTheme === "white" ? "false" : "true");
       if (typeof document !== "undefined") {
-        document.documentElement.classList.remove(
+        const root = document.documentElement;
+        root.classList.remove(
+          "student-theme-white",
+          "student-theme-black",
+          "student-theme-current",
           "admin-theme-white",
           "admin-theme-black",
           "admin-theme-current",
+          "teacher-theme-white",
+          "teacher-theme-black",
+          "teacher-theme-current",
           "app-theme-white",
           "app-theme-black",
           "app-theme-current",
           "dark-mode-black",
           "dark-mode-blue"
         );
-        document.documentElement.classList.add(`admin-theme-${nextTheme}`, `app-theme-${nextTheme}`);
+        root.classList.add(`admin-theme-${nextTheme}`, `app-theme-${nextTheme}`);
+        root.dataset.nstErpTheme = nextTheme;
         if (nextTheme === "white") {
-          document.documentElement.classList.remove("dark", "dark-mode");
+          root.classList.remove("dark", "dark-mode");
+          document.body.classList.remove("dark-mode");
+          document.body.style.backgroundColor = "#eef2f7";
         } else if (nextTheme === "black") {
-          document.documentElement.classList.add("dark", "dark-mode", "dark-mode-black");
+          root.classList.add("dark", "dark-mode", "dark-mode-black");
+          document.body.classList.add("dark-mode");
+          document.body.style.backgroundColor = "#000000";
         } else {
-          document.documentElement.classList.add("dark", "dark-mode", "dark-mode-blue");
+          root.classList.add("dark", "dark-mode", "dark-mode-blue");
+          document.body.classList.add("dark-mode");
+          document.body.style.backgroundColor = "#08142c";
         }
+        let metaTheme = document.querySelector('meta[name="theme-color"]');
+        if (!metaTheme) {
+          metaTheme = document.createElement("meta");
+          metaTheme.setAttribute("name", "theme-color");
+          document.head.appendChild(metaTheme);
+        }
+        metaTheme.setAttribute(
+          "content",
+          nextTheme === "white" ? "#eef2f7" : nextTheme === "black" ? "#000000" : "#08142c"
+        );
       }
       window.dispatchEvent(new Event("nst-dark-theme-change"));
     } catch (e) {
@@ -407,18 +527,43 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
   useEffect(() => {
     applyAdminTheme(appTheme);
+    return () => {
+      if (typeof document !== "undefined") {
+        const root = document.documentElement;
+        root.classList.remove(
+          "student-theme-white",
+          "student-theme-black",
+          "student-theme-current",
+          "admin-theme-white",
+          "admin-theme-black",
+          "admin-theme-current",
+          "teacher-theme-white",
+          "teacher-theme-black",
+          "teacher-theme-current",
+          "app-theme-white",
+          "app-theme-black",
+          "app-theme-current",
+          "dark-mode-black",
+          "dark-mode-blue"
+        );
+        delete root.dataset.nstErpTheme;
+      }
+    };
   }, []);
 
   useEffect(() => {
-    // Ensure status bar theme color matches ERP dark theme
+    // Ensure status bar theme color meta tag exists without overriding active ERP theme
     try {
       let metaTheme = document.querySelector('meta[name="theme-color"]');
       if (!metaTheme) {
         metaTheme = document.createElement("meta");
         metaTheme.setAttribute("name", "theme-color");
+        metaTheme.setAttribute(
+          "content",
+          appTheme === "white" ? "#eef2f7" : appTheme === "black" ? "#000000" : "#08142c"
+        );
         document.head.appendChild(metaTheme);
       }
-      metaTheme.setAttribute("content", "#020617");
     } catch (e) {
       console.warn("Failed to set theme-color meta tag:", e);
     }
@@ -445,6 +590,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       if (Math.abs(diffX) > 45 && Math.abs(diffX) > Math.abs(diffY) * 1.2) {
         if (diffX < 0) {
           // SWIPED LEFT -> Hide menu (1% visible strip)
+          captureActiveMenuScrollRef.current();
           setIsSidebarOpen(false);
           setIsSidebarHidden(true);
           try {
@@ -476,6 +622,31 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       window.removeEventListener("touchend", onGlobalTouchEnd);
     };
   }, []);
+
+  useLayoutEffect(() => {
+    const saved = menuScrollTopRef.current;
+    if (saved <= 0) return;
+    const visibleTargets = [mobileMenuScrollRef.current, desktopMenuScrollRef.current].filter(
+      (el): el is HTMLDivElement => Boolean(el && el.clientHeight > 0)
+    );
+    if (visibleTargets.length === 0) return;
+    isRestoringMenuScrollRef.current = true;
+    visibleTargets.forEach((el) => {
+      el.scrollTop = saved;
+    });
+    const raf = window.requestAnimationFrame(() => {
+      visibleTargets.forEach((el) => {
+        if (el.clientHeight > 0 && Math.abs(el.scrollTop - saved) > 1) {
+          el.scrollTop = saved;
+        }
+      });
+      isRestoringMenuScrollRef.current = false;
+    });
+    return () => {
+      window.cancelAnimationFrame(raf);
+      isRestoringMenuScrollRef.current = false;
+    };
+  }, [isSidebarOpen, isSidebarHidden, isEffectiveLandscape, view, smartClassLesson]);
 
   const handleToggleScreenRotate = async () => {
     const next = !isEffectiveLandscape;
@@ -632,17 +803,17 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     students: false,
     teachers: false,
     attendance_ai: false,
-    fees_finance: true,
-    academics: true,
-    exams: true,
-    facilities: true,
-    communication: true,
+    fees_finance: false,
+    academics: false,
+    exams: false,
+    facilities: false,
+    communication: false,
   });
 
-  const toggleCategoryCollapse = (catId: string) => {
+  const toggleCategoryCollapse = (_catId: string) => {
     setCollapsedCats((prev) => ({
       ...prev,
-      [catId]: !prev[catId],
+      [_catId]: false,
     }));
   };
   const [discountLedgerFilter, setDiscountLedgerFilter] = useState<string>("all");
@@ -657,6 +828,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     name: "",
     phone: "",
     photoUrl: "",
+    signatureUrl: "",
     designation: "Senior Faculty",
     qualification: "",
     experience: "",
@@ -664,7 +836,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     bio: "",
     employeeId: "",
     email: "",
+    monthlySalary: 0,
     hasReferralIncentive: false,
+    staffRole: "TEACHER" as "TEACHER" | "ACCOUNTANT" | "BOTH",
   });
   const [studentForm, setStudentForm] = useState<any>({
     name: "", rollNo: "", admissionNo: "", fatherName: "", motherName: "",
@@ -678,10 +852,16 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const [editingClassId, setEditingClassId] = useState<string | null>(null);
   const [editClassForm, setEditClassForm] = useState({ name: "", section: "", stream: "", defaultFee: 0 });
   const [editingTeacherId, setEditingTeacherId] = useState<string | null>(null);
+  const [roleConvertTarget, setRoleConvertTarget] = useState<{
+    person: any;
+    currentMode: "TEACHER" | "ACCOUNTANT" | "BOTH";
+  } | null>(null);
+  const [convertingRole, setConvertingRole] = useState(false);
   const [editTeacherForm, setEditTeacherForm] = useState({
     name: "",
     phone: "",
     photoUrl: "",
+    signatureUrl: "",
     designation: "",
     qualification: "",
     experience: "",
@@ -689,7 +869,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     bio: "",
     employeeId: "",
     email: "",
+    monthlySalary: 0,
     hasReferralIncentive: false,
+    staffRole: "TEACHER" as "TEACHER" | "ACCOUNTANT" | "BOTH",
   });
   const [editingStudentId, setEditingStudentId] = useState<string | null>(null);
   const [editStudentForm, setEditStudentForm] = useState<any>({
@@ -712,6 +894,25 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const [enrolledFaceIds, setEnrolledFaceIds] = useState<Record<string, boolean>>({});
   const [duesCardTab, setDuesCardTab] = useState<"admission" | "advance">("admission");
   const [showPunchDeskExpanded, setShowPunchDeskExpanded] = useState<boolean>(false);
+
+  // Settings & Recycle Bin state
+  const [settingsTab, setSettingsTab] = useState<"profile" | "recycle_bin">("profile");
+  const [recycleTeachers, setRecycleTeachers] = useState<Array<SchoolTeacher & { deletedAt?: string }>>([]);
+  const [recycleStudents, setRecycleStudents] = useState<Array<SchoolStudent & { deletedAt?: string }>>([]);
+  const [recycleFilter, setRecycleFilter] = useState<"all" | "teachers" | "students">("all");
+  const [recycleSearch, setRecycleSearch] = useState<string>("");
+  const [recycleBusyId, setRecycleBusyId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!schoolId) return;
+    const unsub = subscribeToRecycleBin(schoolId, ({ teachers: rTeachers, students: rStudents }) => {
+      setRecycleTeachers(rTeachers || []);
+      setRecycleStudents(rStudents || []);
+    });
+    return () => {
+      if (typeof unsub === "function") unsub();
+    };
+  }, [schoolId]);
 
   useEffect(() => {
     if (!schoolId) return;
@@ -772,11 +973,27 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     return () => window.removeEventListener("nst_demo_toggle_changed", handleDemoChange);
   }, []);
 
+  const demoSessionItem: SchoolSession = React.useMemo(() => ({
+    id: DEMO_SESSION_ID,
+    schoolId: schoolId,
+    name: "🧪 Demo Session (केवल डमी डेटा)",
+    startDate: "2026-04-01",
+    endDate: "2027-03-31",
+    active: activeSession?.id === DEMO_SESSION_ID,
+    isDemo: true,
+    createdAt: "2026-04-01T00:00:00Z"
+  }), [schoolId, activeSession?.id]);
+
   const handleToggleDemoData = (val: boolean) => {
     setDemoDataEnabled(val);
     setDemoEnabled(val);
-    if (typeof window !== "undefined") {
-      window.location.reload();
+    if (val) {
+      handleActivateSession(demoSessionItem);
+    } else {
+      const firstReal = sessions.find(s => s && s.id && s.name && !isDemoRecord(s));
+      if (firstReal) {
+        handleActivateSession(firstReal);
+      }
     }
   };
 
@@ -785,18 +1002,23 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     activeSession &&
     (activeSession.id === DEMO_SESSION_ID ||
      activeSession.id?.startsWith("demo_") ||
-     activeSession.name?.toLowerCase().includes("demo") ||
      (activeSession as any).isDemo === true)
   );
 
-  const schoolDemoActive = Boolean(demoEnabled && isCurrentSessionDemo);
+  const schoolDemoActive = isCurrentSessionDemo;
 
   const displayedStudents = React.useMemo(() => {
     if (schoolDemoActive) {
-      const demo = getDemoSchoolDataset();
-      return (demo?.students && demo.students.length > 0) ? demo.students : [];
+      const demo = getDemoSchoolDataset(true);
+      const targetSessId = activeSession?.id || DEMO_SESSION_ID;
+      const allDemo = demo?.students || [];
+      const sessFiltered = allDemo.filter(s => s.sessionId === targetSessId);
+      if (sessFiltered.length > 0) return sessFiltered;
+      const primaryId = demo?.session?.id || DEMO_SESSION_ID;
+      const primaryFiltered = allDemo.filter(s => s.sessionId === primaryId);
+      return primaryFiltered.length > 0 ? primaryFiltered : allDemo;
     }
-    // REAL ACADEMIC SESSION: ZERO DUMMY DATA! Only real students for this school & session.
+    // REAL ACADEMIC SESSION: ZERO DUMMY DATA! Only real students for this school & active session.
     const realStudents = students.filter(s => !isDemoRecord(s));
     if (activeSession?.id) {
       return realStudents.filter(s => s.sessionId === activeSession.id);
@@ -806,8 +1028,14 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
   const displayedClasses = React.useMemo(() => {
     if (schoolDemoActive) {
-      const demo = getDemoSchoolDataset();
-      return (demo?.classes && demo.classes.length > 0) ? demo.classes : [];
+      const demo = getDemoSchoolDataset(true);
+      const targetSessId = activeSession?.id || DEMO_SESSION_ID;
+      const allDemo = demo?.classes || [];
+      const sessFiltered = allDemo.filter(c => c.sessionId === targetSessId);
+      if (sessFiltered.length > 0) return sessFiltered;
+      const primaryId = demo?.session?.id || DEMO_SESSION_ID;
+      const primaryFiltered = allDemo.filter(c => c.sessionId === primaryId);
+      return primaryFiltered.length > 0 ? primaryFiltered : allDemo;
     }
     // REAL ACADEMIC SESSION: ZERO DUMMY CLASSES!
     const realClasses = classes.filter(c => !isDemoRecord(c));
@@ -818,33 +1046,125 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   }, [classes, schoolDemoActive, activeSession]);
 
   const displayedTeachers = React.useMemo(() => {
+    const mergeAccountantsIntoTeachers = (baseTeachers: SchoolTeacher[], accPool: SchoolAccountant[]) => {
+      const normPhone = (p?: string) => String(p || "").replace(/[^0-9]/g, "").slice(-10);
+      const normName = (n?: string) => String(n || "").trim().toLowerCase();
+      const activeAccs = (accPool || []).filter(
+        (a) => a && a.active !== false && (schoolDemoActive || !isDemoRecord(a))
+      );
+
+      const enriched: any[] = baseTeachers.map((t) => {
+        const tPhone = normPhone(t.phone);
+        const tName = normName(t.name);
+        const matchedAcc = activeAccs.find(
+          (a) =>
+            a.teacherRef === t.id ||
+            a.id === t.id ||
+            (tPhone.length >= 8 && normPhone(a.phone) === tPhone) ||
+            (tName && normName(a.name) === tName)
+        );
+        if (!matchedAcc) return t;
+        const tPay = Number(t.salaryStructure?.netMonthlySalary ?? t.monthlySalary ?? (t as any).salary ?? 0);
+        const accPay = Number(matchedAcc.salaryStructure?.netMonthlySalary ?? matchedAcc.monthlySalary ?? 0);
+        return {
+          ...t,
+          _isAccountant: true,
+          _accountantId: matchedAcc.id,
+          monthlySalary: tPay > 0 ? tPay : accPay,
+          salary: tPay > 0 ? tPay : accPay,
+          salaryStructure: t.salaryStructure || matchedAcc.salaryStructure,
+        };
+      });
+
+      const deletedIds = getDeletedTeacherIds(schoolId);
+      activeAccs.forEach((acc) => {
+        if (deletedIds.has(acc.id)) return;
+        const accPhone = normPhone(acc.phone);
+        const accName = normName(acc.name);
+        const alreadyInList = enriched.some(
+          (t) =>
+            t.id === acc.id ||
+            acc.teacherRef === t.id ||
+            t._accountantId === acc.id ||
+            (accPhone.length >= 8 && normPhone(t.phone) === accPhone) ||
+            (accName && normName(t.name) === accName)
+        );
+        if (!alreadyInList) {
+          const accPay = Math.max(0, Number(acc.salaryStructure?.netMonthlySalary ?? acc.monthlySalary ?? 0));
+          enriched.push({
+            id: acc.id,
+            schoolId: acc.schoolId || schoolId,
+            name: acc.name,
+            email: acc.email || undefined,
+            phone: acc.phone || undefined,
+            photoUrl: acc.photoUrl || undefined,
+            employeeId: acc.employeeId || "ACC",
+            designation: acc.designation || "Accountant & Cashier",
+            subjects: [],
+            classes: [],
+            joinDate: acc.joinDate || new Date().toISOString().split("T")[0],
+            monthlySalary: accPay,
+            salary: accPay,
+            salaryStructure: acc.salaryStructure,
+            hasReferralIncentive: Boolean((acc as any).hasReferralIncentive),
+            active: true,
+            createdAt: acc.createdAt || new Date().toISOString(),
+            _isAccountant: true,
+            _isAccountantOnly: true,
+            _accountantId: acc.id,
+          });
+        }
+      });
+
+      return enriched;
+    };
+
     if (schoolDemoActive) {
-      const demo = getDemoSchoolDataset();
-      return (demo?.teachers && demo.teachers.length > 0) ? demo.teachers : [];
+      const demo = getDemoSchoolDataset(true);
+      const targetSessId = activeSession?.id || DEMO_SESSION_ID;
+      const allDemo = demo?.teachers || [];
+      const sessFiltered = allDemo.filter(t => t.id?.includes(targetSessId));
+      const primaryId = demo?.session?.id || DEMO_SESSION_ID;
+      const primaryFiltered = allDemo.filter(t => t.id?.includes(primaryId));
+      const demoTeachers = sessFiltered.length > 0 ? sessFiltered : (primaryFiltered.length > 0 ? primaryFiltered : allDemo);
+      const demoAccs = (demo as any)?.accountants || accountants;
+      return mergeAccountantsIntoTeachers(demoTeachers, demoAccs);
     }
-    // REAL ACADEMIC SESSION: ZERO DUMMY TEACHERS!
-    return teachers.filter(t => !isDemoRecord(t));
-  }, [teachers, schoolDemoActive]);
+    // REAL ACADEMIC SESSION: ZERO DUMMY OR DELETED TEACHERS!
+    const deletedIds = getDeletedTeacherIds(schoolId);
+    const activeRealTeachers = teachers.filter(t => !isDemoRecord(t) && isActiveSchoolTeacherRecord(t) && !deletedIds.has(t.id));
+    return mergeAccountantsIntoTeachers(activeRealTeachers, accountants);
+  }, [teachers, accountants, schoolDemoActive, activeSession, schoolId]);
+
+  const displayedStaff = React.useMemo(() => {
+    if (schoolDemoActive) {
+      const demo = getDemoSchoolDataset(true);
+      return demo?.staffEmployees || [];
+    }
+    const deletedIds = getDeletedTeacherIds(schoolId);
+    const activeTeacherIds = new Set(teachers.filter(t => isActiveSchoolTeacherRecord(t) && !deletedIds.has(t.id)).map(t => t.id));
+    return (staffList || []).filter((s) => {
+      if (!s || isDemoRecord(s) || !isActiveStaffRecord(s) || deletedIds.has(s.id)) return false;
+      // Hide orphaned teacher-synced staff records once teachers list has loaded
+      if (s.department === "Academic / Faculty" && !activeTeacherIds.has(s.id)) return false;
+      return true;
+    });
+  }, [staffList, teachers, schoolDemoActive, schoolId]);
 
   const displayedSessions = React.useMemo(() => {
-    const realSess = sessions.filter(s => !isDemoRecord(s));
-    // The demo session is provided so that dummy data is ONLY visible when the user selects this session
-    const demoSessionItem: SchoolSession = {
-      id: DEMO_SESSION_ID,
-      schoolId: schoolId,
-      name: "🧪 Demo Session (केवल डमी डेटा)",
-      startDate: "2026-04-01",
-      endDate: "2027-03-31",
-      active: activeSession?.id === DEMO_SESSION_ID,
-      isDemo: true,
-      createdAt: "2026-04-01T00:00:00Z"
-    };
+    const seen = new Set<string>();
+    const realSess = sessions.filter(s => {
+      if (!s || !s.id || !s.name || isDemoRecord(s) || isDemoSessionId(s.id)) return false;
+      if (seen.has(s.id)) return false;
+      seen.add(s.id);
+      return true;
+    });
     const list = [...realSess, demoSessionItem];
     if (activeSession?.id) {
       return list.map(s => ({ ...s, active: s.id === activeSession.id }));
     }
     return list;
-  }, [sessions, activeSession, schoolId]);
+  }, [sessions, activeSession, demoSessionItem]);
 
   // Today's Birthdays automated detection
   const todaysBirthdayStudents = React.useMemo(() => {
@@ -942,21 +1262,34 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     loadSubAdmins();
     getStaffEmployees(schoolId).then(setStaffList).catch(() => {});
     const unsubSessions = subscribeToSessions(schoolId, (sess) => {
+      const cleanSess = (sess || []).filter(s => s && s.id && s.name && !isDemoSessionId(s.id));
       setSessions(prev => {
         if (
-          prev.length === sess.length &&
-          prev.every((p, i) => p.id === sess[i]?.id && p.active === sess[i]?.active && p.name === sess[i]?.name)
+          prev.length === cleanSess.length &&
+          prev.every((p, i) => p.id === cleanSess[i]?.id && p.active === cleanSess[i]?.active && p.name === cleanSess[i]?.name)
         ) {
           return prev;
         }
-        return sess;
+        return cleanSess;
       });
       const savedSessionId = typeof localStorage !== "undefined" ? localStorage.getItem(`nst_active_session_${schoolId}`) : null;
-      const realSess = sess.filter(s => !isDemoRecord(s));
-      const pool = realSess.length > 0 ? realSess : sess;
-      const active = (savedSessionId && sess.find(s => s.id === savedSessionId)) ||
-                     pool.find(s => s.active && !isDemoRecord(s)) ||
-                     pool[0] || sess[0] || null;
+      const isSavedDemo = Boolean(savedSessionId && isDemoSessionId(savedSessionId));
+      const active = isSavedDemo
+        ? {
+            id: DEMO_SESSION_ID,
+            schoolId,
+            name: "🧪 Demo Session (केवल डमी डेटा)",
+            startDate: "2026-04-01",
+            endDate: "2027-03-31",
+            active: true,
+            isDemo: true,
+            createdAt: "2026-04-01T00:00:00Z"
+          }
+        : ((savedSessionId && cleanSess.find(s => s.id === savedSessionId)) ||
+           cleanSess.find(s => s.active) ||
+           cleanSess[0] || null);
+      setDemoDataEnabled(isSavedDemo);
+      setDemoEnabled(isSavedDemo);
       setActiveSession(prev => {
         if (!prev && !active) return null;
         if (prev?.id === active?.id && prev?.name === active?.name && prev?.active === active?.active) {
@@ -966,13 +1299,55 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       });
     });
     const unsubTeachers = subscribeToTeachers(schoolId, setTeachers);
+    const unsubAccountants = subscribeToAccountants(schoolId, setAccountants);
     const unsubStudents = subscribeToAllStudents(schoolId, (stList) => {
       setStudents(stList);
       if (stList && stList.length > 0) {
         checkAndDispatchTodaysBirthdays(schoolId).catch(() => {});
       }
     });
-    return () => { unsubSessions(); unsubTeachers(); unsubStudents(); };
+    return () => { unsubSessions(); unsubTeachers(); unsubAccountants(); unsubStudents(); };
+  }, [schoolId]);
+
+  useEffect(() => {
+    const handleTeacherOrStaffRemoved = (e: any) => {
+      if (e?.detail?.schoolId && e.detail.schoolId !== schoolId) return;
+      const removedId = e?.detail?.teacherId || e?.detail?.staffId;
+      if (removedId) {
+        setTeachers((prev) => prev.filter((t) => t.id !== removedId));
+        setStaffList((prev) => prev.filter((s) => s.id !== removedId));
+        setSelectedTeacherIds((prev) => prev.filter((id) => id !== removedId));
+      }
+    };
+    const handleStaffUpdated = (e: any) => {
+      if (e?.detail?.schoolId && e.detail.schoolId !== schoolId) return;
+      const updated = e?.detail?.staff;
+      if (updated?.id) {
+        setStaffList((prev) => [updated, ...prev.filter((s) => s.id !== updated.id)]);
+      }
+    };
+    const handleTeacherUpdated = (e: any) => {
+      if (e?.detail?.schoolId && e.detail.schoolId !== schoolId) return;
+      const updated = e?.detail?.teacher;
+      if (updated?.id) {
+        setTeachers((prev) => {
+          const exists = prev.some((t) => t.id === updated.id);
+          return exists
+            ? prev.map((t) => (t.id === updated.id ? { ...t, ...updated } : t))
+            : [updated, ...prev];
+        });
+      }
+    };
+    window.addEventListener("teacher-deleted", handleTeacherOrStaffRemoved);
+    window.addEventListener("staff-deleted", handleTeacherOrStaffRemoved);
+    window.addEventListener("staff-updated", handleStaffUpdated);
+    window.addEventListener("teacher-updated", handleTeacherUpdated);
+    return () => {
+      window.removeEventListener("teacher-deleted", handleTeacherOrStaffRemoved);
+      window.removeEventListener("staff-deleted", handleTeacherOrStaffRemoved);
+      window.removeEventListener("staff-updated", handleStaffUpdated);
+      window.removeEventListener("teacher-updated", handleTeacherUpdated);
+    };
   }, [schoolId]);
 
   useEffect(() => {
@@ -1079,14 +1454,23 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     };
     await saveSession(newSession);
 
-    // If copyClassesFromCurrent is checked, copy existing class structure to new session
-    if (copyClassesFromCurrent && displayedClasses.length > 0) {
-      const clonedClasses: SchoolClass[] = displayedClasses.map(cls => ({
-        ...cls,
-        id: generateId(),
-        sessionId: id,
-        createdAt: new Date().toISOString()
-      }));
+    // If copyClassesFromCurrent is checked, copy existing real class structure to new session
+    const sourceClassesToClone = classes.filter(c => c && !isDemoRecord(c));
+    const clonePool = sourceClassesToClone.length > 0
+      ? (activeSession && !isDemoSessionId(activeSession.id)
+          ? sourceClassesToClone.filter(c => c.sessionId === activeSession.id)
+          : sourceClassesToClone)
+      : [];
+    if (copyClassesFromCurrent && clonePool.length > 0) {
+      const clonedClasses: SchoolClass[] = clonePool.map(cls => {
+        const { isDemo: _dropDemo, ...rest } = cls as any;
+        return {
+          ...rest,
+          id: generateId(),
+          sessionId: id,
+          createdAt: new Date().toISOString()
+        };
+      });
       await Promise.all(clonedClasses.map(c => saveClass(c)));
     }
 
@@ -1182,19 +1566,42 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
   const addTeacher = async () => {
     if (!teacherForm.name.trim()) return;
-    const maxTeachers = getSchoolMaxTeachers(school);
-    if (teachers.length >= maxTeachers) {
-      const tierName = TIER_CONFIG[school?.subscription?.tier || 'starter_200']?.name || 'Starter Plan';
-      toast.error(`Faculty Limit Reached (${teachers.length}/${maxTeachers})! Plan (${tierName}) upgrade karwayen.`);
-      return;
+    const roleChoice = teacherForm.staffRole || "TEACHER";
+    if (roleChoice !== "ACCOUNTANT") {
+      const maxTeachers = getSchoolMaxTeachers(school);
+      if (teachers.length >= maxTeachers) {
+        const tierName = TIER_CONFIG[school?.subscription?.tier || 'starter_200']?.name || 'Starter Plan';
+        toast.error(`Faculty Limit Reached (${teachers.length}/${maxTeachers})! Plan (${tierName}) upgrade karwayen.`);
+        return;
+      }
     }
     setSaving(true);
     const id = generateId();
     const subArr = teacherForm.subjects
       ? String(teacherForm.subjects).split(",").map((s: string) => s.trim()).filter(Boolean)
       : [];
-    const empId = teacherForm.employeeId?.trim() || `TEA-${id.slice(-4).toUpperCase()}`;
+    const empPrefix = roleChoice === "ACCOUNTANT" ? "ACC" : "TEA";
+    const empId = teacherForm.employeeId?.trim() || `${empPrefix}-${id.slice(-4).toUpperCase()}`;
     const cleanPhone = teacherForm.phone?.trim() || "";
+    const monthlyPay = Math.max(0, Number(teacherForm.monthlySalary) || 0);
+    const nowIso = new Date().toISOString();
+    const salaryStruct = {
+      monthlyBaseSalary: monthlyPay,
+      allowanceHra: 0,
+      allowanceTravel: 0,
+      allowanceSpecial: 0,
+      deductionPf: 0,
+      deductionOther: 0,
+      netMonthlySalary: monthlyPay,
+      paymentMode: "Bank Transfer" as const,
+      updatedAt: nowIso,
+    };
+    const defaultDesignation =
+      roleChoice === "ACCOUNTANT"
+        ? "Accountant & Cashier"
+        : roleChoice === "BOTH"
+        ? "Senior Faculty & Accountant"
+        : "Faculty Member";
     const newTeacher: SchoolTeacher = {
       id,
       schoolId,
@@ -1202,7 +1609,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       email: teacherForm.email?.trim() || undefined,
       phone: cleanPhone || undefined,
       photoUrl: teacherForm.photoUrl || undefined,
-      designation: teacherForm.designation?.trim() || "Faculty Member",
+      signatureUrl: teacherForm.signatureUrl || undefined,
+      designation: teacherForm.designation?.trim() || defaultDesignation,
       qualification: teacherForm.qualification?.trim() || undefined,
       experience: teacherForm.experience?.trim() || undefined,
       bio: teacherForm.bio?.trim() || undefined,
@@ -1210,11 +1618,55 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       subjects: subArr,
       classes: [],
       active: true,
-      joinDate: new Date().toISOString().split("T")[0],
-      createdAt: new Date().toISOString(),
+      joinDate: nowIso.split("T")[0],
+      createdAt: nowIso,
+      monthlySalary: monthlyPay,
+      salary: monthlyPay,
+      salaryStructure: salaryStruct,
       hasReferralIncentive: Boolean(teacherForm.hasReferralIncentive),
     };
-    await saveTeacher(newTeacher);
+
+    if (roleChoice === "TEACHER" || roleChoice === "BOTH") {
+      await saveTeacher(newTeacher);
+    }
+
+    if (roleChoice === "ACCOUNTANT" || roleChoice === "BOTH") {
+      const accId = roleChoice === "ACCOUNTANT" ? id : `acc_${id}`;
+      const newAcc: SchoolAccountant = {
+        id: accId,
+        schoolId,
+        name: newTeacher.name,
+        phone: cleanPhone || "0000000000",
+        email: newTeacher.email,
+        photoUrl: newTeacher.photoUrl,
+        signatureUrl: newTeacher.signatureUrl,
+        employeeId: empId,
+        designation:
+          roleChoice === "BOTH"
+            ? `${newTeacher.designation} & Accountant`
+            : newTeacher.designation || "Accountant & Cashier",
+        monthlySalary: monthlyPay,
+        salaryStructure: salaryStruct,
+        joinDate: newTeacher.joinDate,
+        active: true,
+        teacherRef: roleChoice === "BOTH" ? id : undefined,
+        permissions: {
+          canCollectFee: true,
+          canAdmitStudents: true,
+          canGrantDiscount: true,
+          maxDiscountLimitPct: 20,
+          canRecordExpenses: true,
+          canViewDayBook: true,
+          canSendFeeAlerts: true,
+          canManageBusFee: true,
+          canPrintIdCards: true,
+          canManageAbsentee: true,
+        },
+        createdAt: nowIso,
+      };
+      await saveAccountant(newAcc);
+      setAccountants((prev) => [newAcc, ...prev.filter((a) => a.id !== accId)]);
+    }
 
     // Also sync to staff employees so HRM and ID card systems are 100% in sync
     await saveStaffEmployee({
@@ -1223,10 +1675,16 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       name: newTeacher.name,
       email: newTeacher.email || "",
       phone: cleanPhone,
-      designation: newTeacher.designation || "Teacher",
-      department: "Academic / Faculty",
+      designation: newTeacher.designation || (roleChoice === "ACCOUNTANT" ? "Accountant" : "Teacher"),
+      department:
+        roleChoice === "ACCOUNTANT"
+          ? "Accounts & Administration"
+          : roleChoice === "BOTH"
+          ? "Academic & Accounts"
+          : "Academic / Faculty",
       joinDate: newTeacher.joinDate,
-      monthlySalary: 0,
+      monthlySalary: monthlyPay,
+      salaryStructure: salaryStruct,
       active: true,
       photoUrl: newTeacher.photoUrl,
       employeeId: empId,
@@ -1237,6 +1695,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       name: "",
       phone: "",
       photoUrl: "",
+      signatureUrl: "",
       designation: "Senior Faculty",
       qualification: "",
       experience: "",
@@ -1244,21 +1703,29 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       bio: "",
       employeeId: "",
       email: "",
+      monthlySalary: 0,
       hasReferralIncentive: false,
+      staffRole: "TEACHER",
     });
     setShowForm(null);
     setSaving(false);
 
-    // Auto-open newly added teacher's ID card immediately!
-    setSelectedTeacherForIdCard(newTeacher);
+    if (roleChoice === "ACCOUNTANT") {
+      toast.success(`💼 ${newTeacher.name} ko Accountant ke roop me add kar diya gaya!`);
+    } else if (roleChoice === "BOTH") {
+      toast.success(`⚡ ${newTeacher.name} ko Teacher + Accountant dono ke roop me add kar diya gaya!`);
+    } else {
+      // Auto-open newly added teacher's ID card immediately!
+      setSelectedTeacherForIdCard(newTeacher);
+    }
   };
 
   const addStudent = async () => {
     if (!studentForm.name.trim() || !selectedClass || !activeSession) return;
     const maxStudents = getSchoolMaxStudents(school);
-    if (students.length >= maxStudents) {
+    if (displayedStudents.length >= maxStudents) {
       const tierName = TIER_CONFIG[school?.subscription?.tier || 'starter_200']?.name || 'Starter Plan';
-      toast.error(`Student Limit Reached (${students.length}/${maxStudents})! Plan (${tierName}) upgrade karwayen.`);
+      toast.error(`Student Limit Reached (${displayedStudents.length}/${maxStudents})! Plan (${tierName}) upgrade karwayen.`);
       return;
     }
     setSaving(true);
@@ -1301,49 +1768,63 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   const saveEditClass = async () => {
     if (!editingClassId || !editClassForm.name.trim()) return;
     setSaving(true);
-    const previousClass = classes.find(cls => cls.id === editingClassId);
-    const updatedDefaultFee = Number(editClassForm.defaultFee) || 0;
-    const streamVal = isSeniorClass(editClassForm.name) ? (editClassForm.stream || previousClass?.stream || "Science") : undefined;
-    await updateClass(schoolId, editingClassId, {
-      name: editClassForm.name.trim(),
-      section: editClassForm.section,
-      stream: streamVal,
-      defaultFee: updatedDefaultFee,
-      feeStructure: {
-        ...(previousClass?.feeStructure || {}),
-        tuitionFee: updatedDefaultFee,
-      },
-    });
-    if (feeChanged) {
-      const classStudents = students.filter(student =>
-        student.classId === editingClassId &&
-        (!previousClass?.sessionId || student.sessionId === previousClass.sessionId)
-      );
-      await Promise.all(classStudents.map(student =>
-        updateStudent(schoolId, student.id, { monthlyFee: updatedDefaultFee })
-      ));
-      setStudents(current => current.map(student =>
-        classStudents.some(classStudent => classStudent.id === student.id)
-          ? { ...student, monthlyFee: updatedDefaultFee }
-          : student
-      ));
+    try {
+      const previousClass = classes.find(cls => cls.id === editingClassId);
+      const updatedDefaultFee = Number(editClassForm.defaultFee) || 0;
+      const previousDefaultFee = Number(previousClass?.defaultFee ?? previousClass?.feeStructure?.tuitionFee ?? 0);
+      const feeChanged = updatedDefaultFee !== previousDefaultFee;
+      const streamVal = isSeniorClass(editClassForm.name) ? (editClassForm.stream || previousClass?.stream || "Science") : undefined;
+      await updateClass(schoolId, editingClassId, {
+        name: editClassForm.name.trim(),
+        section: editClassForm.section,
+        stream: streamVal,
+        defaultFee: updatedDefaultFee,
+        feeStructure: {
+          ...(previousClass?.feeStructure || {}),
+          tuitionFee: updatedDefaultFee,
+        },
+      });
+      if (feeChanged) {
+        const classStudents = displayedStudents.filter(student =>
+          student.classId === editingClassId &&
+          (!previousClass?.sessionId || student.sessionId === previousClass.sessionId)
+        );
+        await Promise.all(classStudents.map(student =>
+          updateStudent(schoolId, student.id, { monthlyFee: updatedDefaultFee })
+        ));
+        setStudents(current => current.map(student =>
+          classStudents.some(classStudent => classStudent.id === student.id)
+            ? { ...student, monthlyFee: updatedDefaultFee }
+            : student
+        ));
+      }
+      setEditingClassId(null);
+    } finally {
+      setSaving(false);
     }
-    setEditingClassId(null);
-    setSaving(false);
   };
 
   const handleActivateSession = async (session: SchoolSession) => {
     setSaving(true);
+    const isDemoTarget = isDemoSessionId(session.id) || Boolean((session as any).isDemo);
     try {
       if (typeof localStorage !== "undefined") {
         localStorage.setItem(`nst_active_session_${schoolId}`, session.id);
       }
+      setDemoDataEnabled(isDemoTarget);
+      setDemoEnabled(isDemoTarget);
     } catch (e) {
       console.warn("Failed to persist active session:", e);
     }
+    setSelectedClass(null);
+    setSelectedSubject(null);
     setActiveSession({ ...session, active: true });
-    await Promise.all(displayedSessions.map(item =>
-      updateSession(schoolId, item.id, { active: item.id === session.id })
+    // NEVER write partial updates for Demo session or invalid sessions
+    const realSessionsToSync = sessions.filter(
+      item => item && item.id && item.name && !isDemoSessionId(item.id)
+    );
+    await Promise.all(realSessionsToSync.map(item =>
+      updateSession(schoolId, item.id, { active: !isDemoTarget && item.id === session.id })
     ));
     setSaving(false);
     setShowSessionModal(false);
@@ -1352,8 +1833,14 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   };
 
   const handleDeleteSession = async (session: SchoolSession) => {
-    if (displayedSessions.length <= 1) {
-      setDemoMessage("⚠️ Aap aakhiri session delete nahi kar sakte. School me kam se kam ek academic session hona zaroori hai.");
+    if (isDemoSessionId(session.id)) {
+      setDemoMessage("ℹ️ Demo सत्र सिस्टम द्वारा अंतर्निर्मित है; इसे हटाया नहीं जा सकता।");
+      setTimeout(() => setDemoMessage(null), 3000);
+      return;
+    }
+    const realCount = displayedSessions.filter(s => !isDemoSessionId(s.id)).length;
+    if (realCount <= 1) {
+      setDemoMessage("⚠️ Aap aakhiri real session delete nahi kar sakte. School me kam se kam ek academic session hona zaroori hai.");
       setTimeout(() => setDemoMessage(null), 3500);
       return;
     }
@@ -1361,7 +1848,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     setSaving(true);
     try {
       await deleteSession(schoolId, session.id);
-      const remainingSessions = displayedSessions.filter(s => s.id !== session.id);
+      const remainingSessions = sessions.filter(s => s.id !== session.id && !isDemoSessionId(s.id));
       setSessions(remainingSessions);
       if (activeSession?.id === session.id && remainingSessions.length > 0) {
         await handleActivateSession(remainingSessions[0]);
@@ -1388,7 +1875,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         result.session,
       ]);
       setDemoMessage(
-        `✅ Demo Complete: ${result.classes} sections, ${result.students} students (70/class), ${result.staff} staff (1:35 ratio), ${result.exams} exams (PA 40M / Term 100M), 1-year fee dues (3-12 months), ${result.notices} monthly notices aur ${result.holidays} festival holidays tayyar hain!`
+        `✅ Demo Complete: ${result.classes} classes (2 sections each), ${result.students} students (max 40/class: A=20, B=20), ${result.staff} staff (1:20 ratio), ${result.exams} exams (PA 40M / Term 100M), 1-year fee dues (3-12 months), ${result.notices} monthly notices aur ${result.holidays} festival holidays tayyar hain!`
       );
     } catch (error: any) {
       setDemoMessage(`Demo data poora nahi bana: ${error?.message || "Dobara try karein."}`);
@@ -1401,7 +1888,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     if (demoGenerating) return;
     const isRefresh = sessions.some(session => session.id === DEMO_SESSION_ID);
     const confirmation = isRefresh
-      ? "Demo session ke 13 classes (Nursery to 10), 70 students per class (Sections A & B), 1:35 teacher ratio, 6 exams, 1-year fee receipts aur holidays refresh honge. Continue?"
+      ? "Demo session me har class me max 40 students (Section A: 20, Section B: 20), 1:20 teacher-student ratio, 6 exams, 1-year fee receipts aur holidays refresh honge. Continue?"
       : "Full 1-Year CBSE Demo Setup create hoga (Demo Session me). Continue?";
     setConfirmAction({
       title: isRefresh ? "Demo Data Refresh Karein?" : "Demo Session Setup Karein?",
@@ -1411,51 +1898,296 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     });
   };
 
+  const applyFacultyRoleMode = async (
+    person: any,
+    nextMode: "TEACHER" | "ACCOUNTANT" | "BOTH",
+    overrides?: {
+      name?: string;
+      phone?: string;
+      email?: string;
+      photoUrl?: string;
+      signatureUrl?: string;
+      designation?: string;
+      qualification?: string;
+      experience?: string;
+      subjects?: string | string[];
+      bio?: string;
+      employeeId?: string;
+      monthlySalary?: number;
+      salaryStructure?: any;
+      hasReferralIncentive?: boolean;
+    }
+  ) => {
+    const nowIso = new Date().toISOString();
+    const normPhone = (p?: string) => String(p || "").replace(/[^0-9]/g, "").slice(-10);
+    const normName = (n?: string) => String(n || "").trim().toLowerCase();
+
+    const pPhone = normPhone(overrides?.phone ?? person.phone);
+    const pName = normName(overrides?.name ?? person.name);
+
+    const existingTeacher =
+      teachers.find((t) => t.id === person.id) ||
+      teachers.find(
+        (t) =>
+          (pPhone.length >= 8 && normPhone(t.phone) === pPhone) ||
+          (pName && normName(t.name) === pName)
+      );
+
+    const allAccs = accountants.length > 0 ? accountants : await getAccountants(schoolId).catch(() => []);
+    const matchedAcc =
+      allAccs.find(
+        (a) =>
+          a.id === person._accountantId ||
+          a.id === person.id ||
+          a.teacherRef === person.id ||
+          (existingTeacher && a.teacherRef === existingTeacher.id) ||
+          (pPhone.length >= 8 && normPhone(a.phone) === pPhone) ||
+          (pName && normName(a.name) === pName)
+      ) || null;
+
+    const cleanName = (overrides?.name ?? person.name ?? "Staff Member").trim();
+    const cleanPhone = (overrides?.phone ?? person.phone ?? "").trim();
+    const cleanEmail = (overrides?.email ?? person.email ?? "").trim() || undefined;
+    const cleanPhoto = overrides?.photoUrl !== undefined ? overrides.photoUrl : person.photoUrl;
+    const cleanSign = overrides?.signatureUrl !== undefined ? overrides.signatureUrl : person.signatureUrl;
+    const cleanQual = (overrides?.qualification ?? person.qualification ?? "").trim() || undefined;
+    const cleanExp = (overrides?.experience ?? person.experience ?? "").trim() || undefined;
+    const cleanBio = (overrides?.bio ?? person.bio ?? "").trim() || undefined;
+    const rawSubs = overrides?.subjects !== undefined ? overrides.subjects : person.subjects;
+    const subArr = Array.isArray(rawSubs)
+      ? rawSubs
+      : typeof rawSubs === "string"
+      ? rawSubs.split(",").map((s) => s.trim()).filter(Boolean)
+      : [];
+
+    const monthlyPay = Math.max(
+      0,
+      Number(
+        overrides?.monthlySalary ??
+          person.salaryStructure?.netMonthlySalary ??
+          person.monthlySalary ??
+          person.salary ??
+          0
+      )
+    );
+
+    const baseStruct = overrides?.salaryStructure || person.salaryStructure;
+    const nextSalaryStructure = baseStruct
+      ? {
+          ...baseStruct,
+          netMonthlySalary: monthlyPay,
+          monthlyBaseSalary: Math.max(
+            0,
+            monthlyPay -
+              Number(baseStruct.allowanceHra || 0) -
+              Number(baseStruct.allowanceTravel || 0) -
+              Number(baseStruct.allowanceSpecial || 0) +
+              Number(baseStruct.deductionPf || 0) +
+              Number(baseStruct.deductionOther || 0)
+          ),
+          updatedAt: nowIso,
+        }
+      : {
+          monthlyBaseSalary: monthlyPay,
+          allowanceHra: 0,
+          allowanceTravel: 0,
+          allowanceSpecial: 0,
+          deductionPf: 0,
+          deductionOther: 0,
+          netMonthlySalary: monthlyPay,
+          paymentMode: "Bank Transfer" as const,
+          updatedAt: nowIso,
+        };
+
+    const rawDesig = (overrides?.designation ?? person.designation ?? "").trim();
+    const cleanEmpId =
+      (overrides?.employeeId ?? person.employeeId ?? "").trim() ||
+      (nextMode === "ACCOUNTANT"
+        ? `ACC-${String(person.id).slice(-4).toUpperCase()}`
+        : `TEA-${String(person.id).slice(-4).toUpperCase()}`);
+
+    const teacherId = existingTeacher?.id || (!String(person.id).startsWith("acc_") ? person.id : generateId());
+    const accId = matchedAcc?.id || (String(person.id).startsWith("acc_") ? person.id : `acc_${teacherId}`);
+
+    if (nextMode === "TEACHER" || nextMode === "BOTH") {
+      const nextTeacherDesig =
+        nextMode === "TEACHER"
+          ? rawDesig.replace(/\s*&\s*Accountant|\s*Accountant\s*&\s*Cashier/gi, "").trim() || "Faculty Member"
+          : rawDesig || "Senior Faculty & Accountant";
+
+      const teacherRecord: SchoolTeacher = {
+        ...(existingTeacher || {}),
+        id: teacherId,
+        schoolId,
+        name: cleanName,
+        email: cleanEmail,
+        phone: cleanPhone || undefined,
+        photoUrl: cleanPhoto || undefined,
+        signatureUrl: cleanSign || "",
+        designation: nextTeacherDesig,
+        qualification: cleanQual,
+        experience: cleanExp,
+        bio: cleanBio,
+        employeeId: cleanEmpId,
+        subjects: subArr,
+        classes: existingTeacher?.classes || person.classes || [],
+        joinDate: existingTeacher?.joinDate || person.joinDate || nowIso.split("T")[0],
+        createdAt: existingTeacher?.createdAt || person.createdAt || nowIso,
+        monthlySalary: monthlyPay,
+        salary: monthlyPay,
+        salaryStructure: nextSalaryStructure,
+        hasReferralIncentive: overrides?.hasReferralIncentive ?? Boolean(person.hasReferralIncentive),
+        active: true,
+      };
+      await saveTeacher(teacherRecord);
+      setTeachers((prev) => [teacherRecord, ...prev.filter((t) => t.id !== teacherId)]);
+    } else if (existingTeacher) {
+      // Strictly switched from Teacher -> Accountant Only (remove from teachers WITHOUT Recycle Bin deletion!)
+      setTeachers((prev) => prev.filter((t) => t.id !== existingTeacher.id));
+      await unassignTeacherForAccountantRole(schoolId, existingTeacher.id);
+    }
+
+    if (nextMode === "ACCOUNTANT" || nextMode === "BOTH") {
+      const nextAccDesig =
+        nextMode === "ACCOUNTANT"
+          ? rawDesig && /accountant|cashier|bursar/i.test(rawDesig)
+            ? rawDesig
+            : "Accountant & Cashier"
+          : rawDesig || "Senior Faculty & Accountant";
+
+      const accRecord: SchoolAccountant = {
+        ...(matchedAcc || ({} as any)),
+        id: accId,
+        schoolId,
+        name: cleanName,
+        phone: cleanPhone || matchedAcc?.phone || "0000000000",
+        email: cleanEmail || matchedAcc?.email,
+        photoUrl: cleanPhoto || matchedAcc?.photoUrl,
+        signatureUrl: cleanSign || matchedAcc?.signatureUrl || "",
+        employeeId: cleanEmpId,
+        designation: nextAccDesig,
+        monthlySalary: monthlyPay,
+        salaryStructure: nextSalaryStructure,
+        joinDate: matchedAcc?.joinDate || person.joinDate || nowIso.split("T")[0],
+        active: true,
+        teacherRef: nextMode === "BOTH" ? teacherId : undefined,
+        permissions: matchedAcc?.permissions || {
+          canCollectFee: true,
+          canAdmitStudents: true,
+          canGrantDiscount: true,
+          maxDiscountLimitPct: 20,
+          canRecordExpenses: true,
+          canViewDayBook: true,
+          canSendFeeAlerts: true,
+          canManageBusFee: true,
+          canPrintIdCards: true,
+          canManageAbsentee: true,
+        },
+        createdAt: matchedAcc?.createdAt || person.createdAt || nowIso,
+      };
+      await saveAccountant(accRecord);
+      setAccountants((prev) => [accRecord, ...prev.filter((a) => a.id !== accId)]);
+    } else if (matchedAcc) {
+      // Strictly switched from Accountant -> Teacher Only
+      setAccountants((prev) => prev.filter((a) => a.id !== matchedAcc.id));
+      await deleteAccountant(schoolId, matchedAcc.id);
+    }
+
+    // Always keep StaffEmployee synced for Attendance & Payroll
+    const staffId = nextMode === "ACCOUNTANT" ? accId : teacherId;
+    const existingStaff =
+      staffList.find((s) => s.id === staffId) ||
+      staffList.find((s) => s.id === person.id);
+    await saveStaffEmployee({
+      id: staffId,
+      schoolId,
+      name: cleanName,
+      email: cleanEmail || "",
+      phone: cleanPhone,
+      designation:
+        nextMode === "ACCOUNTANT"
+          ? rawDesig && /accountant|cashier|bursar/i.test(rawDesig)
+            ? rawDesig
+            : "Accountant & Cashier"
+          : rawDesig || "Teacher",
+      department:
+        nextMode === "ACCOUNTANT"
+          ? "Accounts & Administration"
+          : nextMode === "BOTH"
+          ? "Academic & Accounts"
+          : "Academic / Faculty",
+      joinDate: person.joinDate || existingStaff?.joinDate || nowIso.split("T")[0],
+      monthlySalary: monthlyPay,
+      salaryStructure: nextSalaryStructure,
+      lateEntriesCount: existingStaff?.lateEntriesCount,
+      active: true,
+      photoUrl: cleanPhoto || undefined,
+      employeeId: cleanEmpId,
+      createdAt: person.createdAt || existingStaff?.createdAt || nowIso,
+    });
+  };
+
   const saveEditTeacher = async () => {
     if (!editingTeacherId || !editTeacherForm.name.trim()) return;
     setSaving(true);
-    const subArr = typeof editTeacherForm.subjects === "string"
-      ? editTeacherForm.subjects.split(",").map((s: string) => s.trim()).filter(Boolean)
-      : (Array.isArray(editTeacherForm.subjects) ? editTeacherForm.subjects : []);
-    const cleanPhone = editTeacherForm.phone?.trim() || "";
-    const cleanEmpId = editTeacherForm.employeeId?.trim() || undefined;
+    try {
+      const existingTeacher: any =
+        teachers.find((x) => x.id === editingTeacherId) ||
+        displayedTeachers.find((x) => x.id === editingTeacherId);
+      const targetRoleMode = editTeacherForm.staffRole || (existingTeacher?._isAccountantOnly ? "ACCOUNTANT" : existingTeacher?._isAccountant ? "BOTH" : "TEACHER");
+      await applyFacultyRoleMode(existingTeacher || { id: editingTeacherId }, targetRoleMode, {
+        name: editTeacherForm.name,
+        phone: editTeacherForm.phone,
+        email: editTeacherForm.email,
+        photoUrl: editTeacherForm.photoUrl,
+        signatureUrl: editTeacherForm.signatureUrl,
+        designation: editTeacherForm.designation,
+        qualification: editTeacherForm.qualification,
+        experience: editTeacherForm.experience,
+        subjects: editTeacherForm.subjects,
+        bio: editTeacherForm.bio,
+        employeeId: editTeacherForm.employeeId,
+        monthlySalary: editTeacherForm.monthlySalary,
+        hasReferralIncentive: editTeacherForm.hasReferralIncentive,
+      });
 
-    await updateTeacher(schoolId, editingTeacherId, {
-      name: editTeacherForm.name.trim(),
-      email: editTeacherForm.email?.trim() || undefined,
-      phone: cleanPhone || undefined,
-      photoUrl: editTeacherForm.photoUrl || undefined,
-      designation: editTeacherForm.designation?.trim() || undefined,
-      qualification: editTeacherForm.qualification?.trim() || undefined,
-      experience: editTeacherForm.experience?.trim() || undefined,
-      bio: editTeacherForm.bio?.trim() || undefined,
-      employeeId: cleanEmpId,
-      subjects: subArr,
-      hasReferralIncentive: Boolean(editTeacherForm.hasReferralIncentive),
-    });
-
-    await saveStaffEmployee({
-      id: editingTeacherId,
-      schoolId,
-      name: editTeacherForm.name.trim(),
-      email: editTeacherForm.email?.trim() || "",
-      phone: cleanPhone,
-      designation: editTeacherForm.designation?.trim() || "Teacher",
-      department: "Academic / Faculty",
-      joinDate: new Date().toISOString().split("T")[0],
-      monthlySalary: 0,
-      active: true,
-      photoUrl: editTeacherForm.photoUrl || undefined,
-      employeeId: cleanEmpId || `TEA-${editingTeacherId.slice(-4).toUpperCase()}`,
-      createdAt: new Date().toISOString()
-    });
-
-    setEditingTeacherId(null);
-    setSaving(false);
+      setEditingTeacherId(null);
+      if (targetRoleMode === "ACCOUNTANT") {
+        toast.success(`💼 ${editTeacherForm.name.trim()} ko Accountant role me save kar diya gaya!`);
+      } else if (targetRoleMode === "BOTH") {
+        toast.success(`⚡ ${editTeacherForm.name.trim()} ab Teacher + Accountant dono role me active hain!`);
+      } else {
+        toast.success(`👨‍🏫 ${editTeacherForm.name.trim()} ki Faculty profile save ho gayi!`);
+      }
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const toggleTeacherReferralIncentive = async (teacher: SchoolTeacher) => {
+  const toggleTeacherReferralIncentive = async (teacher: any) => {
     const nextVal = !teacher.hasReferralIncentive;
+    if (teacher._isAccountantOnly) {
+      await saveTeacher({
+        id: teacher.id,
+        schoolId,
+        name: teacher.name,
+        email: teacher.email || undefined,
+        phone: teacher.phone || undefined,
+        photoUrl: teacher.photoUrl || undefined,
+        designation: teacher.designation || "Accountant & Cashier",
+        employeeId: teacher.employeeId,
+        subjects: [],
+        classes: [],
+        joinDate: teacher.joinDate || todayStr(),
+        monthlySalary: teacher.monthlySalary || 0,
+        salary: teacher.monthlySalary || 0,
+        salaryStructure: teacher.salaryStructure,
+        hasReferralIncentive: nextVal,
+        active: true,
+        createdAt: teacher.createdAt || new Date().toISOString(),
+      });
+      return;
+    }
     await updateTeacher(schoolId, teacher.id, { hasReferralIncentive: nextVal });
     setTeachers(prev => prev.map(t => t.id === teacher.id ? { ...t, hasReferralIncentive: nextVal } : t));
   };
@@ -1491,6 +2223,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       principalPhone: schoolInfoForm.principalPhone,
       directorName: schoolInfoForm.directorName,
       directorPhone: schoolInfoForm.directorPhone,
+      managerName: schoolInfoForm.managerName,
+      managerPhone: schoolInfoForm.managerPhone,
+      accountantName: schoolInfoForm.accountantName,
       mobile: schoolInfoForm.mobile,
       address: schoolInfoForm.address,
       tagline: schoolInfoForm.tagline,
@@ -1502,6 +2237,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       principalPhone: schoolInfoForm.principalPhone,
       directorName: schoolInfoForm.directorName,
       directorPhone: schoolInfoForm.directorPhone,
+      managerName: schoolInfoForm.managerName,
+      managerPhone: schoolInfoForm.managerPhone,
+      accountantName: schoolInfoForm.accountantName,
       mobile: schoolInfoForm.mobile,
       address: schoolInfoForm.address,
       tagline: schoolInfoForm.tagline,
@@ -1571,6 +2309,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       principalPhone: school?.principalPhone || "",
       directorName: school?.directorName || "",
       directorPhone: school?.directorPhone || "",
+      managerName: school?.managerName || "",
+      managerPhone: school?.managerPhone || "",
+      accountantName: school?.accountantName || "",
       mobile: school?.mobile || school?.phone || "",
       address: school?.address || "",
       tagline: school?.tagline || "",
@@ -1653,9 +2394,14 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
   // ── 7-DAY & MONTHLY COLLECTION CALCULATION (FEES + STORE SALES) ────────
   const mergedRealFees = React.useMemo(() => {
+    if (schoolDemoActive) {
+      const demo = getDemoSchoolDataset(true);
+      return Array.isArray(demo?.fees) ? demo.fees : [];
+    }
     const byKey = new Map<string, any>();
     const addFee = (f: any) => {
       if (!f || isDemoRecord(f)) return;
+      if (activeSession?.id && f.sessionId && f.sessionId !== activeSession.id) return;
       const key = f.id || (f.studentId && f.month ? `${f.studentId}_${f.month}` : f.receiptNo);
       if (!key) return;
       const prev = byKey.get(key);
@@ -1671,7 +2417,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     (dashboardFeeHistory || []).forEach(addFee);
     (allFees || []).forEach(addFee);
     return Array.from(byKey.values());
-  }, [schoolId, dashboardFeeHistory, allFees]);
+  }, [schoolId, schoolDemoActive, activeSession?.id, dashboardFeeHistory, allFees]);
 
   const sevenDayFeeData = React.useMemo(() => {
     const days = [];
@@ -1801,14 +2547,15 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       .map((st, idx) => {
         const cls = displayedClasses.find(c => c.id === st.classId);
         const feeEntry = unpaidByStudent.get(st.id);
-        const admDue = Number(st.admissionDueBalance || 0);
+        const admDue = Number(st.admissionDueBalance || 0) + Number(st.previousSessionDue || 0);
         const advDue = st.advanceMonthlyFeePaid === false ? Number(st.advanceMonthlyFeeDue || st.monthlyFee || 0) : 0;
         const overdueAmount = (feeEntry?.amount || 0) + admDue + advDue;
         if (overdueAmount <= 0) return null;
 
         const labels: string[] = [];
         if (feeEntry && feeEntry.months.size > 0) labels.push(...Array.from(feeEntry.months));
-        if (admDue > 0) labels.push("Admission Due");
+        if (Number(st.previousSessionDue || 0) > 0) labels.push("Back Session Due");
+        if (Number(st.admissionDueBalance || 0) > 0) labels.push("Admission Due");
         if (advDue > 0) labels.push("Advance Fee");
 
         return {
@@ -1886,6 +2633,18 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     } catch (err) {
       console.warn("Failed to save school memory:", err);
     }
+    saveSchoolGalleryItem(schoolId, {
+      id: item.id,
+      schoolId,
+      title: item.title,
+      category: item.category,
+      imageUrl: item.url || "https://images.unsplash.com/photo-1577495508048-b635879837f1?auto=format&fit=crop&w=1000&q=80",
+      videoUrl: item.videoUrl || "",
+      mediaType: item.type,
+      description: item.description,
+      date: item.date,
+      createdAt: new Date().toISOString(),
+    } as any).catch(() => {});
     setShowAddMemoryModal(false);
     setNewMemoryForm({
       title: "",
@@ -1912,6 +2671,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         } catch (err) {
           console.warn("Failed to update school memories:", err);
         }
+        deleteSchoolGalleryItem(schoolId, id).catch(() => {});
         toast.success("Memory delete ho gayi.");
       },
     });
@@ -1931,8 +2691,6 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       },
       items: [
         { id: "dashboard" as AdminView, label: "Home Dashboard", icon: Home, desc: "दैनिक उपस्थिति, फीस संग्रह व कार्य डेस्क" },
-        { id: "school_profile" as AdminView, label: "School Profile & Settings", icon: Building2, desc: "लोगो, एफिलिएशन, कोड व लॉक कोड" },
-        { id: "sessions" as AdminView, label: "Academic Sessions (सत्र)", icon: Calendar, desc: "सत्र बदलें, नया सत्र जोड़ें व एडिट करें" },
       ]
     },
     {
@@ -1951,7 +2709,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         { id: "id_cards" as AdminView, label: "QR ID Cards", icon: CreditCard, desc: "स्मार्ट क्यूआर छात्र पहचान पत्र जनरेटर" },
         { id: "sibling_profiles" as AdminView, label: "Sibling Profiles (भाई-बहन प्रोफाइल)", icon: Users, desc: "ऑटो भाई-बहन फैमिली ग्रुप, रियायत व 100% फ्री शिक्षा" },
         { id: "leaves_desk" as AdminView, label: "Student Leaves Desk", icon: Calendar, desc: "अभिभावक छुट्टी आवेदन व 1-टैप अप्रूवल" },
-        { id: "promotion" as AdminView, label: "Class Promotion", icon: TrendingUp, desc: "अगले सत्र में छात्र कक्षा अपग्रेड व ट्रांसफर" },
+        { id: "readmission" as AdminView, label: "Re-Admission (पुनः प्रवेश)", icon: UserPlus, desc: "पुराने बकाया के साथ नए सत्र में छात्रों का पुनः प्रवेश" },
       ]
     },
     {
@@ -1965,9 +2723,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         hoverBg: "hover:bg-violet-950/40 hover:text-violet-200",
       },
       items: [
-        { id: "teachers" as AdminView, label: "Teachers & Faculty (शिक्षक प्रबंधन)", icon: GraduationCap, desc: "नया शिक्षक जोड़ें, एडिट, डिलीट, फोटो व ID कार्ड" },
-        { id: "staff_hrm" as AdminView, label: "Staff HRM Directory", icon: Briefcase, desc: "कर्मचारी प्रोफाइल, दस्तावेज व उपस्थिति" },
-        { id: "staff_payroll" as AdminView, label: "Staff Payroll & Pay Slips", icon: Briefcase, desc: "बायोमेट्रिक वेतन पर्ची व बैंक NEFT लिस्ट" },
+        { id: "teachers" as AdminView, label: "Teachers & Faculty (शिक्षक व स्टाफ हब)", icon: GraduationCap, desc: "शिक्षक सूची, Leave Requests, सैलरी व पेरोल सब एक जगह" },
       ]
     },
     {
@@ -1982,8 +2738,6 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       },
       items: [
         { id: "attendance" as AdminView, label: "Attendance & Haziri (दैनिक हाजिरी)", icon: Clock, desc: "दैनिक छात्र उपस्थिति, QR स्कैनर व हाजिरी रिपोर्ट" },
-        { id: "face_id_studio" as AdminView, label: "Live Face ID Studio (लाइव चेहरा)", icon: Camera, desc: "कैमरे से छात्र व अध्यापकों का लाइव फेस आईडी ट्रेनिंग व मैच टेस्ट" },
-        { id: "class_qr" as AdminView, label: "Class & Student QR Codes (क्यूआर)", icon: QrCode, desc: "प्रोजेक्टर पर लाइव क्यूआर व प्रिंट छात्र क्यूआर" },
         { id: "absentee" as AdminView, label: "Absenty Action Center", icon: AlertCircle, desc: "1-दिन अलर्ट व 2-दिन+ गैरहाजिर कॉल ट्रैकर" },
       ]
     },
@@ -1999,16 +2753,10 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       },
       items: [
         { id: "fees" as AdminView, label: "Fee Collection & Ledger (फीस लेजर)", icon: IndianRupee, desc: "मासिक शुल्क वसूली, चालान व छात्र लेजर" },
-        { id: "fee_structure" as AdminView, label: "Class Fee Rates & Structure", icon: Sparkles, desc: "कक्षा-वार मासिक फीस दरें व हेड" },
-        { id: "fee_alerts" as AdminView, label: "Class Fee Alerts & Push", icon: Bell, desc: "NSTA मैसेंजर व लॉक स्क्रीन बकाया तकाजा" },
+        { id: "fee_structure" as AdminView, label: "Fee Structure & Admission Heads", icon: Sparkles, desc: "कक्षा-वार मासिक, वार्षिक व Online Admission शुल्क सेट-अप" },
         { id: "discount_list" as AdminView, label: "Fee Discount List (छूट सूची)", icon: Award, desc: "किसको कितना व कहाँ डिस्काउंट मिला" },
         { id: "expenses" as AdminView, label: "Expense & Daily Cashbook", icon: Receipt, desc: "दैनिक खर्च, पेटी कैश व नेट क्लोजिंग बैलेंस" },
-        { id: "receipt_cancellation" as AdminView, label: "Receipt Cancellation & Refund", icon: RotateCcw, desc: "रसीद निरस्तीकरण व रिफंड वाउचर ऑडिट" },
         { id: "qr_pay" as AdminView, label: "Scan QR to Pay (फास्ट पे)", icon: QrCode, desc: "स्मार्ट आईडी कार्ड क्यूआर स्कैनर से फीस" },
-        { id: "online_admission_fee" as AdminView, label: "Online Admission & Fee", icon: Sliders, desc: "कक्षा-वार प्रवेश शुल्क व एक्टिव हेड सेट-अप" },
-        { id: "admission_receipt" as AdminView, label: "New Admission Receipt (+ प्रवेश शुल्क)", icon: Receipt, desc: "प्रवेश शुल्क (Admission Fee) भरें और 3-इंच / A6 रसीद बनाएं" },
-        { id: "receipt_header" as AdminView, label: "Receipt Header & Letterhead", icon: Building2, desc: "स्कूल लेटरहेड व रसीद प्रिंट सेटिंग्स" },
-        { id: "razorpay_setup" as AdminView, label: "Razorpay Auto-Webhook Setup", icon: CreditCard, desc: "ऑनलाइन फीस गेटवे व ऑटो-रसीद वेबहुक सेट करें" },
       ]
     },
     {
@@ -2026,6 +2774,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         { id: "subjects" as AdminView, label: "Class Subjects (विषय व किताबें)", icon: BookOpen, desc: "कक्षा-वार पुस्तकें, विषय व पाठ्यक्रम जोड़ें" },
         { id: "timetable" as AdminView, label: "Timetable & Routine", icon: Clock, desc: "साप्ताहिक घंटी व समय सारणी" },
         { id: "homework" as AdminView, label: "Daily Homework", icon: BookOpen, desc: "दैनिक गृहकार्य व छात्र डायरी" },
+        { id: "student_growth_safety" as AdminView, label: "Growth Diary, Skills & SOS", icon: Sparkles, desc: "डेली डायरी, 6-स्किल्स, पोर्टफोलियो, हेल्थ व आपात अलर्ट" },
         { id: "class_notes_manager" as AdminView, label: "Class 1-12 Notes Manager", icon: Sparkles, desc: "स्कूल पाठ्यक्रम नोट्स, MCQ, Video व PDF" },
         { id: "video_lectures" as AdminView, label: "Class Video Archive", icon: Youtube, desc: "यूट्यूब वीडियो लेक्चर्स व डिजिटल क्लास" },
         { id: "library" as AdminView, label: "Library Management", icon: Book, desc: "पुस्तकालय व पुस्तक वितरण" },
@@ -2043,6 +2792,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         hoverBg: "hover:bg-purple-950/40 hover:text-purple-200",
       },
       items: [
+        { id: "entrance_test_hub" as AdminView, label: "Entrance Test & 100-Set Bank", icon: GraduationCap, desc: "Class 1–8 वेबसाइट टेस्ट रिकॉर्ड, 100 सेट व Answer Key PDF" },
         { id: "question_paper_builder" as AdminView, label: "Question Paper Builder", icon: FileText, desc: "अर्धवार्षिक व वार्षिक परीक्षा प्रश्न-पत्र जनरेटर" },
         { id: "admit_cards" as AdminView, label: "Exam Admit Cards", icon: FileText, desc: "परीक्षा प्रवेश पत्र (हॉल टिकट)" },
         { id: "marks" as AdminView, label: "Marks Entry (परीक्षा अंक प्रविष्टि)", icon: Edit3, desc: "कक्षा व विषय अनुसार परीक्षा अंक प्रविष्टि" },
@@ -2091,7 +2841,15 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         { id: "parent_queries" as AdminView, label: "Parent Helpdesk", icon: MessageSquare, desc: "अभिभावक शिकायत व सहायता डेस्क" },
         { id: "multi_branch" as AdminView, label: "Multi-Branch & Franchise Hub", icon: Building2, desc: "मल्टी-कैंपस 1-क्लिक स्विचिंग व इंटर-ब्रांच ट्रांसफर" },
         { id: "backup_recovery" as AdminView, label: "Backup & Disaster Recovery", icon: ShieldCheck, desc: "1-क्लिक सम्पूर्ण स्कूल डेटा ZIP बैकअप व रीस्टोर" },
-        { id: "public_website" as AdminView, label: "Public School Website", icon: Globe, desc: "लाइव पब्लिक स्कूल वेबसाइट" },
+        {
+          id: "website_cms" as AdminView,
+          label: "Website Manager (CMS व फोटो)",
+          icon: Globe,
+          desc: isSchoolEliteCurriculum(school)
+            ? "👑 Elite Active: बैनर, प्रिंसिपल संदेश, शिक्षक फोटो व गैलरी बदलें"
+            : "🔒 Elite Only: Lite में केवल Default Website दिखती है (CMS बंद)",
+        },
+        { id: "public_website" as AdminView, label: "Public School Website", icon: Globe, desc: isSchoolEliteCurriculum(school) ? "लाइव कस्टम स्कूल वेबसाइट देखें" : "डिफ़ॉल्ट स्कूल वेबसाइट देखें (Lite)" },
         { id: "subscription" as AdminView, label: "Plan & Subscription", icon: Crown, desc: "सत्र वैधता व ईआरपी स्थिति" },
       ]
     }
@@ -2102,6 +2860,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     const displaySchoolLogo = school ? getSavedSchoolLogo(school.logoUrl, schoolId) : "";
     const isSidebarDefault = isEffectiveLandscape;
 
+    const isWhite = appTheme === "white";
+    const isBlack = appTheme === "black";
+
     // When hidden via Swipe-Left, render sleek 1% visible vertical strip
     if (isSidebarHidden) {
       return (
@@ -2110,7 +2871,13 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             setIsSidebarHidden(false);
             try { localStorage.setItem("school_erp_sidebar_hidden", "false"); } catch (e) { console.warn("Failed to save sidebar state:", e); }
           }}
-          className={`${isSidebarDefault ? "flex" : "hidden md:flex"} print:hidden flex-col items-center justify-between w-2.5 sm:w-3 hover:w-6 bg-slate-900 border-r border-slate-800/80 shrink-0 h-screen sticky top-0 cursor-pointer transition-all duration-300 z-30 select-none shadow-lg group hover:bg-slate-850`}
+          className={`${isSidebarDefault ? "flex" : "hidden md:flex"} print:hidden flex-col items-center justify-between w-2.5 sm:w-3 hover:w-6 ${
+            isWhite
+              ? "bg-white border-r border-slate-200 hover:bg-slate-100"
+              : isBlack
+              ? "bg-black border-r border-neutral-800 hover:bg-neutral-900"
+              : "bg-[#0a1935] border-r border-[#1b3564] hover:bg-[#10254b]"
+          } shrink-0 h-screen sticky top-0 cursor-pointer transition-all duration-300 z-30 select-none shadow-lg group`}
           title="Swipe Right या क्लिक करके मेनू खोलें (1% Visible)"
         >
           <div className="w-1 h-20 rounded-full bg-gradient-to-b from-indigo-500 via-amber-400 to-indigo-500 my-auto opacity-70 group-hover:opacity-100 group-hover:h-32 transition-all shadow-[0_0_8px_rgba(99,102,241,0.6)]" />
@@ -2119,38 +2886,65 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     }
 
     return (
-      <aside className={`${isSidebarDefault ? "flex" : "hidden md:flex"} print:hidden flex-col w-52 lg:w-56 bg-slate-900 border-r border-slate-800 shrink-0 h-screen h-[100dvh] max-h-screen overflow-hidden select-none z-30 text-slate-100 shadow-xl transition-all duration-200 animate-in slide-in-from-left duration-200`}>
+      <aside className={`${isSidebarDefault ? "flex" : "hidden md:flex"} print:hidden flex-col w-52 lg:w-56 ${
+        isWhite
+          ? "bg-white border-r border-slate-200 text-slate-900 shadow-sm"
+          : isBlack
+          ? "bg-[#050505] border-r border-neutral-800 text-slate-100 shadow-xl"
+          : "bg-[#0a1935] border-r border-[#1b3564] text-slate-100 shadow-xl"
+      } shrink-0 h-screen h-[100dvh] max-h-screen overflow-hidden select-none z-30 transition-all duration-200 animate-in slide-in-from-left duration-200`}>
         {/* Brand Header with Collapse Button (Fixed at top of sidebar) */}
-        <div className="p-3 border-b border-slate-800 bg-slate-950/90 flex items-center justify-between gap-2 shrink-0">
+        <div className={`p-3 border-b flex items-center justify-between gap-2 shrink-0 ${
+          isWhite
+            ? "border-slate-200 bg-slate-50/90"
+            : isBlack
+            ? "border-neutral-800 bg-black"
+            : "border-[#1b3564] bg-[#07132a]"
+        }`}>
           <div className="flex items-center gap-2 min-w-0 flex-1">
-            <div className="w-8 h-8 rounded-xl bg-white/10 p-1 flex items-center justify-center shrink-0 border border-white/15 overflow-hidden shadow-xs">
+            <div className={`w-8 h-8 rounded-xl p-1 flex items-center justify-center shrink-0 border overflow-hidden shadow-xs ${
+              isWhite
+                ? "bg-indigo-50 border-indigo-200"
+                : "bg-white/10 border-white/15"
+            }`}>
               {displaySchoolLogo ? (
                 <img src={displaySchoolLogo} alt={school?.name} className="w-full h-full object-contain rounded-lg bg-white" />
               ) : (
-                <Building2 className="w-4 h-4 text-amber-400" />
+                <Building2 className={`w-4 h-4 ${isWhite ? "text-indigo-700" : "text-amber-400"}`} />
               )}
             </div>
             <div className="min-w-0 flex-1">
-              <h2 className="font-black text-xs text-white truncate leading-tight" title={school?.name || "School ERP"}>
+              <h2 className={`font-black text-xs truncate leading-tight ${isWhite ? "text-slate-900" : "text-white"}`} title={school?.name || "School ERP"}>
                 {school?.name || "School ERP"}
               </h2>
               <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
-                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-500/20 text-blue-300 border border-blue-400/30 whitespace-nowrap shrink-0">
+                <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border whitespace-nowrap shrink-0 ${
+                  isWhite
+                    ? "bg-blue-100 text-blue-800 border-blue-200"
+                    : "bg-blue-500/20 text-blue-300 border-blue-400/30"
+                }`}>
                   {activeSession?.name ? activeSession.name.replace(/Academic Session |Session /i, "") : getDynamicAcademicSessionLabel().replace(/Academic Session |Session /i, "")}
                 </span>
-                <span className="text-[9.5px] text-slate-400 truncate min-w-0">
-                  ID: {school?.code || school?.id?.slice(0, 6)}
-                </span>
+                {getVisibleSchoolRegNo(school) && (
+                  <span className={`text-[9.5px] truncate min-w-0 ${isWhite ? "text-slate-500" : "text-slate-400"}`}>
+                    Reg. No: {getVisibleSchoolRegNo(school)}
+                  </span>
+                )}
               </div>
             </div>
           </div>
           <button
             type="button"
             onClick={() => {
+              captureActiveMenuScrollRef.current();
               setIsSidebarHidden(true);
               try { localStorage.setItem("school_erp_sidebar_hidden", "true"); } catch (e) { console.warn("Failed to save sidebar state:", e); }
             }}
-            className="p-1 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition cursor-pointer shrink-0"
+            className={`p-1 rounded-lg transition cursor-pointer shrink-0 ${
+              isWhite
+                ? "hover:bg-slate-200 text-slate-600 hover:text-slate-900"
+                : "hover:bg-white/10 text-slate-400 hover:text-white"
+            }`}
             title="मेनू को बाएँ छुपाएं (Swipe Left)"
           >
             <ChevronLeft className="w-4 h-4" />
@@ -2158,21 +2952,35 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         </div>
 
         {/* Sidebar Menu Search (Right after School Name & Session) */}
-        <div className="px-2.5 pt-2 pb-1 border-b border-slate-800/80 bg-slate-950/50 shrink-0">
+        <div className={`px-2.5 pt-2 pb-1.5 border-b shrink-0 ${
+          isWhite
+            ? "border-slate-200 bg-slate-50/70"
+            : isBlack
+            ? "border-neutral-800/80 bg-neutral-950/70"
+            : "border-[#1b3564]/80 bg-[#08152e]/70"
+        }`}>
           <div className="relative">
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <Search className={`w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none ${isWhite ? "text-slate-500" : "text-slate-400"}`} />
             <input
               type="text"
               value={menuSearchQuery}
               onChange={(e) => setMenuSearchQuery(e.target.value)}
               placeholder="मेनू / टूल खोजें..."
-              className="w-full pl-8 pr-6 py-1.5 rounded-lg bg-slate-800/90 border border-slate-700 text-[11px] text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              className={`w-full pl-8 pr-6 py-1.5 rounded-lg border text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-400 ${
+                isWhite
+                  ? "bg-white border-slate-300 text-slate-900 placeholder:text-slate-500"
+                  : isBlack
+                  ? "bg-neutral-900 border-neutral-700 text-white placeholder:text-slate-400"
+                  : "bg-[#112447] border-[#26467e] text-white placeholder:text-slate-300"
+              }`}
             />
             {menuSearchQuery && (
               <button
                 type="button"
                 onClick={() => setMenuSearchQuery("")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-[10px] cursor-pointer"
+                className={`absolute right-2 top-1/2 -translate-y-1/2 text-[10px] cursor-pointer ${
+                  isWhite ? "text-slate-500 hover:text-slate-900" : "text-slate-400 hover:text-white"
+                }`}
               >
                 ✕
               </button>
@@ -2181,7 +2989,15 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         </div>
 
         {/* Categories List with Independent Scroll */}
-        <div className="flex-1 px-2.5 py-3 space-y-3.5 overflow-y-auto overscroll-contain">
+        <div
+          ref={desktopMenuScrollRef}
+          onScroll={(e) => {
+            if (!isRestoringMenuScrollRef.current && e.currentTarget.clientHeight > 0) {
+              saveMenuScrollTop(e.currentTarget.scrollTop);
+            }
+          }}
+          className="flex-1 px-2.5 py-3 space-y-3.5 overflow-y-auto overscroll-contain"
+        >
           {navCategories
             .map((cat) => ({
               ...cat,
@@ -2194,34 +3010,27 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             }))
             .filter((cat) => cat.items.length > 0)
             .map((cat, cIdx) => {
-              const isSearching = !!menuSearchQuery.trim();
-              const isCollapsed = isSearching ? false : (collapsedCats[cat.id] ?? false);
+              const isCollapsed = false;
+              void collapsedCats;
+              void toggleCategoryCollapse;
               return (
                 <div key={`cat-${cIdx}`} className="space-y-1">
-                  {/* Collapsible Category Header Accordion */}
-                  <button
-                    type="button"
-                    onClick={() => toggleCategoryCollapse(cat.id)}
-                    className={`w-full px-2 py-1.5 rounded-lg ${cat.theme.pillBg} flex items-center justify-between gap-1 shadow-xs transition hover:brightness-110 active:scale-[0.99] cursor-pointer text-left select-none`}
-                    title={isCollapsed ? "क्लिक करके श्रेणी खोलें" : "क्लिक करके श्रेणी समेटें"}
+                  {/* Always-Open Category Header Pill (Old Signature Colors) */}
+                  <div
+                    className={`erp-menu-cat-pill w-full px-2 py-1.5 rounded-lg ${cat.theme.pillBg} flex items-center justify-between gap-1 shadow-xs text-left select-none`}
                   >
                     <div className="flex items-center gap-1.5 min-w-0">
                       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${cat.theme.accentDot}`} />
-                      <span className={`text-[9.5px] font-black uppercase tracking-wider truncate ${cat.theme.titleColor}`}>
+                      <span className={`erp-menu-cat-title text-[9.5px] font-black uppercase tracking-wider truncate ${cat.theme.titleColor}`}>
                         {cat.title}
                       </span>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
-                      <span className={`text-[8.5px] font-black px-1.5 py-0.2 rounded-full ${cat.theme.badgeColor}`}>
+                      <span className={`erp-menu-cat-badge text-[8.5px] font-black px-1.5 py-0.2 rounded-full ${cat.theme.badgeColor}`}>
                         {cat.items.length}
                       </span>
-                      <ChevronDown
-                        className={`w-3 h-3 ${cat.theme.titleColor} transition-transform duration-200 ${
-                          isCollapsed ? "-rotate-90 opacity-60" : "rotate-0 opacity-100"
-                        }`}
-                      />
                     </div>
-                  </button>
+                  </div>
 
                   {!isCollapsed && (
                     <div className="space-y-0.5 animate-in fade-in duration-150">
@@ -2233,18 +3042,22 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                             key={item.id}
                             type="button"
                             onClick={() => {
+                              captureActiveMenuScrollRef.current();
                               setView(item.id);
+                              mainContentScrollRef.current?.scrollTo({ top: 0 });
                               window.scrollTo({ top: 0, behavior: "smooth" });
                             }}
                             className={`w-full px-2 py-1.5 rounded-lg flex items-center gap-2 text-left transition-all cursor-pointer relative ${
                               isActive
                                 ? "bg-gradient-to-r from-amber-400 via-amber-500 to-orange-500 text-slate-950 font-black shadow-md shadow-amber-500/25 ring-1.5 ring-amber-300 scale-[1.01]"
+                                : isWhite
+                                ? "text-slate-700 hover:text-slate-950 hover:bg-slate-100 font-semibold"
                                 : `text-slate-300 hover:text-white ${cat.theme.hoverBg} font-medium`
                             }`}
                           >
-                            <Icon className={`w-3.5 h-3.5 shrink-0 transition-colors ${isActive ? "text-slate-950 stroke-[2.5]" : "text-slate-400"}`} />
+                            <Icon className={`w-3.5 h-3.5 shrink-0 transition-colors ${isActive ? "text-slate-950 stroke-[2.5]" : isWhite ? "text-slate-500" : "text-slate-400"}`} />
                             <div className="min-w-0 flex-1">
-                              <p className={`text-[11px] leading-tight truncate ${isActive ? "text-slate-950 font-black" : "text-slate-200"}`}>{item.label}</p>
+                              <p className={`text-[11px] leading-tight truncate ${isActive ? "text-slate-950 font-black" : isWhite ? "text-slate-800" : "text-slate-200"}`}>{item.label}</p>
                             </div>
                             {isActive && (
                               <span className="px-1 py-0.2 rounded text-[8px] font-black bg-slate-950 text-amber-300 uppercase shrink-0 tracking-wider">
@@ -2262,36 +3075,58 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         </div>
 
         {/* Bottom Sidebar Action Footer: Unified Account & Switch Hub */}
-        <div className="p-2.5 border-t border-slate-800 bg-slate-950/80 shrink-0">
+        <div className={`p-2.5 border-t shrink-0 ${
+          isWhite
+            ? "border-slate-200 bg-slate-50"
+            : isBlack
+            ? "border-neutral-800 bg-black"
+            : "border-[#1b3564] bg-[#07132a]"
+        }`}>
           <button
             type="button"
             onClick={() => setView("account_hub")}
-            className={`w-full p-2.5 rounded-xl border text-left transition flex items-center justify-between gap-2 shadow-md group cursor-pointer active:scale-95 ${
+            className={`w-full p-2.5 rounded-xl border-2 text-left transition flex items-center justify-between gap-2 shadow-sm group cursor-pointer active:scale-95 ${
               view === "account_hub"
                 ? "bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 border-blue-400 text-white shadow-blue-500/25 ring-2 ring-blue-400/40"
-                : "bg-gradient-to-r from-slate-900 via-indigo-950/70 to-slate-900 border-indigo-500/30 hover:border-indigo-400/60 text-slate-100"
+                : isWhite
+                ? "bg-indigo-50 border-indigo-300 hover:bg-indigo-100 text-slate-900"
+                : isBlack
+                ? "bg-neutral-900 border-indigo-500/40 hover:bg-neutral-800 text-slate-100"
+                : "bg-[#102348] border-indigo-400/40 hover:bg-[#173061] text-slate-100"
             }`}
             title="अकाउंट, रोल स्विच व ऐप विकल्प खोलें"
           >
             <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center shrink-0 text-amber-300 group-hover:scale-105 transition-transform">
-                <User className="w-4 h-4 text-indigo-300" />
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform ${
+                view === "account_hub"
+                  ? "bg-white/15 border border-white/25 text-amber-300"
+                  : isWhite
+                  ? "bg-indigo-100 border border-indigo-300 text-indigo-700"
+                  : "bg-indigo-500/20 border border-indigo-400/30 text-indigo-300"
+              }`}>
+                <User className="w-4 h-4" />
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-1.5">
-                  <p className="text-xs font-black text-white group-hover:text-indigo-200 truncate">
+                  <p className={`text-xs font-black truncate ${view === "account_hub" ? "text-white" : isWhite ? "text-slate-900" : "text-white"}`}>
                     अकाउंट व स्विच
                   </p>
-                  <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-indigo-500/30 text-indigo-200 font-bold border border-indigo-400/30">
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded-md font-bold border ${
+                    view === "account_hub"
+                      ? "bg-white/20 text-white border-white/30"
+                      : isWhite
+                      ? "bg-indigo-100 text-indigo-900 border-indigo-300"
+                      : "bg-indigo-500/30 text-indigo-200 border-indigo-400/30"
+                  }`}>
                     Hub
                   </span>
                 </div>
-                <p className="text-[9.5px] text-slate-400 truncate">
+                <p className={`text-[9.5px] truncate ${view === "account_hub" ? "text-indigo-100" : isWhite ? "text-slate-600" : "text-slate-400"}`}>
                   Teacher, Accountant, App &amp; Logout
                 </p>
               </div>
             </div>
-            <ArrowRight className="w-4 h-4 text-indigo-400 group-hover:translate-x-1 transition-transform shrink-0" />
+            <ArrowRight className={`w-4 h-4 group-hover:translate-x-1 transition-transform shrink-0 ${view === "account_hub" ? "text-white" : isWhite ? "text-indigo-700" : "text-indigo-400"}`} />
           </button>
         </div>
       </aside>
@@ -2301,46 +3136,65 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   // ── MOBILE SLIDE-OUT LEFT DRAWER (20% SLIMMER: w-[228px] max-w-[76vw]) ────
   const renderMobileSidebarDrawer = () => {
     const displaySchoolLogo = school ? getSavedSchoolLogo(school.logoUrl, schoolId) : "";
+    const isWhite = appTheme === "white";
+    const isBlack = appTheme === "black";
     return (
       <div className="fixed inset-0 z-50 md:hidden print:hidden flex animate-in fade-in duration-200">
         {/* Clear backdrop: App behind stays 100% sharp, bright & visible with NO blur or darkening */}
         <div
-          className="fixed inset-0 bg-transparent transition-opacity cursor-pointer"
-          onClick={() => setIsSidebarOpen(false)}
+          className="nst-drawer-backdrop fixed inset-0 transition-opacity cursor-pointer"
+          style={{ backgroundColor: isWhite ? "rgba(15, 23, 42, 0.25)" : "rgba(2, 6, 23, 0.35)" }}
+          onClick={() => {
+            captureActiveMenuScrollRef.current();
+            setIsSidebarOpen(false);
+          }}
         />
         {/* Drawer (20% slimmer width, fixed in place) */}
-        <div className="relative w-[228px] max-w-[76vw] bg-slate-900 text-slate-100 flex flex-col h-full h-[100dvh] shadow-2xl shadow-black/80 z-10 overflow-hidden animate-in slide-in-from-left duration-250 border-r border-slate-800">
+        <div className={`relative w-[228px] max-w-[76vw] flex flex-col h-full h-[100dvh] z-10 overflow-hidden animate-in slide-in-from-left duration-250 border-r ${
+          isWhite
+            ? "bg-white text-slate-900 border-slate-200 shadow-2xl shadow-slate-900/20"
+            : isBlack
+            ? "bg-[#050505] text-slate-100 border-neutral-800 shadow-2xl shadow-black/90"
+            : "bg-[#0a1935] text-slate-100 border-[#1b3564] shadow-2xl shadow-black/80"
+        }`}>
           {/* Header */}
-          <div className="p-3 border-b border-slate-800 bg-slate-950/90 flex items-center justify-between gap-2.5 shrink-0">
+          <div className={`p-3 border-b flex items-center justify-between gap-2.5 shrink-0 ${
+            isWhite
+              ? "border-slate-200 bg-slate-50"
+              : isBlack
+              ? "border-neutral-800 bg-black"
+              : "border-[#1b3564] bg-[#07132a]"
+          }`}>
             <div className="flex items-center gap-2 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-white/10 p-1 flex items-center justify-center shrink-0 border border-white/15 overflow-hidden">
+              <div className={`w-8 h-8 rounded-xl p-1 flex items-center justify-center shrink-0 border overflow-hidden ${
+                isWhite ? "bg-indigo-50 border-indigo-200" : "bg-white/10 border-white/15"
+              }`}>
                 {displaySchoolLogo ? (
                   <img src={displaySchoolLogo} alt={school?.name} className="w-full h-full object-contain rounded-lg bg-white" />
                 ) : (
-                  <Building2 className="w-4 h-4 text-amber-400" />
+                  <Building2 className={`w-4 h-4 ${isWhite ? "text-indigo-700" : "text-amber-400"}`} />
                 )}
               </div>
               <div className="min-w-0">
-                <h3 className="font-black text-xs text-white truncate">{school?.name || "School ERP"}</h3>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsSidebarOpen(false);
-                    setShowSessionModal(true);
-                  }}
-                  className="text-[9.5px] text-emerald-400 hover:text-emerald-300 font-bold flex items-center gap-1 cursor-pointer transition"
-                  title="सत्र बदलें / Switch Session"
-                >
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
-                  <span className="truncate">{activeSession?.name ? activeSession.name.replace(/Academic Session |Session /i, "") : getDynamicAcademicSessionLabel().replace(/Academic Session |Session /i, "")}</span>
-                  <ChevronDown className="w-2.5 h-2.5 opacity-80 shrink-0" />
-                </button>
+                <h3 className={`font-black text-xs truncate ${isWhite ? "text-slate-900" : "text-white"}`}>{school?.name || "School ERP"}</h3>
+                {getVisibleSchoolRegNo(school) && (
+                  <p className={`text-[9.5px] truncate ${isWhite ? "text-slate-500" : "text-slate-400"}`}>
+                    Reg. No: {getVisibleSchoolRegNo(school)}
+                  </p>
+                )}
               </div>
             </div>
             <button
               type="button"
-              onClick={() => setIsSidebarOpen(false)}
-              className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white cursor-pointer"
+              onClick={() => {
+                captureActiveMenuScrollRef.current();
+                setIsSidebarOpen(false);
+              }}
+              className={`p-1 rounded-lg cursor-pointer ${
+                isWhite
+                  ? "bg-slate-200 hover:bg-slate-300 text-slate-700"
+                  : "bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white"
+              }`}
               aria-label="Close Menu"
             >
               <X className="w-4 h-4" />
@@ -2348,21 +3202,35 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           </div>
 
           {/* Mobile Menu Search (Right after School Name & Session) */}
-          <div className="px-2.5 pt-2 pb-1.5 border-b border-slate-800/80 bg-slate-950/50 shrink-0">
+          <div className={`px-2.5 pt-2 pb-1.5 border-b shrink-0 ${
+            isWhite
+              ? "border-slate-200 bg-slate-50/70"
+              : isBlack
+              ? "border-neutral-800/80 bg-neutral-950/70"
+              : "border-[#1b3564]/80 bg-[#08152e]/70"
+          }`}>
             <div className="relative">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <Search className={`w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none ${isWhite ? "text-slate-500" : "text-slate-400"}`} />
               <input
                 type="text"
                 value={menuSearchQuery}
                 onChange={(e) => setMenuSearchQuery(e.target.value)}
                 placeholder="मेनू / टूल खोजें..."
-                className="w-full pl-8 pr-6 py-1.5 rounded-lg bg-slate-800/90 border border-slate-700 text-[11px] text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                className={`w-full pl-8 pr-6 py-1.5 rounded-lg border text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-400 ${
+                  isWhite
+                    ? "bg-white border-slate-300 text-slate-900 placeholder:text-slate-500"
+                    : isBlack
+                    ? "bg-neutral-900 border-neutral-700 text-white placeholder:text-slate-400"
+                    : "bg-[#112447] border-[#26467e] text-white placeholder:text-slate-300"
+                }`}
               />
               {menuSearchQuery && (
                 <button
                   type="button"
                   onClick={() => setMenuSearchQuery("")}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-[10px] cursor-pointer"
+                  className={`absolute right-2 top-1/2 -translate-y-1/2 text-[10px] cursor-pointer ${
+                    isWhite ? "text-slate-500 hover:text-slate-900" : "text-slate-400 hover:text-white"
+                  }`}
                 >
                   ✕
                 </button>
@@ -2371,7 +3239,15 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           </div>
 
           {/* Nav Categories */}
-          <div className="flex-1 px-2.5 py-3 space-y-3.5 overflow-y-auto overscroll-contain">
+          <div
+            ref={mobileMenuScrollRef}
+            onScroll={(e) => {
+              if (!isRestoringMenuScrollRef.current && e.currentTarget.clientHeight > 0) {
+                saveMenuScrollTop(e.currentTarget.scrollTop);
+              }
+            }}
+            className="flex-1 px-2.5 py-3 space-y-3.5 overflow-y-auto overscroll-contain"
+          >
             {navCategories
               .map((cat) => ({
                 ...cat,
@@ -2384,34 +3260,25 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               }))
               .filter((cat) => cat.items.length > 0)
               .map((cat, cIdx) => {
-                const isSearching = !!menuSearchQuery.trim();
-                const isCollapsed = isSearching ? false : (collapsedCats[cat.id] ?? false);
+                const isCollapsed = false;
                 return (
                   <div key={`m-cat-${cIdx}`} className="space-y-1">
-                    {/* Collapsible Category Header Accordion */}
-                    <button
-                      type="button"
-                      onClick={() => toggleCategoryCollapse(cat.id)}
-                      className={`w-full px-2 py-1.5 rounded-lg ${cat.theme.pillBg} flex items-center justify-between gap-1 shadow-xs transition hover:brightness-110 active:scale-[0.99] cursor-pointer text-left select-none`}
-                      title={isCollapsed ? "क्लिक करके श्रेणी खोलें" : "क्लिक करके श्रेणी समेटें"}
+                    {/* Always-Open Category Header Pill (Old Signature Colors) */}
+                    <div
+                      className={`erp-menu-cat-pill w-full px-2 py-1.5 rounded-lg ${cat.theme.pillBg} flex items-center justify-between gap-1 shadow-xs text-left select-none`}
                     >
                       <div className="flex items-center gap-1.5 min-w-0">
                         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${cat.theme.accentDot}`} />
-                        <span className={`text-[9.5px] font-black uppercase tracking-wider truncate ${cat.theme.titleColor}`}>
+                        <span className={`erp-menu-cat-title text-[9.5px] font-black uppercase tracking-wider truncate ${cat.theme.titleColor}`}>
                           {cat.title}
                         </span>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
-                        <span className={`text-[8.5px] font-black px-1.5 py-0.2 rounded-full ${cat.theme.badgeColor}`}>
+                        <span className={`erp-menu-cat-badge text-[8.5px] font-black px-1.5 py-0.2 rounded-full ${cat.theme.badgeColor}`}>
                           {cat.items.length}
                         </span>
-                        <ChevronDown
-                          className={`w-3 h-3 ${cat.theme.titleColor} transition-transform duration-200 ${
-                            isCollapsed ? "-rotate-90 opacity-60" : "rotate-0 opacity-100"
-                          }`}
-                        />
                       </div>
-                    </button>
+                    </div>
 
                     {!isCollapsed && (
                       <div className="space-y-0.5 animate-in fade-in duration-150">
@@ -2423,19 +3290,23 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                               key={`m-${item.id}`}
                               type="button"
                               onClick={() => {
+                                captureActiveMenuScrollRef.current();
                                 setView(item.id);
                                 setIsSidebarOpen(false);
+                                mainContentScrollRef.current?.scrollTo({ top: 0 });
                                 window.scrollTo({ top: 0, behavior: "smooth" });
                               }}
                               className={`w-full px-2 py-1.5 rounded-lg flex items-center gap-2 text-left transition-all cursor-pointer relative ${
                                 isActive
                                   ? "bg-gradient-to-r from-amber-400 via-amber-500 to-orange-500 text-slate-950 font-black shadow-md shadow-amber-500/25 ring-1.5 ring-amber-300 scale-[1.01]"
+                                  : isWhite
+                                  ? "text-slate-700 hover:text-slate-950 hover:bg-slate-100 font-semibold"
                                   : `text-slate-300 hover:text-white ${cat.theme.hoverBg} font-medium`
                               }`}
                             >
-                              <Icon className={`w-3.5 h-3.5 shrink-0 transition-colors ${isActive ? "text-slate-950 stroke-[2.5]" : "text-slate-400"}`} />
+                              <Icon className={`w-3.5 h-3.5 shrink-0 transition-colors ${isActive ? "text-slate-950 stroke-[2.5]" : isWhite ? "text-slate-500" : "text-slate-400"}`} />
                               <div className="min-w-0 flex-1">
-                                <p className={`text-[11px] leading-tight truncate ${isActive ? "text-slate-950 font-black" : "text-slate-200"}`}>{item.label}</p>
+                                <p className={`text-[11px] leading-tight truncate ${isActive ? "text-slate-950 font-black" : isWhite ? "text-slate-800" : "text-slate-200"}`}>{item.label}</p>
                               </div>
                               {isActive && (
                                 <span className="px-1 py-0.2 rounded text-[8px] font-black bg-slate-950 text-amber-300 uppercase shrink-0 tracking-wider">
@@ -2453,39 +3324,62 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           </div>
 
           {/* Footer: Unified Account & Switch Hub */}
-          <div className="p-2.5 border-t border-slate-800 bg-slate-950/80 shrink-0">
+          <div className={`p-2.5 border-t shrink-0 ${
+            isWhite
+              ? "border-slate-200 bg-slate-50"
+              : isBlack
+              ? "border-neutral-800 bg-black"
+              : "border-[#1b3564] bg-[#07132a]"
+          }`}>
             <button
               type="button"
               onClick={() => {
+                captureActiveMenuScrollRef.current();
                 setIsSidebarOpen(false);
                 setView("account_hub");
               }}
-              className={`w-full p-2.5 rounded-xl border text-left transition flex items-center justify-between gap-2 shadow-md group cursor-pointer active:scale-95 ${
+              className={`w-full p-2.5 rounded-xl border-2 text-left transition flex items-center justify-between gap-2 shadow-sm group cursor-pointer active:scale-95 ${
                 view === "account_hub"
                   ? "bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 border-blue-400 text-white shadow-blue-500/25 ring-2 ring-blue-400/40"
-                  : "bg-gradient-to-r from-slate-900 via-indigo-950/70 to-slate-900 border-indigo-500/30 hover:border-indigo-400/60 text-slate-100"
+                  : isWhite
+                  ? "bg-indigo-50 border-indigo-300 hover:bg-indigo-100 text-slate-900"
+                  : isBlack
+                  ? "bg-neutral-900 border-indigo-500/40 hover:bg-neutral-800 text-slate-100"
+                  : "bg-[#102348] border-indigo-400/40 hover:bg-[#173061] text-slate-100"
               }`}
               title="अकाउंट, रोल स्विच व ऐप विकल्प खोलें"
             >
               <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center shrink-0 text-amber-300 group-hover:scale-105 transition-transform">
-                  <User className="w-4 h-4 text-indigo-300" />
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform ${
+                  view === "account_hub"
+                    ? "bg-white/15 border border-white/25 text-amber-300"
+                    : isWhite
+                    ? "bg-indigo-100 border border-indigo-300 text-indigo-700"
+                    : "bg-indigo-500/20 border border-indigo-400/30 text-indigo-300"
+                }`}>
+                  <User className="w-4 h-4" />
                 </div>
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
-                    <p className="text-xs font-black text-white group-hover:text-indigo-200 truncate">
+                    <p className={`text-xs font-black truncate ${view === "account_hub" ? "text-white" : isWhite ? "text-slate-900" : "text-white"}`}>
                       अकाउंट व स्विच
                     </p>
-                    <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-indigo-500/30 text-indigo-200 font-bold border border-indigo-400/30">
+                    <span className={`text-[9px] px-1.5 py-0.5 rounded-md font-bold border ${
+                      view === "account_hub"
+                        ? "bg-white/20 text-white border-white/30"
+                        : isWhite
+                        ? "bg-indigo-100 text-indigo-900 border-indigo-300"
+                        : "bg-indigo-500/30 text-indigo-200 border-indigo-400/30"
+                    }`}>
                       Hub
                     </span>
                   </div>
-                  <p className="text-[9.5px] text-slate-400 truncate">
+                  <p className={`text-[9.5px] truncate ${view === "account_hub" ? "text-indigo-100" : isWhite ? "text-slate-600" : "text-slate-400"}`}>
                     Teacher, Accountant, App &amp; Logout
                   </p>
                 </div>
               </div>
-              <ArrowRight className="w-4 h-4 text-indigo-400 group-hover:translate-x-1 transition-transform shrink-0" />
+              <ArrowRight className={`w-4 h-4 group-hover:translate-x-1 transition-transform shrink-0 ${view === "account_hub" ? "text-white" : isWhite ? "text-indigo-700" : "text-indigo-400"}`} />
             </button>
           </div>
         </div>
@@ -2495,57 +3389,95 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
   // ── UNIFIED TOP BAR (DESKTOP & MOBILE) ─────────────────────────────────
   const renderTopHeader = () => {
+    const isWhite = appTheme === "white";
+    const isBlack = appTheme === "black";
     return (
       <>
-        <header className="sticky top-0 z-20 print:hidden bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 py-2.5 flex items-center justify-between gap-2.5 shadow-xs">
+        <header className={`sticky top-0 z-20 print:hidden px-3 sm:px-6 py-2.5 flex items-center justify-between gap-2.5 shadow-xs border-b ${
+          isWhite
+            ? "bg-white border-slate-200 text-slate-900"
+            : isBlack
+            ? "bg-[#050505] border-neutral-800 text-white"
+            : "bg-[#0b1b3a] border-[#1c3566] text-white"
+        }`}>
           {/* Left: View Title, Home & Academic Session (Session moved to left side) */}
           <div className="flex items-center gap-2 min-w-0">
             {view !== "dashboard" && (
               <button
                 type="button"
                 onClick={() => setView("dashboard")}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition cursor-pointer shrink-0"
+                className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold transition cursor-pointer shrink-0 ${
+                  isWhite
+                    ? "bg-slate-100 hover:bg-slate-200 text-slate-700"
+                    : "bg-slate-800 hover:bg-slate-700 text-slate-200"
+                }`}
               >
                 <ChevronLeft className="w-3.5 h-3.5" />
                 <span className="hidden xs:inline">Home</span>
               </button>
             )}
 
-            {/* Academic Session Selector (Moved to Left Side) */}
+            {/* Academic Session Selector (Compact Year-Only) */}
             <button
               type="button"
               onClick={() => setShowSessionModal(true)}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-800 dark:text-emerald-200 border border-emerald-500/35 text-xs font-black transition cursor-pointer active:scale-95 shadow-xs shrink-0"
+              className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-black transition cursor-pointer active:scale-95 shadow-xs shrink-0 ${
+                isWhite
+                  ? "bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300"
+                  : "bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 border-emerald-500/35"
+              }`}
               title="सत्र बदलें, नया सत्र जोड़ें या एडिट करें (Click to Switch/Edit Academic Session)"
             >
-              <Calendar className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-              <span className="tabular-nums font-mono text-[11px] sm:text-xs">
-                सत्र: {activeSession?.name ? activeSession.name.replace(/Academic Session |Session /i, "") : getDynamicAcademicSessionLabel().replace(/Academic Session |Session /i, "")}
+              <Calendar className={`w-3 h-3 shrink-0 ${isWhite ? "text-emerald-700" : "text-emerald-400"}`} />
+              <span className="tabular-nums font-mono text-[11px] leading-none">
+                {isDemoSessionId(activeSession?.id)
+                  ? "Demo"
+                  : (activeSession?.name || getDynamicAcademicSessionLabel())
+                      .replace(/Academic Session\s*|Session\s*/gi, "")
+                      .trim()}
               </span>
-              <ChevronDown className="w-3 h-3 text-emerald-700 dark:text-emerald-300 opacity-80 shrink-0" />
+              <ChevronDown className={`w-2.5 h-2.5 opacity-80 shrink-0 ${isWhite ? "text-emerald-700" : "text-emerald-300"}`} />
             </button>
 
-            {/* 1-Click Multi-Branch Campus Selector */}
+            {/* 1-Click Multi-Branch Campus Selector (Compact Icon-Only) */}
             <button
               type="button"
               onClick={() => setView("multi_branch")}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-800 dark:text-indigo-200 border border-indigo-500/35 text-xs font-black transition cursor-pointer active:scale-95 shadow-xs shrink-0"
-              title="ब्रांच बदलें या नया कैंपस जोड़ें (1-Click Multi-Branch / Franchise Switcher)"
+              className={`inline-flex items-center justify-center p-1.5 rounded-lg border transition cursor-pointer active:scale-95 shadow-xs shrink-0 ${
+                isWhite
+                  ? "bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border-indigo-300"
+                  : "bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-200 border-indigo-500/35"
+              }`}
+              title={`ब्रांच: ${activeBranchName} — ब्रांच बदलें या नया कैंपस जोड़ें`}
+              aria-label={`ब्रांच बदलें (${activeBranchName})`}
             >
-              <Building2 className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
-              <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0" />
-              <span className="font-mono text-[11px] sm:text-xs max-w-[120px] truncate">
-                ब्रांच: {activeBranchName}
-              </span>
-              <ChevronDown className="w-3 h-3 text-indigo-700 dark:text-indigo-300 opacity-80 shrink-0" />
+              <Building2 className={`w-3.5 h-3.5 shrink-0 ${isWhite ? "text-indigo-700" : "text-indigo-400"}`} />
             </button>
 
-            <h1 className="text-xs sm:text-sm font-black text-slate-800 dark:text-white capitalize truncate hidden md:inline-block">
+            {/* Warning Button: Open Payment & Refund History + Receipt Cancellation Page */}
+            <button
+              type="button"
+              onClick={() => setView("receipt_cancellation")}
+              className={`inline-flex items-center justify-center p-1.5 rounded-lg border transition cursor-pointer active:scale-95 shadow-xs shrink-0 ${
+                view === "receipt_cancellation"
+                  ? "bg-amber-500 text-slate-950 border-amber-500"
+                  : isWhite
+                  ? "bg-amber-50 hover:bg-amber-100 text-amber-700 border-amber-400"
+                  : "bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border-amber-500/45"
+              }`}
+              title="पेमेंट व रिफंड हिस्ट्री / रसीद निरस्तीकरण (Payment & Refund History • Receipt Cancellation)"
+              aria-label="Payment & Refund History / Receipt Cancellation"
+            >
+              <AlertTriangle className={`w-3.5 h-3.5 shrink-0 ${view === "receipt_cancellation" ? "text-slate-950" : isWhite ? "text-amber-600" : "text-amber-400"}`} />
+            </button>
+
+            <h1 className={`text-xs sm:text-sm font-black capitalize truncate hidden md:inline-block ${isWhite ? "text-slate-900" : "text-white"}`}>
               {view === "dashboard"
                 ? "Home Dashboard"
                 : view === "account_hub"
                 ? "Account Hub"
+                : view === "receipt_cancellation"
+                ? "Payment & Refund History"
                 : view === "sibling_profiles"
                 ? "भाई-बहन प्रोफाइल (Sibling Profiles & Concessions)"
                 : view === "school_profile"
@@ -2568,7 +3500,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             </h1>
           </div>
 
-          {/* Right: Search + 3-Theme Switcher + Mobile / Laptop Rotate Mode Toggle */}
+          {/* Right: Search + Mobile/Laptop Rotate + Settings Icon (Profile & Theme) */}
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             {/* Compact Universal Search Button */}
             <button
@@ -2577,7 +3509,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl font-black text-xs transition cursor-pointer active:scale-95 shadow-sm border ${
                 showCompactSearch || universalSearchQuery.trim()
                   ? "bg-blue-600 text-white border-blue-500"
-                  : "bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700"
+                  : isWhite
+                  ? "bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300"
+                  : "bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700"
               }`}
               title="यूनिवर्सल सर्च खोलें (छात्र, शिक्षक, फीस, छूट, टूल)"
             >
@@ -2585,56 +3519,15 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               <span className="hidden sm:inline">Search</span>
             </button>
 
-            {/* 3-Theme Switcher Segmented Pill */}
-            <div className="inline-flex items-center p-0.5 rounded-xl bg-slate-800/90 border border-slate-700/80 shadow-xs">
-              <button
-                type="button"
-                onClick={() => applyAdminTheme("white")}
-                className={`px-2 py-1 rounded-lg text-[10px] sm:text-xs font-black flex items-center gap-1 transition cursor-pointer ${
-                  appTheme === "white"
-                    ? "bg-amber-400 text-slate-950 shadow-sm"
-                    : "text-slate-400 hover:text-white"
-                }`}
-                title="White (Light) थीम - सफेद"
-              >
-                <Sun className="w-3.5 h-3.5" />
-                <span className="hidden xs:inline">White</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => applyAdminTheme("black")}
-                className={`px-2 py-1 rounded-lg text-[10px] sm:text-xs font-black flex items-center gap-1 transition cursor-pointer ${
-                  appTheme === "black"
-                    ? "bg-cyan-400 text-slate-950 shadow-sm"
-                    : "text-slate-400 hover:text-white"
-                }`}
-                title="Black (AMOLED) थीम - सुपर डार्क"
-              >
-                <Moon className="w-3.5 h-3.5" />
-                <span className="hidden xs:inline">Black</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => applyAdminTheme("current")}
-                className={`px-2 py-1 rounded-lg text-[10px] sm:text-xs font-black flex items-center gap-1 transition cursor-pointer ${
-                  appTheme === "current"
-                    ? "bg-indigo-600 text-white shadow-sm"
-                    : "text-slate-400 hover:text-white"
-                }`}
-                title="Midnight (Default) थीम - डिफ़ॉल्ट"
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span className="hidden xs:inline">Midnight</span>
-              </button>
-            </div>
-
-            {/* Mobile / Laptop Rotate Toggle Button */}
+            {/* Mobile / Laptop Rotate Toggle Button (Icon-Only) */}
             <button
               type="button"
               onClick={handleToggleScreenRotate}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl font-black text-xs transition cursor-pointer active:scale-95 shadow-md border ${
+              className={`inline-flex items-center justify-center p-1.5 rounded-xl transition cursor-pointer active:scale-95 shadow-sm border shrink-0 ${
                 isEffectiveLandscape
                   ? "bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 text-white border-cyan-300/60 shadow-cyan-500/30 ring-2 ring-cyan-400/30"
+                  : isWhite
+                  ? "bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300"
                   : "bg-slate-800 hover:bg-slate-700 text-emerald-300 border-emerald-500/40 shadow-emerald-500/10"
               }`}
               title={
@@ -2642,17 +3535,16 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                   ? "Mobile (Portrait) Mode me wapas layein"
                   : "Laptop (Desktop) Mode me badlein"
               }
+              aria-label={
+                isEffectiveLandscape
+                  ? "Switch to Mobile Mode"
+                  : "Switch to Desktop Mode"
+              }
             >
               {isEffectiveLandscape ? (
-                <>
-                  <Laptop className="w-3.5 h-3.5 text-cyan-200 animate-pulse" />
-                  <span className="inline">💻 Laptop</span>
-                </>
+                <Laptop className="w-4 h-4 text-cyan-200" />
               ) : (
-                <>
-                  <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
-                  <span className="inline">📱 Mobile</span>
-                </>
+                <Smartphone className={`w-4 h-4 ${isWhite ? "text-emerald-700" : "text-emerald-400"}`} />
               )}
             </button>
 
@@ -2668,15 +3560,519 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               </button>
             )}
 
-            <button
-              type="button"
-              onClick={() => setView("school_profile")}
-              className="hidden lg:inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition cursor-pointer"
-              title="School Settings"
-            >
-              <Settings className="w-3.5 h-3.5 text-blue-500" />
-              <span>Settings</span>
-            </button>
+            {/* Notification Icon Button (Right Next to Settings) */}
+            <div className="relative shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowHeaderSettingsMenu(false);
+                  setShowHeaderNotificationMenu((prev) => !prev);
+                }}
+                className={`relative inline-flex items-center justify-center p-1.5 rounded-xl transition cursor-pointer active:scale-95 shadow-sm border ${
+                  showHeaderNotificationMenu || view === "fee_alerts"
+                    ? "bg-amber-500 text-slate-950 border-amber-400 ring-2 ring-amber-400/40"
+                    : isWhite
+                    ? "bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300"
+                    : isBlack
+                    ? "bg-neutral-900 hover:bg-neutral-800 text-slate-200 border-neutral-700"
+                    : "bg-[#112447] hover:bg-[#193363] text-slate-200 border-[#294c88]"
+                }`}
+                title="नोटिफिकेशन: Class Fee Alert & Broadcast व स्कूल अलर्ट"
+                aria-label="Notifications and Fee Alerts"
+                aria-expanded={showHeaderNotificationMenu}
+              >
+                <Bell
+                  className={`w-4 h-4 ${
+                    showHeaderNotificationMenu || view === "fee_alerts"
+                      ? "text-slate-950"
+                      : isWhite
+                      ? "text-amber-600"
+                      : "text-amber-400"
+                  }`}
+                />
+                {admissionAlerts.length > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-rose-600 text-white text-[9px] font-black flex items-center justify-center shadow ring-2 ring-white dark:ring-slate-900 tabular-nums">
+                    {admissionAlerts.length > 9 ? "9+" : admissionAlerts.length}
+                  </span>
+                )}
+              </button>
+
+              {showHeaderNotificationMenu && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setShowHeaderNotificationMenu(false)}
+                  />
+                  <div
+                    className={`absolute right-0 top-full mt-2 w-72 sm:w-80 rounded-2xl border shadow-2xl z-50 p-3 space-y-2.5 animate-in fade-in zoom-in-95 duration-150 ${
+                      isWhite
+                        ? "bg-white border-slate-200 text-slate-900"
+                        : isBlack
+                        ? "bg-[#0a0a0a] border-neutral-800 text-slate-100"
+                        : "bg-[#0b1b3a] border-[#26467e] text-white"
+                    }`}
+                  >
+                    <div
+                      className={`flex items-center justify-between pb-2 border-b ${
+                        isWhite ? "border-slate-100" : isBlack ? "border-neutral-800" : "border-[#1c3566]"
+                      }`}
+                    >
+                      <span
+                        className={`text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 ${
+                          isWhite ? "text-slate-600" : "text-slate-300"
+                        }`}
+                      >
+                        <Bell className="w-3.5 h-3.5 text-amber-500" />
+                        <span>Notifications &amp; Broadcast</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowHeaderNotificationMenu(false)}
+                        className={`p-1 rounded-lg transition cursor-pointer ${
+                          isWhite ? "hover:bg-slate-100 text-slate-500" : "hover:bg-white/10 text-slate-400"
+                        }`}
+                        aria-label="Close notification menu"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    {/* Class Fee Alert & Broadcast */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowHeaderNotificationMenu(false);
+                        setView("fee_alerts");
+                      }}
+                      className={`w-full p-2.5 rounded-xl border text-left flex items-center justify-between gap-2.5 transition cursor-pointer active:scale-[0.98] ${
+                        view === "fee_alerts"
+                          ? "bg-amber-500 text-slate-950 border-amber-400 shadow-sm"
+                          : isWhite
+                          ? "bg-amber-50/70 hover:bg-amber-100/80 border-amber-200 text-slate-900"
+                          : isBlack
+                          ? "bg-neutral-900 hover:bg-neutral-800 border-amber-500/30 text-slate-100"
+                          : "bg-[#112447] hover:bg-[#173061] border-amber-500/40 text-white"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div
+                          className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                            view === "fee_alerts"
+                              ? "bg-slate-950/15 text-slate-950"
+                              : isWhite
+                              ? "bg-amber-200/80 text-amber-800"
+                              : "bg-amber-500/20 text-amber-300"
+                          }`}
+                        >
+                          <Bell className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-xs font-black truncate">Class Fee Alert &amp; Broadcast</p>
+                          <p
+                            className={`text-[10px] truncate ${
+                              view === "fee_alerts"
+                                ? "text-slate-900/80"
+                                : isWhite
+                                ? "text-slate-600"
+                                : "text-slate-400"
+                            }`}
+                          >
+                            NSTA मैसेंजर व लॉक स्क्रीन बकाया तकाजा
+                          </p>
+                        </div>
+                      </div>
+                      <ChevronRight
+                        className={`w-4 h-4 shrink-0 ${
+                          view === "fee_alerts" ? "text-slate-950" : "text-slate-400"
+                        }`}
+                      />
+                    </button>
+
+                    {/* Live Online Admission Alerts (if any) */}
+                    {admissionAlerts.length > 0 && (
+                      <div
+                        className={`rounded-xl border p-2.5 space-y-2 ${
+                          isWhite
+                            ? "bg-slate-50 border-slate-200"
+                            : isBlack
+                            ? "bg-neutral-900 border-neutral-800"
+                            : "bg-[#08142c] border-[#1f3b70]"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] font-black uppercase tracking-wider text-emerald-500">
+                            New Admission Alerts ({admissionAlerts.length})
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAdmissionAlerts([]);
+                              try {
+                                localStorage.removeItem(`school_admission_alerts_${schoolId}`);
+                              } catch {}
+                            }}
+                            className={`text-[10px] font-bold hover:underline cursor-pointer ${
+                              isWhite ? "text-slate-500" : "text-slate-400"
+                            }`}
+                          >
+                            Clear
+                          </button>
+                        </div>
+                        <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                          {admissionAlerts.slice(0, 4).map((al: any, idx: number) => (
+                            <button
+                              key={al?.id || idx}
+                              type="button"
+                              onClick={() => {
+                                setShowHeaderNotificationMenu(false);
+                                setView("online_admissions");
+                              }}
+                              className={`w-full text-left p-2 rounded-lg text-[11px] transition cursor-pointer ${
+                                isWhite
+                                  ? "bg-white hover:bg-blue-50 border border-slate-200 text-slate-800"
+                                  : "bg-white/5 hover:bg-white/10 text-slate-200"
+                              }`}
+                            >
+                              <p className="font-bold truncate">
+                                {al?.studentName || al?.name || "New Admission Enquiry"}
+                              </p>
+                              <p className={`text-[10px] truncate ${isWhite ? "text-slate-500" : "text-slate-400"}`}>
+                                {al?.className ? `Class ${al.className}` : "Online Admission"}
+                              </p>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Unified Settings Icon Button (2 Options: School Profile & Settings + Theme Change) */}
+            <div className="relative shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowHeaderNotificationMenu(false);
+                  setShowHeaderSettingsMenu((prev) => !prev);
+                }}
+                className={`inline-flex items-center justify-center p-1.5 rounded-xl transition cursor-pointer active:scale-95 shadow-sm border ${
+                  showHeaderSettingsMenu || view === "school_profile" || view === "receipt_header" || view === "razorpay_setup"
+                    ? "bg-blue-600 text-white border-blue-500 ring-2 ring-blue-400/40"
+                    : isWhite
+                    ? "bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300"
+                    : isBlack
+                    ? "bg-neutral-900 hover:bg-neutral-800 text-slate-200 border-neutral-700"
+                    : "bg-[#112447] hover:bg-[#193363] text-slate-200 border-[#294c88]"
+                }`}
+                title="सेटिंग्स: स्कूल प्रोफाइल, रसीद हेडर, Razorpay व थीम बदलें"
+                aria-label="Settings and Theme"
+                aria-expanded={showHeaderSettingsMenu}
+              >
+                <Settings className={`w-4 h-4 ${showHeaderSettingsMenu || view === "school_profile" || view === "receipt_header" || view === "razorpay_setup" ? "text-white" : isWhite ? "text-blue-600" : "text-blue-400"}`} />
+              </button>
+
+              {showHeaderSettingsMenu && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setShowHeaderSettingsMenu(false)}
+                  />
+                  <div
+                    className={`absolute right-0 top-full mt-2 w-64 sm:w-72 rounded-2xl border shadow-2xl z-50 p-3 space-y-2.5 animate-in fade-in zoom-in-95 duration-150 ${
+                      isWhite
+                        ? "bg-white border-slate-200 text-slate-900"
+                        : isBlack
+                        ? "bg-[#0a0a0a] border-neutral-800 text-slate-100"
+                        : "bg-[#0b1b3a] border-[#26467e] text-white"
+                    }`}
+                  >
+                    <div className={`flex items-center justify-between pb-2 border-b ${
+                      isWhite ? "border-slate-100" : isBlack ? "border-neutral-800" : "border-[#1c3566]"
+                    }`}>
+                      <span className={`text-[11px] font-black uppercase tracking-wider ${
+                        isWhite ? "text-slate-500" : "text-slate-400"
+                      }`}>
+                        Settings &amp; Theme
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowHeaderSettingsMenu(false)}
+                        className={`p-1 rounded-lg transition cursor-pointer ${
+                          isWhite ? "hover:bg-slate-100 text-slate-500" : "hover:bg-white/10 text-slate-400"
+                        }`}
+                        aria-label="Close settings menu"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    {/* Option 1: School Profile & Settings */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowHeaderSettingsMenu(false);
+                        setSettingsTab("profile");
+                        setView("school_profile");
+                      }}
+                      className={`w-full p-2.5 rounded-xl border text-left flex items-center justify-between gap-2.5 transition cursor-pointer active:scale-[0.98] ${
+                        view === "school_profile" && settingsTab === "profile"
+                          ? "bg-blue-600 text-white border-blue-500 shadow-sm"
+                          : isWhite
+                          ? "bg-slate-50 hover:bg-blue-50 border-slate-200 hover:border-blue-300 text-slate-900"
+                          : isBlack
+                          ? "bg-neutral-900 hover:bg-neutral-800 border-neutral-800 text-slate-100"
+                          : "bg-[#112447] hover:bg-[#173061] border-[#26467e] text-white"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                          view === "school_profile" && settingsTab === "profile"
+                            ? "bg-white/20 text-white"
+                            : isWhite
+                            ? "bg-blue-100 text-blue-700"
+                            : "bg-blue-500/20 text-blue-300"
+                        }`}>
+                          <Building2 className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-xs font-black truncate">School Profile &amp; Settings</p>
+                          <p className={`text-[10px] truncate ${
+                            view === "school_profile" && settingsTab === "profile" ? "text-blue-100" : isWhite ? "text-slate-500" : "text-slate-400"
+                          }`}>
+                            प्रोफाइल, लोगो, कोड व लॉक सेटिंग्स
+                          </p>
+                        </div>
+                      </div>
+                      <ChevronRight className={`w-4 h-4 shrink-0 ${
+                        view === "school_profile" && settingsTab === "profile" ? "text-white" : "text-slate-400"
+                      }`} />
+                    </button>
+
+                    {/* Option 2: Recycle Bin */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowHeaderSettingsMenu(false);
+                        setSettingsTab("recycle_bin");
+                        setView("school_profile");
+                      }}
+                      className={`w-full p-2.5 rounded-xl border text-left flex items-center justify-between gap-2.5 transition cursor-pointer active:scale-[0.98] ${
+                        view === "school_profile" && settingsTab === "recycle_bin"
+                          ? "bg-rose-600 text-white border-rose-500 shadow-sm"
+                          : isWhite
+                          ? "bg-slate-50 hover:bg-rose-50 border-slate-200 hover:border-rose-300 text-slate-900"
+                          : isBlack
+                          ? "bg-neutral-900 hover:bg-neutral-800 border-neutral-800 text-slate-100"
+                          : "bg-[#112447] hover:bg-[#173061] border-[#26467e] text-white"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                          view === "school_profile" && settingsTab === "recycle_bin"
+                            ? "bg-white/20 text-white"
+                            : isWhite
+                            ? "bg-rose-100 text-rose-700"
+                            : "bg-rose-500/20 text-rose-300"
+                        }`}>
+                          <Trash2 className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-xs font-black truncate flex items-center gap-1.5">
+                            <span>Recycle Bin</span>
+                            {(recycleTeachers.length + recycleStudents.length) > 0 && (
+                              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-black tabular-nums ${
+                                view === "school_profile" && settingsTab === "recycle_bin"
+                                  ? "bg-white text-rose-700"
+                                  : "bg-rose-600 text-white"
+                              }`}>
+                                {recycleTeachers.length + recycleStudents.length}
+                              </span>
+                            )}
+                          </p>
+                          <p className={`text-[10px] truncate ${
+                            view === "school_profile" && settingsTab === "recycle_bin" ? "text-rose-100" : isWhite ? "text-slate-500" : "text-slate-400"
+                          }`}>
+                            Delete किए गए Teacher व Student यहाँ मिलेंगे
+                          </p>
+                        </div>
+                      </div>
+                      <ChevronRight className={`w-4 h-4 shrink-0 ${
+                        view === "school_profile" && settingsTab === "recycle_bin" ? "text-white" : "text-slate-400"
+                      }`} />
+                    </button>
+
+                    {/* Option 3: Receipt Header & Letterhead */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowHeaderSettingsMenu(false);
+                        setView("receipt_header");
+                      }}
+                      className={`w-full p-2.5 rounded-xl border text-left flex items-center justify-between gap-2.5 transition cursor-pointer active:scale-[0.98] ${
+                        view === "receipt_header"
+                          ? "bg-amber-500 text-slate-950 border-amber-400 shadow-sm"
+                          : isWhite
+                          ? "bg-slate-50 hover:bg-amber-50 border-slate-200 hover:border-amber-300 text-slate-900"
+                          : isBlack
+                          ? "bg-neutral-900 hover:bg-neutral-800 border-neutral-800 text-slate-100"
+                          : "bg-[#112447] hover:bg-[#173061] border-[#26467e] text-white"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                          view === "receipt_header"
+                            ? "bg-slate-950/15 text-slate-950"
+                            : isWhite
+                            ? "bg-amber-100 text-amber-700"
+                            : "bg-amber-500/20 text-amber-300"
+                        }`}>
+                          <Building2 className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-xs font-black truncate">Receipt Header &amp; Letterhead</p>
+                          <p className={`text-[10px] truncate ${
+                            view === "receipt_header" ? "text-slate-900/80" : isWhite ? "text-slate-500" : "text-slate-400"
+                          }`}>
+                            स्कूल लेटरहेड व रसीद प्रिंट सेटिंग्स
+                          </p>
+                        </div>
+                      </div>
+                      <ChevronRight className={`w-4 h-4 shrink-0 ${
+                        view === "receipt_header" ? "text-slate-950" : "text-slate-400"
+                      }`} />
+                    </button>
+
+                    {/* Option 4: Razorpay Auto-Webhook Setup */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowHeaderSettingsMenu(false);
+                        setView("razorpay_setup");
+                      }}
+                      className={`w-full p-2.5 rounded-xl border text-left flex items-center justify-between gap-2.5 transition cursor-pointer active:scale-[0.98] ${
+                        view === "razorpay_setup"
+                          ? "bg-indigo-600 text-white border-indigo-500 shadow-sm"
+                          : isWhite
+                          ? "bg-slate-50 hover:bg-indigo-50 border-slate-200 hover:border-indigo-300 text-slate-900"
+                          : isBlack
+                          ? "bg-neutral-900 hover:bg-neutral-800 border-neutral-800 text-slate-100"
+                          : "bg-[#112447] hover:bg-[#173061] border-[#26467e] text-white"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                          view === "razorpay_setup"
+                            ? "bg-white/20 text-white"
+                            : isWhite
+                            ? "bg-indigo-100 text-indigo-700"
+                            : "bg-indigo-500/20 text-indigo-300"
+                        }`}>
+                          <CreditCard className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-xs font-black truncate">Razorpay Auto-Webhook Setup</p>
+                          <p className={`text-[10px] truncate ${
+                            view === "razorpay_setup" ? "text-indigo-100" : isWhite ? "text-slate-500" : "text-slate-400"
+                          }`}>
+                            ऑनलाइन फीस गेटवे व ऑटो-रसीद वेबहुक
+                          </p>
+                        </div>
+                      </div>
+                      <ChevronRight className={`w-4 h-4 shrink-0 ${
+                        view === "razorpay_setup" ? "text-white" : "text-slate-400"
+                      }`} />
+                    </button>
+
+                    {/* Option 5: Theme Change */}
+                    <div className={`p-2.5 rounded-xl border space-y-2 ${
+                      isWhite
+                        ? "bg-slate-50 border-slate-200"
+                        : isBlack
+                        ? "bg-neutral-900 border-neutral-800"
+                        : "bg-[#112447] border-[#26467e]"
+                    }`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                            isWhite ? "bg-amber-100 text-amber-700" : "bg-amber-500/20 text-amber-300"
+                          }`}>
+                            {appTheme === "white" ? (
+                              <Sun className="w-3.5 h-3.5" />
+                            ) : appTheme === "black" ? (
+                              <Moon className="w-3.5 h-3.5" />
+                            ) : (
+                              <Sparkles className="w-3.5 h-3.5" />
+                            )}
+                          </div>
+                          <div>
+                            <p className="text-xs font-black leading-tight">Theme Change</p>
+                            <p className={`text-[10px] leading-tight ${isWhite ? "text-slate-500" : "text-slate-400"}`}>
+                              ऐप की थीम बदलें
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className={`grid grid-cols-3 gap-1 p-1 rounded-xl border ${
+                        isWhite
+                          ? "bg-white border-slate-200"
+                          : isBlack
+                          ? "bg-black border-neutral-800"
+                          : "bg-[#08142c] border-[#1f3b70]"
+                      }`}>
+                        <button
+                          type="button"
+                          onClick={() => applyAdminTheme("white")}
+                          className={`px-2 py-1.5 rounded-lg text-[11px] font-black flex items-center justify-center gap-1 transition cursor-pointer ${
+                            appTheme === "white"
+                              ? "bg-amber-400 text-slate-950 shadow-sm"
+                              : isWhite
+                              ? "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                              : "text-slate-300 hover:bg-white/10 hover:text-white"
+                          }`}
+                          title="White (Light) थीम - सफेद"
+                        >
+                          <Sun className="w-3.5 h-3.5" />
+                          <span>White</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => applyAdminTheme("black")}
+                          className={`px-2 py-1.5 rounded-lg text-[11px] font-black flex items-center justify-center gap-1 transition cursor-pointer ${
+                            appTheme === "black"
+                              ? "bg-cyan-400 text-slate-950 shadow-sm"
+                              : isWhite
+                              ? "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                              : "text-slate-300 hover:bg-white/10 hover:text-white"
+                          }`}
+                          title="Black (AMOLED) थीम - सुपर डार्क"
+                        >
+                          <Moon className="w-3.5 h-3.5" />
+                          <span>Black</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => applyAdminTheme("current")}
+                          className={`px-2 py-1.5 rounded-lg text-[11px] font-black flex items-center justify-center gap-1 transition cursor-pointer ${
+                            appTheme === "current"
+                              ? "bg-blue-600 text-white shadow-sm"
+                              : isWhite
+                              ? "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                              : "text-slate-300 hover:bg-white/10 hover:text-white"
+                          }`}
+                          title="Blue (Default) थीम - रॉयल ब्लू"
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span>Blue</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </header>
 
@@ -2712,7 +4108,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             {
               id: "sub_demo_session",
               label: "डमी सत्र (Demo Session ON/OFF)",
-              desc: "1-Year Full Model (10 छात्र/क्लास) चालू या बंद करें",
+              desc: "1-Year Full Model (40 छात्र/क्लास • 2 सेक्शन • 1:20 अनुपात) चालू या बंद करें",
               keywords: "demo dummy session डमी डेमो सत्र test",
               icon: Sparkles,
               action: () => setShowHowToUseModal(true),
@@ -2759,11 +4155,14 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             },
             {
               id: "sub_teacher_salary",
-              label: "स्टाफ सैलरी व पेरोल (Teacher Salary & Attendance)",
-              desc: "शिक्षकों व कर्मचारियों की हाजिरी और मासिक वेतन",
-              keywords: "salary payroll vetan staff teacher attendance सैलरी वेतन",
+              label: "स्टाफ सैलरी, पे-हेड्स व पेरोल (Teacher Salary & Pay Slips)",
+              desc: "शिक्षकों व कर्मचारियों का वेतन सेट-अप, हाजिरी आधारित सैलरी स्लिप व HRM",
+              keywords: "salary payroll vetan staff teacher attendance hrm payslip सैलरी वेतन",
               icon: Briefcase,
-              action: () => setView("staff_hrm"),
+              action: () => {
+                setTeachersHubTab("payroll");
+                setView("teachers");
+              },
             },
             {
               id: "sub_digital_signature",
@@ -2772,6 +4171,22 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               keywords: "signature sign letterhead receipt header print हस्ताक्षर रसीद",
               icon: PenTool,
               action: () => setView("receipt_header"),
+            },
+            {
+              id: "sub_razorpay_setup",
+              label: "Razorpay Auto-Webhook Setup (ऑनलाइन फीस गेटवे)",
+              desc: "ऑनलाइन फीस गेटवे, Key ID व ऑटो-रसीद वेबहुक सेट करें",
+              keywords: "razorpay webhook payment gateway online fee रसीद वेबहुक पेमेंट",
+              icon: CreditCard,
+              action: () => setView("razorpay_setup"),
+            },
+            {
+              id: "sub_fee_alerts",
+              label: "Class Fee Alert & Broadcast (बकाया अलर्ट व ब्रॉडकास्ट)",
+              desc: "NSTA मैसेंजर व लॉक स्क्रीन बकाया तकाजा",
+              keywords: "fee alert broadcast due reminder notification तकाजा बकाया ब्रॉडकास्ट",
+              icon: Bell,
+              action: () => setView("fee_alerts"),
             },
             {
               id: "sub_account_hub",
@@ -3168,7 +4583,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             <div className="flex items-center gap-2">
               <span className="text-base animate-pulse">🧪</span>
               <span>
-                <strong>डमी सत्र सक्रिय है (Dummy Session ON):</strong> सभी 13 क्लास, 10 छात्र प्रति क्लास, 1-साल की फीस, हाजिरी, 6 परीक्षा अंक व स्टाफ सैलरी डमी मॉडल में दिखाया जा रहा है।
+                <strong>डमी सत्र सक्रिय है (Dummy Session ON):</strong> हर क्लास में अधिकतम 40 छात्र (2 सेक्शन: A=20, B=20), 1:20 टीचर-स्टूडेंट अनुपात, 1-साल की फीस, हाजिरी, 6 परीक्षा अंक व स्टाफ सैलरी डमी मॉडल में दिखाया जा रहा है।
               </span>
             </div>
             <button
@@ -3196,60 +4611,25 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     );
     const enrolledFaceCount = displayedStudents.length - pendingFaceStudents.length;
 
-    // Live Bus Fleet Summary from real vehicle records (or demo fleet ONLY when demo session is active)
-    let configuredBuses: any[] = [];
-    if (shouldUseDemoForSchool(schoolId)) {
-      configuredBuses = [
-        { id: "bus-01", busNumber: "Bus #01", route: "Route 1" },
-        { id: "bus-02", busNumber: "Bus #02", route: "Route 2" },
-        { id: "bus-03", busNumber: "Bus #03", route: "Route 3" },
-      ];
-    } else {
-      try {
-        const savedFitness = localStorage.getItem(`bus_fitness_${schoolId || "demo"}`);
-        if (savedFitness) {
-          const parsedFleet = JSON.parse(savedFitness);
-          if (Array.isArray(parsedFleet)) {
-            configuredBuses = parsedFleet.map((v: any, idx: number) => ({
-              id: v.id || `bus-${idx + 1}`,
-              busNumber: v.vehicleNumber || `Vehicle #${idx + 1}`,
-              route: v.route || v.model || "Campus Route",
-            }));
-          }
-        }
-      } catch (e) {
-        console.warn("Failed to read bus fleet configuration:", e);
-      }
-    }
-
-    const liveBuses = configuredBuses.map((b) => {
-      let status: "started" | "idle" = "idle";
-      let tripType = "";
-      let speed = 0;
-      try {
-        const raw = localStorage.getItem(`nst_live_bus_${schoolId || "default"}_${b.id}`);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (parsed?.tripStatus === "started") {
-            status = "started";
-            tripType = parsed.tripType === "afternoon_drop" ? "Drop" : "Pickup";
-            speed = Number(parsed.speed || 0);
-          }
-        }
-      } catch (e) {
-        console.warn("Failed to read live bus status:", e);
-      }
-      return { ...b, status, tripType, speed };
-    });
+    // Live Bus Fleet Summary from unified schoolTransportStore (preserves user-added/edited buses in Demo & Real mode)
+    const mergedFleet = buildMergedFleetList(schoolId);
+    const liveBuses = mergedFleet.map((b) => ({
+      id: b.busId,
+      busNumber: b.busNumber,
+      route: b.route,
+      status: b.tripStatus === "started" ? ("started" as const) : ("idle" as const),
+      tripType: b.tripStatus === "started" ? (b.tripType === "afternoon_drop" ? "Drop" : "Pickup") : "",
+      speed: Number(b.speed || 0),
+    }));
     const activeBusCount = liveBuses.filter((b) => b.status === "started").length;
     const busStudentsCount = displayedStudents.filter((s) => s.usesBus).length;
 
-    // Dues Summary
+    // Dues Summary (Admission + Back Session Carryover)
     const studentsWithAdmissionDues = displayedStudents.filter(
-      (s) => Number(s.admissionDueBalance || 0) > 0
+      (s) => Number(s.admissionDueBalance || 0) + Number(s.previousSessionDue || 0) > 0
     );
     const totalAdmissionDue = studentsWithAdmissionDues.reduce(
-      (sum, s) => sum + Number(s.admissionDueBalance || 0),
+      (sum, s) => sum + Number(s.admissionDueBalance || 0) + Number(s.previousSessionDue || 0),
       0
     );
     const studentsWithAdvanceDues = displayedStudents.filter(
@@ -3349,18 +4729,23 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       try {
         let patch: Partial<SchoolStudent> = {};
         if (type === "admission") {
-          const curDue = Number(st.admissionDueBalance || 0);
-          const applied = Math.min(curDue, payAmt);
-          const rem = Math.max(0, curDue - applied);
+          const curBackDue = Number(st.previousSessionDue || 0);
+          const curAdmDue = Number(st.admissionDueBalance || 0);
+          const appliedBack = Math.min(curBackDue, payAmt);
+          const remBack = Math.max(0, curBackDue - appliedBack);
+          const leftForAdm = Math.max(0, payAmt - appliedBack);
+          const appliedAdm = Math.min(curAdmDue, leftForAdm);
+          const remAdm = Math.max(0, curAdmDue - appliedAdm);
           patch = {
-            admissionDueBalance: rem,
-            admissionPaidAmount: Number(st.admissionPaidAmount || 0) + applied,
+            previousSessionDue: remBack,
+            admissionDueBalance: remAdm,
+            admissionPaidAmount: Number(st.admissionPaidAmount || 0) + appliedAdm,
             admissionBalanceHistory: [
               ...(st.admissionBalanceHistory || []),
               {
                 date: todayIso,
-                paidAmount: applied,
-                remainingDue: rem,
+                paidAmount: appliedBack + appliedAdm,
+                remainingDue: remBack + remAdm,
                 receiptNo,
                 paymentMode: mode,
               },
@@ -3584,7 +4969,10 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setView("teachers")}
+                onClick={() => {
+                  setTeachersHubTab("directory");
+                  setView("teachers");
+                }}
                 className="flex-1 py-1.5 px-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-black text-[11px] transition cursor-pointer text-center flex items-center justify-center gap-1 shadow-xs active:scale-95"
               >
                 <Users className="w-3.5 h-3.5" />
@@ -3592,7 +4980,10 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               </button>
               <button
                 type="button"
-                onClick={() => setView("staff_payroll")}
+                onClick={() => {
+                  setTeachersHubTab("payroll");
+                  setView("teachers");
+                }}
                 className="py-1.5 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold text-[11px] transition cursor-pointer shrink-0"
               >
                 वेतन पर्ची →
@@ -3683,26 +5074,26 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             <button
               type="button"
               onClick={() => setShowFaceKioskModal(true)}
-              className="p-2.5 rounded-xl bg-gradient-to-br from-purple-900/60 to-purple-950/80 hover:from-purple-800/80 hover:to-purple-900 border border-purple-500/40 text-left transition cursor-pointer group active:scale-95 flex flex-col justify-between min-h-[74px]"
+              className="p-2.5 rounded-xl bg-purple-50 hover:bg-purple-100 dark:bg-purple-950/70 dark:hover:bg-purple-900/80 border-2 border-purple-600/80 dark:border-purple-500/60 text-left transition cursor-pointer group active:scale-95 flex flex-col justify-between min-h-[74px]"
               title={hasFaceAttendanceAccess(school) ? "AI Face Kiosk" : "👑 Elite Plan Only — AI Face Attendance"}
             >
               <div className="flex items-center justify-between w-full">
                 {hasFaceAttendanceAccess(school) ? (
-                  <Camera className="w-5 h-5 text-purple-300 group-hover:scale-110 transition-transform" />
+                  <Camera className="w-5 h-5 text-purple-700 dark:text-purple-300 group-hover:scale-110 transition-transform" />
                 ) : (
-                  <Lock className="w-5 h-5 text-amber-400 group-hover:scale-110 transition-transform" />
+                  <Lock className="w-5 h-5 text-amber-600 dark:text-amber-400 group-hover:scale-110 transition-transform" />
                 )}
                 <span className={`text-[9px] font-black px-1.5 py-0.2 rounded ${
                   hasFaceAttendanceAccess(school)
-                    ? "bg-purple-500/30 text-purple-200"
-                    : "bg-amber-500 text-slate-950"
+                    ? "bg-purple-200 text-purple-900 dark:bg-purple-500/30 dark:text-purple-200"
+                    : "bg-amber-400 text-slate-950"
                 }`}>
                   {hasFaceAttendanceAccess(school) ? "0.2s" : "👑 Elite"}
                 </span>
               </div>
               <div>
-                <p className="text-xs font-black text-white leading-tight">AI Face Kiosk</p>
-                <p className="text-[9.5px] text-purple-300/80 truncate">
+                <p className="text-xs font-black text-slate-900 dark:text-white leading-tight">AI Face Kiosk</p>
+                <p className="text-[9.5px] text-purple-800 dark:text-purple-300 truncate font-semibold">
                   {hasFaceAttendanceAccess(school) ? "कैमरा हाजिरी" : "Elite Subscription"}
                 </p>
               </div>
@@ -3712,15 +5103,15 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             <button
               type="button"
               onClick={() => setView("fees")}
-              className="p-2.5 rounded-xl bg-gradient-to-br from-amber-900/60 to-amber-950/80 hover:from-amber-800/80 hover:to-amber-900 border border-amber-500/40 text-left transition cursor-pointer group active:scale-95 flex flex-col justify-between min-h-[74px]"
+              className="p-2.5 rounded-xl bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/70 dark:hover:bg-amber-900/80 border-2 border-amber-600/80 dark:border-amber-500/60 text-left transition cursor-pointer group active:scale-95 flex flex-col justify-between min-h-[74px]"
             >
               <div className="flex items-center justify-between w-full">
-                <IndianRupee className="w-5 h-5 text-amber-300 group-hover:scale-110 transition-transform" />
-                <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-amber-500/30 text-amber-200">रसीद</span>
+                <IndianRupee className="w-5 h-5 text-amber-700 dark:text-amber-300 group-hover:scale-110 transition-transform" />
+                <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-amber-200 text-amber-950 dark:bg-amber-500/30 dark:text-amber-200">रसीद</span>
               </div>
               <div>
-                <p className="text-xs font-black text-white leading-tight">फीस रसीद काटें</p>
-                <p className="text-[9.5px] text-amber-300/80 truncate">चालान व संग्रह</p>
+                <p className="text-xs font-black text-slate-900 dark:text-white leading-tight">फीस रसीद काटें</p>
+                <p className="text-[9.5px] text-amber-800 dark:text-amber-300 truncate font-semibold">चालान व संग्रह</p>
               </div>
             </button>
 
@@ -3728,15 +5119,15 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             <button
               type="button"
               onClick={() => setView("absentee")}
-              className="p-2.5 rounded-xl bg-gradient-to-br from-rose-900/60 to-rose-950/80 hover:from-rose-800/80 hover:to-rose-900 border border-rose-500/40 text-left transition cursor-pointer group active:scale-95 flex flex-col justify-between min-h-[74px]"
+              className="p-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/70 dark:hover:bg-rose-900/80 border-2 border-rose-600/80 dark:border-rose-500/60 text-left transition cursor-pointer group active:scale-95 flex flex-col justify-between min-h-[74px]"
             >
               <div className="flex items-center justify-between w-full">
-                <AlertCircle className="w-5 h-5 text-rose-300 group-hover:scale-110 transition-transform" />
-                <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-rose-500/30 text-rose-200">कॉल</span>
+                <AlertCircle className="w-5 h-5 text-rose-700 dark:text-rose-300 group-hover:scale-110 transition-transform" />
+                <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-rose-200 text-rose-950 dark:bg-rose-500/30 dark:text-rose-200">कॉल</span>
               </div>
               <div>
-                <p className="text-xs font-black text-white leading-tight">गैरहाजिर कॉल</p>
-                <p className="text-[9.5px] text-rose-300/80 truncate">2-दिन एब्सेंट अलर्ट</p>
+                <p className="text-xs font-black text-slate-900 dark:text-white leading-tight">गैरहाजिर कॉल</p>
+                <p className="text-[9.5px] text-rose-800 dark:text-rose-300 truncate font-semibold">2-दिन एब्सेंट अलर्ट</p>
               </div>
             </button>
 
@@ -3744,15 +5135,15 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             <button
               type="button"
               onClick={() => setView("homework")}
-              className="p-2.5 rounded-xl bg-gradient-to-br from-indigo-900/60 to-indigo-950/80 hover:from-indigo-800/80 hover:to-indigo-900 border border-indigo-500/40 text-left transition cursor-pointer group active:scale-95 flex flex-col justify-between min-h-[74px]"
+              className="p-2.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/70 dark:hover:bg-indigo-900/80 border-2 border-indigo-600/80 dark:border-indigo-500/60 text-left transition cursor-pointer group active:scale-95 flex flex-col justify-between min-h-[74px]"
             >
               <div className="flex items-center justify-between w-full">
-                <BookOpen className="w-5 h-5 text-indigo-300 group-hover:scale-110 transition-transform" />
-                <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-indigo-500/30 text-indigo-200">डायरी</span>
+                <BookOpen className="w-5 h-5 text-indigo-700 dark:text-indigo-300 group-hover:scale-110 transition-transform" />
+                <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-indigo-200 text-indigo-950 dark:bg-indigo-500/30 dark:text-indigo-200">डायरी</span>
               </div>
               <div>
-                <p className="text-xs font-black text-white leading-tight">दैनिक गृहकार्य</p>
-                <p className="text-[9.5px] text-indigo-300/80 truncate">कक्षा 1-12 डायरी</p>
+                <p className="text-xs font-black text-slate-900 dark:text-white leading-tight">दैनिक गृहकार्य</p>
+                <p className="text-[9.5px] text-indigo-800 dark:text-indigo-300 truncate font-semibold">कक्षा 1-12 डायरी</p>
               </div>
             </button>
 
@@ -3760,15 +5151,15 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             <button
               type="button"
               onClick={() => setView("bus_transport")}
-              className="p-2.5 rounded-xl bg-gradient-to-br from-emerald-900/60 to-emerald-950/80 hover:from-emerald-800/80 hover:to-emerald-900 border border-emerald-500/40 text-left transition cursor-pointer group active:scale-95 flex flex-col justify-between min-h-[74px]"
+              className="p-2.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/70 dark:hover:bg-emerald-900/80 border-2 border-emerald-600/80 dark:border-emerald-500/60 text-left transition cursor-pointer group active:scale-95 flex flex-col justify-between min-h-[74px]"
             >
               <div className="flex items-center justify-between w-full">
-                <Bus className="w-5 h-5 text-emerald-300 group-hover:scale-110 transition-transform" />
-                <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-emerald-500/30 text-emerald-200">GPS</span>
+                <Bus className="w-5 h-5 text-emerald-700 dark:text-emerald-300 group-hover:scale-110 transition-transform" />
+                <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-emerald-200 text-emerald-950 dark:bg-emerald-500/30 dark:text-emerald-200">GPS</span>
               </div>
               <div>
-                <p className="text-xs font-black text-white leading-tight">लाइव बस ट्रैकर</p>
-                <p className="text-[9.5px] text-emerald-300/80 truncate">रूट व स्पीड रडार</p>
+                <p className="text-xs font-black text-slate-900 dark:text-white leading-tight">लाइव बस ट्रैकर</p>
+                <p className="text-[9.5px] text-emerald-800 dark:text-emerald-300 truncate font-semibold">रूट व स्पीड रडार</p>
               </div>
             </button>
 
@@ -3776,15 +5167,15 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             <button
               type="button"
               onClick={() => setShowDirectAdmissionModal(true)}
-              className="p-2.5 rounded-xl bg-gradient-to-br from-sky-900/60 to-sky-950/80 hover:from-sky-800/80 hover:to-sky-900 border border-sky-500/40 text-left transition cursor-pointer group active:scale-95 flex flex-col justify-between min-h-[74px]"
+              className="p-2.5 rounded-xl bg-sky-50 hover:bg-sky-100 dark:bg-sky-950/70 dark:hover:bg-sky-900/80 border-2 border-sky-600/80 dark:border-sky-500/60 text-left transition cursor-pointer group active:scale-95 flex flex-col justify-between min-h-[74px]"
             >
               <div className="flex items-center justify-between w-full">
-                <UserPlus className="w-5 h-5 text-sky-300 group-hover:scale-110 transition-transform" />
-                <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-sky-500/30 text-sky-200">प्रवेश</span>
+                <UserPlus className="w-5 h-5 text-sky-700 dark:text-sky-300 group-hover:scale-110 transition-transform" />
+                <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-sky-200 text-sky-950 dark:bg-sky-500/30 dark:text-sky-200">प्रवेश</span>
               </div>
               <div>
-                <p className="text-xs font-black text-white leading-tight">नया एडमिशन</p>
-                <p className="text-[9.5px] text-sky-300/80 truncate">1-मिनट छात्र एंट्री</p>
+                <p className="text-xs font-black text-slate-900 dark:text-white leading-tight">नया एडमिशन</p>
+                <p className="text-[9.5px] text-sky-800 dark:text-sky-300 truncate font-semibold">1-मिनट छात्र एंट्री</p>
               </div>
             </button>
           </div>
@@ -4181,7 +5572,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               ) : (
                 <div className="space-y-1.5 max-h-28 overflow-y-auto pr-0.5">
                   {studentsWithAdmissionDues.slice(0, 12).map((st) => {
-                    const due = Number(st.admissionDueBalance || 0);
+                    const due = Number(st.admissionDueBalance || 0) + Number(st.previousSessionDue || 0);
                     return (
                       <div
                         key={st.id}
@@ -4366,7 +5757,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               classes={displayedClasses}
               students={displayedStudents}
               teachers={displayedTeachers}
-              staff={staffList}
+              staff={displayedStaff}
               onOpenScanner={() => {
                 setFaceKioskInitialTestMode(false);
                 setShowUniversalScannerModal(true);
@@ -4738,23 +6129,327 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   // ── 2. DEDICATED SCHOOL PROFILE & MASTER SETTINGS VIEW ─────────────────
   const renderSchoolProfileModule = () => {
     const displaySchoolLogo = school ? getSavedSchoolLogo(school.logoUrl, schoolId) : "";
+    const totalRecycleCount = recycleTeachers.length + recycleStudents.length;
+    const rq = recycleSearch.trim().toLowerCase();
+    const filteredRecycleTeachers = (recycleFilter === "all" || recycleFilter === "teachers")
+      ? recycleTeachers.filter((t) => {
+          if (!rq) return true;
+          return (
+            String(t.name || "").toLowerCase().includes(rq) ||
+            String(t.phone || "").toLowerCase().includes(rq) ||
+            String(t.designation || "").toLowerCase().includes(rq) ||
+            String(t.employeeId || "").toLowerCase().includes(rq)
+          );
+        })
+      : [];
+    const filteredRecycleStudents = (recycleFilter === "all" || recycleFilter === "students")
+      ? recycleStudents.filter((s) => {
+          if (!rq) return true;
+          return (
+            String(s.name || "").toLowerCase().includes(rq) ||
+            String(s.fatherName || "").toLowerCase().includes(rq) ||
+            String(s.className || "").toLowerCase().includes(rq) ||
+            String(s.admissionNo || "").toLowerCase().includes(rq) ||
+            String(s.phone || "").toLowerCase().includes(rq)
+          );
+        })
+      : [];
+
     return (
       <div className="space-y-6 max-w-4xl mx-auto animate-in fade-in duration-200">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <button
+            type="button"
+            onClick={() => setView("dashboard")}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition cursor-pointer shadow-xs"
+          >
+            <ChevronLeft className="w-4 h-4" />
+            <span>Back to Dashboard</span>
+          </button>
+
+          <div className="inline-flex items-center gap-1.5 p-1 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-xs">
+            <button
+              type="button"
+              onClick={() => setSettingsTab("profile")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition cursor-pointer ${
+                settingsTab === "profile"
+                  ? "bg-blue-600 text-white shadow-xs"
+                  : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+              }`}
+            >
+              <Building2 className="w-3.5 h-3.5" />
+              <span>School Profile &amp; Security</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSettingsTab("recycle_bin")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition cursor-pointer ${
+                settingsTab === "recycle_bin"
+                  ? "bg-rose-600 text-white shadow-xs"
+                  : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+              }`}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Recycle Bin ({totalRecycleCount})</span>
+            </button>
+          </div>
+        </div>
+
+        {settingsTab === "recycle_bin" && (
+          <div className="space-y-4">
+            <div className="bg-gradient-to-r from-rose-50 via-amber-50 to-orange-50 dark:from-slate-900 dark:via-slate-900 dark:to-rose-950/50 rounded-3xl p-5 sm:p-6 border border-rose-200 dark:border-rose-800/70 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-start gap-3.5">
+                <div className="w-12 h-12 rounded-2xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-md">
+                  <Trash2 className="w-6 h-6" />
+                </div>
+                <div>
+                  <h2 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white">
+                    Recycle Bin (रिसाइकल बिन)
+                  </h2>
+                  <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5 leading-relaxed">
+                    Delete किए गए सभी Teachers और Students यहाँ सुरक्षित रहते हैं। आप इन्हें कभी भी <strong>Restore</strong> करके वापस जोड़ सकते हैं या हमेशा के लिए <strong>Permanent Delete</strong> कर सकते हैं।
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <div className="px-3 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-center">
+                  <p className="text-[10px] font-bold text-slate-400 uppercase">Teachers</p>
+                  <p className="text-base font-black text-indigo-600 dark:text-indigo-400 tabular-nums">{recycleTeachers.length}</p>
+                </div>
+                <div className="px-3 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-center">
+                  <p className="text-[10px] font-bold text-slate-400 uppercase">Students</p>
+                  <p className="text-base font-black text-emerald-600 dark:text-emerald-400 tabular-nums">{recycleStudents.length}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white dark:bg-slate-800 rounded-2xl p-3.5 border border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  value={recycleSearch}
+                  onChange={(e) => setRecycleSearch(e.target.value)}
+                  placeholder="नाम, मोबाइल नंबर, क्लास या रोल से खोजें..."
+                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-medium text-slate-900 dark:text-white"
+                />
+              </div>
+              <div className="flex items-center gap-1.5">
+                {[
+                  { id: "all", label: `All (${totalRecycleCount})` },
+                  { id: "teachers", label: `Teachers (${recycleTeachers.length})` },
+                  { id: "students", label: `Students (${recycleStudents.length})` },
+                ].map((f) => (
+                  <button
+                    key={f.id}
+                    type="button"
+                    onClick={() => setRecycleFilter(f.id as any)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                      recycleFilter === f.id
+                        ? "bg-slate-900 dark:bg-white text-white dark:text-slate-900"
+                        : "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {filteredRecycleTeachers.length === 0 && filteredRecycleStudents.length === 0 ? (
+              <div className="bg-white dark:bg-slate-800 rounded-3xl p-10 text-center border border-slate-200 dark:border-slate-700">
+                <Trash2 className="w-10 h-10 text-slate-300 mx-auto mb-2.5" />
+                <p className="text-sm font-black text-slate-700 dark:text-slate-200">
+                  Recycle Bin खाली है
+                </p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                  जब कोई Teacher या Student delete किया जाएगा, तो वह यहाँ दिखाई देगा।
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {filteredRecycleTeachers.map((t) => (
+                  <div
+                    key={`rb-teacher-${t.id}`}
+                    className="bg-white dark:bg-slate-800 rounded-2xl p-4 border border-slate-200 dark:border-slate-700 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-11 h-11 rounded-xl bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 font-black flex items-center justify-center overflow-hidden shrink-0 border border-indigo-200 dark:border-indigo-800">
+                        {t.photoUrl ? (
+                          <img src={t.photoUrl} alt={t.name} className="w-full h-full object-cover" />
+                        ) : (
+                          <span>{t.name ? t.name.charAt(0).toUpperCase() : "T"}</span>
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 text-[10px] font-black uppercase">
+                            Teacher / Faculty
+                          </span>
+                          <h4 className="font-black text-sm text-slate-900 dark:text-white truncate">{t.name}</h4>
+                        </div>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 truncate">
+                          {t.designation || "Faculty"} {t.phone ? `• 📱 ${t.phone}` : ""} {t.employeeId ? `• ID: ${t.employeeId}` : ""}
+                          {t.deletedAt ? ` • Deleted: ${new Date(t.deletedAt).toLocaleString("en-IN")}` : ""}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        disabled={recycleBusyId === t.id}
+                        onClick={async () => {
+                          setRecycleBusyId(t.id);
+                          try {
+                            const restored = await restoreTeacherFromRecycleBin(schoolId, t.id);
+                            if (restored) {
+                              setTeachers((prev) => prev.some((x) => x.id === restored.id) ? prev : [...prev, restored]);
+                            }
+                            toast.success(`${t.name} ko Recycle Bin se wapas restore kar diya gaya!`);
+                          } catch (err: any) {
+                            toast.error("Restore failed: " + (err?.message || "Error"));
+                          } finally {
+                            setRecycleBusyId(null);
+                          }
+                        }}
+                        className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-xs"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Restore</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={recycleBusyId === t.id}
+                        onClick={() => {
+                          setConfirmAction({
+                            title: "Permanently Delete Teacher?",
+                            message: `Kya aap "${t.name}" ko Recycle Bin se hamesha ke liye delete karna chahte hain? Ise wapas restore nahi kiya ja sakega.`,
+                            confirmLabel: "Delete Forever",
+                            onConfirm: async () => {
+                              setRecycleBusyId(t.id);
+                              try {
+                                await permanentDeleteTeacherFromBin(schoolId, t.id);
+                                toast.success(`${t.name} ko permanently delete kar diya gaya.`);
+                              } finally {
+                                setRecycleBusyId(null);
+                              }
+                            },
+                          });
+                        }}
+                        className="px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-950/70 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Permanent Delete</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                {filteredRecycleStudents.map((s) => (
+                  <div
+                    key={`rb-student-${s.id}`}
+                    className="bg-white dark:bg-slate-800 rounded-2xl p-4 border border-slate-200 dark:border-slate-700 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-11 h-11 rounded-xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-black flex items-center justify-center overflow-hidden shrink-0 border border-emerald-200 dark:border-emerald-800">
+                        {s.photoUrl ? (
+                          <img src={s.photoUrl} alt={s.name} className="w-full h-full object-cover" />
+                        ) : (
+                          <span>{s.name ? s.name.charAt(0).toUpperCase() : "S"}</span>
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 text-[10px] font-black uppercase">
+                            Student
+                          </span>
+                          <h4 className="font-black text-sm text-slate-900 dark:text-white truncate">{s.name}</h4>
+                          {s.className && (
+                            <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-700 text-[10px] font-bold text-slate-700 dark:text-slate-200">
+                              {s.className} {s.rollNo ? `• Roll #${s.rollNo}` : ""}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 truncate">
+                          {s.fatherName ? `👨 ${s.fatherName}` : ""} {s.phone ? `• 📱 ${s.phone}` : ""} {s.admissionNo ? `• Adm: ${s.admissionNo}` : ""}
+                          {s.deletedAt ? ` • Deleted: ${new Date(s.deletedAt).toLocaleString("en-IN")}` : ""}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        disabled={recycleBusyId === s.id}
+                        onClick={async () => {
+                          setRecycleBusyId(s.id);
+                          try {
+                            const restored = await restoreStudentFromRecycleBin(schoolId, s.id);
+                            if (restored) {
+                              setStudents((prev) => prev.some((x) => x.id === restored.id) ? prev : [...prev, restored]);
+                            }
+                            toast.success(`${s.name} ko Recycle Bin se wapas restore kar diya gaya!`);
+                          } catch (err: any) {
+                            toast.error("Restore failed: " + (err?.message || "Error"));
+                          } finally {
+                            setRecycleBusyId(null);
+                          }
+                        }}
+                        className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-xs"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Restore</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={recycleBusyId === s.id}
+                        onClick={() => {
+                          setConfirmAction({
+                            title: "Permanently Delete Student?",
+                            message: `Kya aap "${s.name}" ko Recycle Bin se hamesha ke liye delete karna chahte hain? Ise wapas restore nahi kiya ja sakega.`,
+                            confirmLabel: "Delete Forever",
+                            onConfirm: async () => {
+                              setRecycleBusyId(s.id);
+                              try {
+                                await permanentDeleteStudentFromBin(schoolId, s.id);
+                                toast.success(`${s.name} ko permanently delete kar diya gaya.`);
+                              } finally {
+                                setRecycleBusyId(null);
+                              }
+                            },
+                          });
+                        }}
+                        className="px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-950/70 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Permanent Delete</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {settingsTab === "profile" && (
+          <>
         {/* Profile Header */}
-        <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 rounded-3xl p-6 text-white shadow-xl border border-indigo-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-sky-50 dark:from-slate-900 dark:via-slate-900 dark:to-indigo-950/70 rounded-3xl p-6 text-slate-900 dark:text-white shadow-md border-2 border-blue-700 dark:border-blue-500 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-4">
             <div className="relative group">
-              <div className="w-20 h-20 rounded-2xl bg-white/10 backdrop-blur-md p-1.5 border border-white/20 flex items-center justify-center overflow-hidden shadow-inner">
+              <div className="w-20 h-20 rounded-2xl bg-white dark:bg-slate-800 p-1.5 border-2 border-blue-600/60 dark:border-blue-400/50 flex items-center justify-center overflow-hidden shadow-inner">
                 {displaySchoolLogo ? (
                   <img src={displaySchoolLogo} alt={school?.name} className="w-full h-full object-contain rounded-xl bg-white" />
                 ) : (
-                  <Building2 className="w-10 h-10 text-amber-400" />
+                  <Building2 className="w-10 h-10 text-blue-700 dark:text-amber-400" />
                 )}
               </div>
               <button
                 type="button"
                 onClick={() => setShowFullSchoolProfileEditor(true)}
-                className="absolute -bottom-2 -right-2 p-1.5 rounded-full bg-blue-600 text-white shadow hover:bg-blue-500 cursor-pointer"
+                className="absolute -bottom-2 -right-2 p-1.5 rounded-full bg-blue-700 text-white shadow hover:bg-blue-600 cursor-pointer"
                 title="Change Logo"
               >
                 <Camera className="w-3.5 h-3.5" />
@@ -4762,15 +6457,28 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-xl sm:text-2xl font-black text-white">{school?.name || "School Name"}</h2>
+                <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">{school?.name || "School Name"}</h2>
                 <span className="px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 font-black text-[10px]">
                   VERIFIED INSTITUTION
                 </span>
               </div>
-              <p className="text-xs text-blue-200 mt-1">{school?.tagline || "तमसो मा ज्योतिर्गमय · ज्ञान ही प्रकाश है"}</p>
-              <p className="text-xs text-slate-300 font-mono mt-0.5">
-                School Code: <strong>{school?.code || school?.id}</strong> · Affiliation: <strong>{school?.affiliationNo || "CBSE/STATE-2026"}</strong>
-              </p>
+              <p className="text-xs text-blue-800 dark:text-blue-200 font-semibold mt-1">{school?.tagline || "तमसो मा ज्योतिर्गमय · ज्ञान ही प्रकाश है"}</p>
+              {(() => {
+                const visibleReg = getVisibleSchoolRegNo(school);
+                const visibleAff = String(school?.affiliation || school?.affiliationNo || "").trim();
+                if (!visibleReg && !visibleAff) return null;
+                return (
+                  <p className="text-xs text-slate-700 dark:text-slate-300 font-mono mt-0.5">
+                    {visibleReg ? (
+                      <>Reg. No: <strong>{visibleReg}</strong></>
+                    ) : null}
+                    {visibleReg && visibleAff ? " · " : ""}
+                    {visibleAff ? (
+                      <>Affiliation: <strong>{visibleAff}</strong></>
+                    ) : null}
+                  </p>
+                );
+              })()}
             </div>
           </div>
 
@@ -4778,9 +6486,9 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             <button
               type="button"
               onClick={() => setShowFullSchoolProfileEditor(true)}
-              className="px-4 py-2 rounded-xl bg-white text-slate-900 font-black text-xs hover:bg-slate-100 transition shadow-md active:scale-95 cursor-pointer flex items-center gap-1.5"
+              className="px-4 py-2 rounded-xl bg-blue-700 hover:bg-blue-800 text-white dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100 font-black text-xs transition shadow-md active:scale-95 cursor-pointer flex items-center gap-1.5"
             >
-              <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+              <Sparkles className="w-3.5 h-3.5 text-amber-300 dark:text-blue-600" />
               <span>Full Print Header Editor</span>
             </button>
           </div>
@@ -4823,13 +6531,57 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             </div>
 
             <div>
-              <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">Director / Manager Name</label>
+              <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">Director Name (डायरेक्टर का नाम - अलग)</label>
               <input
                 type="text"
                 value={schoolInfoForm.directorName}
                 onChange={e => setSchoolInfoForm(p => ({ ...p, directorName: e.target.value }))}
-                placeholder="Director / Secretary Name"
+                placeholder="Director Name"
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent text-slate-800 dark:text-white text-xs font-medium focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">Director Phone Number</label>
+              <input
+                type="tel"
+                value={schoolInfoForm.directorPhone}
+                onChange={e => setSchoolInfoForm(p => ({ ...p, directorPhone: e.target.value }))}
+                placeholder="Director Contact Number"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent text-slate-800 dark:text-white text-xs font-medium focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">Manager Name (मैनेजर का नाम - अलग)</label>
+              <input
+                type="text"
+                value={schoolInfoForm.managerName}
+                onChange={e => setSchoolInfoForm(p => ({ ...p, managerName: e.target.value }))}
+                placeholder="Manager Name"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent text-slate-800 dark:text-white text-xs font-medium focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">Manager Phone Number</label>
+              <input
+                type="tel"
+                value={schoolInfoForm.managerPhone}
+                onChange={e => setSchoolInfoForm(p => ({ ...p, managerPhone: e.target.value }))}
+                placeholder="Manager Contact Number"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent text-slate-800 dark:text-white text-xs font-medium focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-emerald-700 dark:text-emerald-400 mb-1 block">Accountant Name (Fee Receipt Default)</label>
+              <input
+                type="text"
+                value={schoolInfoForm.accountantName}
+                onChange={e => setSchoolInfoForm(p => ({ ...p, accountantName: e.target.value }))}
+                placeholder="Head Accountant / Cashier Name"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50/30 dark:bg-transparent text-slate-800 dark:text-white text-xs font-semibold focus:ring-2 focus:ring-emerald-500"
               />
             </div>
 
@@ -4886,19 +6638,66 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm space-y-3">
             <div className="flex items-center gap-2">
               <PenTool className="w-4 h-4 text-purple-600" />
-              <h4 className="font-bold text-sm text-slate-800 dark:text-white">Digital Signatures (हस्ताक्षर)</h4>
+              <h4 className="font-bold text-sm text-slate-800 dark:text-white">Digital Signatures (हस्ताक्षर स्टूडियो)</h4>
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              प्रिंसिपल व डायरेक्टर के डिजिटल हस्ताक्षर मार्कशीट व एडमिट कार्ड पर ऑटो-प्रिंट होते हैं।
+              Principal, Director, Manager, Accountant (Fee Receipt पर) व Exam Controller के अलग-अलग हस्ताक्षर अपलोड/ड्रा करें।
             </p>
-            <div className="pt-2">
+            <div className="pt-2 grid grid-cols-2 sm:grid-cols-3 gap-2">
               <button
                 type="button"
-                onClick={() => setShowDigitalSignatureModal(true)}
-                className="w-full py-2.5 px-4 rounded-xl bg-purple-50 hover:bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 font-bold text-xs border border-purple-200 dark:border-purple-800 transition cursor-pointer flex items-center justify-center gap-2"
+                onClick={() => {
+                  setDigitalSignatureInitialTab("principal");
+                  setShowDigitalSignatureModal(true);
+                }}
+                className="py-2 px-2.5 rounded-xl bg-purple-50 hover:bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 font-bold text-xs border border-purple-200 dark:border-purple-800 transition cursor-pointer flex items-center justify-center gap-1"
               >
                 <PenTool className="w-3.5 h-3.5" />
-                <span>डिजिटल हस्ताक्षर ड्रा / अपलोड करें</span>
+                <span>Principal Sign</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setDigitalSignatureInitialTab("director");
+                  setShowDigitalSignatureModal(true);
+                }}
+                className="py-2 px-2.5 rounded-xl bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 font-bold text-xs border border-blue-200 dark:border-blue-800 transition cursor-pointer flex items-center justify-center gap-1"
+              >
+                <PenTool className="w-3.5 h-3.5" />
+                <span>Director Sign</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setDigitalSignatureInitialTab("manager");
+                  setShowDigitalSignatureModal(true);
+                }}
+                className="py-2 px-2.5 rounded-xl bg-amber-50 hover:bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300 font-bold text-xs border border-amber-200 dark:border-amber-800 transition cursor-pointer flex items-center justify-center gap-1"
+              >
+                <PenTool className="w-3.5 h-3.5" />
+                <span>Manager Sign</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setDigitalSignatureInitialTab("accountant");
+                  setShowDigitalSignatureModal(true);
+                }}
+                className="py-2 px-2.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 font-bold text-xs border border-emerald-200 dark:border-emerald-800 transition cursor-pointer flex items-center justify-center gap-1"
+              >
+                <PenTool className="w-3.5 h-3.5" />
+                <span>🧾 Accountant Sign</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setDigitalSignatureInitialTab("exam_controller");
+                  setShowDigitalSignatureModal(true);
+                }}
+                className="py-2 px-2.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 font-bold text-xs border border-indigo-200 dark:border-indigo-800 transition cursor-pointer flex items-center justify-center gap-1 col-span-2 sm:col-span-2"
+              >
+                <PenTool className="w-3.5 h-3.5" />
+                <span>📝 Exam Controller Sign</span>
               </button>
             </div>
           </div>
@@ -4986,6 +6785,49 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           </div>
         </div>
 
+        {/* Box 4: Receipt Header & Letterhead + Razorpay Auto-Webhook Setup */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+          <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm space-y-3 flex flex-col justify-between">
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Building2 className="w-4 h-4 text-amber-500" />
+                <h4 className="font-bold text-sm text-slate-800 dark:text-white">Receipt Header &amp; Letterhead</h4>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                स्कूल लेटरहेड, रसीद हेडर, लोगो व प्रिंट सेटिंग्स यहाँ से कस्टमाइज करें।
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setView("receipt_header")}
+              className="w-full py-2.5 px-3 rounded-xl bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 font-bold text-xs border border-amber-200 dark:border-amber-800 transition cursor-pointer flex items-center justify-center gap-1.5"
+            >
+              <Building2 className="w-3.5 h-3.5" />
+              <span>Receipt Header &amp; Letterhead खोलें</span>
+            </button>
+          </div>
+
+          <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm space-y-3 flex flex-col justify-between">
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <CreditCard className="w-4 h-4 text-indigo-500" />
+                <h4 className="font-bold text-sm text-slate-800 dark:text-white">Razorpay Auto-Webhook Setup</h4>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                ऑनलाइन फीस गेटवे व ऑटो-रसीद वेबहुक सेटिंग्स यहाँ से कॉन्फ़िगर करें।
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setView("razorpay_setup")}
+              className="w-full py-2.5 px-3 rounded-xl bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 font-bold text-xs border border-indigo-200 dark:border-indigo-800 transition cursor-pointer flex items-center justify-center gap-1.5"
+            >
+              <CreditCard className="w-3.5 h-3.5" />
+              <span>Razorpay Auto-Webhook Setup खोलें</span>
+            </button>
+          </div>
+        </div>
+
         {/* Sub-Admin Authorization Management */}
         <div className="bg-white dark:bg-slate-800 rounded-3xl p-6 border border-slate-200 dark:border-slate-700 shadow-sm space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -5045,6 +6887,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             </div>
           )}
         </div>
+          </>
+        )}
       </div>
     );
   };
@@ -5067,6 +6911,16 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
     return (
       <div className="space-y-6 max-w-6xl mx-auto animate-in fade-in duration-200">
+        <div className="flex items-center justify-between">
+          <button
+            type="button"
+            onClick={() => setView("dashboard")}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition cursor-pointer shadow-xs"
+          >
+            <ChevronLeft className="w-4 h-4" />
+            <span>Back to Dashboard</span>
+          </button>
+        </div>
         {/* Header */}
         <div className="bg-gradient-to-r from-purple-950 via-slate-900 to-indigo-950 rounded-3xl p-6 text-white border border-purple-500/30 shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3.5">
@@ -5253,6 +7107,11 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               </div>
 
               <form onSubmit={handleSaveMemory} className="space-y-3.5 text-xs">
+                {!isSchoolEliteCurriculum(school) && (
+                  <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 rounded-xl px-3 py-2 text-[11px] text-amber-900 dark:text-amber-200 font-semibold">
+                    ⚡ <strong>Lite Plan Notice:</strong> Aapki uploaded photos School Admin Memories mein save hongi, lekin Public Website Gallery par sirf <strong>👑 Elite / White-Label</strong> plan mein dikhengi (Lite mein Default Website rehti hai).
+                  </div>
+                )}
                 <div>
                   <label className="font-bold text-slate-600 dark:text-slate-300 block mb-1">Event Title (समारोह का नाम)</label>
                   <input
@@ -5307,22 +7166,46 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
                   <div>
                     <label className="font-bold text-slate-600 dark:text-slate-300 block mb-1">
-                      {newMemoryForm.type === "IMAGE" ? "Photo URL / File" : "YouTube Video URL"}
+                      {newMemoryForm.type === "IMAGE" ? "Photo Upload / URL" : "YouTube Video URL"}
                     </label>
-                    <input
-                      type="text"
-                      value={newMemoryForm.type === "IMAGE" ? newMemoryForm.url : newMemoryForm.videoUrl}
-                      onChange={e => {
-                        const val = e.target.value;
-                        if (newMemoryForm.type === "IMAGE") {
-                          setNewMemoryForm(p => ({ ...p, url: val }));
-                        } else {
-                          setNewMemoryForm(p => ({ ...p, videoUrl: val, url: val }));
-                        }
-                      }}
-                      placeholder={newMemoryForm.type === "IMAGE" ? "https://images.unsplash.com/..." : "https://youtube.com/watch?v=..."}
-                      className="w-full px-3 py-2 border rounded-xl bg-transparent dark:border-slate-700 text-slate-800 dark:text-white focus:ring-2 focus:ring-purple-500"
-                    />
+                    <div className="space-y-1.5">
+                      {newMemoryForm.type === "IMAGE" && (
+                        <label className="w-full px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-[11px] flex items-center justify-center gap-1.5 cursor-pointer">
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>Upload Photo (Auto Compress)</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              if (!file) return;
+                              try {
+                                const res = await compressImageFileToDataUrl(file, { maxSizeBytes: 240 * 1024 });
+                                setNewMemoryForm(p => ({ ...p, url: res.dataUrl }));
+                                toast.success(`Photo ready (${res.sizeKB} KB ${res.format.toUpperCase()})`);
+                              } catch {
+                                toast.error("Photo compression failed");
+                              }
+                            }}
+                          />
+                        </label>
+                      )}
+                      <input
+                        type="text"
+                        value={newMemoryForm.type === "IMAGE" ? newMemoryForm.url : newMemoryForm.videoUrl}
+                        onChange={e => {
+                          const val = e.target.value;
+                          if (newMemoryForm.type === "IMAGE") {
+                            setNewMemoryForm(p => ({ ...p, url: val }));
+                          } else {
+                            setNewMemoryForm(p => ({ ...p, videoUrl: val, url: val }));
+                          }
+                        }}
+                        placeholder={newMemoryForm.type === "IMAGE" ? "https://images.unsplash.com/..." : "https://youtube.com/watch?v=..."}
+                        className="w-full px-3 py-2 border rounded-xl bg-transparent dark:border-slate-700 text-slate-800 dark:text-white focus:ring-2 focus:ring-purple-500"
+                      />
+                    </div>
                   </div>
                 </div>
 
@@ -5429,7 +7312,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             schoolName={school?.name || "School"}
             classId={qrModalClass.id}
             className={qrModalClass.name}
-            totalStudents={students.filter(s => isStudentInClass(s, qrModalClass.id, qrModalClass.name)).length}
+            totalStudents={displayedStudents.filter(s => isStudentInClass(s, qrModalClass.id, qrModalClass.name)).length}
           />
         )}
 
@@ -5501,12 +7384,17 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               logoUrl: getSavedSchoolLogo(school.logoUrl, schoolId),
               principalName: school.principalName || "",
               principalTitle: "Principal / Head of Institution",
-              code: school.code || "",
+              code: getVisibleSchoolRegNo(school),
               principalPhone: school.principalPhone || "",
               directorName: school.directorName || "",
               directorPhone: school.directorPhone || "",
+              managerName: school.managerName || "",
+              managerPhone: school.managerPhone || "",
+              accountantName: school.accountantName || "",
               principalSignatureUrl: school.principalSignatureUrl || "",
               directorSignatureUrl: school.directorSignatureUrl || "",
+              managerSignatureUrl: school.managerSignatureUrl || "",
+              accountantSignatureUrl: school.accountantSignatureUrl || "",
               customFields: school.customFields || [],
               documentPrintFields: school.documentPrintFields || {},
             }}
@@ -5525,8 +7413,13 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                 principalPhone: details.principalPhone,
                 directorName: details.directorName,
                 directorPhone: details.directorPhone,
+                managerName: details.managerName,
+                managerPhone: details.managerPhone,
+                accountantName: details.accountantName,
                 principalSignatureUrl: details.principalSignatureUrl,
                 directorSignatureUrl: details.directorSignatureUrl,
+                managerSignatureUrl: details.managerSignatureUrl,
+                accountantSignatureUrl: details.accountantSignatureUrl,
                 code: details.code,
                 customFields: details.customFields,
                 documentPrintFields: details.documentPrintFields,
@@ -5540,11 +7433,19 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             onClose={() => setShowDigitalSignatureModal(false)}
             school={school}
             schoolId={schoolId}
+            initialTab={digitalSignatureInitialTab}
             onSignaturesUpdated={updated => {
               setSchool(prev => prev ? {
                 ...prev,
                 principalSignatureUrl: updated.principalSignatureUrl !== undefined ? updated.principalSignatureUrl : prev.principalSignatureUrl,
                 directorSignatureUrl: updated.directorSignatureUrl !== undefined ? updated.directorSignatureUrl : prev.directorSignatureUrl,
+                directorName: updated.directorName !== undefined ? updated.directorName : prev.directorName,
+                managerSignatureUrl: updated.managerSignatureUrl !== undefined ? updated.managerSignatureUrl : prev.managerSignatureUrl,
+                managerName: updated.managerName !== undefined ? updated.managerName : prev.managerName,
+                accountantSignatureUrl: updated.accountantSignatureUrl !== undefined ? updated.accountantSignatureUrl : prev.accountantSignatureUrl,
+                accountantName: updated.accountantName !== undefined ? updated.accountantName : prev.accountantName,
+                examControllerSignatureUrl: updated.examControllerSignatureUrl !== undefined ? updated.examControllerSignatureUrl : prev.examControllerSignatureUrl,
+                examControllerName: updated.examControllerName !== undefined ? updated.examControllerName : prev.examControllerName,
               } : prev);
             }}
           />
@@ -5566,6 +7467,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             onClose={() => setShowDirectAdmissionModal(false)}
             school={school}
             classes={displayedClasses}
+            sessions={sessions}
             activeSession={activeSession}
             defaultClassId={selectedClass?.id || displayedClasses[0]?.id}
             existingStudents={displayedStudents}
@@ -5606,6 +7508,66 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             onOpenTestPortal={() => {
               setSelectedTeacherForIdCard(null);
               if (onPreviewTeacher) onPreviewTeacher();
+            }}
+          />
+        )}
+        {school && appointmentLetterTeacher && (
+          <AppointmentLetterModal
+            isOpen={Boolean(appointmentLetterTeacher)}
+            onClose={() => setAppointmentLetterTeacher(null)}
+            school={school}
+            teacher={appointmentLetterTeacher}
+            classes={displayedClasses}
+            activeSession={activeSession}
+            canEdit={true}
+            onOpenTeacherSignaturePad={() => setSignatureTargetTeacher(appointmentLetterTeacher)}
+            onUpdatedTeacher={(updated) => {
+              setAppointmentLetterTeacher((prev: any) => prev ? { ...prev, ...updated } : prev);
+              setTeachers((prev) => prev.map((x) => x.id === appointmentLetterTeacher.id ? { ...x, ...updated } : x));
+              setAccountants((prev) => prev.map((x) => x.id === appointmentLetterTeacher.id ? { ...x, ...updated } : x));
+            }}
+          />
+        )}
+        {signatureTargetTeacher && (
+          <TeacherSignatureModal
+            isOpen={Boolean(signatureTargetTeacher)}
+            onClose={() => setSignatureTargetTeacher(null)}
+            title={
+              signatureTargetTeacher.id === "__NEW_TEACHER__"
+                ? "New Teacher Digital Signature"
+                : signatureTargetTeacher.id === "__EDIT_TEACHER__"
+                ? `Edit Signature — ${editTeacherForm.name || "Teacher"}`
+                : `Teacher Signature — ${signatureTargetTeacher.name}`
+            }
+            initialSignatureUrl={signatureTargetTeacher.signatureUrl || ""}
+            uploadPrefix={`sig_teacher_${signatureTargetTeacher.id || "staff"}`}
+            onSaveSignature={async (url) => {
+              if (signatureTargetTeacher.id === "__NEW_TEACHER__") {
+                setTeacherForm((p) => ({ ...p, signatureUrl: url }));
+                toast.success("नए शिक्षक का साइन फॉर्म में जुड़ गया!");
+                return;
+              }
+              if (signatureTargetTeacher.id === "__EDIT_TEACHER__") {
+                setEditTeacherForm((p) => ({ ...p, signatureUrl: url }));
+                toast.success("शिक्षक का साइन एडिट फॉर्म में अपडेट हो गया!");
+                return;
+              }
+              const targetId = signatureTargetTeacher.id;
+              const isAccOnly = Boolean(signatureTargetTeacher._isAccountantOnly);
+              if (isAccOnly) {
+                const accObj = accountants.find((a) => a.id === targetId);
+                if (accObj) {
+                  await saveAccountant({ ...accObj, signatureUrl: url });
+                }
+                setAccountants((prev) => prev.map((a) => a.id === targetId ? { ...a, signatureUrl: url } : a));
+              } else {
+                await updateTeacher(schoolId, targetId, { signatureUrl: url });
+                setTeachers((prev) => prev.map((x) => x.id === targetId ? { ...x, signatureUrl: url } : x));
+              }
+              if (appointmentLetterTeacher?.id === targetId) {
+                setAppointmentLetterTeacher((prev: any) => prev ? { ...prev, signatureUrl: url } : prev);
+              }
+              toast.success(`${signatureTargetTeacher.name} का डिजिटल साइन सेव हो गया!`);
             }}
           />
         )}
@@ -5712,26 +7674,26 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                 </div>
               </div>
 
-              {/* Session Roll-Over Quick Banner */}
-              <div className="p-3 rounded-2xl bg-gradient-to-r from-purple-950/50 to-indigo-950/50 border border-purple-500/30 flex items-center justify-between gap-3">
+              {/* Session Re-Admission Quick Banner */}
+              <div className="p-3 rounded-2xl bg-gradient-to-r from-blue-950/60 to-indigo-950/60 border border-blue-500/30 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="w-8 h-8 rounded-xl bg-purple-500/20 text-purple-300 flex items-center justify-center shrink-0">
-                    <GraduationCap className="w-4 h-4" />
+                  <div className="w-8 h-8 rounded-xl bg-blue-500/20 text-blue-300 flex items-center justify-center shrink-0">
+                    <UserPlus className="w-4 h-4" />
                   </div>
                   <div className="min-w-0">
-                    <h5 className="text-xs font-black text-white">वार्षिक सत्र प्रमोशन इंजन (Roll-Over)</h5>
-                    <p className="text-[10px] text-purple-200/80 truncate">छात्रों को अगली कक्षा व नए सत्र में प्रमोट करें</p>
+                    <h5 className="text-xs font-black text-white">सत्र पुनः प्रवेश डेस्क (Re-Admission)</h5>
+                    <p className="text-[10px] text-blue-200/80 truncate">केवल पुनः प्रवेश वाले छात्र ही पिछले बकाया सहित नए सत्र में जाएंगे</p>
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => {
                     setShowSessionModal(false);
-                    setShowSessionRollOverModal(true);
+                    setView("readmission");
                   }}
-                  className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-black text-xs shadow-md transition active:scale-95 cursor-pointer shrink-0"
+                  className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-black text-xs shadow-md transition active:scale-95 cursor-pointer shrink-0"
                 >
-                  प्रमोट करें →
+                  Re-Admission →
                 </button>
               </div>
 
@@ -6052,7 +8014,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                       </span>
                     </div>
                     <p className="text-xs text-slate-600 dark:text-slate-300 font-medium">
-                      सीखने या डेमो दिखाने के लिए इसे ON करें — 13 क्लास, 10 छात्र प्रति क्लास, 1-साल की फीस, हाजिरी, 6 परीक्षाएं और स्टाफ सैलरी अपने-आप दिख जाएगी।
+                      सीखने या डेमो दिखाने के लिए इसे ON करें — हर क्लास में 40 छात्र (Section A: 20, Section B: 20), 1:20 टीचर-स्टूडेंट अनुपात, 1-साल की फीस, हाजिरी, 6 परीक्षाएं और स्टाफ सैलरी अपने-आप दिख जाएगी।
                     </p>
                   </div>
                   <button
@@ -6184,19 +8146,6 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             </div>
           </div>
         )}
-        {showSessionRollOverModal && (
-          <SessionRollOverModal
-            isOpen={showSessionRollOverModal}
-            onClose={() => setShowSessionRollOverModal(false)}
-            school={school}
-            sessions={displayedSessions}
-            classes={displayedClasses}
-            currentSession={activeSession}
-            onSuccess={() => {
-              try { loadAll(); } catch (e) { console.warn("Failed to reload after rollover:", e); }
-            }}
-          />
-        )}
         {showFaceStudioModal && (
           <UniversalFaceIdStudioModal
             isOpen={showFaceStudioModal}
@@ -6281,8 +8230,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         appTheme === "white"
           ? "bg-slate-100 text-slate-900"
           : appTheme === "black"
-          ? "bg-black text-white"
-          : "bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+          ? "dark bg-black text-white"
+          : "dark bg-[#08142c] text-slate-100"
       } w-full relative`}>
         {/* Left Sidebar (fixed in place on desktop or landscape, never scrolls with page) */}
         {renderDesktopSidebar()}
@@ -6302,10 +8251,12 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         )}
 
         {/* Main Content Area (Independent scroll container - page cards scroll smoothly while menu stays fixed) */}
-        <div className={`flex-1 flex flex-col min-w-0 h-screen h-[100dvh] max-h-screen overflow-y-auto print:h-auto print:min-h-0 print:max-h-none print:overflow-visible print:block ${
+        <div
+          ref={mainContentScrollRef}
+          className={`flex-1 flex flex-col min-w-0 h-screen h-[100dvh] max-h-screen overflow-y-auto print:h-auto print:min-h-0 print:max-h-none print:overflow-visible print:block ${
           isEffectiveLandscape ? "overflow-x-auto" : "overflow-x-hidden"
         }`}>
-          {renderTopHeader()}
+          {view === "dashboard" && renderTopHeader()}
           <main className={`flex-1 p-2 sm:p-4 lg:p-5 w-full mx-auto pb-16 md:pb-12 print:p-0 print:m-0 print:max-w-none print:min-w-0 ${
             isEffectiveLandscape ? "min-w-[980px] sm:min-w-0 max-w-7xl" : "max-w-7xl"
           }`}>
@@ -6430,8 +8381,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               <span className="font-bold text-white truncate max-w-[220px]">{school?.name || "School"}</span>
             </div>
             <div className="flex items-center justify-between text-xs pb-2 border-b border-slate-800/80">
-              <span className="text-slate-400 font-medium">School Code / ID:</span>
-              <span className="font-mono font-bold text-indigo-300">{school?.code || school?.id || schoolId}</span>
+              <span className="text-slate-400 font-medium">School ID:</span>
+              <span className="font-mono font-bold text-indigo-300">{getVisibleSchoolRegNo(school) || school?.id || schoolId}</span>
             </div>
             <div className="flex items-center justify-between text-xs pb-2 border-b border-slate-800/80">
               <span className="text-slate-400 font-medium">Plan Status:</span>
@@ -6521,17 +8472,60 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     );
   }
 
-  if (view === "attendance") {
-    const activeClass = selectedClass || (displayedClasses.length > 0 ? displayedClasses[0] : null);
+  const renderDailyTeacherAttendanceDesk = (options?: { showDateSelector?: boolean }) => {
+    const teacherRecordsMap = teacherAttRecords?.records || {};
+    const principalName = school?.principalName || "Principal / School Admin";
 
-    // Compute Teacher Attendance & Face ID Stats
+    let localAdminAtt: { present?: boolean; inTime?: string; outTime?: string } | null = null;
+    try {
+      const saved = localStorage.getItem(`nst_admin_att_${schoolId}_${teacherAttendanceDate}`);
+      if (saved) localAdminAtt = JSON.parse(saved);
+    } catch {
+      // ignore storage errors
+    }
+
+    const principalRecord = teacherRecordsMap["ADMIN-01"] || (localAdminAtt
+      ? {
+          id: "ADMIN-01",
+          name: principalName,
+          role: "ADMIN",
+          employeeId: "ADMIN-01",
+          present: Boolean(localAdminAtt.present),
+          status: localAdminAtt.present ? "present" : undefined,
+          inTime: localAdminAtt.inTime,
+          outTime: localAdminAtt.outTime,
+        }
+      : undefined);
+
+    const isPrincipalPresent = principalRecord?.present === true;
+    const isPrincipalLate = isPrincipalPresent && (principalRecord?.status === "late" || Boolean((principalRecord as any)?.isLate));
+    const isPrincipalAbsent = principalRecord?.present === false;
+
     const totalTeachersCount = displayedTeachers.length;
+    const totalStaffWithPrincipal = totalTeachersCount + 1;
     const enrolledTeachersCount = displayedTeachers.filter(t => enrolledFaceIds[t.id]).length;
     const pendingFaceTeachersCount = totalTeachersCount - enrolledTeachersCount;
 
-    const teacherRecordsMap = teacherAttRecords?.records || {};
-    const presentTeachersCount = displayedTeachers.filter(t => teacherRecordsMap[t.id]?.present === true).length;
-    const absentTeachersCount = displayedTeachers.filter(t => teacherRecordsMap[t.id]?.present === false).length;
+    const presentTeachersCount =
+      displayedTeachers.filter(t => teacherRecordsMap[t.id]?.present === true).length +
+      (isPrincipalPresent ? 1 : 0);
+    const lateTeachersCount =
+      displayedTeachers.filter(t => {
+        const rec = teacherRecordsMap[t.id];
+        return rec?.present === true && (rec?.status === "late" || Boolean((rec as any)?.isLate));
+      }).length + (isPrincipalLate ? 1 : 0);
+    const absentTeachersCount =
+      displayedTeachers.filter(t => teacherRecordsMap[t.id]?.present === false).length +
+      (isPrincipalAbsent ? 1 : 0);
+
+    const checkIsAfterInCutoff = () => {
+      if (teacherAttendanceDate !== todayStr()) return false;
+      const nowD = new Date();
+      const [cH, cM] = String(attendanceSchedule?.inCutoffTime || "08:15").split(":").map(Number);
+      const cutoffMin = (Number.isFinite(cH) ? cH : 8) * 60 + (Number.isFinite(cM) ? cM : 15);
+      const nowMin = nowD.getHours() * 60 + nowD.getMinutes();
+      return nowMin > cutoffMin;
+    };
 
     const filteredTeachersForAttendance = displayedTeachers.filter(t => {
       if (!teacherSearchInAttendance.trim()) return true;
@@ -6544,7 +8538,95 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       );
     });
 
-    const handleTeacherPunchInAttendance = async (teacher: SchoolTeacher, action: "in" | "out" | "absent") => {
+    const handlePrincipalPunchInAttendance = async (action: "in" | "late" | "out" | "absent") => {
+      if (!schoolId) return;
+      const nowMs = Date.now();
+      const nowTime = new Date(nowMs).toLocaleTimeString("en-IN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: true,
+      });
+
+      const currentRecords = { ...(teacherAttRecords?.records || {}) };
+      const existing = currentRecords["ADMIN-01"] || principalRecord;
+
+      if (action === "absent") {
+        currentRecords["ADMIN-01"] = {
+          id: "ADMIN-01",
+          name: principalName,
+          role: "ADMIN",
+          employeeId: "ADMIN-01",
+          present: false,
+          status: "absent",
+          isLate: false,
+          inTime: undefined,
+          outTime: undefined,
+        } as any;
+        try {
+          localStorage.setItem(
+            `nst_admin_att_${schoolId}_${teacherAttendanceDate}`,
+            JSON.stringify({ date: teacherAttendanceDate, present: false })
+          );
+        } catch {
+          // ignore
+        }
+      } else {
+        const inTime = action === "in" || action === "late" ? (existing?.inTime || nowTime) : (existing?.inTime || nowTime);
+        const inTimestamp = action === "in" || action === "late" ? (existing?.inTimestamp || nowMs) : (existing?.inTimestamp || nowMs);
+        const outTime = action === "out" ? nowTime : existing?.outTime;
+        const outTimestamp = action === "out" ? nowMs : existing?.outTimestamp;
+        const stayDuration =
+          action === "out" && inTime
+            ? calculateStayDuration(inTime, outTime, inTimestamp, outTimestamp)
+            : existing?.stayDuration;
+        const isLateEntry =
+          action === "late"
+            ? true
+            : action === "in"
+            ? checkIsAfterInCutoff()
+            : Boolean(existing?.status === "late" || (existing as any)?.isLate);
+
+        currentRecords["ADMIN-01"] = {
+          id: "ADMIN-01",
+          name: principalName,
+          role: "ADMIN",
+          employeeId: "ADMIN-01",
+          present: true,
+          status: isLateEntry ? "late" : "present",
+          isLate: isLateEntry,
+          inTime,
+          outTime,
+          inTimestamp,
+          outTimestamp,
+          stayDuration,
+          scanType: action === "out" ? "out" : "in",
+        } as any;
+        try {
+          localStorage.setItem(
+            `nst_admin_att_${schoolId}_${teacherAttendanceDate}`,
+            JSON.stringify({ date: teacherAttendanceDate, present: true, status: isLateEntry ? "late" : "present", isLate: isLateEntry, inTime, outTime })
+          );
+        } catch {
+          // ignore
+        }
+      }
+
+      const updated: StaffDailyAttendanceRecord = {
+        schoolId,
+        date: teacherAttendanceDate,
+        records: currentRecords,
+      };
+      setTeacherAttRecords(updated);
+      await saveStaffDailyAttendance(updated);
+      playAttendanceSuccessChime();
+      speakNotification(
+        "प्रधानाचार्य हाजिरी दर्ज",
+        `${principalName} का ${action === "late" ? "लेट आगमन" : action === "in" ? "आगमन" : action === "out" ? "प्रस्थान" : "अनुपस्थिति"} दर्ज हुआ।`
+      );
+    };
+
+    const handleTeacherPunchInAttendance = async (teacher: SchoolTeacher, action: "in" | "late" | "out" | "absent") => {
       if (!schoolId) return;
       const nowTime = new Date().toLocaleTimeString("en-IN", {
         hour: "2-digit",
@@ -6555,43 +8637,53 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
       const currentRecords = { ...(teacherAttRecords?.records || {}) };
       const existing = currentRecords[teacher.id];
+      const staffRole = (teacher as any)._isAccountant ? "ACCOUNTANT" : "TEACHER";
+      let markedAsLate = false;
 
       if (action === "absent") {
         currentRecords[teacher.id] = {
           id: teacher.id,
           name: teacher.name,
-          role: "TEACHER",
+          role: staffRole,
           employeeId: teacher.employeeId || teacher.id,
           present: false,
           status: "absent",
+          isLate: false,
           inTime: undefined,
           outTime: undefined,
-        };
+        } as any;
       } else {
         const nowMs = Date.now();
-        const inTime = action === "in" ? (existing?.inTime || nowTime) : (existing?.inTime || nowTime);
-        const inTimestamp = action === "in" ? (existing?.inTimestamp || nowMs) : (existing?.inTimestamp || nowMs);
+        const inTime = action === "in" || action === "late" ? (existing?.inTime || nowTime) : (existing?.inTime || nowTime);
+        const inTimestamp = action === "in" || action === "late" ? (existing?.inTimestamp || nowMs) : (existing?.inTimestamp || nowMs);
         const outTime = action === "out" ? nowTime : existing?.outTime;
         const outTimestamp = action === "out" ? nowMs : existing?.outTimestamp;
         let stayDuration = existing?.stayDuration;
         if (action === "out" && inTime) {
           stayDuration = calculateStayDuration(inTime, outTime, inTimestamp, outTimestamp);
         }
+        markedAsLate =
+          action === "late"
+            ? true
+            : action === "in"
+            ? checkIsAfterInCutoff()
+            : Boolean(existing?.status === "late" || (existing as any)?.isLate);
 
         currentRecords[teacher.id] = {
           id: teacher.id,
           name: teacher.name,
-          role: "TEACHER",
+          role: staffRole,
           employeeId: teacher.employeeId || teacher.id,
           present: true,
-          status: "present",
+          status: markedAsLate ? "late" : "present",
+          isLate: markedAsLate,
           inTime,
           outTime,
           inTimestamp,
           outTimestamp,
           stayDuration,
-          scanType: action,
-        };
+          scanType: action === "out" ? "out" : "in",
+        } as any;
       }
 
       const updated: StaffDailyAttendanceRecord = {
@@ -6603,7 +8695,10 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       setTeacherAttRecords(updated);
       await saveStaffDailyAttendance(updated);
       playAttendanceSuccessChime();
-      speakNotification("हाजिरी दर्ज", `${teacher.name} का ${action === "in" ? "आगमन" : action === "out" ? "प्रस्थान" : "अनुपस्थिति"} दर्ज हुआ।`);
+      speakNotification(
+        "हाजिरी दर्ज",
+        `${teacher.name} का ${action === "late" || (action === "in" && markedAsLate) ? "लेट आगमन" : action === "in" ? "आगमन" : action === "out" ? "प्रस्थान" : "अनुपस्थिति"} दर्ज हुआ।`
+      );
     };
 
     const handleMarkAllTeachersPresent = async () => {
@@ -6615,24 +8710,27 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         second: "2-digit",
         hour12: true,
       });
+      const autoLate = checkIsAfterInCutoff();
 
       const currentRecords = { ...(teacherAttRecords?.records || {}) };
       displayedTeachers.forEach((t) => {
         const existing = currentRecords[t.id];
+        const keepLate = existing?.status === "late" || Boolean((existing as any)?.isLate) || autoLate;
         currentRecords[t.id] = {
           id: t.id,
           name: t.name,
-          role: "TEACHER",
+          role: (t as any)._isAccountant ? "ACCOUNTANT" : "TEACHER",
           employeeId: t.employeeId || t.id,
           present: true,
-          status: "present",
+          status: keepLate ? "late" : "present",
+          isLate: keepLate,
           inTime: existing?.inTime || nowTime,
           inTimestamp: existing?.inTimestamp || nowMs,
           outTime: existing?.outTime,
           outTimestamp: existing?.outTimestamp,
           stayDuration: existing?.stayDuration,
           scanType: "in",
-        };
+        } as any;
       });
 
       const updated: StaffDailyAttendanceRecord = {
@@ -6671,7 +8769,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             ...existing,
             id: t.id,
             name: t.name,
-            role: "TEACHER",
+            role: (t as any)._isAccountant ? "ACCOUNTANT" : "TEACHER",
             employeeId: t.employeeId || t.id,
             present: true,
             status: "present",
@@ -6704,69 +8802,631 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       speakNotification("प्रस्थान पूर्ण", "सभी उपस्थित शिक्षकों का प्रस्थान दर्ज हो गया।");
     };
 
+    return (
+      <div className="space-y-4 animate-in fade-in">
+        {options?.showDateSelector && (
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 sm:p-4 flex items-center justify-between gap-3 flex-wrap shadow-xs">
+            <div>
+              <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white flex items-center gap-2 tracking-tight">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <span>Staff Daily Attendance</span>
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Principal, Teachers &amp; Accountants attendance and biometric check-ins.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-1.5">
+              <Calendar className="w-4 h-4 text-slate-400 shrink-0" />
+              <input
+                type="date"
+                value={teacherAttendanceDate}
+                onChange={(e) => setTeacherAttendanceDate(e.target.value)}
+                className="bg-transparent text-slate-900 dark:text-white text-xs font-mono font-semibold focus:outline-none cursor-pointer"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* School Admin & Principal Daily Attendance Card */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-start sm:items-center gap-3.5 min-w-0">
+              <div className="w-11 h-11 rounded-xl bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border border-amber-200/80 dark:border-amber-800/60 flex items-center justify-center shrink-0">
+                <Building2 className="w-5 h-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white tracking-tight">
+                    Principal &amp; Admin Desk
+                  </h3>
+                  <span
+                    className={`px-2 py-0.5 rounded-md text-[11px] font-semibold border inline-flex items-center gap-1 ${
+                      isPrincipalLate
+                        ? "bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800/60"
+                        : isPrincipalPresent
+                        ? "bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/60"
+                        : isPrincipalAbsent
+                        ? "bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800/60"
+                        : "bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800/60"
+                    }`}
+                  >
+                    {isPrincipalLate ? (
+                      <Clock className="w-3 h-3" />
+                    ) : isPrincipalPresent ? (
+                      <CheckCircle2 className="w-3 h-3" />
+                    ) : isPrincipalAbsent ? (
+                      <X className="w-3 h-3" />
+                    ) : (
+                      <Clock className="w-3 h-3" />
+                    )}
+                    <span>
+                      {isPrincipalLate
+                        ? "Late"
+                        : isPrincipalPresent
+                        ? "Present"
+                        : isPrincipalAbsent
+                        ? "Absent"
+                        : "Pending"}
+                    </span>
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-300 font-medium mt-0.5 truncate">
+                  {principalName} · Principal · <span className="font-mono text-slate-500 dark:text-slate-400">ADMIN-01</span>
+                </p>
+                <div className="flex items-center gap-2.5 text-xs text-slate-500 dark:text-slate-400 mt-1.5 font-mono tabular-nums flex-wrap">
+                  <span>
+                    In: <strong className="text-emerald-600 dark:text-emerald-400 font-semibold">{principalRecord?.inTime || "--:--"}</strong>
+                  </span>
+                  <span className="text-slate-300 dark:text-slate-700">·</span>
+                  <span>
+                    Out: <strong className="text-amber-600 dark:text-amber-400 font-semibold">{principalRecord?.outTime || "--:--"}</strong>
+                  </span>
+                  {principalRecord?.stayDuration && (
+                    <>
+                      <span className="text-slate-300 dark:text-slate-700">·</span>
+                      <span className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 inline-flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        {principalRecord.stayDuration}
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 sm:flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => handlePrincipalPunchInAttendance("in")}
+                className={`min-h-[40px] px-3 py-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer active:scale-95 whitespace-nowrap ${
+                  isPrincipalPresent && !isPrincipalLate && !principalRecord?.outTime
+                    ? "bg-emerald-600 text-white shadow-xs ring-1 ring-emerald-500"
+                    : "bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/50 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60"
+                }`}
+              >
+                <LogIn className="w-3.5 h-3.5 shrink-0" />
+                <span>Punch In</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handlePrincipalPunchInAttendance("late")}
+                className={`min-h-[40px] px-3 py-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer active:scale-95 whitespace-nowrap ${
+                  isPrincipalLate
+                    ? "bg-amber-500 text-white shadow-xs ring-1 ring-amber-400"
+                    : "bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/50 dark:hover:bg-amber-900/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60"
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5 shrink-0" />
+                <span>Late</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handlePrincipalPunchInAttendance("out")}
+                className={`min-h-[40px] px-3 py-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer active:scale-95 whitespace-nowrap ${
+                  principalRecord?.outTime
+                    ? "bg-amber-600 text-white shadow-xs ring-1 ring-amber-500"
+                    : "bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700"
+                }`}
+              >
+                <LogOut className="w-3.5 h-3.5 shrink-0" />
+                <span>Punch Out</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handlePrincipalPunchInAttendance("absent")}
+                className={`min-h-[40px] px-3 py-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer active:scale-95 whitespace-nowrap ${
+                  isPrincipalAbsent
+                    ? "bg-rose-600 text-white shadow-xs ring-1 ring-rose-500"
+                    : "bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800/60"
+                }`}
+              >
+                <X className="w-3.5 h-3.5 shrink-0" />
+                <span>Absent</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Executive Metrics Strip */}
+        <div className="grid grid-cols-2 sm:grid-cols-6 gap-2.5">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 shadow-2xs">
+            <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Total Staff</p>
+            <p className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white mt-1 tabular-nums">{totalStaffWithPrincipal}</p>
+          </div>
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 shadow-2xs">
+            <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Present Today</p>
+            <p className="text-xl sm:text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1 tabular-nums">{presentTeachersCount}</p>
+          </div>
+          <div className="bg-white dark:bg-slate-900 border border-amber-200/80 dark:border-amber-800/50 rounded-xl p-3.5 shadow-2xs">
+            <p className="text-[11px] font-semibold text-amber-600 dark:text-amber-400">Late Arrivals</p>
+            <p className="text-xl sm:text-2xl font-bold text-amber-600 dark:text-amber-400 mt-1 tabular-nums">{lateTeachersCount}</p>
+          </div>
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 shadow-2xs">
+            <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Absent</p>
+            <p className="text-xl sm:text-2xl font-bold text-rose-600 dark:text-rose-400 mt-1 tabular-nums">{absentTeachersCount}</p>
+          </div>
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 shadow-2xs">
+            <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Face ID Ready</p>
+            <p className="text-xl sm:text-2xl font-bold text-indigo-600 dark:text-indigo-400 mt-1 tabular-nums">{enrolledTeachersCount}</p>
+          </div>
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 shadow-2xs">
+            <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Face ID Pending</p>
+            <p className="text-xl sm:text-2xl font-bold text-slate-600 dark:text-slate-300 mt-1 tabular-nums">{pendingFaceTeachersCount}</p>
+          </div>
+        </div>
+
+        {/* Search & Quick Actions Toolbar */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3 sm:p-3.5 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2.5 shadow-xs">
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Search teacher or accountant by name, phone, or ID..."
+              value={teacherSearchInAttendance}
+              onChange={(e) => setTeacherSearchInAttendance(e.target.value)}
+              className="w-full min-h-[40px] pl-9 pr-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-medium text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:border-emerald-500"
+            />
+          </div>
+
+          <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-0.5 lg:pb-0">
+            <button
+              type="button"
+              onClick={() => setShowFaceKioskModal(true)}
+              className={`min-h-[40px] px-3.5 py-2 rounded-xl font-semibold text-xs flex items-center gap-1.5 active:scale-95 transition cursor-pointer whitespace-nowrap shrink-0 ${
+                hasFaceAttendanceAccess(school)
+                  ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs"
+                  : "bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-amber-300 border border-slate-200 dark:border-slate-700"
+              }`}
+              title={hasFaceAttendanceAccess(school) ? "Launch Live Camera Face Attendance Kiosk" : "Elite Plan — AI Face Attendance"}
+            >
+              {hasFaceAttendanceAccess(school) ? <Sparkles className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5 text-amber-500" />}
+              <span>AI Face Kiosk</span>
+              {!hasFaceAttendanceAccess(school) && (
+                <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 text-[10px] font-bold">Elite</span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setFaceStudioInitialTab("TEACHERS");
+                setFaceStudioTargetPerson(null);
+                setShowFaceStudioModal(true);
+              }}
+              className={`min-h-[40px] px-3.5 py-2 rounded-xl font-semibold text-xs flex items-center gap-1.5 active:scale-95 transition cursor-pointer whitespace-nowrap shrink-0 ${
+                hasFaceAttendanceAccess(school)
+                  ? "bg-slate-900 hover:bg-slate-800 dark:bg-indigo-600 dark:hover:bg-indigo-500 text-white shadow-xs"
+                  : "bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-amber-300 border border-slate-200 dark:border-slate-700"
+              }`}
+              title={hasFaceAttendanceAccess(school) ? "Register & manage staff Face IDs" : "Elite Plan — Live Face ID Studio"}
+            >
+              {hasFaceAttendanceAccess(school) ? <Camera className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5 text-amber-500" />}
+              <span>Face ID Studio</span>
+              {!hasFaceAttendanceAccess(school) && (
+                <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 text-[10px] font-bold">Elite</span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleMarkAllTeachersPresent}
+              className="min-h-[40px] px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/50 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 font-semibold text-xs flex items-center gap-1.5 active:scale-95 transition cursor-pointer whitespace-nowrap shrink-0"
+              title="Mark all teachers and accountants Present (IN)"
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>All Present (IN)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleMarkAllTeachersOut}
+              className="min-h-[40px] px-3.5 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/50 dark:hover:bg-amber-900/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60 font-semibold text-xs flex items-center gap-1.5 active:scale-95 transition cursor-pointer whitespace-nowrap shrink-0"
+              title="Mark OUT for all present teachers"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>All OUT</span>
+            </button>
+          </div>
+        </div>
+
+        {/* School Shift Timing Bar */}
+        {(() => {
+          const liveShift = getLiveShiftStatus(attendanceSchedule);
+          const cleanBadgeLabel = liveShift.badgeText.replace(/^[🔴🟠🟢]\s*/, "");
+          return (
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 space-y-2 shadow-2xs">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span
+                    className={`w-2 h-2 rounded-full shrink-0 ${
+                      liveShift.phase === "out_active"
+                        ? "bg-rose-500"
+                        : liveShift.phase === "late_in"
+                        ? "bg-amber-500"
+                        : "bg-emerald-500"
+                    }`}
+                  />
+                  <Clock className="w-4 h-4 text-slate-400 shrink-0" />
+                  <span className="text-xs font-semibold text-slate-900 dark:text-white truncate">
+                    {cleanBadgeLabel}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowAttScheduleEditor((p) => !p)}
+                  className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-[11px] font-semibold cursor-pointer shrink-0 transition"
+                >
+                  {showAttScheduleEditor ? "Done" : "Edit Shift Times"}
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                {liveShift.helperText}
+              </p>
+              {showAttScheduleEditor && (
+                <div className="pt-2.5 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center gap-4 text-xs">
+                  <label className="flex items-center gap-2 font-semibold text-slate-700 dark:text-slate-200">
+                    <span>IN Cutoff (Late after):</span>
+                    <input
+                      type="time"
+                      value={attendanceSchedule.inCutoffTime}
+                      onChange={(e) => {
+                        const next = { ...attendanceSchedule, inCutoffTime: e.target.value };
+                        setAttendanceSchedule(next);
+                        if (schoolId) void saveAttendanceSchedule(schoolId, next);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white font-mono text-xs"
+                    />
+                  </label>
+                  <label className="flex items-center gap-2 font-semibold text-slate-700 dark:text-slate-200">
+                    <span>OUT Starts (Auto Exit):</span>
+                    <input
+                      type="time"
+                      value={attendanceSchedule.outStartTime}
+                      onChange={(e) => {
+                        const next = { ...attendanceSchedule, outStartTime: e.target.value };
+                        setAttendanceSchedule(next);
+                        if (schoolId) void saveAttendanceSchedule(schoolId, next);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white font-mono text-xs"
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* Pending Face ID Callout */}
+        {pendingFaceTeachersCount > 0 && (
+          <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-900 dark:text-amber-200">
+            <div className="flex items-start sm:items-center gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5 sm:mt-0" />
+              <span>
+                <strong>{pendingFaceTeachersCount} staff member(s)</strong> do not have Face ID registered yet. Enroll their face below for kiosk check-ins.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const firstPending = displayedTeachers.find(t => !enrolledFaceIds[t.id]);
+                if (firstPending) handleOpenTeacherFaceEnrollment(firstPending);
+              }}
+              className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs shrink-0 cursor-pointer active:scale-95 transition whitespace-nowrap self-start sm:self-auto"
+            >
+              Enroll Next Staff →
+            </button>
+          </div>
+        )}
+
+        {/* Teachers & Accountants Attendance Cards Grid */}
+        {filteredTeachersForAttendance.length === 0 ? (
+          <div className="text-center py-14 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 text-slate-500 dark:text-slate-400">
+            <Users className="w-10 h-10 mx-auto mb-2.5 opacity-40" />
+            <p className="text-sm font-bold text-slate-900 dark:text-white">No staff members found</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Adjust your search filter or add staff from the Faculty Directory.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+            {filteredTeachersForAttendance.map((t) => {
+              const rec = teacherRecordsMap[t.id];
+              const isPresent = rec?.present === true;
+              const isAbsent = rec?.present === false;
+              const isLate = rec?.status === "late";
+              const isFaceEnrolled = Boolean(enrolledFaceIds[t.id]);
+
+              return (
+                <div
+                  key={t.id}
+                  className={`p-4 rounded-2xl border bg-white dark:bg-slate-900 transition flex flex-col justify-between space-y-3.5 shadow-2xs ${
+                    isPresent
+                      ? "border-emerald-300 dark:border-emerald-700/60"
+                      : isAbsent
+                      ? "border-rose-300 dark:border-rose-700/60"
+                      : "border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700"
+                  }`}
+                >
+                  {/* Profile & Status */}
+                  <div className="flex items-start gap-3">
+                    <div className="relative shrink-0">
+                      <div
+                        className={`w-12 h-12 rounded-xl overflow-hidden border flex items-center justify-center font-bold text-sm ${
+                          isFaceEnrolled
+                            ? "border-emerald-300 dark:border-emerald-700"
+                            : "border-slate-200 dark:border-slate-700"
+                        } bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200`}
+                      >
+                        {t.photoUrl ? (
+                          <img src={t.photoUrl} alt={t.name} className="w-full h-full object-cover" />
+                        ) : (
+                          <span>{t.name ? t.name.charAt(0).toUpperCase() : "T"}</span>
+                        )}
+                      </div>
+                      {isFaceEnrolled && (
+                        <span
+                          className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[9px] font-bold ring-2 ring-white dark:ring-slate-900"
+                          title="Face ID Verified"
+                        >
+                          ✓
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-1.5">
+                        <h4 className="font-bold text-sm text-slate-900 dark:text-white truncate">{t.name}</h4>
+                        <span
+                          className={`px-1.5 py-0.5 rounded-md text-[10px] font-semibold shrink-0 border ${
+                            isLate
+                              ? "bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800/60"
+                              : isPresent
+                              ? "bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/60"
+                              : isAbsent
+                              ? "bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800/60"
+                              : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700"
+                          }`}
+                        >
+                          {isPresent ? (isLate ? "Late" : "Present") : isAbsent ? "Absent" : "Pending"}
+                        </span>
+                      </div>
+
+                      <p className="text-[11px] font-medium text-slate-600 dark:text-slate-300 truncate mt-0.5">
+                        {t.designation || ((t as any)._isAccountant ? "Accountant" : "Faculty")}
+                        {(t as any)._isAccountant ? " · Accounts" : ""}
+                        {t.subjects ? ` · ${Array.isArray(t.subjects) ? t.subjects.join(", ") : t.subjects}` : ""}
+                      </p>
+
+                      <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400 font-mono tabular-nums mt-1 truncate">
+                        {t.employeeId && <span>ID: {t.employeeId}</span>}
+                        {t.employeeId && t.phone && <span className="text-slate-300 dark:text-slate-700">·</span>}
+                        {t.phone && <span>{t.phone}</span>}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Biometric Strip */}
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div
+                        className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                          isFaceEnrolled
+                            ? "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400"
+                            : "bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400"
+                        }`}
+                      >
+                        <Camera className="w-3.5 h-3.5" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-[10px] font-medium text-slate-500 dark:text-slate-400">Face Biometric</p>
+                        <p className={`text-xs font-semibold truncate ${isFaceEnrolled ? "text-emerald-700 dark:text-emerald-400" : "text-amber-700 dark:text-amber-400"}`}>
+                          {isFaceEnrolled ? "Enrolled" : "Pending Setup"}
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleOpenTeacherFaceEnrollment(t)}
+                      className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition active:scale-95 cursor-pointer shrink-0 whitespace-nowrap ${
+                        isFaceEnrolled
+                          ? "bg-white hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700"
+                          : "bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs"
+                      }`}
+                      title="Scan face via live camera"
+                    >
+                      <Camera className="w-3.5 h-3.5" />
+                      <span>{isFaceEnrolled ? "Re-scan" : "Add Face ID"}</span>
+                    </button>
+                  </div>
+
+                  {/* Punch Timings & Actions */}
+                  <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400 font-mono tabular-nums flex-wrap">
+                      <span>
+                        In: <strong className="text-emerald-600 dark:text-emerald-400 font-semibold">{rec?.inTime || "--:--"}</strong>
+                      </span>
+                      <span>
+                        Out:{" "}
+                        <strong className={rec?.outTime ? "text-amber-600 dark:text-amber-400 font-semibold" : "text-slate-400"}>
+                          {rec?.outTime || (rec?.inTime ? `Pending (${formatTime12h(attendanceSchedule.outStartTime)})` : "--:--")}
+                        </strong>
+                      </span>
+                      {rec?.stayDuration && (
+                        <span className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400">
+                          {rec.stayDuration}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleTeacherPunchInAttendance(t, "in")}
+                        className={`min-h-[38px] py-1.5 rounded-lg text-[11px] font-semibold transition flex items-center justify-center gap-1 cursor-pointer active:scale-95 ${
+                          isPresent && !isLate && !rec?.outTime
+                            ? "bg-emerald-600 text-white shadow-2xs"
+                            : "bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60"
+                        }`}
+                      >
+                        <LogIn className="w-3 h-3" />
+                        <span>In</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleTeacherPunchInAttendance(t, "late")}
+                        className={`min-h-[38px] py-1.5 rounded-lg text-[11px] font-semibold transition flex items-center justify-center gap-1 cursor-pointer active:scale-95 ${
+                          isLate
+                            ? "bg-amber-500 text-white shadow-2xs"
+                            : "bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/40 dark:hover:bg-amber-900/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60"
+                        }`}
+                      >
+                        <Clock className="w-3 h-3" />
+                        <span>Late</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleTeacherPunchInAttendance(t, "out")}
+                        className={`min-h-[38px] py-1.5 rounded-lg text-[11px] font-semibold transition flex items-center justify-center gap-1 cursor-pointer active:scale-95 ${
+                          rec?.outTime
+                            ? "bg-amber-600 text-white shadow-2xs"
+                            : "bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/40 dark:hover:bg-amber-900/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60"
+                        }`}
+                      >
+                        <LogOut className="w-3 h-3" />
+                        <span>Out</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleTeacherPunchInAttendance(t, "absent")}
+                        className={`min-h-[38px] py-1.5 rounded-lg text-[11px] font-semibold transition flex items-center justify-center gap-1 cursor-pointer active:scale-95 ${
+                          isAbsent
+                            ? "bg-rose-600 text-white shadow-2xs"
+                            : "bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800/60"
+                        }`}
+                      >
+                        <X className="w-3 h-3" />
+                        <span>Abs</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Footer Actions: ID Card & Call */}
+                  <div className="flex items-center justify-between gap-2 pt-1 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTeacherForIdCard(t)}
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold flex items-center gap-1.5 cursor-pointer transition"
+                    >
+                      <CreditCard className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                      <span>ID Card</span>
+                    </button>
+                    {t.phone && (
+                      <a
+                        href={`tel:${t.phone}`}
+                        className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-emerald-700 dark:text-emerald-400 font-semibold flex items-center gap-1.5 transition"
+                      >
+                        <Phone className="w-3.5 h-3.5" />
+                        <span>Call</span>
+                      </a>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  if (view === "attendance") {
+    const activeClass = selectedClass || (displayedClasses.length > 0 ? displayedClasses[0] : null);
+
     return renderErpShell(
-      <div className="space-y-4 p-2 sm:p-4 max-w-7xl mx-auto">
-        {/* Top Master Role Switcher Tab: Students vs Teachers */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-2 sm:p-3 flex items-center justify-between gap-3 flex-wrap shadow-md">
-          <div className="flex items-center gap-2">
+      <div className="space-y-3 p-2.5 sm:p-4 max-w-6xl mx-auto">
+        {/* Unified Top Switcher: Students vs Teachers & Staff (date shown only on Teachers tab to eliminate duplicate date boxes) */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 shadow-xs">
+          <div className="grid grid-cols-2 sm:inline-flex items-center gap-1.5 bg-slate-100 dark:bg-slate-950 p-1 rounded-xl border border-slate-200/80 dark:border-slate-800 w-full sm:w-auto">
             <button
               type="button"
               onClick={() => setAttendanceTab("students")}
-              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-black flex items-center gap-2 transition cursor-pointer active:scale-95 ${
+              className={`min-h-[40px] px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition cursor-pointer active:scale-98 whitespace-nowrap ${
                 attendanceTab === "students"
-                  ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/30 ring-1 ring-emerald-400"
-                  : "bg-slate-800 hover:bg-slate-700 text-slate-300"
+                  ? "bg-slate-900 text-white dark:bg-emerald-600 shadow-xs"
+                  : "text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white"
               }`}
             >
-              <GraduationCap className="w-4 h-4" />
-              <span>👨‍🎓 छात्र हाजिरी (Class Students)</span>
+              <GraduationCap className="w-4 h-4 shrink-0" />
+              <span className="sm:hidden">Students</span>
+              <span className="hidden sm:inline">Student Attendance</span>
             </button>
             <button
               type="button"
               onClick={() => setAttendanceTab("teachers")}
-              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-black flex items-center gap-2 transition cursor-pointer active:scale-95 ${
+              className={`min-h-[40px] px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition cursor-pointer active:scale-98 whitespace-nowrap ${
                 attendanceTab === "teachers"
-                  ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg shadow-purple-600/30 ring-1 ring-purple-400"
-                  : "bg-slate-800 hover:bg-slate-700 text-slate-300"
+                  ? "bg-slate-900 text-white dark:bg-indigo-600 shadow-xs"
+                  : "text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white"
               }`}
             >
-              <Users className="w-4 h-4 text-purple-300" />
-              <span>👨‍🏫 शिक्षक व स्टाफ हाजिरी (Teachers Desk)</span>
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-purple-950 text-purple-200 border border-purple-700/80">
-                {displayedTeachers.length} शिक्षक
-              </span>
+              <Users className="w-4 h-4 shrink-0" />
+              <span className="sm:hidden tabular-nums">Staff ({displayedTeachers.length})</span>
+              <span className="hidden sm:inline tabular-nums">Teachers &amp; Staff ({displayedTeachers.length})</span>
             </button>
           </div>
 
-          <div className="flex items-center gap-2 text-xs font-bold text-slate-400">
-            <Calendar className="w-4 h-4 text-emerald-400" />
-            <input
-              type="date"
-              value={teacherAttendanceDate}
-              onChange={(e) => setTeacherAttendanceDate(e.target.value)}
-              className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-white text-xs font-mono font-bold focus:outline-none focus:border-emerald-500"
-            />
-          </div>
+          {attendanceTab === "teachers" && (
+            <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 sm:py-1.5 self-stretch sm:self-auto justify-between sm:justify-start">
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 sm:hidden">Date</span>
+              <div className="flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-slate-400 shrink-0" />
+                <input
+                  type="date"
+                  value={teacherAttendanceDate}
+                  onChange={(e) => setTeacherAttendanceDate(e.target.value)}
+                  className="bg-transparent text-slate-900 dark:text-white text-xs font-mono font-semibold focus:outline-none cursor-pointer"
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         {attendanceTab === "students" ? (
           <div className="space-y-3">
             {displayedClasses.length > 1 && (
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-2.5 px-4 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar shadow-xs">
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <Clock className="w-4 h-4 text-emerald-400" />
-                  <span className="text-xs font-black text-white">कक्षा चुनें (Class):</span>
-                </div>
-                <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 flex items-center gap-3 shadow-2xs">
+                <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 whitespace-nowrap shrink-0">
+                  Class:
+                </span>
+                <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 flex-1">
                   {displayedClasses.map((c) => (
                     <button
                       key={c.id}
                       type="button"
                       onClick={() => setSelectedClass(c)}
-                      className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+                      className={`min-h-[34px] px-3 py-1 rounded-lg text-xs font-semibold transition cursor-pointer whitespace-nowrap shrink-0 ${
                         activeClass?.id === c.id
-                          ? "bg-emerald-600 text-white shadow-xs ring-1 ring-emerald-400"
-                          : "bg-slate-800 hover:bg-slate-700 text-slate-300"
+                          ? "bg-slate-900 text-white dark:bg-emerald-600 shadow-2xs"
+                          : "bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300"
                       }`}
                     >
                       {c.name} {c.section ? `(${c.section})` : ""}
@@ -6786,389 +9446,13 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                 onBack={() => setView("classes")}
               />
             ) : (
-              <div className="p-8 text-center text-slate-400">Pehle koi Class add karein.</div>
+              <div className="p-8 text-center bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs font-medium text-slate-500 dark:text-slate-400">
+                Please create a class first to mark student attendance.
+              </div>
             )}
           </div>
         ) : (
-          /* TEACHER ATTENDANCE & FACE ID DESK */
-          <div className="space-y-4 animate-in fade-in">
-            {/* Header Metrics Banner */}
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3 sm:p-4 text-center">
-                <p className="text-[11px] font-bold text-slate-400">कुल शिक्षक (Faculty)</p>
-                <p className="text-xl sm:text-2xl font-black text-white mt-0.5">{totalTeachersCount}</p>
-              </div>
-              <div className="bg-emerald-950/40 border border-emerald-500/30 rounded-2xl p-3 sm:p-4 text-center">
-                <p className="text-[11px] font-bold text-emerald-300">आज उपस्थित (Present)</p>
-                <p className="text-xl sm:text-2xl font-black text-emerald-400 mt-0.5">{presentTeachersCount}</p>
-              </div>
-              <div className="bg-rose-950/40 border border-rose-500/30 rounded-2xl p-3 sm:p-4 text-center">
-                <p className="text-[11px] font-bold text-rose-300">अनुपस्थित (Absent)</p>
-                <p className="text-xl sm:text-2xl font-black text-rose-400 mt-0.5">{absentTeachersCount}</p>
-              </div>
-              <div className="bg-purple-950/40 border border-purple-500/30 rounded-2xl p-3 sm:p-4 text-center">
-                <p className="text-[11px] font-bold text-purple-300">फेस आईडी रजिस्टर्ड</p>
-                <p className="text-xl sm:text-2xl font-black text-purple-400 mt-0.5">{enrolledTeachersCount}</p>
-              </div>
-              <div className="bg-amber-950/40 border border-amber-500/30 rounded-2xl p-3 sm:p-4 text-center col-span-2 sm:col-span-1">
-                <p className="text-[11px] font-bold text-amber-300">फेस आईडी बाकी</p>
-                <p className="text-xl sm:text-2xl font-black text-amber-400 mt-0.5">{pendingFaceTeachersCount}</p>
-              </div>
-            </div>
-
-            {/* Quick Actions & Search Strip */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3 sm:p-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 shadow-sm">
-              <div className="relative flex-1">
-                <Search className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
-                <input
-                  type="text"
-                  placeholder="शिक्षक का नाम, फोन या Employee ID खोजें..."
-                  value={teacherSearchInAttendance}
-                  onChange={(e) => setTeacherSearchInAttendance(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500"
-                />
-              </div>
-
-              <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  type="button"
-                  onClick={() => setShowFaceKioskModal(true)}
-                  className={`px-3.5 py-2 rounded-xl font-black text-xs flex items-center gap-1.5 active:scale-95 transition cursor-pointer ${
-                    hasFaceAttendanceAccess(school)
-                      ? "bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-md shadow-emerald-600/20"
-                      : "bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40"
-                  }`}
-                  title={hasFaceAttendanceAccess(school) ? "लाइव कैमरे से शिक्षक हाजिरी लगाएं" : "👑 Elite Plan Only — AI Face Attendance"}
-                >
-                  {hasFaceAttendanceAccess(school) ? <Sparkles className="w-4 h-4 text-amber-300" /> : <Lock className="w-3.5 h-3.5 text-amber-400" />}
-                  <span>📷 AI Face Kiosk</span>
-                  {!hasFaceAttendanceAccess(school) && (
-                    <span className="px-1.5 py-0.2 rounded bg-amber-500 text-slate-950 text-[9px] font-black">👑 Elite</span>
-                  )}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setFaceStudioInitialTab("TEACHERS");
-                    setFaceStudioTargetPerson(null);
-                    setShowFaceStudioModal(true);
-                  }}
-                  className={`px-3.5 py-2 rounded-xl font-black text-xs flex items-center gap-1.5 active:scale-95 transition cursor-pointer ${
-                    hasFaceAttendanceAccess(school)
-                      ? "bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-md shadow-purple-600/20"
-                      : "bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40"
-                  }`}
-                  title={hasFaceAttendanceAccess(school) ? "सभी शिक्षकों का फेस आईडी रजिस्टर व मैनेज करें" : "👑 Elite Plan Only — Live Face ID Studio"}
-                >
-                  {hasFaceAttendanceAccess(school) ? <Camera className="w-4 h-4 text-amber-200" /> : <Lock className="w-3.5 h-3.5 text-amber-400" />}
-                  <span>✨ शिक्षक फेस आईडी स्टूडियो</span>
-                  {!hasFaceAttendanceAccess(school) && (
-                    <span className="px-1.5 py-0.2 rounded bg-amber-500 text-slate-950 text-[9px] font-black">👑 Elite</span>
-                  )}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleMarkAllTeachersPresent}
-                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-emerald-500/30 font-black text-xs flex items-center gap-1.5 active:scale-95 transition cursor-pointer"
-                  title="आज सभी शिक्षकों को Present मार्क करें"
-                >
-                  <Check className="w-4 h-4" />
-                  <span>⚡ सभी Present (IN)</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleMarkAllTeachersOut}
-                  className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-1.5 active:scale-95 transition cursor-pointer"
-                  title="सभी उपस्थित शिक्षकों का OUT दर्ज करें"
-                >
-                  <LogOut className="w-4 h-4" />
-                  <span>🏃 सभी OUT</span>
-                </button>
-              </div>
-            </div>
-
-            {/* IN / OUT School Shift Timing Strip */}
-            {(() => {
-              const liveShift = getLiveShiftStatus(attendanceSchedule);
-              return (
-                <div className="bg-slate-900/90 border border-cyan-500/30 rounded-2xl p-3 space-y-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Clock className="w-4 h-4 text-cyan-400 shrink-0" />
-                      <span className="text-xs font-black text-white truncate">
-                        {liveShift.badgeText}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setShowAttScheduleEditor((p) => !p)}
-                      className="px-2.5 py-1 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/40 text-cyan-300 text-[11px] font-black cursor-pointer shrink-0"
-                    >
-                      {showAttScheduleEditor ? "बंद करें" : "⚙️ IN/OUT समय बदलें"}
-                    </button>
-                  </div>
-                  <p className="text-[11px] text-slate-400">
-                    {liveShift.helperText}
-                  </p>
-                  {showAttScheduleEditor && (
-                    <div className="pt-2 border-t border-slate-800 flex flex-wrap items-center gap-3 text-xs">
-                      <label className="flex items-center gap-1.5 font-bold text-slate-200">
-                        <span>🟢 IN कटऑफ:</span>
-                        <input
-                          type="time"
-                          value={attendanceSchedule.inCutoffTime}
-                          onChange={(e) => {
-                            const next = { ...attendanceSchedule, inCutoffTime: e.target.value };
-                            setAttendanceSchedule(next);
-                            if (schoolId) void saveAttendanceSchedule(schoolId, next);
-                          }}
-                          className="px-2 py-1 rounded-lg bg-slate-950 border border-slate-700 text-white font-mono"
-                        />
-                      </label>
-                      <label className="flex items-center gap-1.5 font-bold text-slate-200">
-                        <span>🔴 OUT शुरू:</span>
-                        <input
-                          type="time"
-                          value={attendanceSchedule.outStartTime}
-                          onChange={(e) => {
-                            const next = { ...attendanceSchedule, outStartTime: e.target.value };
-                            setAttendanceSchedule(next);
-                            if (schoolId) void saveAttendanceSchedule(schoolId, next);
-                          }}
-                          className="px-2 py-1 rounded-lg bg-slate-950 border border-slate-700 text-white font-mono"
-                        />
-                      </label>
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-
-            {/* Notice banner if some teachers have pending Face ID */}
-            {pendingFaceTeachersCount > 0 && (
-              <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-3 text-xs text-amber-300">
-                <div className="flex items-center gap-2.5">
-                  <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
-                  <span>
-                    <strong>महत्वपूर्ण सूचना:</strong> {pendingFaceTeachersCount} शिक्षकों का फेस आईडी अभी तक पंजीकृत नहीं हुआ है। पहले नीचे दिए गए <strong>"📷 Face ID जोड़ें"</strong> बटन पर क्लिक करके उनका चेहरा कैमरे से रजिस्टर करें।
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const firstPending = displayedTeachers.find(t => !enrolledFaceIds[t.id]);
-                    if (firstPending) handleOpenTeacherFaceEnrollment(firstPending);
-                  }}
-                  className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs shrink-0 cursor-pointer shadow-xs active:scale-95 transition"
-                >
-                  पहले शिक्षक का रजिस्टर करें →
-                </button>
-              </div>
-            )}
-
-            {/* Teachers Attendance & Face ID Cards List */}
-            {filteredTeachersForAttendance.length === 0 ? (
-              <div className="text-center py-16 bg-slate-900 border border-slate-800 rounded-3xl p-6 text-slate-400">
-                <Users className="w-12 h-12 mx-auto mb-3 opacity-30 text-purple-400" />
-                <p className="text-base font-bold text-white">कोई शिक्षक नहीं मिला</p>
-                <p className="text-xs text-slate-400 mt-1">खोज शब्द बदलें या शिक्षक प्रबंधन से नए शिक्षक जोड़ें।</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-                {filteredTeachersForAttendance.map((t) => {
-                  const rec = teacherRecordsMap[t.id];
-                  const isPresent = rec?.present === true;
-                  const isAbsent = rec?.present === false;
-                  const isLate = rec?.status === "late";
-                  const isFaceEnrolled = Boolean(enrolledFaceIds[t.id]);
-
-                  return (
-                    <div
-                      key={t.id}
-                      className={`p-4 rounded-3xl border transition flex flex-col justify-between space-y-3.5 ${
-                        isPresent
-                          ? "bg-slate-900/90 border-emerald-500/40 shadow-sm"
-                          : isAbsent
-                          ? "bg-slate-900/90 border-rose-500/40 shadow-sm"
-                          : "bg-slate-900/70 border-slate-800 hover:border-purple-500/40"
-                      }`}
-                    >
-                      {/* Teacher Profile & Face Status */}
-                      <div className="flex items-start gap-3">
-                        <div className="relative shrink-0">
-                          <div
-                            className={`w-13 h-15 rounded-2xl overflow-hidden border-2 flex items-center justify-center font-black text-white text-base ${
-                              isFaceEnrolled
-                                ? "border-emerald-400 shadow-md shadow-emerald-500/20"
-                                : "border-amber-400 shadow-md shadow-amber-500/20"
-                            } bg-gradient-to-tr from-purple-700 to-indigo-700`}
-                          >
-                            {t.photoUrl ? (
-                              <img src={t.photoUrl} alt={t.name} className="w-full h-full object-cover" />
-                            ) : (
-                              <span>{t.name ? t.name.charAt(0).toUpperCase() : "T"}</span>
-                            )}
-                          </div>
-                          {isFaceEnrolled && (
-                            <span
-                              className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[10px] font-black shadow-md border-2 border-slate-900"
-                              title="Face ID Verified"
-                            >
-                              ✓
-                            </span>
-                          )}
-                        </div>
-
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <h4 className="font-black text-sm text-white truncate">{t.name}</h4>
-                            <span
-                              className={`px-1.5 py-0.2 rounded text-[9px] font-black uppercase tracking-wider ${
-                                isPresent
-                                  ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
-                                  : isAbsent
-                                  ? "bg-rose-500/20 text-rose-300 border border-rose-500/40"
-                                  : "bg-slate-800 text-slate-400 border border-slate-700"
-                              }`}
-                            >
-                              {isPresent ? (isLate ? "विलंब (Late)" : "उपस्थित (Present)") : isAbsent ? "अनुपस्थित (Absent)" : "पेंडिंग (Pending)"}
-                            </span>
-                          </div>
-
-                          <p className="text-[11px] font-bold text-purple-300 truncate mt-0.5">
-                            {t.designation || "Faculty"} {t.subjects ? `• ${Array.isArray(t.subjects) ? t.subjects.join(", ") : t.subjects}` : ""}
-                          </p>
-
-                          <div className="flex items-center gap-2.5 text-[10px] text-slate-400 font-mono mt-1">
-                            {t.employeeId && <span>ID: {t.employeeId}</span>}
-                            {t.phone && <span>📞 {t.phone}</span>}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Face ID Status Strip & Direct Add Face ID Button */}
-                      <div className="p-2.5 rounded-2xl bg-slate-950/80 border border-slate-800 flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <div
-                            className={`w-7 h-7 rounded-xl flex items-center justify-center ${
-                              isFaceEnrolled
-                                ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
-                                : "bg-amber-500/20 text-amber-400 border border-amber-500/30 animate-pulse"
-                            }`}
-                          >
-                            <Camera className="w-3.5 h-3.5" />
-                          </div>
-                          <div>
-                            <p className="text-[10px] font-bold text-slate-400">बायोमेट्रिक पहचान</p>
-                            <p className={`text-xs font-black ${isFaceEnrolled ? "text-emerald-400" : "text-amber-400"}`}>
-                              {isFaceEnrolled ? "✅ Face ID रजिस्टर्ड" : "⚠️ Face ID बाकी है"}
-                            </p>
-                          </div>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => handleOpenTeacherFaceEnrollment(t)}
-                          className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition active:scale-95 cursor-pointer shadow-md ${
-                            isFaceEnrolled
-                              ? "bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
-                              : "bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-600/30 ring-2 ring-emerald-400/70"
-                          }`}
-                          title="लाइव कैमरे से इस शिक्षक का चेहरा स्कैन करें"
-                        >
-                          <Camera className="w-3.5 h-3.5" />
-                          <span>{isFaceEnrolled ? "री-स्कैन" : "📷 Face ID जोड़ें"}</span>
-                        </button>
-                      </div>
-
-                      {/* Attendance Punch Timings & Buttons */}
-                      <div className="pt-2 border-t border-slate-800/80 space-y-2">
-                        <div className="flex items-center justify-between gap-2 text-xs text-slate-300 font-mono px-1 flex-wrap">
-                          <span>
-                            आगमन: <strong className="text-emerald-400">{rec?.inTime || "--:--"}</strong>
-                          </span>
-                          <span>
-                            प्रस्थान:{" "}
-                            <strong className={rec?.outTime ? "text-amber-400" : "text-slate-400"}>
-                              {rec?.outTime || (rec?.inTime ? `Pending (${formatTime12h(attendanceSchedule.outStartTime)})` : "--:--")}
-                            </strong>
-                          </span>
-                          {rec?.stayDuration && (
-                            <span className="text-[11px] font-bold text-purple-300 bg-purple-950/60 px-1.5 py-0.5 rounded border border-purple-800/60">
-                              ⏱️ {rec.stayDuration}
-                            </span>
-                          )}
-                        </div>
-
-                        <div className="grid grid-cols-3 gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => handleTeacherPunchInAttendance(t, "in")}
-                            className={`py-1.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer active:scale-95 ${
-                              isPresent && !rec?.outTime
-                                ? "bg-emerald-600 text-white ring-2 ring-emerald-400 shadow"
-                                : "bg-emerald-950/40 text-emerald-300 hover:bg-emerald-900/60 border border-emerald-500/30"
-                            }`}
-                          >
-                            <LogIn className="w-3.5 h-3.5" />
-                            <span>Punch In</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleTeacherPunchInAttendance(t, "out")}
-                            className={`py-1.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer active:scale-95 ${
-                              rec?.outTime
-                                ? "bg-amber-600 text-white ring-2 ring-amber-400 shadow"
-                                : "bg-amber-950/40 text-amber-300 hover:bg-amber-900/60 border border-amber-500/30"
-                            }`}
-                          >
-                            <LogOut className="w-3.5 h-3.5" />
-                            <span>Punch Out</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleTeacherPunchInAttendance(t, "absent")}
-                            className={`py-1.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer active:scale-95 ${
-                              isAbsent
-                                ? "bg-rose-600 text-white ring-2 ring-rose-400 shadow"
-                                : "bg-rose-950/40 text-rose-300 hover:bg-rose-900/60 border border-rose-500/30"
-                            }`}
-                          >
-                            <X className="w-3.5 h-3.5" />
-                            <span>अनुपस्थित</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Footer Actions: ID Card & Call */}
-                      <div className="flex items-center justify-between gap-2 pt-1 text-[11px]">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedTeacherForIdCard(t)}
-                          className="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-indigo-500/30 font-bold flex items-center gap-1 cursor-pointer"
-                        >
-                          <CreditCard className="w-3 h-3" />
-                          <span>🪪 ID कार्ड</span>
-                        </button>
-                        {t.phone && (
-                          <a
-                            href={`tel:${t.phone}`}
-                            className="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/30 font-bold flex items-center gap-1"
-                          >
-                            <Phone className="w-3 h-3" />
-                            <span>कॉल करें</span>
-                          </a>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+          renderDailyTeacherAttendanceDesk()
         )}
       </div>
     );
@@ -7261,7 +9545,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         sessionId={activeSession?.id || ""}
         adminId={adminUid}
         initialTool="qr_scanner"
-        onBack={() => setView("fees")}
+        exitOnToolClose={true}
+        onBack={() => setView("dashboard")}
       />
     );
   }
@@ -7277,7 +9562,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         sessionId={activeSession?.id || ""}
         adminId={adminUid}
         initialTool="fee_alert"
-        onBack={() => setView("fees")}
+        exitOnToolClose={true}
+        onBack={() => setView("dashboard")}
       />
     );
   }
@@ -7293,23 +9579,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         sessionId={activeSession?.id || ""}
         adminId={adminUid}
         initialTool="header"
-        onBack={() => setView("fees")}
-      />
-    );
-  }
-
-  if (view === "admission_receipt") {
-    return renderErpShell(
-      <FeeManager
-        key={view}
-        schoolId={schoolId}
-        className="All Classes"
-        schoolName={school?.name}
-        school={school || undefined}
-        sessionId={activeSession?.id || ""}
-        adminId={adminUid}
-        initialTool="admission_receipt"
-        onBack={() => setView("fees")}
+        exitOnToolClose={true}
+        onBack={() => setView("dashboard")}
       />
     );
   }
@@ -7318,7 +9589,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     return renderErpShell(
       <RazorpaySettingsModal
         isOpen={true}
-        onClose={() => setView("fees")}
+        onClose={() => setView("dashboard")}
         schoolId={schoolId}
         schoolName={school?.name}
         adminUid={adminUid}
@@ -7366,6 +9637,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             subjects={subjects.filter(s => s.classId === activeClass.id)}
             adminId={adminUid}
             schoolName={school?.name}
+            school={school}
+            teachers={displayedTeachers}
             onBack={() => setView("classes")}
           />
         ) : (
@@ -7409,6 +9682,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             classId={activeClass.id}
             className={activeClass.name}
             sessionId={activeSession?.id || ""}
+            school={school}
+            teachers={displayedTeachers}
             onBack={() => setView("classes")}
           />
         ) : (
@@ -7490,7 +9765,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {displayedClasses.map((c) => {
-            const classStudents = students.filter(s => isStudentInClass(s, c.id, c.name));
+            const classStudents = displayedStudents.filter(s => isStudentInClass(s, c.id, c.name));
             return (
               <div key={c.id} className="p-4 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xs space-y-3">
                 <div className="flex items-center justify-between">
@@ -7523,10 +9798,10 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     return renderErpShell(
       <IdCardManager
         school={school!}
-        classes={classes}
-        students={students}
-        staff={staffList}
-        teachers={teachers}
+        classes={displayedClasses}
+        students={displayedStudents}
+        staff={displayedStaff}
+        teachers={displayedTeachers}
         onBack={() => setView("dashboard")}
       />
     );
@@ -7536,9 +9811,10 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     return renderErpShell(
       <AdmitCardManager
         school={school!}
-        classes={classes}
-        students={students}
+        classes={displayedClasses}
+        students={displayedStudents}
         activeSession={activeSession}
+        onSchoolUpdated={(updated) => setSchool((prev) => prev ? { ...prev, ...updated } : prev)}
         onBack={() => setView("dashboard")}
       />
     );
@@ -7548,8 +9824,8 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     return renderErpShell(
       <CertificateManager
         school={school!}
-        classes={classes}
-        students={students}
+        classes={displayedClasses}
+        students={displayedStudents}
         onBack={() => setView("dashboard")}
       />
     );
@@ -7560,23 +9836,33 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       <div className="pb-12 w-full max-w-full overflow-x-hidden print:p-0 print:pb-0 print:overflow-visible">
         <MarksheetGenerator
           school={school!}
-          classes={classes}
-          students={students}
+          classes={displayedClasses}
+          students={displayedStudents}
+          teachers={displayedTeachers}
           activeSession={activeSession}
+          onSchoolUpdated={(updated) => setSchool((prev) => prev ? { ...prev, ...updated } : prev)}
           onBack={() => setView("dashboard")}
         />
       </div>
     );
   }
 
-  if (view === "promotion") {
+  if (view === "readmission") {
     return renderErpShell(
-      <StudentPromotionManager
-        schoolId={schoolId}
-        sessions={sessions}
-        classes={classes}
-        students={students}
+      <StudentReAdmissionManager
+        school={school!}
+        sessions={displayedSessions}
+        allClasses={classes}
+        allStudents={students}
+        activeSession={activeSession}
         onBack={() => setView("dashboard")}
+        onActivateSession={handleActivateSession}
+        onReAdmitted={(newSt) => {
+          setStudents(prev => [newSt, ...prev.filter(s => s.id !== newSt.id)]);
+        }}
+        onUndoReAdmitted={(removedId) => {
+          setStudents(prev => prev.filter(s => s.id !== removedId));
+        }}
       />
     );
   }
@@ -7625,12 +9911,31 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     );
   }
 
+  if (view === "website_cms") {
+    return renderErpShell(
+      <SchoolWebsiteCms
+        school={school!}
+        teachers={displayedTeachers}
+        isSuperAdmin={Boolean(isSuperAdmin)}
+        onSchoolUpdated={(updated) => setSchool(updated)}
+        onTeacherUpdated={(teacherId, patch) => {
+          setTeachers(prev => prev.map(t => (t.id === teacherId ? { ...t, ...patch } : t)));
+        }}
+        onPreviewWebsite={() => setView("public_website")}
+        onUpgradePlan={() => setView("subscription")}
+        onBack={() => setView("dashboard")}
+      />
+    );
+  }
+
   if (view === "public_website") {
     return renderErpShell(
       <PublicSchoolWebsite
         school={school!}
-        classes={classes}
-        sessions={sessions}
+        classes={displayedClasses}
+        sessions={displayedSessions}
+        teachers={displayedTeachers}
+        students={displayedStudents}
         onBack={() => setView("dashboard")}
         onOpenAdmission={() => setView("online_admissions")}
         onOpenVerification={(type) => {
@@ -7656,27 +9961,14 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     );
   }
 
-  if (view === "online_admission_fee") {
-    return renderErpShell(
-      <OnlineAdmissionManager
-        school={school!}
-        classes={classes}
-        sessions={sessions}
-        activeSession={activeSession}
-        isAdmin={true}
-        viewMode="fee_setup_only"
-        onBack={() => setView("dashboard")}
-      />
-    );
-  }
-
-  if (view === "fee_structure") {
+  if (view === "online_admission_fee" || view === "fee_structure") {
     return renderErpShell(
       <ClassFeeStructureSection
         schoolId={schoolId}
         sessionId={activeSession?.id}
         classes={classes}
         teachers={displayedTeachers}
+        viewMode="classes_only"
         onBack={() => setView("dashboard")}
         onClassesUpdated={() => {}}
         onTeachersUpdated={() => {}}
@@ -7848,16 +10140,34 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
   if (view === "expenses") {
     return renderErpShell(
-      <SchoolExpenseManager
-        school={school}
-        activeSession={activeSession}
-      />
+      <div className="space-y-3">
+        <button
+          type="button"
+          onClick={() => setView("dashboard")}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition cursor-pointer shadow-xs"
+        >
+          <ChevronLeft className="w-4 h-4" />
+          <span>Back to Dashboard</span>
+        </button>
+        <SchoolExpenseManager
+          school={school}
+          activeSession={activeSession}
+        />
+      </div>
     );
   }
 
   if (view === "leaves_desk") {
     return renderErpShell(
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-4xl mx-auto space-y-3">
+        <button
+          type="button"
+          onClick={() => setView("dashboard")}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition cursor-pointer shadow-xs"
+        >
+          <ChevronLeft className="w-4 h-4" />
+          <span>Back to Dashboard</span>
+        </button>
         <ParentLeaveManager
           school={school}
           mode="TEACHER_ADMIN"
@@ -7881,18 +10191,73 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
   if (view === "staff_payroll") {
     return renderErpShell(
-      <StaffPayrollManager
-        school={school}
-        activeSession={activeSession}
-      />
+      <div className="space-y-3">
+        <button
+          type="button"
+          onClick={() => setView("dashboard")}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition cursor-pointer shadow-xs"
+        >
+          <ChevronLeft className="w-4 h-4" />
+          <span>Back to Dashboard</span>
+        </button>
+        <StaffPayrollManager
+          school={school}
+          activeSession={activeSession}
+          teachers={displayedTeachers}
+          staffList={displayedStaff}
+        />
+      </div>
     );
   }
 
   if (view === "question_paper_builder") {
     return renderErpShell(
-      <QuestionPaperBuilder
-        school={school}
-        activeSession={activeSession}
+      <div className="space-y-3">
+        <button
+          type="button"
+          onClick={() => setView("dashboard")}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition cursor-pointer shadow-xs"
+        >
+          <ChevronLeft className="w-4 h-4" />
+          <span>Back to Dashboard</span>
+        </button>
+        <QuestionPaperBuilder
+          school={school}
+          activeSession={activeSession}
+        />
+      </div>
+    );
+  }
+
+  if (view === "entrance_test_hub") {
+    return renderErpShell(
+      <EntranceTestAdminManager
+        school={school!}
+        onBack={() => setView("dashboard")}
+        onSchoolUpdated={(updated) => setSchool(updated)}
+        onConvertLeadToAdmission={(attempt) => {
+          const evalSummary = evaluateEntranceScore(
+            attempt.percentage,
+            attempt.classLabel,
+            attempt.classLevel
+          );
+          saveEntranceAdmissionPrefill({
+            schoolId: school?.id || "",
+            studentName: attempt.studentName,
+            phone: attempt.phone,
+            classLevel: attempt.classLevel,
+            classLabel: attempt.classLabel,
+            attemptsUsed: attempt.attemptNumber,
+            bestScorePct: attempt.percentage,
+            lastSetId: attempt.setId,
+            evaluationTier: evalSummary.tier,
+            evaluationTag: evalSummary.adminShortBadge,
+            recommendedClassLevel: evalSummary.recommendedClassLevel,
+            recommendedClassLabel: evalSummary.recommendedClassLabel,
+            createdAt: new Date().toISOString(),
+          });
+          setView("online_admissions");
+        }}
       />
     );
   }
@@ -7900,10 +10265,12 @@ export const SchoolAdminPanel: React.FC<Props> = ({
   if (view === "receipt_cancellation") {
     return renderErpShell(
       <ReceiptCancellationModal
+        asPage={true}
         isOpen={true}
-        onClose={() => setView("fees")}
+        onClose={() => setView("dashboard")}
         school={school}
         activeSession={activeSession}
+        defaultAuthorizedBy={school?.principalName || "Admin (Principal)"}
         onReceiptCancelled={() => {}}
       />
     );
@@ -7986,7 +10353,44 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     );
   }
 
+  if (view === "admission_crm") {
+    return renderErpShell(
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <button
+            type="button"
+            onClick={() => setView("dashboard")}
+            className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-200 flex items-center gap-1.5 cursor-pointer"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            <span>Back to Dashboard</span>
+          </button>
+        </div>
+        <AdmissionEnquiryCrm
+          school={school!}
+          classes={displayedClasses}
+          students={displayedStudents}
+          onConvertToAdmission={() => setView("online_admissions")}
+        />
+      </div>
+    );
+  }
+
+  if (view === "student_growth_safety") {
+    return renderErpShell(
+      <TeacherAdminGrowthHub
+        school={school!}
+        classes={displayedClasses}
+        students={displayedStudents}
+        actorName={school?.principalName || "School Admin"}
+        canBroadcastEmergency={true}
+        onBack={() => setView("dashboard")}
+      />
+    );
+  }
+
   const menuItems = [
+    { label: "Growth Diary, Skills & SOS", subtitle: "Daily Diary, 6-Skills, Health & Alerts", icon: <Sparkles className="w-5 h-5 text-indigo-400" />, view: "student_growth_safety", count: "Trust ⚡", locked: false, featured: true },
     { label: "Multi-Branch & Franchise Hub", subtitle: "1-Click Campus Switcher & Consolidated Stats", icon: <Building2 className="w-5 h-5 text-indigo-500" />, view: "multi_branch", count: "Multi-Campus 🏢", locked: false, featured: true },
     { label: "Hostel & Mess Management", subtitle: "Rooms, Bed Allocation & 7-Day Diet Plan", icon: <Building2 className="w-5 h-5 text-amber-500" />, view: "hostel_mess", count: "Hostel 🛏️", locked: false, featured: true },
     { label: "Syllabus Pacing Tracker", subtitle: "Chapter Velocity, Backlog & Teacher Alerts", icon: <TrendingUp className="w-5 h-5 text-emerald-500" />, view: "syllabus_pacing", count: "Pacing 🎯", locked: false, featured: true },
@@ -8006,48 +10410,68 @@ export const SchoolAdminPanel: React.FC<Props> = ({
     { label: "School Store & Stock", subtitle: "Uniforms, Books & POS Bill", icon: <Package className="w-5 h-5 text-orange-500" />, view: "inventory_store", count: "Stock", locked: false },
     { label: "Students", subtitle: "Admissions & Profiles", icon: <Users className="w-5 h-5 text-orange-500" />, view: "students", count: displayedStudents.length, locked: false },
     { label: "Fee Collection", subtitle: "Monthly Ledger & Receipts", icon: <IndianRupee className="w-5 h-5 text-emerald-500" />, view: "fees", count: "Live Sync", locked: false },
+    { label: "Scan QR to Pay", subtitle: "Instant ID Card Fee Collect", icon: <QrCode className="w-5 h-5 text-cyan-500" />, view: "qr_pay", count: "Fast Pay", locked: false, featured: true },
     { label: "QR ID Cards", subtitle: "Print & Scan Student ID", icon: <CreditCard className="w-5 h-5 text-indigo-500" />, view: "id_cards", count: "Live QR", locked: false },
     { label: "Classes", subtitle: "Sections, Attendance & Marks", icon: <BookOpen className="w-5 h-5 text-purple-500" />, view: "classes", count: displayedClasses.length, locked: false },
-    { label: "Teachers", subtitle: "Faculty Accounts & Access", icon: <Users className="w-5 h-5 text-green-500" />, view: "teachers", count: displayedTeachers.length, locked: false },
-    { label: "Fee Structure & Heads", subtitle: "Student Fee & Teacher Pay", icon: <IndianRupee className="w-5 h-5 text-emerald-600" />, view: "fee_structure", count: "Heads & Pay", locked: false },
+    { label: "Teachers & Staff Hub", subtitle: "Directory, Salary, Slips & HRM", icon: <Users className="w-5 h-5 text-green-500" />, view: "teachers", count: displayedTeachers.length, locked: false },
+    { label: "Fee Structure & Heads", subtitle: "Class & Online Admission Heads", icon: <IndianRupee className="w-5 h-5 text-emerald-600" />, view: "fee_structure", count: "Class + Adm", locked: false },
     { label: "Marksheet (रिजल्ट)", subtitle: "Report Card & Print", icon: <FileSpreadsheet className="w-5 h-5 text-emerald-600" />, view: "marksheet_hub", count: "Official", locked: false },
     { label: "Notice Board & Holidays", subtitle: "Circulars & Festival Holidays", icon: <Megaphone className="w-5 h-5 text-purple-600" />, view: "notices", count: "Circulars", locked: false },
     { label: "Admit Cards", subtitle: "Exam Hall Tickets", icon: <FileText className="w-5 h-5 text-rose-500" />, view: "admit_cards", count: "Hall Ticket", locked: false },
     { label: "Certificates", subtitle: "TC, Bonafide & Merit", icon: <Award className="w-5 h-5 text-amber-500" />, view: "certificates", count: "TC & Merit", locked: false },
-    { label: "Class Promotion", subtitle: "Next Session Upgrade", icon: <TrendingUp className="w-5 h-5 text-blue-600" />, view: "promotion", count: "Promote", locked: false },
-    { label: "Staff HRM & Leaves", subtitle: "Payroll & Attendance", icon: <Briefcase className="w-5 h-5 text-teal-600" />, view: "staff_hrm", count: "Salaries", locked: false },
+    { label: "Re-Admission (पुनः प्रवेश)", subtitle: "Back Due & Next Session", icon: <UserPlus className="w-5 h-5 text-blue-600" />, view: "readmission", count: "पुनः प्रवेश", locked: false },
     { label: "Reports & Print", subtitle: "40+ Register Sheets", icon: <FileSpreadsheet className="w-5 h-5 text-cyan-600" />, view: "reports_hub", count: "40+ Reports", locked: false },
-    { label: "Sessions", subtitle: "Academic Years", icon: <Calendar className="w-5 h-5 text-blue-500" />, view: "sessions", count: displayedSessions.length, locked: false },
-    { label: "Public Website", subtitle: "Live School Portal", icon: <Globe className="w-5 h-5 text-indigo-500" />, view: "public_website", count: "Live", locked: false },
+    { label: "Website Manager (CMS)", subtitle: "Custom Banner, Photos & Gallery", icon: <Sparkles className="w-5 h-5 text-amber-500" />, view: "website_cms", count: isSchoolEliteCurriculum(school) ? "Elite 👑" : "Elite Req", locked: false, featured: true },
+    { label: "Public Website", subtitle: isSchoolEliteCurriculum(school) ? "Live Custom School Portal" : "Default Website (Lite)", icon: <Globe className="w-5 h-5 text-indigo-500" />, view: "public_website", count: "Live", locked: false },
     { label: "Online Admissions", subtitle: "New Enquiries", icon: <UserPlus className="w-5 h-5 text-amber-500" />, view: "online_admissions", count: "Portal", locked: false },
   ];
 
   // ── ACCOUNT & SWITCH HUB PAGE (Dedicated screen for role switch, app explore & account actions) ──
   const renderAccountHubPage = () => {
     const displaySchoolLogo = school ? getSavedSchoolLogo(school.logoUrl, schoolId) : "";
+    const isWhite = appTheme === "white";
+    const isBlack = appTheme === "black";
+
+    const cardSurface = isWhite
+      ? "bg-white border-slate-200 text-slate-900"
+      : isBlack
+      ? "bg-neutral-950 border-neutral-800 text-white"
+      : "bg-[#102348] border-[#25457d] text-white";
+
+    const titleColor = isWhite ? "text-slate-900" : "text-white";
+    const mutedColor = isWhite ? "text-slate-600" : "text-slate-300";
+
     return (
       <div className="space-y-6 max-w-4xl mx-auto pb-12 animate-in fade-in duration-200">
         {/* Top Header Card with Back Button */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+        <div className={`flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 rounded-2xl border shadow-sm ${cardSurface}`}>
           <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={() => setView("dashboard")}
-              className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition cursor-pointer active:scale-95"
+              className={`p-2 rounded-xl transition cursor-pointer active:scale-95 ${
+                isWhite
+                  ? "bg-slate-100 hover:bg-slate-200 text-slate-700"
+                  : "bg-white/10 hover:bg-white/20 text-slate-200"
+              }`}
               title="डैशबोर्ड पर वापस जाएँ"
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
             <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className={`text-base sm:text-lg font-black ${titleColor}`}>
                   अकाउंट व स्विच हब (Account Hub)
                 </h2>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 font-bold">
+                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                  isWhite
+                    ? "bg-blue-100 text-blue-800"
+                    : "bg-blue-500/25 text-blue-200 border border-blue-400/30"
+                }`}>
                   All-in-One
                 </span>
               </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
+              <p className={`text-xs ${mutedColor}`}>
                 Teacher, Accountant, Student व्यू, NSTA लर्निंग ऐप व लॉगआउट विकल्प
               </p>
             </div>
@@ -8063,31 +10487,49 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         </div>
 
         {/* School & Admin Profile Summary Card */}
-        <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white border border-indigo-500/30 shadow-lg">
+        <div className={`p-4 sm:p-5 rounded-2xl border-2 shadow-md ${
+          isWhite
+            ? "bg-gradient-to-r from-blue-50 via-indigo-50 to-sky-50 text-slate-900 border-indigo-200"
+            : isBlack
+            ? "bg-gradient-to-r from-neutral-950 via-neutral-900 to-indigo-950/60 text-white border-indigo-500/60"
+            : "bg-gradient-to-r from-[#0e2042] via-[#132b57] to-[#1a346b] text-white border-indigo-400/50"
+        }`}>
           <div className="flex flex-col sm:flex-row items-center sm:items-start justify-between gap-4">
             <div className="flex flex-col sm:flex-row items-center sm:items-center gap-3.5 text-center sm:text-left">
               {displaySchoolLogo ? (
                 <img
                   src={displaySchoolLogo}
                   alt={school?.name}
-                  className="w-16 h-16 rounded-2xl object-contain bg-white/10 p-1.5 border border-white/20 shadow-md"
+                  className="w-16 h-16 rounded-2xl object-contain bg-white p-1.5 border-2 border-indigo-500/50 shadow-sm"
                 />
               ) : (
-                <div className="w-16 h-16 rounded-2xl bg-indigo-600/40 border border-indigo-400/40 flex items-center justify-center text-amber-300 shadow-md">
+                <div className={`w-16 h-16 rounded-2xl border-2 flex items-center justify-center shadow-sm ${
+                  isWhite
+                    ? "bg-indigo-100 border-indigo-300 text-indigo-700"
+                    : "bg-indigo-600/30 border-indigo-400/50 text-amber-300"
+                }`}>
                   <Building2 className="w-8 h-8" />
                 </div>
               )}
               <div>
-                <h3 className="text-lg font-black text-white">{school?.name || "School Ecosystem"}</h3>
-                <p className="text-xs text-indigo-200 mt-0.5">
-                  {school?.code ? `Code: ${school.code} • ` : ""}
+                <h3 className={`text-lg font-black ${titleColor}`}>{school?.name || "School Ecosystem"}</h3>
+                <p className={`text-xs font-semibold mt-0.5 ${isWhite ? "text-indigo-800" : "text-indigo-200"}`}>
+                  {getVisibleSchoolRegNo(school) ? `Reg. No: ${getVisibleSchoolRegNo(school)} • ` : ""}
                   सत्र: {activeSession?.name || getDynamicAcademicSessionLabel()}
                 </p>
                 <div className="flex flex-wrap items-center justify-center sm:justify-start gap-1.5 mt-2">
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold">
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${
+                    isWhite
+                      ? "bg-emerald-100 text-emerald-900 border-emerald-300"
+                      : "bg-emerald-500/20 text-emerald-200 border-emerald-400/35"
+                  }`}>
                     🛡️ स्कूल एडमिनिस्ट्रेटर (Active Admin)
                   </span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30 font-bold">
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${
+                    isWhite
+                      ? "bg-blue-100 text-blue-900 border-blue-300"
+                      : "bg-blue-500/20 text-blue-200 border-blue-400/35"
+                  }`}>
                     🏛️ डायरेक्ट स्कूल पोर्टल
                   </span>
                 </div>
@@ -8096,7 +10538,11 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             <button
               type="button"
               onClick={() => setView("school_profile")}
-              className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold border border-white/20 flex items-center gap-1.5 transition cursor-pointer active:scale-95"
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold border flex items-center gap-1.5 transition cursor-pointer active:scale-95 ${
+                isWhite
+                  ? "bg-indigo-700 hover:bg-indigo-800 text-white border-indigo-800"
+                  : "bg-white/10 hover:bg-white/20 text-white border-white/25"
+              }`}
             >
               <Settings className="w-3.5 h-3.5" />
               <span>स्कूल सेटिंग्स (Settings)</span>
@@ -8104,65 +10550,81 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Section 1: Explore Full NSTA Learning App */}
-        <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-indigo-900/40 via-purple-900/30 to-slate-900/50 border border-indigo-500/30 shadow-md">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <div className="flex items-start gap-3">
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-amber-400 to-indigo-600 p-0.5 shrink-0 shadow-lg">
-                <div className="w-full h-full rounded-2xl bg-slate-950 flex items-center justify-center text-amber-300">
-                  <Sparkles className="w-6 h-6 animate-pulse" />
+        {/* Section 1: Explore Full NSTA Learning App (Only shown when platform content access is passed, e.g. SuperAdmin) */}
+        {onOpenPlatformContent && (
+          <div className={`p-4 sm:p-5 rounded-2xl border-2 shadow-md ${
+            isWhite
+              ? "bg-gradient-to-br from-indigo-50 via-purple-50 to-sky-50 border-indigo-200 text-slate-900"
+              : isBlack
+              ? "bg-gradient-to-br from-neutral-950 via-neutral-900 to-indigo-950/60 border-indigo-500/60 text-white"
+              : "bg-gradient-to-br from-[#0e2042] via-[#132b57] to-[#1a346b] border-indigo-400/50 text-white"
+          }`}>
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-amber-400 to-indigo-600 p-0.5 shrink-0 shadow-lg">
+                  <div className={`w-full h-full rounded-2xl flex items-center justify-center ${
+                    isWhite ? "bg-indigo-950 text-amber-300" : "bg-slate-950 text-amber-300"
+                  }`}>
+                    <Sparkles className="w-6 h-6" />
+                  </div>
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className={`text-base font-black ${titleColor}`}>
+                      Explore Full NSTA App
+                    </h3>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                      isWhite
+                        ? "bg-amber-100 text-amber-800 border-amber-300"
+                        : "bg-amber-500/20 text-amber-300 border-amber-400/40"
+                    }`}>
+                      53+ Books &amp; MCQs
+                    </span>
+                  </div>
+                  <p className={`text-xs mt-1 max-w-xl ${mutedColor}`}>
+                    मुख्य NSTA स्टूडेंट लर्निंग ऐप खोलें: NCERT किताबें, डेली क्विज, टेस्ट सीरीज, डिजिटल लाइब्रेरी व कॉम्पिटिटिव स्टडी रूम।
+                  </p>
                 </div>
               </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-base font-black text-slate-900 dark:text-white">
-                    Explore Full NSTA App
-                  </h3>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-300 border border-amber-500/30">
-                    53+ Books &amp; MCQs
-                  </span>
-                </div>
-                <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 max-w-xl">
-                  मुख्य NSTA स्टूडेंट लर्निंग ऐप खोलें: NCERT किताबें, डेली क्विज, टेस्ट सीरीज, डिजिटल लाइब्रेरी व कॉम्पिटिटिव स्टडी रूम।
-                </p>
-              </div>
+              <button
+                type="button"
+                onClick={handleExploreFullApp}
+                className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:from-indigo-500 hover:to-pink-500 text-white font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30 cursor-pointer active:scale-95 transition shrink-0"
+              >
+                <span>मुख्य ऐप खोलें (Open App)</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={handleExploreFullApp}
-              className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:from-indigo-500 hover:to-pink-500 text-white font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30 cursor-pointer active:scale-95 transition shrink-0"
-            >
-              <span>मुख्य ऐप खोलें (Open App)</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
           </div>
-        </div>
+        )}
 
         {/* Section 2: Role & Dashboard View Switcher */}
         <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs sm:text-sm font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <h3 className={`text-xs sm:text-sm font-black uppercase tracking-wider ${mutedColor}`}>
               डैशबोर्ड व्यू स्विच करें (Dashboard Role Views)
             </h3>
-            <span className="text-[11px] text-slate-400">पोर्टल को अन्य रोल के नजरिए से देखें</span>
+            <span className={`text-[11px] ${isWhite ? "text-slate-500" : "text-slate-400"}`}>पोर्टल को अन्य रोल के नजरिए से देखें</span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {/* Teacher View */}
-            <div className="p-4 rounded-2xl bg-white dark:bg-slate-800 border border-emerald-500/30 hover:border-emerald-500 shadow-sm transition flex flex-col justify-between gap-3 group">
+            <div className={`p-4 rounded-2xl border hover:border-emerald-500 shadow-sm transition flex flex-col justify-between gap-3 group ${cardSurface} border-emerald-500/35`}>
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-xl">
                     👨‍🏫
                   </div>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                    isWhite ? "bg-emerald-100 text-emerald-800" : "bg-emerald-500/15 text-emerald-300"
+                  }`}>
                     शिक्षक पैनल
                   </span>
                 </div>
-                <h4 className="text-sm font-black text-slate-900 dark:text-white">
+                <h4 className={`text-sm font-black ${titleColor}`}>
                   Teacher View
                 </h4>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                <p className={`text-xs mt-1 ${mutedColor}`}>
                   दैनिक अटेंडेंस, होमवर्क डायरी, क्लास नोट्स व मार्क्स एंट्री इंटरफेस।
                 </p>
               </div>
@@ -8179,20 +10641,22 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             </div>
 
             {/* Accountant View */}
-            <div className="p-4 rounded-2xl bg-white dark:bg-slate-800 border border-amber-500/30 hover:border-amber-500 shadow-sm transition flex flex-col justify-between gap-3 group">
+            <div className={`p-4 rounded-2xl border hover:border-amber-500 shadow-sm transition flex flex-col justify-between gap-3 group ${cardSurface} border-amber-500/35`}>
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-xl">
                     💼
                   </div>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                    isWhite ? "bg-amber-100 text-amber-800" : "bg-amber-500/15 text-amber-300"
+                  }`}>
                     लेखापाल पैनल
                   </span>
                 </div>
-                <h4 className="text-sm font-black text-slate-900 dark:text-white">
+                <h4 className={`text-sm font-black ${titleColor}`}>
                   Accountant View
                 </h4>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                <p className={`text-xs mt-1 ${mutedColor}`}>
                   फीस वसूली, रसीद जनरेशन, डे-बुक, पेंडिंग ड्यूज व फाइनेंशियल रिपोर्ट्स।
                 </p>
               </div>
@@ -8209,20 +10673,22 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             </div>
 
             {/* Student View */}
-            <div className="p-4 rounded-2xl bg-white dark:bg-slate-800 border border-purple-500/30 hover:border-purple-500 shadow-sm transition flex flex-col justify-between gap-3 group">
+            <div className={`p-4 rounded-2xl border hover:border-purple-500 shadow-sm transition flex flex-col justify-between gap-3 group ${cardSurface} border-purple-500/35`}>
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <div className="w-10 h-10 rounded-xl bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-xl">
                     🎓
                   </div>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-600 dark:text-purple-400">
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                    isWhite ? "bg-purple-100 text-purple-800" : "bg-purple-500/15 text-purple-300"
+                  }`}>
                     छात्र / पैरेंट
                   </span>
                 </div>
-                <h4 className="text-sm font-black text-slate-900 dark:text-white">
+                <h4 className={`text-sm font-black ${titleColor}`}>
                   Student View
                 </h4>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                <p className={`text-xs mt-1 ${mutedColor}`}>
                   रिजल्ट मार्कशीट, उपस्थिति रिकॉर्ड, डिजिटल नोटिस बोर्ड व फीस स्लिप।
                 </p>
               </div>
@@ -8242,22 +10708,22 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
         {/* Section 3: School Management & Session Actions */}
         <div className="space-y-3">
-          <h3 className="text-xs sm:text-sm font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">
+          <h3 className={`text-xs sm:text-sm font-black uppercase tracking-wider ${mutedColor}`}>
             स्कूल व सत्र विकल्प (Session &amp; School Actions)
           </h3>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {canExitSchool && (
-              <div className="p-4 rounded-2xl bg-white dark:bg-slate-800 border border-amber-500/30 shadow-sm flex items-center justify-between gap-3">
+              <div className={`p-4 rounded-2xl border shadow-sm flex items-center justify-between gap-3 ${cardSurface} border-amber-500/35`}>
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-amber-500/15 flex items-center justify-center text-amber-600 shrink-0">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/15 flex items-center justify-center text-amber-500 shrink-0">
                     <Building2 className="w-5 h-5" />
                   </div>
                   <div>
-                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                    <h4 className={`text-sm font-bold ${titleColor}`}>
                       Leave School (स्कूल छोड़ें)
                     </h4>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                    <p className={`text-xs ${mutedColor}`}>
                       इस स्कूल से अपना खाता अलग (detach) करें
                     </p>
                   </div>
@@ -8265,23 +10731,27 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                 <button
                   type="button"
                   onClick={() => setShowLeaveConfirmModal(true)}
-                  className="px-3.5 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-700 dark:text-amber-300 font-bold text-xs cursor-pointer active:scale-95 transition shrink-0"
+                  className={`px-3.5 py-2 rounded-xl border font-bold text-xs cursor-pointer active:scale-95 transition shrink-0 ${
+                    isWhite
+                      ? "bg-amber-50 hover:bg-amber-100 border-amber-300 text-amber-800"
+                      : "bg-amber-500/15 hover:bg-amber-500/25 border-amber-500/40 text-amber-300"
+                  }`}
                 >
                   Leave
                 </button>
               </div>
             )}
 
-            <div className="p-4 rounded-2xl bg-white dark:bg-slate-800 border border-rose-500/30 shadow-sm flex items-center justify-between gap-3">
+            <div className={`p-4 rounded-2xl border shadow-sm flex items-center justify-between gap-3 ${cardSurface} border-rose-500/35`}>
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-rose-500/15 flex items-center justify-center text-rose-600 shrink-0">
+                <div className="w-10 h-10 rounded-xl bg-rose-500/15 flex items-center justify-center text-rose-500 shrink-0">
                   <LogOut className="w-5 h-5" />
                 </div>
                 <div>
-                  <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                  <h4 className={`text-sm font-bold ${titleColor}`}>
                     Admin Logout (एडमिन लॉगआउट)
                   </h4>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                  <p className={`text-xs ${mutedColor}`}>
                     स्कूल एडमिन सत्र सुरक्षित रूप से समाप्त करें
                   </p>
                 </div>
@@ -8302,7 +10772,11 @@ export const SchoolAdminPanel: React.FC<Props> = ({
           <button
             type="button"
             onClick={() => setView("dashboard")}
-            className="px-6 py-3 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white dark:bg-slate-800 dark:hover:bg-slate-700 font-bold text-sm flex items-center gap-2 shadow-lg cursor-pointer active:scale-95 transition"
+            className={`px-6 py-3 rounded-2xl font-bold text-sm flex items-center gap-2 shadow-lg cursor-pointer active:scale-95 transition ${
+              isWhite
+                ? "bg-slate-900 hover:bg-slate-800 text-white"
+                : "bg-indigo-600 hover:bg-indigo-500 text-white"
+            }`}
           >
             <ChevronLeft className="w-4 h-4" />
             <span>डैशबोर्ड पर वापस लौटें (Back to Dashboard)</span>
@@ -8349,11 +10823,11 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto shrink-0">
               <button
                 type="button"
-                onClick={() => setShowSessionRollOverModal(true)}
-                className="px-4 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-purple-600/20 transition cursor-pointer active:scale-95"
+                onClick={() => setView("readmission")}
+                className="px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-emerald-600/20 transition cursor-pointer active:scale-95"
               >
-                <GraduationCap className="w-4 h-4" />
-                <span>🎓 छात्र सत्र प्रमोशन (Roll-Over)</span>
+                <UserPlus className="w-4 h-4" />
+                <span>🔄 छात्र पुनः प्रवेश (Re-Admission)</span>
               </button>
 
               <button
@@ -8578,24 +11052,26 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                             <span>सक्रिय करें (Switch to this)</span>
                           </button>
                         )}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingSessionId(s.id);
-                            setEditSessionForm({
-                              name: s.name,
-                              startDate: s.startDate || "",
-                              endDate: s.endDate || ""
-                            });
-                            setShowForm(null);
-                          }}
-                          className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
-                          title="सत्र विवरण बदलें"
-                        >
-                          <Edit3 className="w-3.5 h-3.5 text-blue-500" />
-                          <span>Edit</span>
-                        </button>
-                        {displayedSessions.length > 1 && (
+                        {!isDemoSessionId(s.id) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingSessionId(s.id);
+                              setEditSessionForm({
+                                name: s.name,
+                                startDate: s.startDate || "",
+                                endDate: s.endDate || ""
+                              });
+                              setShowForm(null);
+                            }}
+                            className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                            title="सत्र विवरण बदलें"
+                          >
+                            <Edit3 className="w-3.5 h-3.5 text-blue-500" />
+                            <span>Edit</span>
+                          </button>
+                        )}
+                        {!isDemoSessionId(s.id) && displayedSessions.filter(x => !isDemoSessionId(x.id)).length > 1 && (
                           <button
                             type="button"
                             onClick={() => handleDeleteSession(s)}
@@ -9289,7 +11765,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                                 <Sparkles className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
                                 <span>Advanced Tools & Printouts</span>
                                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300">
-                                  ID Cards • Admit Cards • Promotion
+                                  ID Cards • Admit Cards • Re-Admission
                                 </span>
                               </div>
                               {isToolsExpanded ? (
@@ -9331,17 +11807,17 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                                   </div>
                                 </button>
 
-                                {/* Student Promotion */}
+                                {/* Student Re-Admission */}
                                 <button
                                   type="button"
-                                  onClick={() => { setSelectedClass(cls); setView("promotion"); }}
+                                  onClick={() => { setSelectedClass(cls); setView("readmission"); }}
                                   className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-emerald-400 dark:hover:border-emerald-500 transition text-left flex items-center gap-2.5 group cursor-pointer"
                                 >
                                   <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-400 flex items-center justify-center shrink-0">
-                                    <GraduationCap className="w-4 h-4" />
+                                    <UserPlus className="w-4 h-4" />
                                   </div>
                                   <div className="min-w-0 flex-1">
-                                    <p className="text-xs font-black text-slate-800 dark:text-white leading-tight">Promotion</p>
+                                    <p className="text-xs font-black text-slate-800 dark:text-white leading-tight">Re-Admission</p>
                                     <p className="text-[10px] text-slate-400 truncate">Next Session</p>
                                   </div>
                                 </button>
@@ -9668,137 +12144,316 @@ export const SchoolAdminPanel: React.FC<Props> = ({
 
     if (view === "teachers") {
       return (
-        <div className="p-4 space-y-4 max-w-3xl mx-auto">
-          {/* Header Banner */}
-          <div className="bg-white dark:bg-slate-800 rounded-2xl p-4 sm:p-5 border border-slate-200 dark:border-slate-700 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-            <div>
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 flex items-center justify-center font-bold">
-                  <GraduationCap className="w-4 h-4" />
-                </div>
-                <h3 className="text-base font-black text-slate-800 dark:text-white">
-                  Faculty &amp; Teachers Directory (शिक्षक प्रबंधन)
-                </h3>
-              </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                Teachers ka photo, qualification, designation, subjects aur bio manage karein jo student dashboard me dikhega.
-              </p>
-              <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-[11px] font-bold text-emerald-700 dark:text-emerald-300">
-                <Shield className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                <span>🔒 Privacy Protection: Teachers ke personal mobile numbers student portal par nahi dikhaye jaate hain.</span>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 flex-wrap">
-              <button
-                type="button"
-                onClick={() => {
-                  setFaceStudioInitialTab("TEACHERS");
-                  setFaceStudioTargetPerson(null);
-                  setShowFaceStudioModal(true);
-                }}
-                className={`px-3.5 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 transition active:scale-95 cursor-pointer shadow-xs ${
-                  hasFaceAttendanceAccess(school)
-                    ? "bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300"
-                    : "bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-300"
-                }`}
-                title={hasFaceAttendanceAccess(school) ? "Register Live Face ID for Teachers" : "👑 Elite Plan Only — Live Face ID Studio"}
-              >
-                {hasFaceAttendanceAccess(school) ? (
-                  <Camera className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                ) : (
-                  <Lock className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-                )}
-                <span>📷 शिक्षक फेस आईडी स्टुडियो</span>
-                {!hasFaceAttendanceAccess(school) && (
-                  <span className="px-1.5 py-0.2 rounded bg-amber-500 text-slate-950 text-[10px] font-black">👑 Elite</span>
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={() => setView("id_cards")}
-                className="px-3.5 py-2.5 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 transition active:scale-95 cursor-pointer shadow-xs"
-                title="Open ID Card Generator for All Staff and Teachers"
-              >
-                <CreditCard className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                <span>🪪 ID Cards Hub</span>
-              </button>
-              <button
-                onClick={() => {
-                  setShowForm(showForm === "teacher" ? null : "teacher");
-                  setEditingTeacherId(null);
-                }}
-                className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs sm:text-sm flex items-center gap-2 shadow-sm transition active:scale-95 cursor-pointer shrink-0"
-              >
-                <Plus className="w-4 h-4" />
-                <span>+ Add Faculty / Teacher</span>
-              </button>
-            </div>
+        <div className={`p-3 sm:p-5 space-y-4 mx-auto ${teachersHubTab === "directory" ? "max-w-5xl" : "max-w-7xl"}`}>
+          {/* Unified Teachers & Staff Hub Segmented Navigation (All HRM Sections Integrated Directly) */}
+          <div className="bg-slate-100/90 dark:bg-slate-900/90 rounded-2xl p-1.5 border border-slate-200/90 dark:border-slate-700/80 grid grid-cols-2 lg:grid-cols-4 gap-1.5 print:hidden">
+            {[
+              {
+                id: "directory" as const,
+                label: "Faculty Directory",
+                sub: `${displayedTeachers.length} active`,
+                Icon: Users,
+              },
+              {
+                id: "leaves" as const,
+                label: "Leave Requests",
+                sub: pendingStaffLeavesCount > 0 ? `${pendingStaffLeavesCount} pending • Approve` : "Apply & approve",
+                Icon: Clock,
+              },
+              {
+                id: "payroll" as const,
+                label: "Payroll & Pay Slips",
+                sub: "Auto daily salary",
+                Icon: FileSpreadsheet,
+              },
+              {
+                id: "hrm_payslip" as const,
+                label: "Salary / Payslip",
+                sub: "Late cut & bonus",
+                Icon: Printer,
+              },
+            ].map((tab) => {
+              const isActive = teachersHubTab === tab.id;
+              const TabIcon = tab.Icon;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setTeachersHubTab(tab.id)}
+                  className={`px-3 py-2.5 rounded-xl text-left transition cursor-pointer flex items-center gap-2.5 min-w-0 ${
+                    isActive
+                      ? "bg-white dark:bg-indigo-600 text-slate-900 dark:text-white shadow-xs ring-1 ring-slate-200 dark:ring-indigo-500"
+                      : "text-slate-600 dark:text-slate-300 hover:bg-white/70 dark:hover:bg-slate-800/80"
+                  }`}
+                >
+                  <div
+                    className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition ${
+                      isActive
+                        ? "bg-indigo-50 dark:bg-white/15 text-indigo-600 dark:text-white"
+                        : "bg-slate-200/70 dark:bg-slate-800 text-slate-500 dark:text-slate-400"
+                    }`}
+                  >
+                    <TabIcon className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs sm:text-[13px] font-extrabold truncate leading-tight">
+                      {tab.label}
+                    </div>
+                    <div
+                      className={`text-[10px] font-semibold truncate mt-0.5 tabular-nums ${
+                        isActive
+                          ? "text-indigo-600 dark:text-indigo-100"
+                          : "text-slate-400 dark:text-slate-400"
+                      }`}
+                    >
+                      {tab.sub}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
           </div>
+
+          {teachersHubTab === "payroll" && (
+            <StaffPayrollManager
+              school={school}
+              activeSession={activeSession}
+              teachers={displayedTeachers}
+              staffList={displayedStaff}
+            />
+          )}
+
+          {(teachersHubTab === "leaves" ||
+            teachersHubTab === "hrm_payslip") &&
+            school && (
+              <StaffHRMManager
+                school={school}
+                embedded={true}
+                hideInternalNav={true}
+                hideAdminAttendanceCard={true}
+                controlledTab={
+                  teachersHubTab === "hrm_payslip" ? "salary" : "leaves"
+                }
+                onTabChange={(nextHrmTab) => {
+                  if (nextHrmTab === "salary") setTeachersHubTab("hrm_payslip");
+                  else if (nextHrmTab === "leaves") setTeachersHubTab("leaves");
+                }}
+              />
+            )}
+
+          {showTeacherRulesModal && (
+            <div className="fixed inset-0 z-[70] flex items-start justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-xs overflow-y-auto">
+              <div className="w-full max-w-5xl my-4 bg-slate-100 dark:bg-slate-950 rounded-3xl p-4 sm:p-6 border border-slate-300 dark:border-slate-800 shadow-2xl">
+                <TeacherRulesRegulationsView
+                  school={school}
+                  canEdit={true}
+                  staffCount={displayedTeachers.length}
+                  onClose={() => setShowTeacherRulesModal(false)}
+                />
+              </div>
+            </div>
+          )}
+
+          {showTeacherReferralModal && school && (
+            <div className="fixed inset-0 z-[70] flex items-start justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-xs overflow-y-auto">
+              <div className="w-full max-w-5xl my-4 bg-slate-50 dark:bg-slate-900 rounded-3xl p-4 sm:p-6 border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4">
+                <div className="flex items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 flex items-center justify-center">
+                      <Award className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm sm:text-base font-black text-slate-900 dark:text-white">
+                        10% Student Referral Bonus
+                      </h3>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                        यहाँ से चुनें कि किस शिक्षक को Referral देना है और कमीशन हिसाब देखें
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowTeacherReferralModal(false)}
+                    className="p-2 rounded-xl bg-slate-200/70 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 cursor-pointer"
+                    aria-label="Close Referral Modal"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <StaffHRMManager
+                  school={school}
+                  embedded={true}
+                  hideInternalNav={true}
+                  hideAdminAttendanceCard={true}
+                  controlledTab="referrals"
+                />
+              </div>
+            </div>
+          )}
+
+          {teachersHubTab === "directory" && (
+          <>
 
           {/* Add Teacher Form */}
           {showForm === "teacher" && !editingTeacherId && (
-            <div className="bg-white dark:bg-slate-800 rounded-2xl p-5 border-2 border-blue-500/30 shadow-md space-y-4 animate-in fade-in">
+            <div className="bg-white dark:bg-slate-800 rounded-2xl p-4 sm:p-6 border border-indigo-200 dark:border-indigo-800/70 shadow-sm space-y-4 animate-in fade-in">
               <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 pb-3">
-                <p className="text-sm font-black text-blue-600 dark:text-blue-400 flex items-center gap-2">
-                  <UserPlus className="w-4 h-4" />
-                  <span>New Teacher Profile (नया शिक्षक जोड़ें)</span>
-                </p>
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
+                    <UserPlus className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-black text-slate-900 dark:text-white">New Faculty Profile</h4>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">नया शिक्षक / अकाउंटेंट प्रोफाइल जोड़ें</p>
+                  </div>
+                </div>
                 <button
                   type="button"
                   onClick={() => setShowForm(null)}
-                  className="text-slate-400 hover:text-slate-600 dark:hover:text-white text-xs font-bold"
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-700 transition cursor-pointer"
+                  aria-label="Close form"
                 >
-                  ✕ Close
+                  <X className="w-4 h-4" />
                 </button>
               </div>
 
-              {/* Photo Upload */}
-              <div className="p-3 bg-slate-50 dark:bg-slate-700/40 rounded-xl border border-slate-200 dark:border-slate-600 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-xl bg-slate-200 dark:bg-slate-600 flex items-center justify-center overflow-hidden border border-slate-300 dark:border-slate-500 shrink-0">
-                    {teacherForm.photoUrl ? (
-                      <img src={teacherForm.photoUrl} alt="Preview" className="w-full h-full object-cover" />
-                    ) : (
-                      <User className="w-6 h-6 text-slate-400" />
+              {/* Photo & Signature Setup Pair */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="p-3 bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-12 h-12 rounded-xl bg-slate-200 dark:bg-slate-700 flex items-center justify-center overflow-hidden border border-slate-300 dark:border-slate-600 shrink-0">
+                      {teacherForm.photoUrl ? (
+                        <img src={teacherForm.photoUrl} alt="Preview" className="w-full h-full object-cover" />
+                      ) : (
+                        <User className="w-5 h-5 text-slate-400" />
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-slate-800 dark:text-slate-100 truncate">Portrait Photo</p>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">ID Card व Portal हेतु</p>
+                    </div>
+                  </div>
+                  <DirectUploadButton
+                    kind="image"
+                    compact
+                    currentUrl={teacherForm.photoUrl}
+                    onUploaded={(url) => setTeacherForm(p => ({ ...p, photoUrl: url }))}
+                    onClear={() => setTeacherForm(p => ({ ...p, photoUrl: "" }))}
+                  />
+                </div>
+
+                <div className="p-3 bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-20 h-12 rounded-xl bg-white border border-slate-200 flex items-center justify-center overflow-hidden p-1 shrink-0">
+                      {teacherForm.signatureUrl ? (
+                        <img src={teacherForm.signatureUrl} alt="Signature" className="max-w-full max-h-full object-contain" />
+                      ) : (
+                        <span className="text-[10px] font-semibold text-slate-400">No Sign</span>
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-slate-800 dark:text-slate-100 truncate">Digital Signature</p>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">Marksheet व Appointment Letter</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setSignatureTargetTeacher({ id: "__NEW_TEACHER__", name: teacherForm.name || "New Teacher", signatureUrl: teacherForm.signatureUrl })}
+                      className="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <PenTool className="w-3.5 h-3.5" />
+                      <span>{teacherForm.signatureUrl ? "Change" : "Sign"}</span>
+                    </button>
+                    {teacherForm.signatureUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setTeacherForm(p => ({ ...p, signatureUrl: "" }))}
+                        className="px-2 py-1.5 rounded-lg bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 text-xs font-bold cursor-pointer"
+                      >
+                        Clear
+                      </button>
                     )}
                   </div>
-                  <div>
-                    <p className="text-xs font-bold text-slate-700 dark:text-slate-200">Teacher Photo (तस्वीर)</p>
-                    <p className="text-[10px] text-slate-400">ID Card व Teacher Portal पर दिखेगी</p>
-                  </div>
                 </div>
-                <DirectUploadButton
-                  kind="image"
-                  compact
-                  currentUrl={teacherForm.photoUrl}
-                  onUploaded={(url) => setTeacherForm(p => ({ ...p, photoUrl: url }))}
-                  onClear={() => setTeacherForm(p => ({ ...p, photoUrl: "" }))}
-                />
+              </div>
+
+              {/* Role / Portal Mode Selector (Teacher <-> Accountant) */}
+              <div className="p-3 bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="text-xs font-extrabold text-slate-800 dark:text-slate-100">
+                    Role / Portal Type (शिक्षक या अकाउंटेंट चुनें)
+                  </label>
+                  <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400">
+                    1-Click Role Control
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { id: "TEACHER" as const, label: "Teacher (शिक्षक)", sub: "Attendance & Classes", Icon: GraduationCap, activeCls: "bg-indigo-600 text-white border-indigo-600" },
+                    { id: "ACCOUNTANT" as const, label: "Accountant (लेखा)", sub: "Fees & Cash Desk", Icon: Briefcase, activeCls: "bg-amber-500 text-slate-950 border-amber-500" },
+                    { id: "BOTH" as const, label: "Teacher + Accountant", sub: "Dono Portal Access", Icon: RefreshCw, activeCls: "bg-emerald-600 text-white border-emerald-600" },
+                  ].map((opt) => {
+                    const active = (teacherForm.staffRole || "TEACHER") === opt.id;
+                    const OptIcon = opt.Icon;
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() =>
+                          setTeacherForm((p) => ({
+                            ...p,
+                            staffRole: opt.id,
+                            designation:
+                              opt.id === "ACCOUNTANT" && (!p.designation || p.designation === "Senior Faculty" || p.designation === "Senior Faculty & Accountant")
+                                ? "Accountant & Cashier"
+                                : opt.id === "BOTH" && (!p.designation || p.designation === "Senior Faculty" || p.designation === "Accountant & Cashier")
+                                ? "Senior Faculty & Accountant"
+                                : opt.id === "TEACHER" && (p.designation === "Accountant & Cashier" || p.designation === "Senior Faculty & Accountant")
+                                ? "Senior Faculty"
+                                : p.designation,
+                          }))
+                        }
+                        className={`p-2.5 rounded-xl border text-left transition cursor-pointer flex items-start gap-2 ${
+                          active
+                            ? `${opt.activeCls} shadow-xs`
+                            : "bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-indigo-300"
+                        }`}
+                      >
+                        <OptIcon className="w-4 h-4 shrink-0 mt-0.5" />
+                        <div className="min-w-0">
+                          <div className="text-[11px] font-black leading-tight truncate">{opt.label}</div>
+                          <div className={`text-[10px] truncate mt-0.5 ${active ? "opacity-90" : "text-slate-400"}`}>{opt.sub}</div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               {/* Basic Details */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1 block">
                     Full Name (पूरा नाम) *
                   </label>
                   <input
                     value={teacherForm.name}
                     onChange={e => setTeacherForm(p => ({ ...p, name: e.target.value }))}
                     placeholder="e.g. Rajesh Kumar Sharma"
-                    className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                    className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1 block">
                     Designation / Role (पद)
                   </label>
                   <input
                     value={teacherForm.designation}
                     onChange={e => setTeacherForm(p => ({ ...p, designation: e.target.value }))}
                     placeholder="e.g. Senior Faculty - Mathematics, TGT Science"
-                    className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                    className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
                   />
                 </div>
               </div>
@@ -9806,84 +12461,44 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               {/* Qualification & Experience */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1 block">
                     Highest Qualification (शैक्षणिक योग्यता)
                   </label>
                   <input
                     value={teacherForm.qualification}
                     onChange={e => setTeacherForm(p => ({ ...p, qualification: e.target.value }))}
                     placeholder="e.g. M.Sc. (Mathematics), B.Ed, CTET"
-                    className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                    className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1 block">
                     Teaching Experience (शिक्षण अनुभव)
                   </label>
                   <input
                     value={teacherForm.experience}
                     onChange={e => setTeacherForm(p => ({ ...p, experience: e.target.value }))}
                     placeholder="e.g. 8+ Years Experience"
-                    className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                    className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
                   />
                 </div>
               </div>
 
-              {/* Subjects */}
-              <div>
-                <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">
-                  Subjects Taught (पढ़ाने वाले विषय — अल्पविराम ',' से अलग करें)
-                </label>
-                <input
-                  value={teacherForm.subjects}
-                  onChange={e => setTeacherForm(p => ({ ...p, subjects: e.target.value }))}
-                  placeholder="e.g. Mathematics, Physics, Applied Math"
-                  className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
-                />
-              </div>
-
-              {/* Bio / Message */}
-              <div>
-                <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">
-                  Teacher Bio / Message for Students (शिक्षक का संदेश / परिचय)
-                </label>
-                <textarea
-                  rows={2}
-                  value={teacherForm.bio}
-                  onChange={e => setTeacherForm(p => ({ ...p, bio: e.target.value }))}
-                  placeholder="e.g. Dedicated to conceptual clarity and helping every student achieve academic excellence."
-                  className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
-                />
-              </div>
-
-              {/* Mobile Phone, Employee ID & Optional Official Email */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 bg-blue-50/50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900 rounded-xl">
+              {/* Subjects & Bio */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-bold text-blue-950 dark:text-blue-200 mb-1 block">
-                    Mobile Number * (मोबाइल नंबर)
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1 block">
+                    Subjects Taught (comma separated)
                   </label>
                   <input
-                    type="tel"
-                    value={teacherForm.phone}
-                    onChange={e => setTeacherForm(p => ({ ...p, phone: e.target.value }))}
-                    placeholder="e.g. 9876543210 (लॉगिन हेतु)"
-                    className="w-full px-3 py-2 border border-blue-300 dark:border-blue-700 rounded-xl bg-white dark:bg-slate-900 text-slate-800 dark:text-white text-sm font-bold"
-                  />
-                  <p className="text-[10px] text-blue-600 dark:text-blue-400 mt-0.5">शिक्षक ID कार्ड व लॉगिन हेतु</p>
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">
-                    Employee ID (कर्मचारी कोड)
-                  </label>
-                  <input
-                    value={teacherForm.employeeId}
-                    onChange={e => setTeacherForm(p => ({ ...p, employeeId: e.target.value }))}
-                    placeholder="e.g. TEA-104 (खाली छोड़ने पर ऑटो)"
-                    className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-slate-800 dark:text-white text-sm"
+                    value={teacherForm.subjects}
+                    onChange={e => setTeacherForm(p => ({ ...p, subjects: e.target.value }))}
+                    placeholder="e.g. Mathematics, Physics, Applied Math"
+                    className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1 block">
                     Official Email (ईमेल — Optional)
                   </label>
                   <input
@@ -9891,48 +12506,77 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                     value={teacherForm.email}
                     onChange={e => setTeacherForm(p => ({ ...p, email: e.target.value }))}
                     placeholder="e.g. teacher@school.edu.in"
-                    className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-slate-800 dark:text-white text-sm"
+                    className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
                   />
                 </div>
               </div>
 
-              {/* 10% Referral Incentive Permission Toggle */}
-              <div className="flex items-center justify-between p-3 bg-purple-50/70 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800 rounded-xl">
-                <div className="space-y-0.5">
-                  <label className="text-xs font-black text-purple-900 dark:text-purple-200 flex items-center gap-1.5">
-                    <Award className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
-                    <span>10% Student Referral Incentive Permission (रेफरल लाभ अनुमति)</span>
-                  </label>
-                  <p className="text-[10.5px] text-purple-700 dark:text-purple-300">
-                    Admin जिसे चाहेगा केवल उसी शिक्षक को 10% रेफरल इंसेंटिव दिखेगा व लाभ मिलेगा।
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setTeacherForm(p => ({ ...p, hasReferralIncentive: !p.hasReferralIncentive }))}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer shadow-xs active:scale-95 ${
-                    teacherForm.hasReferralIncentive
-                      ? "bg-purple-600 hover:bg-purple-700 text-white ring-2 ring-purple-300"
-                      : "bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-300"
-                  }`}
-                >
-                  {teacherForm.hasReferralIncentive ? "ENABLED (चालू)" : "DISABLED (बंद)"}
-                </button>
+              <div>
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1 block">
+                  Teacher Bio / Message for Students
+                </label>
+                <textarea
+                  rows={2}
+                  value={teacherForm.bio}
+                  onChange={e => setTeacherForm(p => ({ ...p, bio: e.target.value }))}
+                  placeholder="e.g. Dedicated to conceptual clarity and helping every student achieve academic excellence."
+                  className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                />
               </div>
 
-              <div className="flex gap-2 pt-2">
+              {/* Mobile Phone, Employee ID & Monthly Salary */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3.5 bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-700 rounded-xl">
+                <div>
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1 block">
+                    Mobile Number * (लॉगिन नंबर)
+                  </label>
+                  <input
+                    type="tel"
+                    value={teacherForm.phone}
+                    onChange={e => setTeacherForm(p => ({ ...p, phone: e.target.value }))}
+                    placeholder="e.g. 9876543210"
+                    className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm font-bold tabular-nums"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1 block">
+                    Employee ID (कर्मचारी कोड)
+                  </label>
+                  <input
+                    value={teacherForm.employeeId}
+                    onChange={e => setTeacherForm(p => ({ ...p, employeeId: e.target.value }))}
+                    placeholder="e.g. TEA-104 (Auto if empty)"
+                    className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-emerald-700 dark:text-emerald-300 mb-1 block">
+                    Monthly Salary / मासिक वेतन (₹)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={teacherForm.monthlySalary || ""}
+                    onChange={e => setTeacherForm(p => ({ ...p, monthlySalary: Math.max(0, Number(e.target.value) || 0) }))}
+                    placeholder="e.g. 25000"
+                    className="w-full px-3 py-2 border border-emerald-300 dark:border-emerald-700 rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm font-black tabular-nums"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-1">
                 <button
                   type="button"
                   onClick={addTeacher}
                   disabled={saving || !teacherForm.name.trim()}
-                  className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-black disabled:opacity-60 shadow-md transition active:scale-95 cursor-pointer"
+                  className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold disabled:opacity-60 shadow-xs transition active:scale-[0.99] cursor-pointer"
                 >
-                  {saving ? "Saving Teacher..." : "Save Teacher Profile"}
+                  {saving ? "Saving Teacher..." : "Save Faculty Profile"}
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowForm(null)}
-                  className="px-5 py-2.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl text-sm font-bold cursor-pointer"
+                  className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-bold cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -9940,350 +12584,734 @@ export const SchoolAdminPanel: React.FC<Props> = ({
             </div>
           )}
 
+          {/* Multi-select Bulk Cleanup Bar */}
+          {displayedTeachers.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-2 bg-white dark:bg-slate-800/80 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700">
+              <label className="flex items-center gap-2.5 text-xs font-bold text-slate-700 dark:text-slate-200 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={selectedTeacherIds.length > 0 && selectedTeacherIds.length === displayedTeachers.length}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      setSelectedTeacherIds(displayedTeachers.map((t) => t.id));
+                    } else {
+                      setSelectedTeacherIds([]);
+                    }
+                  }}
+                  className="w-4 h-4 rounded accent-indigo-600 cursor-pointer"
+                />
+                <span className="tabular-nums">
+                  Select All ({selectedTeacherIds.length}/{displayedTeachers.length})
+                </span>
+              </label>
+              {selectedTeacherIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const idsToDelete = [...selectedTeacherIds];
+                    setConfirmAction({
+                      title: `${idsToDelete.length} Teachers Recycle Bin me Bhejein?`,
+                      message: `Chune gaye ${idsToDelete.length} teachers Settings > Recycle Bin me chale jayenge jahan se aap unhe kabhi bhi restore kar sakte hain.`,
+                      confirmLabel: `Move to Recycle Bin (${idsToDelete.length})`,
+                      onConfirm: async () => {
+                        const idSet = new Set(idsToDelete);
+                        const accOnlyIds = displayedTeachers
+                          .filter((item: any) => idSet.has(item.id) && item._isAccountantOnly)
+                          .map((item) => item.id);
+                        const teacherIds = idsToDelete.filter((tid) => !accOnlyIds.includes(tid));
+                        setTeachers((prev) => prev.filter((item) => !idSet.has(item.id)));
+                        setStaffList((prev) => prev.filter((item) => !idSet.has(item.id)));
+                        setAccountants((prev) => prev.filter((item) => !accOnlyIds.includes(item.id)));
+                        setSelectedTeacherIds([]);
+                        await Promise.allSettled([
+                          ...teacherIds.map((tid) => deleteTeacher(schoolId, tid)),
+                          ...accOnlyIds.map((aid) => deleteAccountant(schoolId, aid)),
+                        ]);
+                        toast.success(`${idsToDelete.length} records Recycle Bin me bhej diye gaye.`);
+                      },
+                    });
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete Selected ({selectedTeacherIds.length})</span>
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Teachers Cards List */}
           {displayedTeachers.length === 0 ? (
             <div className="text-center py-12 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-6">
-              <GraduationCap className="w-10 h-10 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
-              <p className="text-base font-bold text-slate-700 dark:text-slate-300">
-                Abhi koi teacher add nahi kiya gaya
+              <div className="w-12 h-12 rounded-2xl bg-slate-100 dark:bg-slate-700/60 text-slate-400 flex items-center justify-center mx-auto mb-3">
+                <GraduationCap className="w-6 h-6" />
+              </div>
+              <p className="text-base font-extrabold text-slate-800 dark:text-slate-100">
+                Abhi koi faculty member add nahi kiya gaya
               </p>
-              <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
-                Upar diye "+ Add Faculty / Teacher" button par click karke apne school ke teachers ki photo, qualification aur subjects jodein.
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto">
+                Upar diye "Add Faculty Member" button par click karke teachers ka photo, salary, digital sign aur subjects add karein.
               </p>
             </div>
           ) : (
-            displayedTeachers.map((t, idx) => {
-              const subjectsList = Array.isArray(t.subjects) ? t.subjects : (t.subjects ? [t.subjects] : []);
-              return (
-                <div
-                  key={t.id || `teacher-${t.name || idx}-${idx}`}
-                  className="bg-white dark:bg-slate-800 rounded-2xl p-4 sm:p-5 border border-slate-200/90 dark:border-slate-700 shadow-xs hover:shadow-md transition overflow-hidden"
-                >
-                  {editingTeacherId === t.id ? (
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 pb-2.5">
-                        <p className="text-xs font-black text-emerald-600 dark:text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
-                          <Edit3 className="w-3.5 h-3.5" />
-                          <span>Edit Faculty Profile</span>
-                        </p>
-                        <span className="text-[10px] text-slate-400 font-bold">ID: #{t.id.slice(0, 6)}</span>
-                      </div>
+            <div className="space-y-3">
+              {displayedTeachers.map((t, idx) => {
+                const subjectsList = Array.isArray(t.subjects) ? t.subjects : (t.subjects ? [t.subjects] : []);
+                const isSelectedForDelete = selectedTeacherIds.includes(t.id);
+                const teacherPay = Number(t.salaryStructure?.netMonthlySalary ?? t.monthlySalary ?? (t as any).salary ?? 0);
+                const hasFace = Boolean(enrolledFaceIds[t.id]);
+                const hasSign = Boolean(t.signatureUrl);
 
-                      {/* Edit Photo */}
-                      <div className="p-3 bg-slate-50 dark:bg-slate-700/40 rounded-xl border border-slate-200 dark:border-slate-600 flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-3">
-                          <div className="w-12 h-12 rounded-xl bg-slate-200 dark:bg-slate-600 flex items-center justify-center overflow-hidden border border-slate-300 dark:border-slate-500 shrink-0">
-                            {editTeacherForm.photoUrl ? (
-                              <img src={editTeacherForm.photoUrl} alt="Preview" className="w-full h-full object-cover" />
-                            ) : (
-                              <User className="w-6 h-6 text-slate-400" />
-                            )}
+                return (
+                  <div
+                    key={t.id || `teacher-${t.name || idx}-${idx}`}
+                    className={`bg-white dark:bg-slate-800/95 rounded-2xl p-4 sm:p-5 border transition overflow-hidden ${
+                      isSelectedForDelete
+                        ? "border-rose-400 dark:border-rose-600 ring-1 ring-rose-300 dark:ring-rose-800"
+                        : "border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 shadow-xs"
+                    }`}
+                  >
+                    {editingTeacherId === t.id ? (
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 pb-2.5">
+                          <p className="text-xs font-extrabold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider flex items-center gap-1.5">
+                            <Edit3 className="w-3.5 h-3.5" />
+                            <span>Edit Faculty Profile</span>
+                          </p>
+                          <span className="text-[11px] text-slate-400 font-mono font-bold">#{t.employeeId || t.id.slice(0, 6)}</span>
+                        </div>
+
+                        {/* Edit Photo & Digital Signature Pair */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div className="p-3 bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="w-12 h-12 rounded-xl bg-slate-200 dark:bg-slate-700 flex items-center justify-center overflow-hidden border border-slate-300 dark:border-slate-600 shrink-0">
+                                {editTeacherForm.photoUrl ? (
+                                  <img src={editTeacherForm.photoUrl} alt="Preview" className="w-full h-full object-cover" />
+                                ) : (
+                                  <User className="w-5 h-5 text-slate-400" />
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-xs font-bold text-slate-800 dark:text-slate-100 truncate">Portrait Photo</p>
+                                <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">Change profile image</p>
+                              </div>
+                            </div>
+                            <DirectUploadButton
+                              kind="image"
+                              compact
+                              currentUrl={editTeacherForm.photoUrl}
+                              onUploaded={(url) => setEditTeacherForm(p => ({ ...p, photoUrl: url }))}
+                              onClear={() => setEditTeacherForm(p => ({ ...p, photoUrl: "" }))}
+                            />
+                          </div>
+
+                          <div className="p-3 bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="w-20 h-12 rounded-xl bg-white border border-slate-200 flex items-center justify-center overflow-hidden p-1 shrink-0">
+                                {editTeacherForm.signatureUrl ? (
+                                  <img src={editTeacherForm.signatureUrl} alt="Signature" className="max-w-full max-h-full object-contain" />
+                                ) : (
+                                  <span className="text-[10px] font-semibold text-slate-400">No Sign</span>
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-xs font-bold text-slate-800 dark:text-slate-100 truncate">Digital Signature</p>
+                                <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">Letters, Marksheets &amp; Rules</p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => setSignatureTargetTeacher({ id: "__EDIT_TEACHER__", name: editTeacherForm.name || t.name, signatureUrl: editTeacherForm.signatureUrl })}
+                                className="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1 cursor-pointer"
+                              >
+                                <PenTool className="w-3.5 h-3.5" />
+                                <span>{editTeacherForm.signatureUrl ? "Change" : "Sign"}</span>
+                              </button>
+                              {editTeacherForm.signatureUrl && (
+                                <button
+                                  type="button"
+                                  onClick={() => setEditTeacherForm(p => ({ ...p, signatureUrl: "" }))}
+                                  className="px-2 py-1.5 rounded-lg bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 text-xs font-bold cursor-pointer"
+                                >
+                                  Clear
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Role Conversion Switch inside Edit Form (Teacher <-> Accountant) */}
+                        <div className="p-3 bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <label className="text-xs font-extrabold text-slate-800 dark:text-slate-100">
+                              Role / Portal Access (Teacher को Accountant या Accountant को Teacher बनाएं)
+                            </label>
+                          </div>
+                          <div className="grid grid-cols-3 gap-2">
+                            {[
+                              { id: "TEACHER" as const, label: "Teacher", sub: "Sirf Teacher", Icon: GraduationCap, activeCls: "bg-indigo-600 text-white border-indigo-600" },
+                              { id: "ACCOUNTANT" as const, label: "Accountant", sub: "Sirf Accountant", Icon: Briefcase, activeCls: "bg-amber-500 text-slate-950 border-amber-500" },
+                              { id: "BOTH" as const, label: "Teacher + Acc", sub: "Dono Role", Icon: RefreshCw, activeCls: "bg-emerald-600 text-white border-emerald-600" },
+                            ].map((opt) => {
+                              const active = (editTeacherForm.staffRole || "TEACHER") === opt.id;
+                              const OptIcon = opt.Icon;
+                              return (
+                                <button
+                                  key={opt.id}
+                                  type="button"
+                                  onClick={() => setEditTeacherForm((p) => ({ ...p, staffRole: opt.id }))}
+                                  className={`p-2 rounded-xl border text-left transition cursor-pointer flex items-center gap-2 ${
+                                    active
+                                      ? `${opt.activeCls} shadow-xs`
+                                      : "bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-indigo-300"
+                                  }`}
+                                >
+                                  <OptIcon className="w-4 h-4 shrink-0" />
+                                  <div className="min-w-0">
+                                    <div className="text-[11px] font-black leading-tight truncate">{opt.label}</div>
+                                    <div className={`text-[10px] truncate ${active ? "opacity-90" : "text-slate-400"}`}>{opt.sub}</div>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1 block">Full Name *</label>
+                            <input
+                              value={editTeacherForm.name}
+                              onChange={e => setEditTeacherForm(p => ({ ...p, name: e.target.value }))}
+                              placeholder="Full Name"
+                              className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm"
+                            />
                           </div>
                           <div>
-                            <p className="text-xs font-bold text-slate-700 dark:text-slate-200">Teacher Photo</p>
-                            <p className="text-[10px] text-slate-400">Change portrait image</p>
+                            <label className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1 block">Designation / Role</label>
+                            <input
+                              value={editTeacherForm.designation}
+                              onChange={e => setEditTeacherForm(p => ({ ...p, designation: e.target.value }))}
+                              placeholder="Designation"
+                              className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm"
+                            />
                           </div>
                         </div>
-                        <DirectUploadButton
-                          kind="image"
-                          compact
-                          currentUrl={editTeacherForm.photoUrl}
-                          onUploaded={(url) => setEditTeacherForm(p => ({ ...p, photoUrl: url }))}
-                          onClear={() => setEditTeacherForm(p => ({ ...p, photoUrl: "" }))}
-                        />
-                      </div>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1 block">Highest Qualification</label>
+                            <input
+                              value={editTeacherForm.qualification}
+                              onChange={e => setEditTeacherForm(p => ({ ...p, qualification: e.target.value }))}
+                              placeholder="e.g. M.Sc., B.Ed"
+                              className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1 block">Teaching Experience</label>
+                            <input
+                              value={editTeacherForm.experience}
+                              onChange={e => setEditTeacherForm(p => ({ ...p, experience: e.target.value }))}
+                              placeholder="e.g. 8+ Years"
+                              className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1 block">Subjects Taught (comma separated)</label>
+                            <input
+                              value={editTeacherForm.subjects}
+                              onChange={e => setEditTeacherForm(p => ({ ...p, subjects: e.target.value }))}
+                              placeholder="e.g. Mathematics, Physics"
+                              className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1 block">Official Email</label>
+                            <input
+                              type="email"
+                              value={editTeacherForm.email}
+                              onChange={e => setEditTeacherForm(p => ({ ...p, email: e.target.value }))}
+                              placeholder="Email"
+                              className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm"
+                            />
+                          </div>
+                        </div>
+
                         <div>
-                          <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">Full Name *</label>
-                          <input
-                            value={editTeacherForm.name}
-                            onChange={e => setEditTeacherForm(p => ({ ...p, name: e.target.value }))}
-                            placeholder="Full Name"
-                            className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
+                          <label className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1 block">Teacher Bio / Message for Students</label>
+                          <textarea
+                            rows={2}
+                            value={editTeacherForm.bio}
+                            onChange={e => setEditTeacherForm(p => ({ ...p, bio: e.target.value }))}
+                            placeholder="Inspiring bio or message for students"
+                            className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm"
                           />
                         </div>
-                        <div>
-                          <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">Designation / Role</label>
-                          <input
-                            value={editTeacherForm.designation}
-                            onChange={e => setEditTeacherForm(p => ({ ...p, designation: e.target.value }))}
-                            placeholder="Designation"
-                            className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
-                          />
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3.5 bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-700 rounded-xl">
+                          <div>
+                            <label className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1 block">Mobile Number *</label>
+                            <input
+                              type="tel"
+                              value={editTeacherForm.phone}
+                              onChange={e => setEditTeacherForm(p => ({ ...p, phone: e.target.value }))}
+                              placeholder="Mobile (Login Number)"
+                              className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm font-bold tabular-nums"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1 block">Employee ID</label>
+                            <input
+                              value={editTeacherForm.employeeId}
+                              onChange={e => setEditTeacherForm(p => ({ ...p, employeeId: e.target.value }))}
+                              placeholder="Employee ID"
+                              className="w-full px-3 py-2 border border-slate-200 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm font-mono"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs font-bold text-emerald-700 dark:text-emerald-300 mb-1 block">
+                              Monthly Salary / मासिक वेतन (₹)
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              value={editTeacherForm.monthlySalary || ""}
+                              onChange={e => setEditTeacherForm(p => ({ ...p, monthlySalary: Math.max(0, Number(e.target.value) || 0) }))}
+                              placeholder="e.g. 25000"
+                              className="w-full px-3 py-2 border border-emerald-400/70 dark:border-emerald-700 rounded-xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm font-black tabular-nums"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={saveEditTeacher}
+                            disabled={saving || !editTeacherForm.name.trim()}
+                            className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold disabled:opacity-60 shadow-xs transition cursor-pointer"
+                          >
+                            <Save className="w-4 h-4" />
+                            <span>{saving ? "Saving Changes..." : "Save Changes"}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingTeacherId(null)}
+                            className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-bold cursor-pointer"
+                          >
+                            Cancel
+                          </button>
                         </div>
                       </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div>
-                          <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">Highest Qualification</label>
-                          <input
-                            value={editTeacherForm.qualification}
-                            onChange={e => setEditTeacherForm(p => ({ ...p, qualification: e.target.value }))}
-                            placeholder="e.g. M.Sc., B.Ed"
-                            className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">Teaching Experience</label>
-                          <input
-                            value={editTeacherForm.experience}
-                            onChange={e => setEditTeacherForm(p => ({ ...p, experience: e.target.value }))}
-                            placeholder="e.g. 8+ Years"
-                            className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
-                          />
-                        </div>
-                      </div>
-
+                    ) : (
                       <div>
-                        <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">Subjects Taught (comma separated)</label>
-                        <input
-                          value={editTeacherForm.subjects}
-                          onChange={e => setEditTeacherForm(p => ({ ...p, subjects: e.target.value }))}
-                          placeholder="e.g. Mathematics, Physics"
-                          className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">Teacher Bio / Message for Students</label>
-                        <textarea
-                          rows={2}
-                          value={editTeacherForm.bio}
-                          onChange={e => setEditTeacherForm(p => ({ ...p, bio: e.target.value }))}
-                          placeholder="Inspiring bio or message for students"
-                          className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
-                        />
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <div>
-                          <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">Mobile Number *</label>
+                        {/* Card Main Row */}
+                        <div className="flex items-start gap-3 sm:gap-4">
                           <input
-                            type="tel"
-                            value={editTeacherForm.phone}
-                            onChange={e => setEditTeacherForm(p => ({ ...p, phone: e.target.value }))}
-                            placeholder="Mobile (Login Number)"
-                            className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm font-bold"
+                            type="checkbox"
+                            checked={isSelectedForDelete}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedTeacherIds((prev) => prev.includes(t.id) ? prev : [...prev, t.id]);
+                              } else {
+                                setSelectedTeacherIds((prev) => prev.filter((id) => id !== t.id));
+                              }
+                            }}
+                            aria-label={`Select ${t.name}`}
+                            className="mt-1.5 w-4 h-4 rounded accent-indigo-600 cursor-pointer shrink-0"
                           />
-                        </div>
-                        <div>
-                          <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">Employee ID</label>
-                          <input
-                            value={editTeacherForm.employeeId}
-                            onChange={e => setEditTeacherForm(p => ({ ...p, employeeId: e.target.value }))}
-                            placeholder="Employee ID"
-                            className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1 block">Official Email</label>
-                          <input
-                            type="email"
-                            value={editTeacherForm.email}
-                            onChange={e => setEditTeacherForm(p => ({ ...p, email: e.target.value }))}
-                            placeholder="Email"
-                            className="w-full px-3 py-2 border dark:border-slate-600 rounded-xl bg-transparent text-slate-800 dark:text-white text-sm"
-                          />
-                        </div>
-                      </div>
 
-                      {/* 10% Referral Incentive Permission Toggle */}
-                      <div className="flex items-center justify-between p-3 bg-purple-50/70 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800 rounded-xl">
-                        <div className="space-y-0.5">
-                          <label className="text-xs font-black text-purple-900 dark:text-purple-200 flex items-center gap-1.5">
-                            <Award className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
-                            <span>10% Student Referral Incentive Permission (रेफरल लाभ अनुमति)</span>
-                          </label>
-                          <p className="text-[10.5px] text-purple-700 dark:text-purple-300">
-                            Admin जिसे चाहेगा केवल उसी शिक्षक को 10% रेफरल इंसेंटिव दिखेगा व लाभ मिलेगा।
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setEditTeacherForm(p => ({ ...p, hasReferralIncentive: !p.hasReferralIncentive }))}
-                          className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer shadow-xs active:scale-95 ${
-                            editTeacherForm.hasReferralIncentive
-                              ? "bg-purple-600 hover:bg-purple-700 text-white ring-2 ring-purple-300"
-                              : "bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-300"
-                          }`}
-                        >
-                          {editTeacherForm.hasReferralIncentive ? "ENABLED (चालू)" : "DISABLED (बंद)"}
-                        </button>
-                      </div>
-
-                      <div className="flex gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={saveEditTeacher}
-                          disabled={saving || !editTeacherForm.name.trim()}
-                          className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-black disabled:opacity-60 shadow-md transition active:scale-95 cursor-pointer"
-                        >
-                          <Save className="w-3.5 h-3.5" />
-                          <span>{saving ? "Saving Changes..." : "Save Changes"}</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setEditingTeacherId(null)}
-                          className="px-5 py-2.5 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-sm font-bold cursor-pointer"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                      <div className="flex items-start gap-3.5 flex-1 min-w-0">
-                        {/* Portrait Photo */}
-                        <div className="w-14 h-16 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center font-black text-white text-lg overflow-hidden shrink-0 shadow-xs border border-slate-200 dark:border-slate-700">
-                          {t.photoUrl ? (
-                            <img src={t.photoUrl} alt={t.name} className="w-full h-full object-cover" />
-                          ) : (
-                            <span>{t.name ? t.name.charAt(0).toUpperCase() : "T"}</span>
-                          )}
-                        </div>
-
-                        {/* Teacher Details */}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <h4 className="font-black text-base text-slate-800 dark:text-white">
-                              {t.name}
-                            </h4>
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
-                              {t.designation || "Faculty"}
-                            </span>
-                            {enrolledFaceIds[t.id] ? (
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1">
-                                <CheckCircle2 className="w-3 h-3 text-emerald-500" /> Face ID दर्ज
-                              </span>
+                          {/* Portrait Photo */}
+                          <div className="w-13 h-14 sm:w-14 sm:h-16 rounded-xl bg-slate-100 dark:bg-slate-700 flex items-center justify-center font-black text-slate-700 dark:text-slate-200 text-lg overflow-hidden shrink-0 border border-slate-200 dark:border-slate-600">
+                            {t.photoUrl ? (
+                              <img src={t.photoUrl} alt={t.name} className="w-full h-full object-cover" />
                             ) : (
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 flex items-center gap-1">
-                                <AlertTriangle className="w-3 h-3 text-amber-500" /> Face ID बाकी
-                              </span>
+                              <span>{t.name ? t.name.charAt(0).toUpperCase() : "T"}</span>
                             )}
-                            {t.experience && (
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-900">
-                                ⏳ {t.experience}
-                              </span>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => toggleTeacherReferralIncentive(t)}
-                              className={`text-[10px] font-black px-2 py-0.5 rounded-full border transition flex items-center gap-1 cursor-pointer active:scale-95 shadow-xs ${
-                                t.hasReferralIncentive
-                                  ? "bg-purple-100 dark:bg-purple-950/70 text-purple-700 dark:text-purple-300 border-purple-300 dark:border-purple-600 hover:bg-purple-200"
-                                  : "bg-slate-100 dark:bg-slate-700/60 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-600 hover:bg-slate-200"
-                              }`}
-                              title="Click to toggle 10% Referral Incentive benefit for this teacher"
-                            >
-                              <Award className="w-3 h-3 text-purple-500" />
-                              <span>{t.hasReferralIncentive ? "10% Referral: ON" : "10% Referral: OFF"}</span>
-                            </button>
                           </div>
 
-                          {t.qualification && (
-                            <p className="text-xs font-semibold text-slate-600 dark:text-slate-300 mt-1 flex items-center gap-1">
-                              <span>🎓</span>
-                              <span>{t.qualification}</span>
-                            </p>
-                          )}
+                          {/* Teacher Primary Details */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <h4 className="font-black text-sm sm:text-base text-slate-900 dark:text-white tracking-tight">
+                                    {t.name}
+                                  </h4>
+                                  <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400">
+                                    {t.designation || "Faculty"}
+                                  </span>
+                                  {(t as any)._isAccountantOnly ? (
+                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                                      Accountant Only
+                                    </span>
+                                  ) : (t as any)._isAccountant ? (
+                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                                      Teacher + Accountant
+                                    </span>
+                                  ) : (
+                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                                      Teacher
+                                    </span>
+                                  )}
+                                </div>
 
-                          {subjectsList.length > 0 && (
-                            <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+                                {/* Clean Unboxed Metadata Line */}
+                                <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-slate-600 dark:text-slate-300">
+                                  {t.employeeId && (
+                                    <span className="font-mono font-semibold text-slate-700 dark:text-slate-200">
+                                      {t.employeeId}
+                                    </span>
+                                  )}
+                                  {t.phone && (
+                                    <>
+                                      {t.employeeId && <span className="text-slate-300 dark:text-slate-600">·</span>}
+                                      <span className="inline-flex items-center gap-1 font-semibold tabular-nums text-slate-700 dark:text-slate-200">
+                                        <Phone className="w-3 h-3 text-slate-400" />
+                                        {t.phone}
+                                      </span>
+                                    </>
+                                  )}
+                                  {t.qualification && (
+                                    <>
+                                      <span className="text-slate-300 dark:text-slate-600">·</span>
+                                      <span>{t.qualification}</span>
+                                    </>
+                                  )}
+                                  {t.experience && (
+                                    <>
+                                      <span className="text-slate-300 dark:text-slate-600">·</span>
+                                      <span>{t.experience}</span>
+                                    </>
+                                  )}
+                                  {t.email && (
+                                    <>
+                                      <span className="text-slate-300 dark:text-slate-600">·</span>
+                                      <span className="truncate max-w-[180px]">{t.email}</span>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Clean Right Salary Metric */}
+                              <div className="shrink-0 sm:text-right">
+                                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-400">
+                                  Monthly Salary
+                                </div>
+                                <div className="text-sm sm:text-base font-black text-emerald-700 dark:text-emerald-400 tabular-nums">
+                                  ₹{teacherPay.toLocaleString("en-IN")}
+                                  <span className="text-[11px] font-semibold text-slate-400">/mo</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Subjects + Clean Readiness Indicators */}
+                            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                               {subjectsList.map((subItem: string, sIdx: number) => (
                                 <span
                                   key={`t-sub-${t.id}-${sIdx}`}
-                                  className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-700/80 text-slate-700 dark:text-slate-300"
+                                  className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-700/70 text-slate-700 dark:text-slate-200"
                                 >
                                   {subItem}
                                 </span>
                               ))}
+
+                              <span
+                                className={`text-[11px] font-semibold px-2 py-0.5 rounded-md inline-flex items-center gap-1 ${
+                                  hasFace
+                                    ? "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300"
+                                    : "bg-slate-100 dark:bg-slate-700/60 text-slate-500 dark:text-slate-400"
+                                }`}
+                              >
+                                {hasFace ? (
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                                ) : (
+                                  <AlertTriangle className="w-3 h-3 text-amber-500" />
+                                )}
+                                {hasFace ? "Face ID Ready" : "Face ID Pending"}
+                              </span>
+
+                              <span
+                                className={`text-[11px] font-semibold px-2 py-0.5 rounded-md inline-flex items-center gap-1 ${
+                                  hasSign
+                                    ? "bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300"
+                                    : "bg-slate-100 dark:bg-slate-700/60 text-slate-500 dark:text-slate-400"
+                                }`}
+                              >
+                                <PenTool className="w-3 h-3" />
+                                {hasSign ? "Sign Added" : "No Sign"}
+                              </span>
+
                             </div>
-                          )}
 
-                          {t.bio && (
-                            <p className="text-xs text-slate-500 dark:text-slate-400 italic mt-2 bg-slate-50 dark:bg-slate-900/40 p-2 rounded-lg border-l-2 border-blue-500">
-                              "{t.bio}"
-                            </p>
-                          )}
-
-                          <div className="flex items-center gap-3 text-[11px] text-slate-400 mt-2 flex-wrap">
-                            {t.employeeId && <span className="font-mono font-bold text-slate-600 dark:text-slate-300">ID: {t.employeeId}</span>}
-                            {t.phone && <span className="font-semibold text-indigo-600 dark:text-indigo-400 flex items-center gap-0.5"><Phone className="w-3 h-3" /> {t.phone}</span>}
-                            {t.email && <span>{t.email}</span>}
+                            {t.bio && (
+                              <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 line-clamp-2">
+                                {t.bio}
+                              </p>
+                            )}
                           </div>
                         </div>
-                      </div>
 
-                      {/* Action buttons */}
-                      <div className="flex sm:flex-col items-center gap-1.5 shrink-0 self-end sm:self-center">
-                        <button
-                          type="button"
-                          onClick={() => handleOpenTeacherFaceEnrollment(t)}
-                          className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition active:scale-95 cursor-pointer shadow-xs ${
-                            enrolledFaceIds[t.id]
-                              ? "border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-300"
-                              : "bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-md shadow-emerald-600/30 ring-2 ring-emerald-400/50 animate-pulse"
-                          }`}
-                          title="शिक्षक का Face ID कैमरे से स्कैन करें"
-                        >
-                          <Camera className="w-3.5 h-3.5" />
-                          <span>{enrolledFaceIds[t.id] ? "📷 Face ID री-स्कैन" : "📷 Face ID जोड़ें"}</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedTeacherForIdCard(t)}
-                          className="px-3 py-1.5 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 text-indigo-700 dark:text-indigo-300 text-xs font-black flex items-center gap-1 transition active:scale-95 cursor-pointer shadow-xs"
-                          title="Teacher ID Card Dekhein aur Print Karein"
-                        >
-                          <CreditCard className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-                          <span>🪪 ID Card</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingTeacherId(t.id);
-                            setEditTeacherForm({
-                              name: t.name || "",
-                              phone: t.phone || "",
-                              photoUrl: t.photoUrl || "",
-                              designation: t.designation || "",
-                              qualification: t.qualification || "",
-                              experience: t.experience || "",
-                              subjects: Array.isArray(t.subjects) ? t.subjects.join(", ") : (t.subjects || ""),
-                              bio: t.bio || "",
-                              employeeId: t.employeeId || "",
-                              email: t.email || "",
-                              hasReferralIncentive: Boolean(t.hasReferralIncentive),
-                            });
-                            setShowForm(null);
-                          }}
-                          className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                          <span>Edit</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setConfirmAction({
-                              title: "Teacher Remove Karein?",
-                              message: `Kya aap sach me "${t.name}" ko remove karna chahte hain?`,
-                              confirmLabel: "Remove Teacher",
-                              onConfirm: () => deleteTeacher(schoolId, t.id),
-                            });
-                          }}
-                          className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 dark:text-rose-400 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          <span>Delete</span>
-                        </button>
+                        {/* Uniform Balanced Action Bar */}
+                        <div className="mt-3.5 pt-3 border-t border-slate-100 dark:border-slate-700/70 grid grid-cols-3 sm:flex sm:flex-wrap items-center gap-1.5 sm:gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenTeacherFaceEnrollment(t)}
+                            className={`px-2.5 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-[0.98] cursor-pointer ${
+                              hasFace
+                                ? "bg-slate-50 hover:bg-slate-100 dark:bg-slate-900/60 dark:hover:bg-slate-700/70 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200"
+                                : "bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs"
+                            }`}
+                            title="शिक्षक का Face ID कैमरे से स्कैन करें"
+                          >
+                            <Camera className="w-3.5 h-3.5 shrink-0" />
+                            <span className="truncate">{hasFace ? "Face Re-scan" : "Add Face ID"}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setSignatureTargetTeacher(t)}
+                            className="px-2.5 py-2 rounded-xl bg-slate-50 hover:bg-slate-100 dark:bg-slate-900/60 dark:hover:bg-slate-700/70 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-[0.98] cursor-pointer"
+                            title="Teacher ka Digital Signature Draw / Upload Karein"
+                          >
+                            <PenTool className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400 shrink-0" />
+                            <span className="truncate">{hasSign ? "Edit Sign" : "Add Sign"}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setAppointmentLetterTeacher(t)}
+                            className="px-2.5 py-2 rounded-xl bg-slate-50 hover:bg-slate-100 dark:bg-slate-900/60 dark:hover:bg-slate-700/70 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-[0.98] cursor-pointer"
+                            title="Teacher Appointment Letter (A4) व 2-Page Joining Kit Generate Karein"
+                          >
+                            <FileText className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                            <span className="truncate">Letter</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setSelectedTeacherForIdCard(t)}
+                            className="px-2.5 py-2 rounded-xl bg-slate-50 hover:bg-slate-100 dark:bg-slate-900/60 dark:hover:bg-slate-700/70 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-[0.98] cursor-pointer"
+                            title="Teacher ID Card Dekhein aur Print Karein"
+                          >
+                            <CreditCard className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                            <span className="truncate">ID Card</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const currentPay = Number(t.salaryStructure?.netMonthlySalary ?? t.monthlySalary ?? (t as any).salary ?? 0);
+                              setEditingTeacherId(t.id);
+                              setEditTeacherForm({
+                                name: t.name || "",
+                                phone: t.phone || "",
+                                photoUrl: t.photoUrl || "",
+                                signatureUrl: t.signatureUrl || "",
+                                designation: t.designation || "",
+                                qualification: t.qualification || "",
+                                experience: t.experience || "",
+                                subjects: Array.isArray(t.subjects) ? t.subjects.join(", ") : (t.subjects || ""),
+                                bio: t.bio || "",
+                                employeeId: t.employeeId || "",
+                                email: t.email || "",
+                                monthlySalary: currentPay,
+                                hasReferralIncentive: Boolean(t.hasReferralIncentive),
+                                staffRole: (t as any)._isAccountantOnly
+                                  ? "ACCOUNTANT"
+                                  : (t as any)._isAccountant
+                                  ? "BOTH"
+                                  : "TEACHER",
+                              });
+                              setShowForm(null);
+                            }}
+                            className="px-2.5 py-2 rounded-xl bg-slate-50 hover:bg-slate-100 dark:bg-slate-900/60 dark:hover:bg-slate-700/70 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer"
+                            title="Teacher ka profile aur monthly salary (paisa) edit karein"
+                          >
+                            <Edit3 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                            <span className="truncate">Edit / Pay</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const curMode: "TEACHER" | "ACCOUNTANT" | "BOTH" = (t as any)._isAccountantOnly
+                                ? "ACCOUNTANT"
+                                : (t as any)._isAccountant
+                                ? "BOTH"
+                                : "TEACHER";
+                              setRoleConvertTarget({ person: t, currentMode: curMode });
+                            }}
+                            className={`px-2.5 py-2 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                              (t as any)._isAccountantOnly
+                                ? "bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:hover:bg-indigo-900/60 border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300"
+                                : (t as any)._isAccountant
+                                ? "bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/50 dark:hover:bg-emerald-900/60 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300"
+                                : "bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/50 dark:hover:bg-amber-900/60 border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300"
+                            }`}
+                            title="Teacher ko Accountant ya Accountant ko Teacher me badlein"
+                          >
+                            {(t as any)._isAccountantOnly ? (
+                              <>
+                                <GraduationCap className="w-3.5 h-3.5 shrink-0" />
+                                <span className="truncate">Teacher बनाएं</span>
+                              </>
+                            ) : (t as any)._isAccountant ? (
+                              <>
+                                <RefreshCw className="w-3.5 h-3.5 shrink-0" />
+                                <span className="truncate">Role बदलें</span>
+                              </>
+                            ) : (
+                              <>
+                                <Briefcase className="w-3.5 h-3.5 shrink-0" />
+                                <span className="truncate">Accountant बनाएं</span>
+                              </>
+                            )}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const isAccOnly = Boolean((t as any)._isAccountantOnly);
+                              setConfirmAction({
+                                title: isAccOnly ? "Accountant Remove Karein?" : "Teacher Recycle Bin me Bhejein?",
+                                message: isAccOnly
+                                  ? `Kya aap sach me Accountant "${t.name}" ko remove karna chahte hain?`
+                                  : `"${t.name}" ko remove karne par yeh Settings > Recycle Bin me surakshit rahenge jahan se aap inhe kabhi bhi restore kar sakte hain.`,
+                                confirmLabel: isAccOnly ? "Remove Accountant" : "Move to Recycle Bin",
+                                onConfirm: async () => {
+                                  setSelectedTeacherIds((prev) => prev.filter((id) => id !== t.id));
+                                  if (isAccOnly) {
+                                    setAccountants((prev) => prev.filter((a) => a.id !== t.id));
+                                    await deleteAccountant(schoolId, t.id);
+                                    toast.success(`Accountant ${t.name} ko remove kar diya gaya.`);
+                                  } else {
+                                    setTeachers((prev) => prev.filter((item) => item.id !== t.id));
+                                    setStaffList((prev) => prev.filter((item) => item.id !== t.id));
+                                    await deleteTeacher(schoolId, t.id);
+                                    toast.success(`${t.name} ko Recycle Bin me bhej diya gaya (Settings > Recycle Bin).`);
+                                  }
+                                },
+                              });
+                            }}
+                            className="sm:ml-auto px-2.5 py-2 rounded-xl bg-slate-50 hover:bg-rose-50 dark:bg-slate-900/60 dark:hover:bg-rose-950/40 border border-slate-200 dark:border-slate-700 hover:border-rose-200 dark:hover:border-rose-800 text-rose-600 dark:text-rose-400 text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                            <span className="truncate">Delete</span>
+                          </button>
+                        </div>
                       </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* 1-Click Teacher <-> Accountant Role Switcher Modal */}
+          {roleConvertTarget && (
+            <div className="fixed inset-0 z-[80] bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+              <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-2xl overflow-hidden">
+                <div className="p-4 sm:p-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                      <RefreshCw className="w-5 h-5" />
                     </div>
-                  )}
+                    <div className="min-w-0">
+                      <h3 className="text-sm sm:text-base font-black text-slate-900 dark:text-white truncate">
+                        {roleConvertTarget.person?.name} — Role बदलें
+                      </h3>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                        Teacher को Accountant या Accountant को Teacher बनाएं
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => !convertingRole && setRoleConvertTarget(null)}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                    aria-label="Close"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
                 </div>
-              );
-            })
+
+                <div className="p-4 sm:p-5 space-y-2.5">
+                  {[
+                    {
+                      mode: "ACCOUNTANT" as const,
+                      title: "सिर्फ़ Accountant बनाएं (Accountant Only)",
+                      desc: "Teacher से हटाकर Accountant Cash Desk & Fee Counter पर शिफ्ट करें (वेतन व Face ID सुरक्षित रहेगा)।",
+                      Icon: Briefcase,
+                      cls: "border-amber-200 dark:border-amber-800/70 bg-amber-50/70 hover:bg-amber-100/80 dark:bg-amber-950/30 dark:hover:bg-amber-950/50 text-amber-900 dark:text-amber-200",
+                    },
+                    {
+                      mode: "TEACHER" as const,
+                      title: "सिर्फ़ Teacher बनाएं (Teacher Only)",
+                      desc: "Accountant से हटाकर Teacher Portal, Attendance व Marks पर शिफ्ट करें।",
+                      Icon: GraduationCap,
+                      cls: "border-indigo-200 dark:border-indigo-800/70 bg-indigo-50/70 hover:bg-indigo-100/80 dark:bg-indigo-950/30 dark:hover:bg-indigo-950/50 text-indigo-900 dark:text-indigo-200",
+                    },
+                    {
+                      mode: "BOTH" as const,
+                      title: "Teacher + Accountant दोनों बनाएं (Dual Role)",
+                      desc: "दोनों पोर्टल (Teacher Portal व Accountant Cash Desk) एक साथ चालू रहेंगे।",
+                      Icon: RefreshCw,
+                      cls: "border-emerald-200 dark:border-emerald-800/70 bg-emerald-50/70 hover:bg-emerald-100/80 dark:bg-emerald-950/30 dark:hover:bg-emerald-950/50 text-emerald-900 dark:text-emerald-200",
+                    },
+                  ].map((opt) => {
+                    const isCurrent = roleConvertTarget.currentMode === opt.mode;
+                    const OptIcon = opt.Icon;
+                    return (
+                      <button
+                        key={opt.mode}
+                        type="button"
+                        disabled={convertingRole || isCurrent}
+                        onClick={async () => {
+                          setConvertingRole(true);
+                          try {
+                            await applyFacultyRoleMode(roleConvertTarget.person, opt.mode);
+                            if (opt.mode === "ACCOUNTANT") {
+                              toast.success(`💼 ${roleConvertTarget.person.name} को सफलतापूर्वक Accountant बना दिया गया!`);
+                            } else if (opt.mode === "TEACHER") {
+                              toast.success(`👨‍🏫 ${roleConvertTarget.person.name} को सफलतापूर्वक Teacher बना दिया गया!`);
+                            } else {
+                              toast.success(`⚡ ${roleConvertTarget.person.name} अब Teacher + Accountant दोनों रूप में सक्रिय हैं!`);
+                            }
+                            setRoleConvertTarget(null);
+                          } catch (err: any) {
+                            toast.error("Role बदलने में त्रुटि: " + (err?.message || "पुनः प्रयास करें"));
+                          } finally {
+                            setConvertingRole(false);
+                          }
+                        }}
+                        className={`w-full p-3.5 rounded-2xl border text-left transition flex items-start gap-3 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed ${opt.cls}`}
+                      >
+                        <OptIcon className="w-5 h-5 shrink-0 mt-0.5" />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs sm:text-sm font-black">{opt.title}</span>
+                            {isCurrent && (
+                              <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-white/80 dark:bg-slate-800 text-slate-700 dark:text-slate-200">
+                                Current
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] opacity-85 mt-0.5 leading-snug">{opt.desc}</p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+          </>
           )}
         </div>
       );
@@ -10707,7 +13735,23 @@ export const SchoolAdminPanel: React.FC<Props> = ({
                     className="p-1.5 rounded-lg hover:bg-orange-50 dark:hover:bg-orange-900/20 text-orange-500 cursor-pointer">
                     <Edit3 className="w-4 h-4" />
                   </button>
-                  <button onClick={() => deleteStudent(schoolId, s.id)} className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-red-400 cursor-pointer">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConfirmAction({
+                        title: "Student Recycle Bin me Bhejein?",
+                        message: `"${s.name}" ko delete karne par yeh Settings > Recycle Bin me chale jayenge jahan se aap inhe kabhi bhi restore kar sakte hain.`,
+                        confirmLabel: "Move to Recycle Bin",
+                        onConfirm: async () => {
+                          setStudents((prev) => prev.filter((item) => item.id !== s.id));
+                          await deleteStudent(schoolId, s.id);
+                          toast.success(`${s.name} ko Recycle Bin me bhej diya gaya (Settings > Recycle Bin).`);
+                        },
+                      });
+                    }}
+                    className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-red-400 cursor-pointer"
+                    title="Move Student to Recycle Bin"
+                  >
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
@@ -10789,74 +13833,169 @@ export const SchoolAdminPanel: React.FC<Props> = ({
         classFeesMap.set(k, arr);
       });
 
+      const overallPct = schoolTotal > 0 ? Math.min(100, Math.round((schoolCollected / schoolTotal) * 100)) : 0;
+
       return (
-        <div className="p-4 max-w-2xl mx-auto space-y-3">
-          {/* Month selector */}
-          <div className="bg-white dark:bg-slate-800 rounded-xl p-3 flex items-center gap-3 shadow-sm">
-            <button onClick={() => { changeMonth(-1); setAllFees([]); }} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700">
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <span className="flex-1 text-center font-bold text-slate-800 dark:text-white text-sm">
-              {new Date(feeMonth + "-01").toLocaleString("default", { month: "long", year: "numeric" })}
+        <div className="p-4 sm:p-5 max-w-3xl mx-auto space-y-4">
+          {/* Unified Executive Fee Overview Card */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-xs">
+            {/* Month Navigator Strip */}
+            <div className="px-3 py-2.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2 bg-slate-50/70 dark:bg-slate-950/50">
+              <button
+                type="button"
+                onClick={() => { changeMonth(-1); setAllFees([]); }}
+                className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 transition-colors cursor-pointer"
+                aria-label="Previous month"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <div className="text-center">
+                <p className="text-sm font-bold tracking-tight text-slate-900 dark:text-white">
+                  {new Date(feeMonth + "-01").toLocaleString("default", { month: "long", year: "numeric" })}
+                </p>
+                <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                  Monthly Fee Collection Overview
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => { changeMonth(1); setAllFees([]); }}
+                className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 transition-colors cursor-pointer"
+                aria-label="Next month"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Primary 3-Column KPI Strip */}
+            <div className="grid grid-cols-3 divide-x divide-slate-200 dark:divide-slate-800">
+              <div className="p-3.5 sm:p-4">
+                <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Expected</p>
+                <p className="mt-1 text-base sm:text-xl font-extrabold font-mono tabular-nums tracking-tight text-slate-900 dark:text-white">
+                  ₹{schoolTotal.toLocaleString("en-IN")}
+                </p>
+              </div>
+              <div className="p-3.5 sm:p-4">
+                <p className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400">Collected</p>
+                <p className="mt-1 text-base sm:text-xl font-extrabold font-mono tabular-nums tracking-tight text-emerald-600 dark:text-emerald-400">
+                  ₹{schoolCollected.toLocaleString("en-IN")}
+                </p>
+              </div>
+              <div className="p-3.5 sm:p-4">
+                <p className="text-[11px] font-medium text-rose-600 dark:text-rose-400">Pending Due</p>
+                <p className="mt-1 text-base sm:text-xl font-extrabold font-mono tabular-nums tracking-tight text-rose-600 dark:text-rose-400">
+                  ₹{schoolDue.toLocaleString("en-IN")}
+                </p>
+              </div>
+            </div>
+
+            {/* Integrated Collection Progress Bar */}
+            <div className="border-t border-slate-100 dark:border-slate-800 px-4 py-3 space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-medium text-slate-600 dark:text-slate-300">Overall Collection Rate</span>
+                <span className="font-mono tabular-nums font-bold text-slate-900 dark:text-white">
+                  {overallPct}% · {displayedStudents.length} students
+                </span>
+              </div>
+              <div className="h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-emerald-600 dark:bg-emerald-500 rounded-full transition-all duration-300"
+                  style={{ width: `${overallPct}%` }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Section Header */}
+          <div className="flex items-center justify-between px-1">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              Class-Wise Fee Ledger
+            </h3>
+            <span className="text-xs font-medium text-slate-500 dark:text-slate-400 tabular-nums">
+              {sortedClasses.length} {sortedClasses.length === 1 ? "class" : "classes"}
             </span>
-            <button onClick={() => { changeMonth(1); setAllFees([]); }} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700">
-              <ChevronRight className="w-4 h-4" />
-            </button>
           </div>
-
-          {/* School-wide totals */}
-          <div className="grid grid-cols-3 gap-2">
-            <div className="bg-white dark:bg-slate-800 rounded-xl p-3 shadow-sm text-center">
-              <p className="text-xs text-slate-400 mb-0.5">Expected</p>
-              <p className="font-bold text-slate-800 dark:text-white text-sm">₹{schoolTotal.toLocaleString()}</p>
-            </div>
-            <div className="bg-green-50 dark:bg-green-900/20 rounded-xl p-3 shadow-sm text-center">
-              <p className="text-xs text-green-600 mb-0.5">Collected</p>
-              <p className="font-bold text-green-700 text-sm">₹{schoolCollected.toLocaleString()}</p>
-            </div>
-            <div className="bg-red-50 dark:bg-red-900/20 rounded-xl p-3 shadow-sm text-center">
-              <p className="text-xs text-red-500 mb-0.5">Due</p>
-              <p className="font-bold text-red-600 text-sm">₹{schoolDue.toLocaleString()}</p>
-            </div>
-          </div>
-
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide px-1">Class-wise Summary</p>
 
           {feeSummaryLoading ? (
-            <div className="text-center py-10 text-slate-400 text-sm">Loading fees...</div>
-          ) : sortedClasses.map((cls, idx) => {
-            const classStudents = classStudentsMap.get(cls.id) || displayedStudents.filter(s => isStudentInClass(s, cls.id, cls.name));
-            const classFees = classFeesMap.get(cls.id) || allFees.filter(f => f.classId === cls.id || isStudentInClass(f, cls.id, cls.name));
-            const expected = classStudents.reduce((sum, s) => sum + (s.monthlyFee || 0), 0);
-            const collected = classFees.filter(f => f.paid).reduce((sum, f) => sum + (f.amount || 0), 0);
-            const due = classFees.filter(f => !f.paid).reduce((sum, f) => sum + (f.amount || 0), 0);
-            const pct = expected > 0 ? Math.round((collected / expected) * 100) : 0;
-            return (
-              <button key={cls.id || `fee-cls-${cls.name}-${idx}`} onClick={() => { setFeeClassSelected(cls); setView("fee_class"); }}
-                className="w-full bg-white dark:bg-slate-800 rounded-xl p-3 shadow-sm text-left hover:shadow-md transition-shadow">
-                <div className="flex items-center justify-between mb-1.5">
-                  <p className="font-semibold text-slate-800 dark:text-white text-sm">{cls.name}</p>
-                  <p className="text-xs text-slate-400">{classStudents.length} students</p>
-                </div>
-                <div className="flex gap-3 text-xs mb-2">
-                  <span className="text-slate-500">Expected: <strong>₹{expected.toLocaleString()}</strong></span>
-                  <span className="text-green-600">Paid: <strong>₹{collected.toLocaleString()}</strong></span>
-                  <span className="text-red-500">Due: <strong>₹{due.toLocaleString()}</strong></span>
-                </div>
-                <div className="h-2 bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
-                  <div className="h-full bg-green-500 rounded-full" style={{ width: `${pct}%` }} />
-                </div>
-                <p className="text-[10px] text-slate-400 mt-1 flex justify-between">
-                  <span>{pct}% collected</span>
-                  <span className="text-blue-500">Tap to manage →</span>
-                </p>
-              </button>
-            );
-          })}
-          {sortedClasses.length === 0 && (
-            <div className="text-center py-10 text-slate-400">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl text-center py-10 text-slate-400 text-xs font-medium">
+              Loading class fee summary...
+            </div>
+          ) : sortedClasses.length > 0 ? (
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl divide-y divide-slate-100 dark:divide-slate-800 overflow-hidden shadow-xs">
+              {sortedClasses.map((cls, idx) => {
+                const classStudents = classStudentsMap.get(cls.id) || displayedStudents.filter(s => isStudentInClass(s, cls.id, cls.name));
+                const classFees = classFeesMap.get(cls.id) || allFees.filter(f => f.classId === cls.id || isStudentInClass(f, cls.id, cls.name));
+                const expected = classStudents.reduce((sum, s) => sum + (s.monthlyFee || 0), 0);
+                const collected = classFees.filter(f => f.paid).reduce((sum, f) => sum + (f.amount || 0), 0);
+                const due = classFees.filter(f => !f.paid).reduce((sum, f) => sum + (f.amount || 0), 0);
+                const pct = expected > 0 ? Math.min(100, Math.round((collected / expected) * 100)) : 0;
+                return (
+                  <button
+                    key={cls.id || `fee-cls-${cls.name}-${idx}`}
+                    type="button"
+                    onClick={() => { setFeeClassSelected(cls); setView("fee_class"); }}
+                    className="w-full px-4 py-3.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors cursor-pointer group"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-baseline gap-2 min-w-0">
+                        <p className="font-bold text-slate-900 dark:text-white text-sm truncate group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                          {cls.name}
+                        </p>
+                        <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums shrink-0">
+                          · {classStudents.length} {classStudents.length === 1 ? "student" : "students"}
+                        </span>
+                      </div>
+                      <span className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 shrink-0 whitespace-nowrap group-hover:translate-x-0.5 transition-transform">
+                        Manage →
+                      </span>
+                    </div>
+
+                    <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                      <div>
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400 block">Expected</span>
+                        <span className="font-mono tabular-nums font-bold text-slate-800 dark:text-slate-100">
+                          ₹{expected.toLocaleString("en-IN")}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400 block">Collected</span>
+                        <span className="font-mono tabular-nums font-bold text-emerald-600 dark:text-emerald-400">
+                          ₹{collected.toLocaleString("en-IN")}
+                        </span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400 block">Due</span>
+                        <span className={`font-mono tabular-nums font-bold ${due > 0 ? "text-rose-600 dark:text-rose-400" : "text-slate-400 dark:text-slate-500"}`}>
+                          ₹{due.toLocaleString("en-IN")}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="mt-2.5 flex items-center gap-2.5">
+                      <div className="flex-1 h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-300 ${
+                            pct >= 100
+                              ? "bg-emerald-600 dark:bg-emerald-500"
+                              : pct > 0
+                              ? "bg-indigo-600 dark:bg-indigo-500"
+                              : "bg-slate-300 dark:bg-slate-700"
+                          }`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <span className="text-[11px] font-mono tabular-nums font-semibold text-slate-500 dark:text-slate-400 w-9 text-right shrink-0">
+                        {pct}%
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl text-center py-10 text-slate-400">
               <IndianRupee className="w-10 h-10 mx-auto mb-2 opacity-20" />
-              <p>Koi class nahi mili</p>
+              <p className="text-xs font-medium">Koi class nahi mili</p>
             </div>
           )}
         </div>
@@ -10873,10 +14012,57 @@ export const SchoolAdminPanel: React.FC<Props> = ({
       renderAccountHubPage()
     ) : (
       <div>
-        <div className="bg-white dark:bg-slate-800 border-b dark:border-slate-700 px-4 py-3 rounded-2xl mb-4 flex items-center justify-between shadow-xs">
-          <p className="text-sm font-black text-slate-700 dark:text-slate-200 capitalize">
-            {view.replace(/_/g, " ")}
-          </p>
+        <div className="bg-white dark:bg-slate-800 border-b dark:border-slate-700 px-4 py-3 rounded-2xl mb-4 flex items-center justify-between gap-2 shadow-xs">
+          <div className="flex items-center gap-2 min-w-0">
+            <p className="text-sm font-black text-slate-700 dark:text-slate-200 capitalize truncate">
+              {view.replace(/_/g, " ")}
+            </p>
+            {view === "teachers" && (
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const isOpening = !(teachersHubTab === "directory" && showForm === "teacher");
+                    setTeachersHubTab("directory");
+                    setEditingTeacherId(null);
+                    setShowForm(isOpening ? "teacher" : null);
+                  }}
+                  title="Add Faculty Member"
+                  aria-label="Add Faculty Member"
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition active:scale-95 cursor-pointer shadow-xs ${
+                    teachersHubTab === "directory" && showForm === "teacher"
+                      ? "bg-indigo-700 text-white ring-2 ring-indigo-300 dark:ring-indigo-500"
+                      : "bg-indigo-600 hover:bg-indigo-700 text-white"
+                  }`}
+                >
+                  <Plus className="w-4 h-4 stroke-[2.5]" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowTeacherRulesModal(true)}
+                  title="Rules & Regulations for Teachers"
+                  aria-label="Teacher Rules"
+                  className="h-8 px-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/50 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs font-bold inline-flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+                >
+                  <FileText className="w-3.5 h-3.5 shrink-0" />
+                  <span>Rules</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowTeacherReferralModal(true)}
+                  title="10% Referral Bonus (किसे देना है)"
+                  aria-label="10% Referral Bonus"
+                  className={`w-8 h-8 rounded-xl border flex items-center justify-center transition active:scale-95 cursor-pointer ${
+                    showTeacherReferralModal
+                      ? "bg-purple-600 text-white border-purple-600 shadow-xs"
+                      : "bg-purple-50 hover:bg-purple-100 dark:bg-purple-950/40 dark:hover:bg-purple-900/50 border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300"
+                  }`}
+                >
+                  <Award className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+          </div>
           <button
             type="button"
             onClick={() => {
@@ -10884,7 +14070,7 @@ export const SchoolAdminPanel: React.FC<Props> = ({
               else if (view === "content") setView("subjects");
               else setView("dashboard");
             }}
-            className="text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 cursor-pointer"
+            className="text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 cursor-pointer shrink-0"
           >
             <ChevronLeft className="w-3.5 h-3.5" /> Back to {view === "subjects" || view === "students" ? "Classes" : "Dashboard"}
           </button>

@@ -19,8 +19,10 @@ import {
   deleteStaffEmployee,
   saveStaffLeave,
   getStaffLeaves,
+  subscribeStaffLeaves,
   updateStaffLeaveStatus,
   getTeachers,
+  saveTeacher,
   updateTeacher,
   getStudents,
   getSchoolFeeHistory,
@@ -32,8 +34,11 @@ import {
   getAccountants,
   saveAccountant,
   deleteAccountant,
+  updateSchool,
+  getMonthlyStaffDailyAttendance,
   generateId,
   todayStr,
+  currentMonthStr,
 } from "../../school-firebase";
 import {
   calculateTeacherReferralLedger,
@@ -67,19 +72,47 @@ import {
   X,
   Sparkles,
   QrCode,
+  Edit3,
+  GraduationCap,
+  UserPlus,
+  Building2,
+  PenTool,
 } from "lucide-react";
 import { TeacherIdCardModal } from "./TeacherIdCardModal";
+import { TeacherSignatureModal } from "./TeacherSignatureModal";
 import { speakNotification } from "../../utils/voiceNotifyEngine";
+
+export type HrmTab = "directory" | "accountants" | "referrals" | "leaves" | "salary";
 
 interface Props {
   school: School;
-  onBack: () => void;
+  onBack?: () => void;
+  embedded?: boolean;
+  controlledTab?: HrmTab;
+  onTabChange?: (tab: HrmTab) => void;
+  hideInternalNav?: boolean;
+  hideAdminAttendanceCard?: boolean;
+  initialTeacherIdForAccountant?: string | null;
+  onClearInitialTeacherForAccountant?: () => void;
 }
 
-type HrmTab = "directory" | "accountants" | "referrals" | "leaves" | "salary";
-
-export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
-  const [activeTab, setActiveTab] = useState<HrmTab>("directory");
+export const StaffHRMManager: React.FC<Props> = ({
+  school,
+  onBack,
+  embedded = false,
+  controlledTab,
+  onTabChange,
+  hideInternalNav = false,
+  hideAdminAttendanceCard = false,
+  initialTeacherIdForAccountant,
+  onClearInitialTeacherForAccountant,
+}) => {
+  const [internalTab, setInternalTab] = useState<HrmTab>(controlledTab || "directory");
+  const activeTab = controlledTab ?? internalTab;
+  const setActiveTab = (tab: HrmTab) => {
+    setInternalTab(tab);
+    onTabChange?.(tab);
+  };
   const [staffList, setStaffList] = useState<StaffEmployee[]>([]);
   const [accountantsList, setAccountantsList] = useState<SchoolAccountant[]>([]);
   const [showAddAccountantModal, setShowAddAccountantModal] = useState(false);
@@ -296,6 +329,339 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
   const [confirmDeletePayoutId, setConfirmDeletePayoutId] = useState<string | null>(null);
   const [confirmDeleteAccountantId, setConfirmDeleteAccountantId] = useState<string | null>(null);
 
+  // Edit Accountant salary/details modal state
+  const [editingAccountantModal, setEditingAccountantModal] = useState<{
+    acc: SchoolAccountant;
+    name: string;
+    phone: string;
+    employeeId: string;
+    designation: string;
+    monthlySalary: number;
+    signatureUrl?: string;
+  } | null>(null);
+  const [signatureTargetAccountant, setSignatureTargetAccountant] = useState<SchoolAccountant | null>(null);
+
+  // Convert Accountant -> Teacher modal state
+  const [convertAccountantModal, setConvertAccountantModal] = useState<{
+    acc: SchoolAccountant;
+    name: string;
+    phone: string;
+    employeeId: string;
+    designation: string;
+    subjects: string;
+    qualification: string;
+    experience: string;
+    monthlySalary: number;
+  } | null>(null);
+
+  // Edit Staff Directory salary/details modal state
+  const [editingStaffModal, setEditingStaffModal] = useState<{
+    st: StaffEmployee;
+    name: string;
+    phone: string;
+    employeeId: string;
+    designation: string;
+    department: string;
+    monthlySalary: number;
+  } | null>(null);
+
+  const [savingRoleOrPay, setSavingRoleOrPay] = useState(false);
+
+  const findLinkedTeacherForAccountant = (acc: SchoolAccountant): SchoolTeacher | undefined => {
+    const accPhone = normalizeWhatsappOrPhone(acc.phone || "");
+    const accName = normalizePersonName(acc.name || "");
+    return teachersList.find(
+      (t) =>
+        (acc.teacherRef && t.id === acc.teacherRef) ||
+        (accPhone.length >= 8 && normalizeWhatsappOrPhone(t.phone || "") === accPhone) ||
+        (accName && normalizePersonName(t.name || "") === accName)
+    );
+  };
+
+  const buildSyncedSalaryStructure = (prevStruct: any, nextMonthly: number) => {
+    const pay = Math.max(0, Number(nextMonthly) || 0);
+    const nowIso = new Date().toISOString();
+    if (!prevStruct) {
+      return {
+        monthlyBaseSalary: pay,
+        allowanceHra: 0,
+        allowanceTravel: 0,
+        allowanceSpecial: 0,
+        deductionPf: 0,
+        deductionOther: 0,
+        netMonthlySalary: pay,
+        paymentMode: "Bank Transfer" as const,
+        updatedAt: nowIso,
+      };
+    }
+    const hra = Number(prevStruct.allowanceHra || 0);
+    const travel = Number(prevStruct.allowanceTravel || 0);
+    const special = Number(prevStruct.allowanceSpecial || 0);
+    const pf = Number(prevStruct.deductionPf || 0);
+    const other = Number(prevStruct.deductionOther || 0);
+    const adjustedBase = Math.max(0, pay - hra - travel - special + pf + other);
+    return {
+      ...prevStruct,
+      monthlyBaseSalary: adjustedBase,
+      netMonthlySalary: pay,
+      updatedAt: nowIso,
+    };
+  };
+
+  const handleSaveAccountantEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingAccountantModal) return;
+    const { acc, name, phone, employeeId, designation, monthlySalary, signatureUrl } = editingAccountantModal;
+    if (!name.trim() || !phone.trim()) {
+      showToast("error", "कृपया Accountant का नाम और मोबाइल नंबर दर्ज करें।");
+      return;
+    }
+    setSavingRoleOrPay(true);
+    try {
+      const nextPay = Math.max(0, Number(monthlySalary) || 0);
+      const nextStruct = buildSyncedSalaryStructure(acc.salaryStructure, nextPay);
+      const updatedAcc: SchoolAccountant = {
+        ...acc,
+        name: name.trim(),
+        phone: phone.trim(),
+        employeeId: employeeId.trim() || acc.employeeId || "ACC",
+        designation: designation.trim() || acc.designation || "Accountant & Cashier",
+        monthlySalary: nextPay,
+        salaryStructure: nextStruct,
+        signatureUrl: signatureUrl !== undefined ? signatureUrl : acc.signatureUrl,
+      };
+      await saveAccountant(updatedAcc);
+      setAccountantsList((prev) => prev.map((a) => (a.id === acc.id ? updatedAcc : a)));
+
+      // Sync linked Teacher & Staff record if linked
+      const linkedTeacher = findLinkedTeacherForAccountant(acc);
+      if (linkedTeacher) {
+        const syncedStruct = buildSyncedSalaryStructure(linkedTeacher.salaryStructure, nextPay);
+        await updateTeacher(school.id, linkedTeacher.id, {
+          name: updatedAcc.name,
+          phone: updatedAcc.phone,
+          monthlySalary: nextPay,
+          salary: nextPay,
+          salaryStructure: syncedStruct,
+        });
+        setTeachersList((prev) =>
+          prev.map((t) =>
+            t.id === linkedTeacher.id
+              ? { ...t, name: updatedAcc.name, phone: updatedAcc.phone, monthlySalary: nextPay, salary: nextPay, salaryStructure: syncedStruct }
+              : t
+          )
+        );
+      }
+
+      const matchingStaff = staffList.find(
+        (s) =>
+          (acc.teacherRef && s.id === acc.teacherRef) ||
+          s.id === acc.id ||
+          (phone.trim() && s.phone === phone.trim())
+      );
+      if (matchingStaff) {
+        const syncedStaff: StaffEmployee = {
+          ...matchingStaff,
+          name: updatedAcc.name,
+          phone: updatedAcc.phone,
+          monthlySalary: nextPay,
+          salaryStructure: nextStruct,
+        };
+        await saveStaffEmployee(syncedStaff);
+        setStaffList((prev) => prev.map((s) => (s.id === matchingStaff.id ? syncedStaff : s)));
+      }
+
+      setEditingAccountantModal(null);
+      showToast("success", `✅ ${updatedAcc.name} का विवरण और मासिक वेतन (₹${nextPay.toLocaleString("en-IN")}) अपडेट हो गया!`);
+    } catch (err: any) {
+      showToast("error", "अपडेट करने में त्रुटि: " + (err?.message || "पुनः प्रयास करें"));
+    } finally {
+      setSavingRoleOrPay(false);
+    }
+  };
+
+  const openConvertAccountantToTeacherModal = (acc: SchoolAccountant) => {
+    const existingTeacher = findLinkedTeacherForAccountant(acc);
+    if (existingTeacher) {
+      showToast("error", `${acc.name} पहले से ही Teacher के रूप में सक्रिय हैं!`);
+      return;
+    }
+    setConvertAccountantModal({
+      acc,
+      name: acc.name || "",
+      phone: acc.phone || "",
+      employeeId: acc.employeeId && !acc.employeeId.startsWith("ACC") ? acc.employeeId : `TEA-${acc.id.slice(-4).toUpperCase()}`,
+      designation: acc.designation ? `${acc.designation} & Faculty` : "Faculty & Accountant",
+      subjects: "Accountancy, Mathematics",
+      qualification: "",
+      experience: "",
+      monthlySalary: Math.max(0, Number(acc.monthlySalary || 0)),
+    });
+  };
+
+  const handleConfirmConvertAccountantToTeacher = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!convertAccountantModal) return;
+    const { acc, name, phone, employeeId, designation, subjects, qualification, experience, monthlySalary } =
+      convertAccountantModal;
+    if (!name.trim()) {
+      showToast("error", "कृपया Teacher का नाम दर्ज करें।");
+      return;
+    }
+    setSavingRoleOrPay(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const pay = Math.max(0, Number(monthlySalary) || 0);
+      const salaryStruct = buildSyncedSalaryStructure(acc.salaryStructure, pay);
+      const subArr = subjects
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+      // Re-use matching teacher if present by phone/name, else create new SchoolTeacher
+      const existing = findLinkedTeacherForAccountant(acc);
+      const teacherId = existing?.id || generateId();
+      const empId = employeeId.trim() || `TEA-${teacherId.slice(-4).toUpperCase()}`;
+
+      const teacherRecord: SchoolTeacher = {
+        ...(existing || {}),
+        id: teacherId,
+        schoolId: school.id,
+        name: name.trim(),
+        phone: phone.trim() || acc.phone || undefined,
+        email: existing?.email || acc.email || undefined,
+        photoUrl: existing?.photoUrl || acc.photoUrl || undefined,
+        employeeId: empId,
+        designation: designation.trim() || "Faculty & Accountant",
+        qualification: qualification.trim() || existing?.qualification || undefined,
+        experience: experience.trim() || existing?.experience || undefined,
+        subjects: subArr.length > 0 ? subArr : (existing?.subjects || ["General"]),
+        classes: existing?.classes || [],
+        active: true,
+        joinDate: existing?.joinDate || acc.joinDate || todayStr(),
+        createdAt: existing?.createdAt || nowIso,
+        monthlySalary: pay,
+        salary: pay,
+        salaryStructure: salaryStruct,
+      };
+
+      await saveTeacher(teacherRecord);
+
+      // Also sync StaffEmployee directory so attendance & payroll stay 100% synced
+      const staffRecord: StaffEmployee = {
+        id: teacherId,
+        schoolId: school.id,
+        name: teacherRecord.name,
+        email: teacherRecord.email || "",
+        phone: teacherRecord.phone || "",
+        designation: teacherRecord.designation || "Faculty & Accountant",
+        department: "Academic & Accounts",
+        employeeId: empId,
+        joinDate: teacherRecord.joinDate,
+        monthlySalary: pay,
+        salaryStructure: salaryStruct,
+        active: true,
+        photoUrl: teacherRecord.photoUrl,
+        createdAt: teacherRecord.createdAt,
+      };
+      await saveStaffEmployee(staffRecord);
+
+      // Link teacherRef back onto Accountant record & sync salary
+      const updatedAcc: SchoolAccountant = {
+        ...acc,
+        teacherRef: teacherId,
+        monthlySalary: pay,
+        salaryStructure: salaryStruct,
+      };
+      await saveAccountant(updatedAcc);
+
+      setTeachersList((prev) => [teacherRecord, ...prev.filter((t) => t.id !== teacherId)]);
+      setStaffList((prev) => [staffRecord, ...prev.filter((s) => s.id !== teacherId)]);
+      setAccountantsList((prev) => prev.map((a) => (a.id === acc.id ? updatedAcc : a)));
+      setConvertAccountantModal(null);
+      showToast("success", `👨‍🏫 ${teacherRecord.name} को सफलतापूर्वक Teacher भी बना दिया गया है!`);
+    } catch (err: any) {
+      showToast("error", "Teacher बनाने में त्रुटि: " + (err?.message || "पुनः प्रयास करें"));
+    } finally {
+      setSavingRoleOrPay(false);
+    }
+  };
+
+  const handleSaveStaffEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingStaffModal) return;
+    const { st, name, phone, employeeId, designation, department, monthlySalary } = editingStaffModal;
+    if (!name.trim()) {
+      showToast("error", "कृपया स्टाफ का नाम दर्ज करें।");
+      return;
+    }
+    setSavingRoleOrPay(true);
+    try {
+      const nextPay = Math.max(0, Number(monthlySalary) || 0);
+      const nextStruct = buildSyncedSalaryStructure(st.salaryStructure, nextPay);
+      const updatedStaff: StaffEmployee = {
+        ...st,
+        name: name.trim(),
+        phone: phone.trim(),
+        employeeId: employeeId.trim() || st.employeeId,
+        designation: designation.trim() || st.designation,
+        department: department.trim() || st.department,
+        monthlySalary: nextPay,
+        salaryStructure: nextStruct,
+      };
+      await saveStaffEmployee(updatedStaff);
+      setStaffList((prev) => prev.map((item) => (item.id === st.id ? updatedStaff : item)));
+
+      // Sync to Teacher if matching id
+      const matchingTeacher = teachersList.find((t) => t.id === st.id);
+      if (matchingTeacher) {
+        const tStruct = buildSyncedSalaryStructure(matchingTeacher.salaryStructure, nextPay);
+        await updateTeacher(school.id, matchingTeacher.id, {
+          name: updatedStaff.name,
+          phone: updatedStaff.phone || undefined,
+          designation: updatedStaff.designation,
+          employeeId: updatedStaff.employeeId,
+          monthlySalary: nextPay,
+          salary: nextPay,
+          salaryStructure: tStruct,
+        });
+        setTeachersList((prev) =>
+          prev.map((t) =>
+            t.id === matchingTeacher.id
+              ? { ...t, name: updatedStaff.name, phone: updatedStaff.phone, designation: updatedStaff.designation, monthlySalary: nextPay, salary: nextPay, salaryStructure: tStruct }
+              : t
+          )
+        );
+      }
+
+      // Sync to Accountant if linked
+      const linkedAcc = accountantsList.find(
+        (a) => a.teacherRef === st.id || a.id === st.id || (updatedStaff.phone && a.phone === updatedStaff.phone)
+      );
+      if (linkedAcc) {
+        const updatedAcc: SchoolAccountant = {
+          ...linkedAcc,
+          name: updatedStaff.name,
+          phone: updatedStaff.phone || linkedAcc.phone,
+          monthlySalary: nextPay,
+          salaryStructure: nextStruct,
+        };
+        await saveAccountant(updatedAcc);
+        setAccountantsList((prev) => prev.map((a) => (a.id === linkedAcc.id ? updatedAcc : a)));
+      }
+
+      if (selectedStaffForSlip?.id === st.id) {
+        setSelectedStaffForSlip(updatedStaff);
+      }
+      setEditingStaffModal(null);
+      showToast("success", `✅ ${updatedStaff.name} का वेतन ₹${nextPay.toLocaleString("en-IN")}/माह अपडेट हो गया!`);
+    } catch (err: any) {
+      showToast("error", "स्टाफ अपडेट करने में त्रुटि: " + (err?.message || ""));
+    } finally {
+      setSavingRoleOrPay(false);
+    }
+  };
+
   // New staff modal
   const [showAddStaff, setShowAddStaff] = useState(false);
   const [staffForm, setStaffForm] = useState({
@@ -341,6 +707,7 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
   // Pay slip state
   const [selectedStaffForSlip, setSelectedStaffForSlip] = useState<StaffEmployee | null>(null);
   const [lateDaysMap, setLateDaysMap] = useState<Record<string, number>>({});
+  const [monthlyAttMap, setMonthlyAttMap] = useState<Record<string, Record<string, any>>>({});
   const [includeReferralInSlip, setIncludeReferralInSlip] = useState(true);
   const [settlingSlipBonus, setSettlingSlipBonus] = useState(false);
 
@@ -414,6 +781,8 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
       if (stf.length > 0 && !leaveForm.staffId) {
         setLeaveForm((prev) => ({ ...prev, staffId: stf[0].id }));
         setSelectedStaffForSlip((prev) => prev || stf[0]);
+      } else if (tch.length > 0 && !leaveForm.staffId) {
+        setLeaveForm((prev) => ({ ...prev, staffId: tch[0].id }));
       }
     } catch {
       // Handled gracefully with cached state
@@ -424,6 +793,90 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
   useEffect(() => {
     loadData();
   }, [school.id]);
+
+  useEffect(() => {
+    if (!school?.id) return;
+    const unsub = subscribeStaffLeaves(school.id, (list) => {
+      setLeavesList(list || []);
+    });
+    return unsub;
+  }, [school?.id]);
+
+  useEffect(() => {
+    if (!school?.id) return;
+    let active = true;
+    const ym = currentMonthStr();
+    const refreshAtt = () => {
+      getMonthlyStaffDailyAttendance(school.id, ym)
+        .then((res) => {
+          if (active) setMonthlyAttMap(res || {});
+        })
+        .catch(() => {});
+    };
+    refreshAtt();
+    const onAttUpdated = (e: any) => {
+      if (e?.detail?.schoolId && e.detail.schoolId !== school.id) return;
+      refreshAtt();
+    };
+    window.addEventListener("staff-daily-attendance-updated", onAttUpdated);
+    return () => {
+      active = false;
+      window.removeEventListener("staff-daily-attendance-updated", onAttUpdated);
+    };
+  }, [school?.id]);
+
+  useEffect(() => {
+    const onRemoved = (e: any) => {
+      if (e?.detail?.schoolId && e.detail.schoolId !== school.id) return;
+      const rid = e?.detail?.teacherId || e?.detail?.staffId;
+      if (rid) {
+        setStaffList((prev) => prev.filter((s) => s.id !== rid));
+        setTeachersList((prev) => prev.filter((t) => t.id !== rid));
+      }
+    };
+    const onTeacherUpdated = (e: any) => {
+      if (e?.detail?.schoolId && e.detail.schoolId !== school.id) return;
+      const updated = e?.detail?.teacher;
+      if (updated?.id) {
+        setTeachersList((prev) => {
+          const exists = prev.some((t) => t.id === updated.id);
+          return exists
+            ? prev.map((t) => (t.id === updated.id ? { ...t, ...updated } : t))
+            : [updated, ...prev];
+        });
+      }
+    };
+    const onStaffUpdated = (e: any) => {
+      if (e?.detail?.schoolId && e.detail.schoolId !== school.id) return;
+      const updated = e?.detail?.staff;
+      if (updated?.id) {
+        setStaffList((prev) => {
+          const exists = prev.some((s) => s.id === updated.id);
+          return exists
+            ? prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s))
+            : [updated, ...prev];
+        });
+      }
+    };
+    window.addEventListener("teacher-deleted", onRemoved);
+    window.addEventListener("staff-deleted", onRemoved);
+    window.addEventListener("teacher-updated", onTeacherUpdated);
+    window.addEventListener("staff-updated", onStaffUpdated);
+    return () => {
+      window.removeEventListener("teacher-deleted", onRemoved);
+      window.removeEventListener("staff-deleted", onRemoved);
+      window.removeEventListener("teacher-updated", onTeacherUpdated);
+      window.removeEventListener("staff-updated", onStaffUpdated);
+    };
+  }, [school.id]);
+
+  useEffect(() => {
+    if (!initialTeacherIdForAccountant || loading) return;
+    handleTeacherSearchOrSelect(initialTeacherIdForAccountant);
+    setActiveTab("accountants");
+    setShowAddAccountantModal(true);
+    onClearInitialTeacherForAccountant?.();
+  }, [initialTeacherIdForAccountant, loading, teachersList.length, staffList.length]);
 
   // Unified referrer list & live 10% commission ledger
   const mergedReferrers = useMemo(
@@ -443,21 +896,31 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
     [studentsList, feesList, payoutsList, mergedReferrers, referralSettings]
   );
 
-  // Match selected staff member in Salary Slip tab with their referral ledger bucket
+  // Match selected staff or first available teacher in Salary Slip tab with their referral ledger bucket
   const slipReferralSummary: TeacherCommissionSummary | null = useMemo(() => {
-    if (!selectedStaffForSlip) return null;
-    const targetName = normalizePersonName(selectedStaffForSlip.name);
-    const targetPhone = normalizeWhatsappOrPhone(selectedStaffForSlip.phone);
+    const targetPerson =
+      selectedStaffForSlip ||
+      staffList[0] ||
+      (teachersList[0]
+        ? {
+            id: teachersList[0].id,
+            name: teachersList[0].name,
+            phone: teachersList[0].phone || "",
+          }
+        : null);
+    if (!targetPerson) return null;
+    const targetName = normalizePersonName(targetPerson.name);
+    const targetPhone = normalizeWhatsappOrPhone(targetPerson.phone);
 
     return (
       referralLedger.teachers.find((t) => {
-        if (t.teacherId === selectedStaffForSlip.id) return true;
+        if (t.teacherId === targetPerson.id) return true;
         if (targetPhone && normalizeWhatsappOrPhone(t.phone) === targetPhone) return true;
         if (targetName && normalizePersonName(t.teacherName) === targetName) return true;
         return false;
       }) || null
     );
-  }, [selectedStaffForSlip, referralLedger.teachers]);
+  }, [selectedStaffForSlip, staffList, teachersList, referralLedger.teachers]);
 
   const handleAddStaff = async () => {
     if (!staffForm.name.trim() || !staffForm.phone.trim()) {
@@ -482,6 +945,7 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
       };
       await saveStaffEmployee(newStaff);
       setStaffList((prev) => [newStaff, ...prev]);
+      window.dispatchEvent(new CustomEvent("staff-updated", { detail: { schoolId: school.id, staff: newStaff } }));
       if (!selectedStaffForSlip) setSelectedStaffForSlip(newStaff);
       setShowAddStaff(false);
       setStaffForm({
@@ -501,35 +965,57 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
   };
 
   const handleDeleteStaff = async (id: string) => {
-    await deleteStaffEmployee(school.id, id);
     setStaffList((prev) => prev.filter((s) => s.id !== id));
+    setTeachersList((prev) => prev.filter((t) => t.id !== id));
     setConfirmDeleteStaffId(null);
-    showToast("success", "Staff record hata diya gaya.");
+    await deleteStaffEmployee(school.id, id);
+    window.dispatchEvent(new CustomEvent("staff-deleted", { detail: { schoolId: school.id, staffId: id } }));
+    showToast("success", "Staff / Teacher record permanently hata diya gaya.");
   };
 
+  const leaveCandidates = useMemo(() => {
+    const byId = new Map<string, { id: string; name: string; designation: string }>();
+    staffList.forEach((s) => {
+      if (s?.id) byId.set(s.id, { id: s.id, name: s.name, designation: s.designation || "Staff" });
+    });
+    teachersList.forEach((t) => {
+      if (t?.id && !byId.has(t.id)) {
+        byId.set(t.id, { id: t.id, name: t.name, designation: t.designation || "Teacher" });
+      }
+    });
+    return Array.from(byId.values());
+  }, [staffList, teachersList]);
+
   const handleApplyLeave = async () => {
-    const staff = staffList.find((s) => s.id === leaveForm.staffId);
-    if (!staff || !leaveForm.reason.trim()) {
-      showToast("error", "Staff member chunein aur chhutti ka karan likhein.");
+    const candidate =
+      leaveCandidates.find((c) => c.id === leaveForm.staffId) || leaveCandidates[0];
+    if (!candidate || !leaveForm.reason.trim()) {
+      showToast("error", "Teacher / Staff member chunein aur chhutti ka karan likhein.");
       return;
     }
+    const fromMs = new Date(leaveForm.fromDate || todayStr()).getTime();
+    const toMs = new Date(leaveForm.toDate || leaveForm.fromDate || todayStr()).getTime();
+    const computedDays =
+      Number.isFinite(fromMs) && Number.isFinite(toMs) && toMs >= fromMs
+        ? Math.max(1, Math.round((toMs - fromMs) / 86400000) + 1)
+        : Number(leaveForm.days) || 1;
     try {
       const newLeave: StaffLeave = {
         id: generateId(),
         schoolId: school.id,
-        staffId: staff.id,
-        staffName: staff.name,
-        designation: staff.designation,
+        staffId: candidate.id,
+        staffName: candidate.name,
+        designation: candidate.designation,
         leaveType: leaveForm.leaveType,
         fromDate: leaveForm.fromDate,
         toDate: leaveForm.toDate,
-        days: Number(leaveForm.days) || 1,
+        days: computedDays,
         reason: leaveForm.reason.trim(),
         status: "pending",
         appliedAt: new Date().toISOString(),
       };
       await saveStaffLeave(newLeave);
-      setLeavesList((prev) => [newLeave, ...prev]);
+      setLeavesList((prev) => [newLeave, ...prev.filter((x) => x.id !== newLeave.id)]);
       setShowApplyLeave(false);
       setLeaveForm((prev) => ({ ...prev, reason: "" }));
       showToast("success", "Leave application jama ho gaya.");
@@ -541,6 +1027,12 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
   const handleUpdateLeave = async (leaveId: string, status: "approved" | "rejected") => {
     await updateStaffLeaveStatus(school.id, leaveId, status);
     setLeavesList((prev) => prev.map((l) => (l.id === leaveId ? { ...l, status } : l)));
+    showToast(
+      "success",
+      status === "approved"
+        ? "✓ Leave Request approve ho gayi — Teacher ko status dikh jayega."
+        : "Leave Request reject kar di gayi — Teacher ko status dikh jayega."
+    );
   };
 
   const handleSaveReferralPolicy = async () => {
@@ -643,47 +1135,95 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 pb-16">
+    <div className={embedded ? "space-y-4" : "min-h-screen bg-slate-50 dark:bg-slate-900 pb-16"}>
       {/* Top Navbar */}
-      <div className="bg-gradient-to-r from-teal-900 via-slate-900 to-indigo-950 px-4 py-4 text-white shadow-lg sticky top-0 z-30 print:hidden">
-        <div className="max-w-5xl mx-auto flex items-center justify-between gap-3 flex-wrap">
-          <button
-            onClick={onBack}
-            className="flex items-center gap-1.5 text-teal-200 hover:text-white text-sm font-bold transition-colors cursor-pointer"
-          >
-            <ChevronLeft className="w-4 h-4" /> School Dashboard
-          </button>
-          <div className="flex flex-wrap p-1 bg-white/10 rounded-xl gap-1">
-            {(
-              [
-                { id: "directory", label: "Staff Directory" },
-                {
-                  id: "accountants",
-                  label: `💼 Accountants${accountantsList.length > 0 ? ` (${accountantsList.length})` : ""}`,
-                },
-                {
-                  id: "referrals",
-                  label: `10% Referral Bonus${referralLedger.totals.referredStudents > 0 ? ` (${referralLedger.totals.referredStudents})` : ""}`,
-                },
-                { id: "leaves", label: "Leave Requests" },
-                { id: "salary", label: "Salary / Payslip" },
-              ] as { id: HrmTab; label: string }[]
-            ).map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
-                  activeTab === tab.id ? "bg-white text-teal-900 shadow" : "text-white/80 hover:text-white"
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
+      {embedded ? (
+        hideInternalNav ? null : (
+        <div className="bg-white dark:bg-slate-800/95 border border-slate-200 dark:border-slate-700 rounded-2xl p-2.5 sm:px-4 shadow-xs print:hidden">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <span className="text-xs font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+              <Briefcase className="w-4 h-4 text-teal-600 dark:text-teal-400" />
+              <span>HRM Sections</span>
+            </span>
+            <div className="flex flex-wrap p-1 bg-slate-100 dark:bg-slate-900/80 rounded-xl gap-1">
+              {(
+                [
+                  { id: "directory", label: "Staff Directory" },
+                  {
+                    id: "accountants",
+                    label: `Accountants${accountantsList.length > 0 ? ` (${accountantsList.length})` : ""}`,
+                  },
+                  {
+                    id: "referrals",
+                    label: `10% Referral Bonus${referralLedger.totals.referredStudents > 0 ? ` (${referralLedger.totals.referredStudents})` : ""}`,
+                  },
+                  { id: "leaves", label: "Leave Requests" },
+                  { id: "salary", label: "Salary / Payslip" },
+                ] as { id: HrmTab; label: string }[]
+              ).map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer tabular-nums ${
+                    activeTab === tab.id
+                      ? "bg-white dark:bg-teal-600 text-teal-700 dark:text-white shadow-xs ring-1 ring-slate-200 dark:ring-teal-500"
+                      : "text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
-      </div>
+        )
+      ) : (
+        <div className="bg-gradient-to-r from-teal-900 via-slate-900 to-indigo-950 px-4 py-4 text-white shadow-lg sticky top-0 z-30 print:hidden">
+          <div className="max-w-6xl mx-auto flex items-center justify-between gap-3 flex-wrap">
+            {onBack ? (
+              <button
+                onClick={onBack}
+                className="flex items-center gap-1.5 text-teal-200 hover:text-white text-sm font-bold transition-colors cursor-pointer"
+              >
+                <ChevronLeft className="w-4 h-4" /> School Dashboard
+              </button>
+            ) : (
+              <span className="text-xs font-black uppercase tracking-wider text-teal-200 flex items-center gap-1.5">
+                <Briefcase className="w-4 h-4" /> Staff HRM, Accountants, Leaves &amp; Referrals
+              </span>
+            )}
+            <div className="flex flex-wrap p-1 bg-white/10 rounded-xl gap-1">
+              {(
+                [
+                  { id: "directory", label: "Staff Directory" },
+                  {
+                    id: "accountants",
+                    label: `Accountants${accountantsList.length > 0 ? ` (${accountantsList.length})` : ""}`,
+                  },
+                  {
+                    id: "referrals",
+                    label: `10% Referral Bonus${referralLedger.totals.referredStudents > 0 ? ` (${referralLedger.totals.referredStudents})` : ""}`,
+                  },
+                  { id: "leaves", label: "Leave Requests" },
+                  { id: "salary", label: "Salary / Payslip" },
+                ] as { id: HrmTab; label: string }[]
+              ).map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer tabular-nums ${
+                    activeTab === tab.id ? "bg-white text-teal-900 shadow" : "text-white/80 hover:text-white"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
-      <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
+      <div className={embedded ? "space-y-6" : "max-w-5xl mx-auto px-4 py-6 space-y-6"}>
         {feedback && (
           <div
             className={`px-4 py-3 rounded-xl text-xs font-bold flex items-center justify-between gap-3 print:hidden ${
@@ -712,12 +1252,32 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
 
         <div className="flex items-center justify-between flex-wrap gap-3 print:hidden">
           <div>
-            <h1 className="text-2xl font-black text-slate-900 dark:text-white flex items-center gap-2">
-              <Briefcase className="w-7 h-7 text-teal-600" />
-              Staff HRM, Payroll &amp; Referral Incentives
+            <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white flex items-center gap-2">
+              <Briefcase className="w-6 h-6 text-teal-600 shrink-0" />
+              {hideInternalNav
+                ? activeTab === "directory"
+                  ? "Staff Directory (सपोर्ट व अन्य स्टाफ)"
+                  : activeTab === "accountants"
+                  ? "Accountants & Cashier Delegation"
+                  : activeTab === "referrals"
+                  ? "10% Student Referral Bonus Ledger"
+                  : activeTab === "leaves"
+                  ? "Staff Leave Requests (अवकाश प्रबंधन)"
+                  : "Quick Staff Salary & Payslip"
+                : "Staff HRM, Payroll & Referral Incentives"}
             </h1>
             <p className="text-xs text-slate-500 mt-1">
-              Shikshakon ka record, 10% student referral commission, chhutti aur salary slips ek jagah manage karein.
+              {hideInternalNav
+                ? activeTab === "directory"
+                  ? "गैर-शैक्षणिक व सपोर्ट स्टाफ का रिकॉर्ड, वेतन एडिट, ID कार्ड और Accountant असाइनमेंट।"
+                  : activeTab === "accountants"
+                  ? "फीस संकलन, POS रसीद और कैशियर अधिकारों के लिए Accountant नियुक्त व मैनेज करें।"
+                  : activeTab === "referrals"
+                  ? "शिक्षकों द्वारा लाए गए प्रवेश पर 10% कमीशन, पॉलिसी और पेआउट सेटलमेंट।"
+                  : activeTab === "leaves"
+                  ? "स्टाफ व शिक्षकों की छुट्टी (CL/Medical/EL) आवेदन, स्वीकृति और रिकॉर्ड।"
+                  : "लेट एंट्री (3:1 कटौती) और 10% रेफरल बोनस के साथ मासिक वेतन स्लिप प्रिंट करें।"
+                : "Shikshakon ka record, 10% student referral commission, chhutti aur salary slips ek jagah manage karein."}
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
@@ -740,33 +1300,39 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
           </div>
         </div>
 
-        {/* Dedicated Admin Daily Attendance & Verification Desk */}
-        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border border-indigo-500/30 rounded-2xl p-4 shadow-xl text-white print:hidden">
+        {/* Dedicated Admin Daily Attendance & Verification Desk (hidden when managed on Daily Attendance page) */}
+        {!(hideAdminAttendanceCard || hideInternalNav) && (
+        <div className="bg-white dark:bg-slate-800/95 border border-slate-200 dark:border-slate-700 rounded-2xl p-4 shadow-xs text-slate-900 dark:text-white print:hidden">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center font-bold text-xl shadow-inner">
-                🏛️
+              <div className="w-11 h-11 rounded-xl bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/70 flex items-center justify-center shrink-0">
+                <Building2 className="w-5 h-5" />
               </div>
               <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-black text-white tracking-wide">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-sm font-black text-slate-900 dark:text-white tracking-tight">
                     School Admin &amp; Principal Desk (एडमिन हाजिरी)
                   </h3>
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-black border ${
+                  <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border inline-flex items-center gap-1 ${
                     adminAttendanceRecord.present
-                      ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
-                      : "bg-amber-500/20 text-amber-300 border-amber-500/40"
+                      ? "bg-emerald-50 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/40"
+                      : "bg-amber-50 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-500/40"
                   }`}>
-                    {adminAttendanceRecord.present ? "✅ Present Today" : "⏳ Attendance Pending"}
+                    {adminAttendanceRecord.present ? (
+                      <CheckCircle2 className="w-3 h-3" />
+                    ) : (
+                      <Clock className="w-3 h-3" />
+                    )}
+                    <span>{adminAttendanceRecord.present ? "Present Today" : "Attendance Pending"}</span>
                   </span>
                 </div>
-                <p className="text-xs text-indigo-200 mt-0.5">
-                  {school.principalName || "Principal / School Admin"} • ID: <span className="font-mono font-bold text-amber-300">ADMIN-01</span>
+                <p className="text-xs text-slate-600 dark:text-slate-300 font-semibold mt-0.5">
+                  {school.principalName || "Principal / School Admin"} · ID: <span className="font-mono font-bold text-indigo-700 dark:text-indigo-300">ADMIN-01</span>
                 </p>
-                <div className="flex items-center gap-3 text-[11px] text-slate-300 mt-1 font-mono">
-                  <span>In Time: <strong className="text-emerald-400">{adminAttendanceRecord.inTime || "--:--"}</strong></span>
-                  <span>•</span>
-                  <span>Out Time: <strong className="text-amber-400">{adminAttendanceRecord.outTime || "--:--"}</strong></span>
+                <div className="flex items-center gap-3 text-[11px] text-slate-600 dark:text-slate-300 mt-1 font-mono font-semibold tabular-nums">
+                  <span>In: <strong className="text-emerald-700 dark:text-emerald-400">{adminAttendanceRecord.inTime || "--:--"}</strong></span>
+                  <span>·</span>
+                  <span>Out: <strong className="text-amber-700 dark:text-amber-400">{adminAttendanceRecord.outTime || "--:--"}</strong></span>
                 </div>
               </div>
             </div>
@@ -789,6 +1355,7 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
             </div>
           </div>
         </div>
+        )}
 
         {/* TAB 1: STAFF DIRECTORY */}
         {activeTab === "directory" && (
@@ -871,30 +1438,51 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
                       <div className="w-10 h-10 rounded-xl bg-teal-100 dark:bg-teal-900/40 text-teal-800 dark:text-teal-200 font-black flex items-center justify-center text-sm">
                         {st.name.slice(0, 1)}
                       </div>
-                      {confirmDeleteStaffId === st.id ? (
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            onClick={() => handleDeleteStaff(st.id)}
-                            className="px-2 py-1 rounded-lg bg-rose-600 text-white text-[10px] font-black cursor-pointer"
-                          >
-                            Confirm Delete
-                          </button>
-                          <button
-                            onClick={() => setConfirmDeleteStaffId(null)}
-                            className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-[10px] font-bold cursor-pointer"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : (
+                      <div className="flex items-center gap-1">
                         <button
-                          onClick={() => setConfirmDeleteStaffId(st.id)}
-                          className="text-slate-400 hover:text-rose-500 p-1 cursor-pointer"
-                          title="Remove staff"
+                          type="button"
+                          onClick={() =>
+                            setEditingStaffModal({
+                              st,
+                              name: st.name || "",
+                              phone: st.phone || "",
+                              employeeId: st.employeeId || "",
+                              designation: st.designation || "",
+                              department: st.department || "",
+                              monthlySalary: Number(st.salaryStructure?.netMonthlySalary ?? st.monthlySalary ?? 0),
+                            })
+                          }
+                          className="px-2 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 text-[10px] font-black flex items-center gap-1 cursor-pointer"
+                          title="वेतन व विवरण एडिट करें"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <Edit3 className="w-3 h-3" />
+                          <span>वेतन एडिट</span>
                         </button>
-                      )}
+                        {confirmDeleteStaffId === st.id ? (
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() => handleDeleteStaff(st.id)}
+                              className="px-2 py-1 rounded-lg bg-rose-600 text-white text-[10px] font-black cursor-pointer"
+                            >
+                              Confirm Delete
+                            </button>
+                            <button
+                              onClick={() => setConfirmDeleteStaffId(null)}
+                              className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-[10px] font-bold cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setConfirmDeleteStaffId(st.id)}
+                            className="text-slate-400 hover:text-rose-500 p-1 cursor-pointer"
+                            title="Remove staff"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <div>
                       <h3 className="font-black text-slate-900 dark:text-white text-sm">{st.name}</h3>
@@ -916,7 +1504,7 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
                     <div className="pt-2 border-t dark:border-slate-700 flex justify-between items-center text-xs">
                       <span className="text-slate-400">Monthly Salary:</span>
                       <span className="font-black tabular-nums text-slate-800 dark:text-slate-200">
-                        ₹{st.monthlySalary.toLocaleString("en-IN")}
+                        ₹{Number(st.salaryStructure?.netMonthlySalary ?? st.monthlySalary ?? 0).toLocaleString("en-IN")}
                       </span>
                     </div>
                     <div className="pt-1 flex items-center gap-2">
@@ -932,7 +1520,7 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
                         <span className="py-1.5 px-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 text-[11px] font-black flex items-center gap-1 shrink-0">
                           <Check className="w-3.5 h-3.5 text-amber-600" /> Accountant Active
                         </span>
-                      ) : (
+                      ) : !hideInternalNav ? (
                         <button
                           type="button"
                           onClick={() => {
@@ -946,7 +1534,7 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
                           <Briefcase className="w-3.5 h-3.5" />
                           <span>Accountant बनाएं</span>
                         </button>
-                      )}
+                      ) : null}
                     </div>
                   </div>
                 ))}
@@ -1111,7 +1699,58 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2 self-end sm:self-auto">
+                      <div className="flex items-center flex-wrap gap-2 self-end sm:self-auto">
+                        {findLinkedTeacherForAccountant(acc) ? (
+                          <span className="px-2.5 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-xs font-black flex items-center gap-1">
+                            <GraduationCap className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>✓ Teacher Active</span>
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => openConvertAccountantToTeacherModal(acc)}
+                            className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white text-xs font-black transition flex items-center gap-1.5 shadow-sm cursor-pointer active:scale-95"
+                            title="इस Accountant को Teacher भी बनाएं"
+                          >
+                            <GraduationCap className="w-3.5 h-3.5" />
+                            <span>Teacher बनाएं</span>
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => setSignatureTargetAccountant(acc)}
+                          className={`px-3 py-1.5 rounded-xl border text-xs font-black transition flex items-center gap-1.5 cursor-pointer active:scale-95 ${
+                            acc.signatureUrl
+                              ? "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100"
+                              : "bg-purple-50 dark:bg-purple-950/40 text-purple-800 dark:text-purple-300 border-purple-200 dark:border-purple-800 hover:bg-purple-100"
+                          }`}
+                          title="Accountant का Fee Receipt डिजिटल हस्ताक्षर जोड़ें या बदलें"
+                        >
+                          <PenTool className="w-3.5 h-3.5" />
+                          <span>{acc.signatureUrl ? "✍️ Sign अपडेट करें" : "✍️ Sign जोड़ें"}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditingAccountantModal({
+                              acc,
+                              name: acc.name || "",
+                              phone: acc.phone || "",
+                              employeeId: acc.employeeId || "",
+                              designation: acc.designation || "Accountant & Cashier",
+                              monthlySalary: Number(acc.salaryStructure?.netMonthlySalary ?? acc.monthlySalary ?? 0),
+                              signatureUrl: acc.signatureUrl || "",
+                            })
+                          }
+                          className="px-3 py-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:bg-amber-100 text-xs font-black transition flex items-center gap-1 cursor-pointer active:scale-95"
+                          title="Accountant का मासिक वेतन (पैसा) और विवरण एडिट करें"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          <span>वेतन / विवरण एडिट</span>
+                        </button>
+
                         {confirmDeleteAccountantId === acc.id ? (
                           <div className="flex items-center gap-1.5">
                             <button
@@ -1411,6 +2050,75 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
               </div>
             </div>
 
+            {/* All Teachers 10% Referral Eligibility Controls (Admin Only) */}
+            <div className="bg-white dark:bg-slate-800 rounded-2xl p-4 sm:p-5 border border-slate-200/80 dark:border-slate-700 shadow-xs space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <Award className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                  <h2 className="text-sm font-black text-slate-900 dark:text-white">
+                    Teachers Referral Access (किसे 10% Referral देना है)
+                  </h2>
+                </div>
+                <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 tabular-nums">
+                  {teachersList.filter((tc) => tc.hasReferralIncentive).length} / {teachersList.length} Active
+                </span>
+              </div>
+
+              {teachersList.length === 0 ? (
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Abhi koi teacher record nahi mila.
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                  {teachersList.map((tc) => {
+                    const isOn = Boolean(tc.hasReferralIncentive);
+                    return (
+                      <div
+                        key={`ref-perm-${tc.id}`}
+                        className={`p-3 rounded-xl border flex items-center justify-between gap-2.5 transition ${
+                          isOn
+                            ? "bg-purple-50/70 dark:bg-purple-950/30 border-purple-200 dark:border-purple-800"
+                            : "bg-slate-50 dark:bg-slate-900/40 border-slate-200 dark:border-slate-700"
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <div className="text-xs font-black text-slate-900 dark:text-white truncate">
+                            {tc.name}
+                          </div>
+                          <div className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 truncate">
+                            {tc.designation || "Faculty"}{tc.employeeId ? ` · ${tc.employeeId}` : ""}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const nextVal = !isOn;
+                            await updateTeacher(school.id, tc.id, { hasReferralIncentive: nextVal });
+                            setTeachersList((prev) =>
+                              prev.map((item) =>
+                                item.id === tc.id ? { ...item, hasReferralIncentive: nextVal } : item
+                              )
+                            );
+                            showToast(
+                              "success",
+                              `${tc.name} ke liye 10% Referral Incentive ${nextVal ? "चालू (ON)" : "बंद (OFF)"} kar diya gaya.`
+                            );
+                          }}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-black border shrink-0 transition cursor-pointer active:scale-95 ${
+                            isOn
+                              ? "bg-purple-600 text-white border-purple-600 shadow-xs"
+                              : "bg-white dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700"
+                          }`}
+                        >
+                          {isOn ? "Referral ON" : "Referral OFF"}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
             {/* Per-Teacher Commission Ledger */}
             {referralLedger.teachers.length === 0 ? (
               <div className="bg-white dark:bg-slate-800 rounded-2xl p-10 text-center border border-slate-200/80 dark:border-slate-700 space-y-2">
@@ -1504,7 +2212,7 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
                             <span className="px-2.5 py-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 text-[10px] font-black flex items-center gap-1">
                               <Check className="w-3 h-3 text-amber-600" /> Accountant
                             </span>
-                          ) : (
+                          ) : !hideInternalNav ? (
                             <button
                               type="button"
                               onClick={() => {
@@ -1518,7 +2226,7 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
                               <Briefcase className="w-3.5 h-3.5" />
                               <span>Accountant बनाएं</span>
                             </button>
-                          )}
+                          ) : null}
                           <button
                             type="button"
                             onClick={() => openSettleDrawer(t)}
@@ -1762,13 +2470,13 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
                 <h3 className="font-black text-slate-900 dark:text-white text-base">Chhutti (Leave) Apply Karein</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="text-xs font-bold text-slate-500 block mb-1">Staff Member Chuno:</label>
+                    <label className="text-xs font-bold text-slate-500 block mb-1">Teacher / Staff Member Chuno:</label>
                     <select
                       value={leaveForm.staffId}
                       onChange={(e) => setLeaveForm({ ...leaveForm, staffId: e.target.value })}
                       className="w-full px-3 py-2 text-xs font-bold bg-slate-100 dark:bg-slate-700 rounded-xl border-0"
                     >
-                      {staffList.map((s) => (
+                      {leaveCandidates.map((s) => (
                         <option key={s.id} value={s.id}>
                           {s.name} ({s.designation})
                         </option>
@@ -1787,6 +2495,7 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
                       <option value="casual">Casual Leave (CL)</option>
                       <option value="sick">Medical / Sick Leave</option>
                       <option value="earned">Earned Leave (EL)</option>
+                      <option value="unpaid">Unpaid Leave</option>
                     </select>
                   </div>
                   <div>
@@ -1839,7 +2548,7 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
               <div className="bg-white dark:bg-slate-800 rounded-2xl p-12 text-center text-slate-400 space-y-2 border border-slate-200/70 dark:border-slate-700">
                 <Clock className="w-10 h-10 mx-auto opacity-30 text-indigo-600" />
                 <p className="text-sm font-bold text-slate-600 dark:text-slate-300">Koi Leave Request Nahi Hai</p>
-                <p className="text-xs">Staff ke sabhi leave applications yahan dikhenge.</p>
+                <p className="text-xs">Teachers व स्टाफ द्वारा भेजे गए सभी leave applications यहाँ लाइव दिखेंगे।</p>
               </div>
             ) : (
               <div className="space-y-3">
@@ -1849,12 +2558,17 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
                     className="bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-slate-100 dark:border-slate-700 flex items-center justify-between gap-4 flex-wrap"
                   >
                     <div>
-                      <div className="flex items-center gap-2 mb-1">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <span className="font-black text-slate-900 dark:text-white text-sm">{l.staffName}</span>
                         <span className="text-xs text-slate-400">({l.designation})</span>
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 uppercase">
                           {l.leaveType}
                         </span>
+                        {l.days ? (
+                          <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300">
+                            {l.days} दिन
+                          </span>
+                        ) : null}
                       </div>
                       <p className="text-xs text-slate-600 dark:text-slate-300">
                         {l.fromDate} to {l.toDate} ·{" "}
@@ -1898,19 +2612,66 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
         )}
 
         {/* TAB 4: SALARY PAYSLIP */}
-        {activeTab === "salary" && (
+        {activeTab === "salary" && (() => {
+          const payslipPeople: StaffEmployee[] = (() => {
+            const byId = new Map<string, StaffEmployee>();
+            staffList.forEach((s) => {
+              if (s?.id) byId.set(s.id, s);
+            });
+            teachersList.forEach((t) => {
+              if (!t?.id || byId.has(t.id)) return;
+              byId.set(t.id, {
+                id: t.id,
+                schoolId: school.id,
+                name: t.name,
+                email: (t as any).email || "",
+                phone: t.phone || "",
+                employeeId: t.employeeId || t.id,
+                designation: t.designation || "Teacher",
+                department: "Academic",
+                monthlySalary: Number((t as any).monthlySalary || (t as any).salary || 0),
+                joinDate: (t as any).joiningDate || todayStr(),
+                active: true,
+                createdAt: (t as any).createdAt || new Date().toISOString(),
+              });
+            });
+            return Array.from(byId.values());
+          })();
+
+          const activeSlipPerson =
+            (selectedStaffForSlip &&
+              payslipPeople.find((p) => p.id === selectedStaffForSlip.id)) ||
+            payslipPeople[0] ||
+            null;
+
+          let autoPresentDays = 0;
+          let autoLateDays = 0;
+          let autoAbsentDays = 0;
+          if (activeSlipPerson?.id) {
+            Object.values(monthlyAttMap || {}).forEach((dayRecs) => {
+              const entry = dayRecs?.[activeSlipPerson.id];
+              if (!entry) return;
+              if (entry.present === true) autoPresentDays++;
+              else if (entry.present === false) autoAbsentDays++;
+              if (entry.present !== false && (entry.status === "late" || entry.isLate === true)) {
+                autoLateDays++;
+              }
+            });
+          }
+
+          return (
           <div className="space-y-4">
             <div className="bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm flex items-center justify-between gap-3 flex-wrap print:hidden">
               <div className="flex items-center gap-2">
                 <span className="text-xs font-bold text-slate-500">Staff Member Chuno:</span>
                 <select
-                  value={selectedStaffForSlip?.id || ""}
+                  value={activeSlipPerson?.id || ""}
                   onChange={(e) =>
-                    setSelectedStaffForSlip(staffList.find((s) => s.id === e.target.value) || null)
+                    setSelectedStaffForSlip(payslipPeople.find((s) => s.id === e.target.value) || null)
                   }
                   className="px-3 py-2 text-xs font-bold bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-white rounded-xl border-0"
                 >
-                  {staffList.map((s) => (
+                  {payslipPeople.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name} ({s.designation})
                     </option>
@@ -1919,15 +2680,42 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
               </div>
               <button
                 onClick={handlePrintSlip}
-                disabled={!selectedStaffForSlip}
+                disabled={!activeSlipPerson}
                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow cursor-pointer"
               >
                 <Printer className="w-3.5 h-3.5" /> Print Payslip
               </button>
             </div>
 
-            {selectedStaffForSlip ? (
+            {activeSlipPerson ? (
               <div className="space-y-4">
+                {/* Auto Daily Attendance Live Tracker Strip */}
+                <div className="bg-emerald-50 dark:bg-emerald-950/30 p-4 rounded-2xl border border-emerald-200 dark:border-emerald-800 grid grid-cols-2 sm:grid-cols-4 gap-3 print:hidden">
+                  <div>
+                    <span className="text-[10px] font-bold uppercase text-emerald-700 dark:text-emerald-300 block">Auto Track: Present</span>
+                    <span className="text-lg font-black text-emerald-900 dark:text-white tabular-nums">{autoPresentDays} दिन</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold uppercase text-amber-700 dark:text-amber-300 block">Auto Track: Late</span>
+                    <span className="text-lg font-black text-amber-700 dark:text-amber-300 tabular-nums">{autoLateDays} दिन</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold uppercase text-rose-700 dark:text-rose-300 block">Auto Track: Absent</span>
+                    <span className="text-lg font-black text-rose-700 dark:text-rose-300 tabular-nums">{autoAbsentDays} दिन</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold uppercase text-teal-700 dark:text-teal-300 block">आज तक बना पैसा</span>
+                    <span className="text-lg font-black text-teal-800 dark:text-teal-200 tabular-nums">
+                      ₹{Math.max(
+                        0,
+                        Math.round((activeSlipPerson.monthlySalary / 26) * autoPresentDays) -
+                          Math.floor(Math.max(autoLateDays, lateDaysMap[activeSlipPerson.id] ?? 0) / 3) *
+                            Math.round(activeSlipPerson.monthlySalary / 30)
+                      ).toLocaleString("en-IN")}
+                    </span>
+                  </div>
+                </div>
+
                 {/* Late Entry Cut Control */}
                 <div className="bg-amber-50 dark:bg-amber-950/40 p-4 rounded-2xl border border-amber-200 dark:border-amber-800 flex flex-wrap items-center justify-between gap-3 print:hidden">
                   <div>
@@ -1941,7 +2729,7 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
                     </div>
                     <p className="text-xs text-amber-700 dark:text-amber-400 mt-1 tabular-nums">
                       3 din late aane par 1 din ka salary cut hota hai. Daily rate = ₹
-                      {Math.round(selectedStaffForSlip.monthlySalary / 30)}/day.
+                      {Math.round(activeSlipPerson.monthlySalary / 30)}/day · Cloud Auto Late: {autoLateDays}d
                     </p>
                   </div>
                   <div className="flex items-center gap-2 bg-white dark:bg-slate-800 px-3 py-1.5 rounded-xl border border-amber-300 dark:border-amber-700">
@@ -1953,12 +2741,12 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
                       min="0"
                       max="31"
                       value={
-                        lateDaysMap[selectedStaffForSlip.id] ??
-                        (selectedStaffForSlip.lateEntriesCount || 0)
+                        lateDaysMap[activeSlipPerson.id] ??
+                        Math.max(autoLateDays, activeSlipPerson.lateEntriesCount || 0)
                       }
                       onChange={(e) => {
                         const val = Math.max(0, parseInt(e.target.value) || 0);
-                        setLateDaysMap((prev) => ({ ...prev, [selectedStaffForSlip.id]: val }));
+                        setLateDaysMap((prev) => ({ ...prev, [activeSlipPerson.id]: val }));
                       }}
                       className="w-16 px-2 py-1 text-xs font-black tabular-nums bg-slate-100 dark:bg-slate-700 rounded-lg text-center border-0 text-slate-900 dark:text-white"
                     />
@@ -2012,18 +2800,18 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4 text-xs bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6">
+                  <div className="grid grid-cols-2 gap-4 text-xs bg-slate-50 p-4 rounded-xl border border-slate-200 mb-4">
                     <div>
                       <span className="text-slate-500 font-bold">Employee Name: </span>
-                      <strong className="text-slate-900 text-sm">{selectedStaffForSlip.name}</strong>
+                      <strong className="text-slate-900 text-sm">{activeSlipPerson.name}</strong>
                     </div>
                     <div>
                       <span className="text-slate-500 font-bold">Designation: </span>
-                      <strong className="text-slate-900">{selectedStaffForSlip.designation}</strong>
+                      <strong className="text-slate-900">{activeSlipPerson.designation}</strong>
                     </div>
                     <div>
                       <span className="text-slate-500 font-bold">Phone Number: </span>
-                      <strong className="text-slate-900 tabular-nums">{selectedStaffForSlip.phone}</strong>
+                      <strong className="text-slate-900 tabular-nums">{activeSlipPerson.phone || "—"}</strong>
                     </div>
                     <div>
                       <span className="text-slate-500 font-bold">Pay Month: </span>
@@ -2034,69 +2822,157 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
                   </div>
 
                   {(() => {
+                    const nowSlip = new Date();
+                    const daysInMonthSlip = new Date(nowSlip.getFullYear(), nowSlip.getMonth() + 1, 0).getDate();
+                    let totalWorkingSlip = 0;
+                    let runningWorkingSlip = 0;
+                    for (let d = 1; d <= daysInMonthSlip; d++) {
+                      const dt = new Date(nowSlip.getFullYear(), nowSlip.getMonth(), d);
+                      if (dt.getDay() !== 0) {
+                        totalWorkingSlip++;
+                        if (d <= nowSlip.getDate()) runningWorkingSlip++;
+                      }
+                    }
+                    const effectiveWorkingDays = totalWorkingSlip || 26;
                     const lateCount =
-                      lateDaysMap[selectedStaffForSlip.id] ??
-                      (selectedStaffForSlip.lateEntriesCount || 0);
-                    const dailyRate = Math.round(selectedStaffForSlip.monthlySalary / 30);
+                      lateDaysMap[activeSlipPerson.id] ??
+                      Math.max(autoLateDays, activeSlipPerson.lateEntriesCount || 0);
+                    const workingDailyRate = Math.round(activeSlipPerson.monthlySalary / effectiveWorkingDays);
                     const deductedDays = Math.floor(lateCount / 3);
-                    const lateDeduction = deductedDays * dailyRate;
+                    const lateDeduction = deductedDays * workingDailyRate;
+                    const absentDeduction = autoAbsentDays * workingDailyRate;
+                    const bonusEligibleSlip = autoPresentDays > 0 && autoAbsentDays === 0;
+                    const bonusAmountSlip = bonusEligibleSlip ? 2 * workingDailyRate : 0;
+                    const totalCutDaysSlip = autoAbsentDays + deductedDays;
                     const referralBonusIncluded =
                       includeReferralInSlip && slipReferralSummary
                         ? slipReferralSummary.balancePayable
                         : 0;
                     const netSalary = Math.max(
                       0,
-                      selectedStaffForSlip.monthlySalary - lateDeduction + referralBonusIncluded
+                      activeSlipPerson.monthlySalary + bonusAmountSlip - absentDeduction - lateDeduction + referralBonusIncluded
+                    );
+                    const earnedTillDate = Math.max(
+                      0,
+                      workingDailyRate * autoPresentDays + bonusAmountSlip - lateDeduction + referralBonusIncluded
                     );
 
                     return (
-                      <table className="w-full text-left text-xs border border-slate-300 rounded-xl overflow-hidden mb-6 tabular-nums">
-                        <thead className="bg-slate-800 text-white">
-                          <tr>
-                            <th className="p-2.5">Earnings &amp; Deductions Description</th>
-                            <th className="p-2.5 text-right">Amount (₹)</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-200">
-                          <tr>
-                            <td className="p-2.5 font-bold">Basic Pay + Standard Allowances</td>
-                            <td className="p-2.5 text-right font-black">
-                              ₹{selectedStaffForSlip.monthlySalary.toLocaleString("en-IN")}
-                            </td>
-                          </tr>
-                          {referralBonusIncluded > 0 && slipReferralSummary && (
-                            <tr className="bg-emerald-50/70 text-emerald-950">
+                      <>
+                        <div className="grid grid-cols-3 gap-2.5 text-xs mb-4">
+                          <div className="p-2.5 rounded-xl bg-teal-50 border border-teal-200">
+                            <span className="text-[10px] font-black text-teal-700 uppercase block">Running Days</span>
+                            <strong className="text-sm font-black text-teal-950">{runningWorkingSlip} / {effectiveWorkingDays} दिन</strong>
+                          </div>
+                          <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200">
+                            <span className="text-[10px] font-black text-emerald-700 uppercase block">Present / Absent</span>
+                            <strong className="text-sm font-black text-emerald-950">P: {autoPresentDays}d · A: {autoAbsentDays}d</strong>
+                          </div>
+                          <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200">
+                            <span className="text-[10px] font-black text-rose-700 uppercase block">कितने दिन कटा</span>
+                            <strong className="text-sm font-black text-rose-900">{totalCutDaysSlip} दिन (Late: {lateCount}d)</strong>
+                          </div>
+                        </div>
+
+                        <div className={`p-2.5 rounded-xl border mb-4 text-xs font-bold flex items-center justify-between ${
+                          bonusAmountSlip > 0
+                            ? "bg-emerald-50 border-emerald-300 text-emerald-900"
+                            : "bg-amber-50 border-amber-300 text-amber-900"
+                        }`}>
+                          <span>
+                            {bonusAmountSlip > 0
+                              ? "✅ बोनस मिला: +2 दिन का नियमित उपस्थिति बोनस (0 Absent)"
+                              : autoPresentDays === 0
+                              ? "⏳ बोनस अभी लागू नहीं (0 दिन उपस्थिति)"
+                              : `❌ बोनस नहीं मिला (${autoAbsentDays} दिन अनुपस्थित होने पर बोनस निरस्त)`}
+                          </span>
+                          <span className="font-black">+₹{bonusAmountSlip.toLocaleString("en-IN")}</span>
+                        </div>
+
+                        <table className="w-full text-left text-xs border border-slate-300 rounded-xl overflow-hidden mb-4 tabular-nums">
+                          <thead className="bg-slate-800 text-white">
+                            <tr>
+                              <th className="p-2.5">Earnings &amp; Deductions Description</th>
+                              <th className="p-2.5 text-right">Amount (₹)</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200">
+                            <tr>
                               <td className="p-2.5 font-bold">
-                                Student Admission Referral Incentive ({slipReferralSummary.studentsCount} Students • Paid Fee Basis)
+                                तय मासिक वेतन (Monthly Fixed · ₹{workingDailyRate}/दिन दर)
+                              </td>
+                              <td className="p-2.5 text-right font-black">
+                                ₹{activeSlipPerson.monthlySalary.toLocaleString("en-IN")}
+                              </td>
+                            </tr>
+                            <tr className="bg-teal-50/70 text-teal-950">
+                              <td className="p-2.5 font-bold">
+                                इस माह उपस्थिति कमाई ({autoPresentDays} Present × ₹{workingDailyRate}/दिन)
+                              </td>
+                              <td className="p-2.5 text-right font-black text-teal-800">
+                                ₹{(workingDailyRate * autoPresentDays).toLocaleString("en-IN")}
+                              </td>
+                            </tr>
+                            <tr>
+                              <td className="p-2.5 font-bold">
+                                Attendance Bonus ({bonusAmountSlip > 0 ? "मिला: +2 दिन" : "नहीं मिला"})
                               </td>
                               <td className="p-2.5 text-right font-black text-emerald-700">
-                                +₹{referralBonusIncluded.toLocaleString("en-IN")}
+                                {bonusAmountSlip > 0 ? `+₹${bonusAmountSlip.toLocaleString("en-IN")}` : "₹0"}
                               </td>
                             </tr>
-                          )}
-                          {deductedDays > 0 ? (
-                            <tr className="bg-rose-50 text-rose-900">
+                            {referralBonusIncluded > 0 && slipReferralSummary && (
+                              <tr className="bg-emerald-50/70 text-emerald-950">
+                                <td className="p-2.5 font-bold">
+                                  Student Admission Referral Incentive ({slipReferralSummary.studentsCount} Students • Paid Fee Basis)
+                                </td>
+                                <td className="p-2.5 text-right font-black text-emerald-700">
+                                  +₹{referralBonusIncluded.toLocaleString("en-IN")}
+                                </td>
+                              </tr>
+                            )}
+                            <tr className={autoAbsentDays > 0 ? "bg-rose-50 text-rose-900" : ""}>
                               <td className="p-2.5 font-bold">
-                                Late Entry Penalty ({lateCount} Late Days @ 3:1 Ratio = -{deductedDays} Day Salary Cut)
+                                Absent कटौती ({autoAbsentDays} दिन अनुपस्थित × ₹{workingDailyRate})
                               </td>
                               <td className="p-2.5 text-right font-black text-rose-700">
-                                -₹{lateDeduction.toLocaleString("en-IN")}
+                                {absentDeduction > 0 ? `-₹${absentDeduction.toLocaleString("en-IN")}` : "₹0"}
                               </td>
                             </tr>
-                          ) : (
-                            <tr>
-                              <td className="p-2.5 text-slate-500">Late Penalty (0 Late Days)</td>
-                              <td className="p-2.5 text-right text-slate-500">₹0</td>
+                            {deductedDays > 0 ? (
+                              <tr className="bg-rose-50 text-rose-900">
+                                <td className="p-2.5 font-bold">
+                                  Late Entry Penalty ({lateCount} Late Days @ 3:1 Ratio = -{deductedDays} Day Cut)
+                                </td>
+                                <td className="p-2.5 text-right font-black text-rose-700">
+                                  -₹{lateDeduction.toLocaleString("en-IN")}
+                                </td>
+                              </tr>
+                            ) : (
+                              <tr>
+                                <td className="p-2.5 text-slate-500">Late Penalty ({lateCount} Late Days · 0 Cut)</td>
+                                <td className="p-2.5 text-right text-slate-500">₹0</td>
+                              </tr>
+                            )}
+                            <tr className="bg-emerald-50 text-emerald-950 font-black text-sm">
+                              <td className="p-2.5">
+                                इस माह आज तक बना / देय वेतन (Earned Payable Till Today)
+                                <span className="block text-[10px] font-semibold text-emerald-700">
+                                  पूरा माह Net (यदि पूरे {effectiveWorkingDays} दिन चलें): ₹{netSalary.toLocaleString("en-IN")}
+                                </span>
+                              </td>
+                              <td className="p-2.5 text-right text-emerald-800 text-lg">
+                                ₹{earnedTillDate.toLocaleString("en-IN")}
+                              </td>
                             </tr>
-                          )}
-                          <tr className="bg-emerald-50 text-emerald-950 font-black text-sm">
-                            <td className="p-2.5">Net Payable Salary</td>
-                            <td className="p-2.5 text-right text-emerald-800">
-                              ₹{netSalary.toLocaleString("en-IN")}
-                            </td>
-                          </tr>
-                        </tbody>
-                      </table>
+                          </tbody>
+                        </table>
+
+                        <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-[10.5px] text-slate-700 mb-4 space-y-0.5">
+                          <div className="font-black text-teal-800 uppercase text-[10px]">Applied Salary &amp; Attendance Rules:</div>
+                          <div>• 1 दिन अनुपस्थित = 1 दिन (₹{workingDailyRate}) वेतन कटौती • 3 दिन लेट = 1 दिन कटौती • 0 अनुपस्थिति पर +2 दिन बोनस</div>
+                        </div>
+                      </>
                     );
                   })()}
 
@@ -2118,11 +2994,12 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
               </div>
             ) : (
               <div className="bg-white dark:bg-slate-800 rounded-2xl p-10 text-center text-xs text-slate-500 border border-slate-200/70 dark:border-slate-700">
-                Pehle Staff Directory mein staff member add karein, phir unka Salary Slip generate karein.
+                Pehle Teachers / Staff add karein, phir unka Salary Slip aur Auto Daily Earned amount dekhein.
               </div>
             )}
           </div>
-        )}
+          );
+        })()}
 
         {/* ADD ACCOUNTANT MODAL */}
         {showAddAccountantModal && (
@@ -2428,6 +3305,419 @@ export const StaffHRMManager: React.FC<Props> = ({ school, onBack }) => {
             teacher={selectedStaffForIdCard as any}
             school={school}
             onClose={() => setSelectedStaffForIdCard(null)}
+          />
+        )}
+
+        {/* EDIT ACCOUNTANT SALARY & PROFILE MODAL */}
+        {editingAccountantModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
+            <div className="relative w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-700 dark:text-amber-400 flex items-center justify-center">
+                    <Edit3 className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-black text-slate-900 dark:text-white text-base">
+                      Accountant वेतन व विवरण एडिट करें
+                    </h3>
+                    <p className="text-[11px] text-slate-500">
+                      मासिक वेतन (पैसा), पद और मोबाइल नंबर अपडेट करें
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditingAccountantModal(null)}
+                  className="p-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-400 hover:text-slate-600 dark:hover:text-white cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveAccountantEdit} className="space-y-3 text-xs">
+                <div>
+                  <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">पूरा नाम *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editingAccountantModal.name}
+                    onChange={(e) => setEditingAccountantModal({ ...editingAccountantModal, name: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white font-bold"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">मोबाइल नंबर *</label>
+                    <input
+                      type="tel"
+                      required
+                      value={editingAccountantModal.phone}
+                      onChange={(e) => setEditingAccountantModal({ ...editingAccountantModal, phone: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">Employee ID</label>
+                    <input
+                      type="text"
+                      value={editingAccountantModal.employeeId}
+                      onChange={(e) => setEditingAccountantModal({ ...editingAccountantModal, employeeId: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">पद (Designation)</label>
+                  <input
+                    type="text"
+                    value={editingAccountantModal.designation}
+                    onChange={(e) => setEditingAccountantModal({ ...editingAccountantModal, designation: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white"
+                  />
+                </div>
+                <div className="p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
+                  <label className="block text-emerald-800 dark:text-emerald-300 font-black mb-1">
+                    मासिक वेतन / Monthly Salary (₹) *
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    required
+                    value={editingAccountantModal.monthlySalary}
+                    onChange={(e) =>
+                      setEditingAccountantModal({
+                        ...editingAccountantModal,
+                        monthlySalary: Math.max(0, Number(e.target.value) || 0),
+                      })
+                    }
+                    className="w-full px-3 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-emerald-300 dark:border-emerald-700 text-slate-900 dark:text-white font-black text-base tabular-nums"
+                  />
+                </div>
+
+                {/* Accountant Signature Box inside Edit Modal */}
+                <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <span className="block font-black text-slate-700 dark:text-slate-200 text-xs">
+                      Fee Receipt Signature (हस्ताक्षर)
+                    </span>
+                    <span className="block text-[10px] text-slate-500">
+                      {editingAccountantModal.signatureUrl ? "✓ डिजिटल साइन सेव है" : "अभी साइन अपलोड नहीं है"}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {editingAccountantModal.signatureUrl && (
+                      <img
+                        src={editingAccountantModal.signatureUrl}
+                        alt="Accountant Sign"
+                        className="h-8 max-w-[76px] object-contain bg-white border border-slate-200 rounded-lg p-1"
+                      />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setSignatureTargetAccountant(editingAccountantModal.acc)}
+                      className="px-2.5 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-[11px] font-black cursor-pointer flex items-center gap-1"
+                    >
+                      <PenTool className="w-3 h-3" />
+                      <span>{editingAccountantModal.signatureUrl ? "बदलें" : "Sign जोड़ें"}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="pt-2 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingAccountantModal(null)}
+                    className="flex-1 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold cursor-pointer"
+                  >
+                    रद्द करें
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingRoleOrPay}
+                    className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-black shadow-lg cursor-pointer"
+                  >
+                    {savingRoleOrPay ? "सेव हो रहा है..." : "वेतन व विवरण सेव करें"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* CONVERT ACCOUNTANT -> TEACHER MODAL */}
+        {convertAccountantModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
+            <div className="relative w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-xl bg-indigo-500/20 text-indigo-700 dark:text-indigo-400 flex items-center justify-center">
+                    <GraduationCap className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-black text-slate-900 dark:text-white text-base">
+                      Accountant को Teacher बनाएं
+                    </h3>
+                    <p className="text-[11px] text-slate-500">
+                      {convertAccountantModal.acc.name} को Teacher पैनल व कक्षा शिक्षण के लिए सक्रिय करें
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setConvertAccountantModal(null)}
+                  className="p-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-400 hover:text-slate-600 dark:hover:text-white cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleConfirmConvertAccountantToTeacher} className="space-y-3 text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">Teacher नाम *</label>
+                    <input
+                      type="text"
+                      required
+                      value={convertAccountantModal.name}
+                      onChange={(e) => setConvertAccountantModal({ ...convertAccountantModal, name: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">मोबाइल नंबर (लॉगिन हेतु) *</label>
+                    <input
+                      type="tel"
+                      required
+                      value={convertAccountantModal.phone}
+                      onChange={(e) => setConvertAccountantModal({ ...convertAccountantModal, phone: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white font-bold"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">Teacher ID / Employee ID</label>
+                    <input
+                      type="text"
+                      value={convertAccountantModal.employeeId}
+                      onChange={(e) => setConvertAccountantModal({ ...convertAccountantModal, employeeId: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">पद (Designation)</label>
+                    <input
+                      type="text"
+                      value={convertAccountantModal.designation}
+                      onChange={(e) => setConvertAccountantModal({ ...convertAccountantModal, designation: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">
+                    पढ़ाने वाले विषय (Subjects — comma से अलग करें)
+                  </label>
+                  <input
+                    type="text"
+                    value={convertAccountantModal.subjects}
+                    onChange={(e) => setConvertAccountantModal({ ...convertAccountantModal, subjects: e.target.value })}
+                    placeholder="उदा. Accountancy, Mathematics, Commerce"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white font-medium"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">योग्यता (Qualification)</label>
+                    <input
+                      type="text"
+                      value={convertAccountantModal.qualification}
+                      onChange={(e) => setConvertAccountantModal({ ...convertAccountantModal, qualification: e.target.value })}
+                      placeholder="M.Com, B.Ed"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">अनुभव (Experience)</label>
+                    <input
+                      type="text"
+                      value={convertAccountantModal.experience}
+                      onChange={(e) => setConvertAccountantModal({ ...convertAccountantModal, experience: e.target.value })}
+                      placeholder="5+ Years"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-emerald-700 dark:text-emerald-300 font-black mb-1">मासिक वेतन (₹)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={convertAccountantModal.monthlySalary}
+                      onChange={(e) =>
+                        setConvertAccountantModal({
+                          ...convertAccountantModal,
+                          monthlySalary: Math.max(0, Number(e.target.value) || 0),
+                        })
+                      }
+                      className="w-full px-3 py-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-700 text-slate-900 dark:text-white font-black tabular-nums"
+                    />
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 text-[11px] text-indigo-800 dark:text-indigo-200 font-medium">
+                  नोट: इससे उनका Accountant रोल सुरक्षित रहेगा और साथ ही वे Teachers लिस्ट, Class Teacher असाइनमेंट और Attendance के लिए भी सक्रिय हो जाएंगे।
+                </div>
+
+                <div className="pt-2 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setConvertAccountantModal(null)}
+                    className="flex-1 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold cursor-pointer"
+                  >
+                    रद्द करें
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingRoleOrPay}
+                    className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-50 text-white font-black shadow-lg cursor-pointer"
+                  >
+                    {savingRoleOrPay ? "प्रक्रिया जारी है..." : "👨‍🏫 Teacher बनाएं (Confirm)"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* EDIT STAFF DIRECTORY SALARY & PROFILE MODAL */}
+        {editingStaffModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
+            <div className="relative w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 flex items-center justify-center">
+                    <Wallet className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-black text-slate-900 dark:text-white text-base">
+                      Staff वेतन व विवरण एडिट करें
+                    </h3>
+                    <p className="text-[11px] text-slate-500">सभी लिंक्ड रिकॉर्ड अपने आप अपडेट हो जाएंगे</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditingStaffModal(null)}
+                  className="p-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-400 hover:text-slate-600 dark:hover:text-white cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveStaffEdit} className="space-y-3 text-xs">
+                <div>
+                  <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">नाम *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editingStaffModal.name}
+                    onChange={(e) => setEditingStaffModal({ ...editingStaffModal, name: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white font-bold"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">मोबाइल</label>
+                    <input
+                      type="tel"
+                      value={editingStaffModal.phone}
+                      onChange={(e) => setEditingStaffModal({ ...editingStaffModal, phone: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">पद (Designation)</label>
+                    <input
+                      type="text"
+                      value={editingStaffModal.designation}
+                      onChange={(e) => setEditingStaffModal({ ...editingStaffModal, designation: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                </div>
+                <div className="p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
+                  <label className="block text-emerald-800 dark:text-emerald-300 font-black mb-1">
+                    मासिक वेतन / Monthly Salary (₹) *
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    required
+                    value={editingStaffModal.monthlySalary}
+                    onChange={(e) =>
+                      setEditingStaffModal({
+                        ...editingStaffModal,
+                        monthlySalary: Math.max(0, Number(e.target.value) || 0),
+                      })
+                    }
+                    className="w-full px-3 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-emerald-300 dark:border-emerald-700 text-slate-900 dark:text-white font-black text-base tabular-nums"
+                  />
+                </div>
+
+                <div className="pt-2 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingStaffModal(null)}
+                    className="flex-1 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold cursor-pointer"
+                  >
+                    रद्द करें
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingRoleOrPay}
+                    className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-black shadow-lg cursor-pointer"
+                  >
+                    {savingRoleOrPay ? "सेव हो रहा है..." : "सेव करें"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+        {/* ACCOUNTANT DIGITAL SIGNATURE MODAL */}
+        {signatureTargetAccountant && (
+          <TeacherSignatureModal
+            isOpen={Boolean(signatureTargetAccountant)}
+            onClose={() => setSignatureTargetAccountant(null)}
+            title={`Accountant Signature — ${signatureTargetAccountant.name}`}
+            subtitle="फीस रसीद (Fee Receipt) पर दिखने वाला Accountant का हस्ताक्षर ड्रा या अपलोड करें"
+            initialSignatureUrl={signatureTargetAccountant.signatureUrl || ""}
+            uploadPrefix={`sig_acc_${signatureTargetAccountant.id}`}
+            onSaveSignature={async (url) => {
+              const target = signatureTargetAccountant;
+              const updatedAcc: SchoolAccountant = { ...target, signatureUrl: url };
+              await saveAccountant(updatedAcc);
+              setAccountantsList((prev) => prev.map((a) => (a.id === target.id ? updatedAcc : a)));
+              if (editingAccountantModal && editingAccountantModal.acc.id === target.id) {
+                setEditingAccountantModal({ ...editingAccountantModal, acc: updatedAcc, signatureUrl: url });
+              }
+              const linkedT = findLinkedTeacherForAccountant(target);
+              if (linkedT) {
+                await updateTeacher(school.id, linkedT.id, { signatureUrl: url }).catch(() => {});
+                setTeachersList((prev) => prev.map((t) => (t.id === linkedT.id ? { ...t, signatureUrl: url } : t)));
+              }
+              if (!school.accountantSignatureUrl && url) {
+                await updateSchool(school.id, {
+                  accountantSignatureUrl: url,
+                  accountantName: school.accountantName || target.name,
+                }).catch(() => {});
+              }
+              showToast("success", `✅ ${target.name} का Fee Receipt हस्ताक्षर सेव हो गया!`);
+            }}
           />
         )}
       </div>

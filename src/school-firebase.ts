@@ -66,18 +66,29 @@ export const isDemoSessionId = (sessionId?: string | null): boolean => {
   return s === "demo_session_2026_27" || s.startsWith("demo_") || s.includes("demo");
 };
 
+export const isDemoSchoolId = (sid?: string | null): boolean => {
+  if (!sid) return true;
+  const s = String(sid).toLowerCase();
+  return s === "demo_school" || s.startsWith("demo_") || s.includes("demo");
+};
+
 // Strict rule: Demo data is ONLY allowed when in an explicit Demo Session. Real sessions have ZERO dummy data!
 export const shouldUseDemoForSchool = (schoolId?: string, sessionId?: string): boolean => {
-  if (sessionId && !isDemoSessionId(sessionId)) {
-    return false;
+  if (sessionId) {
+    return isDemoSessionId(sessionId);
+  }
+  if (typeof localStorage !== "undefined" && schoolId) {
+    try {
+      const savedSess = localStorage.getItem(`nst_active_session_${schoolId}`);
+      if (savedSess) {
+        return isDemoSessionId(savedSess);
+      }
+    } catch {}
   }
   if (!isDemoDataEnabled()) {
     return false;
   }
-  if (sessionId && isDemoSessionId(sessionId)) {
-    return true;
-  }
-  if (schoolId && (schoolId === "demo_school" || schoolId.startsWith("demo_") || schoolId.includes("demo"))) {
+  if (isDemoSchoolId(schoolId)) {
     return true;
   }
   return false;
@@ -245,13 +256,13 @@ export const clearSchoolFromDeletedList = (schoolId: string) => {
 
 export const DEFAULT_DPS_SCHOOL: School = {
   id: "dps_gurgaon_sector45",
-  name: "Nstz",
-  code: "NSTZ",
+  name: "Life Maker Public School",
+  code: "LMPS",
   address: "Institutional Academic Campus, Educational Zone",
   phone: "0124-4125800",
-  email: "contact@nstz.app",
-  affiliation: "Affiliated Education Center",
-  adminEmail: "admin@nstz.app",
+  email: "contact@lifemaker.edu.in",
+  affiliation: "Ummid Educational & Welfare Trust",
+  adminEmail: "admin@lifemaker.edu.in",
   logoUrl: "",
   principalName: "Dr. Arvind Swaminathan",
   principalPhone: "9811023450",
@@ -281,6 +292,34 @@ export const DEFAULT_DPS_SCHOOL: School = {
   totalTeachers: 26
 };
 
+const normalizeDefaultSchoolBrand = (sc: School): School => {
+  if (!sc || typeof sc !== "object") return sc;
+  const nameLower = String(sc.name || "").trim().toLowerCase();
+  const codeUpper = String(sc.code || "").trim().toUpperCase();
+  const isLegacyDefaultBrand =
+    nameLower === "nstz" ||
+    nameLower === "nstz smart academy" ||
+    codeUpper === "NSTZ" ||
+    (sc.id === "dps_gurgaon_sector45" && (nameLower === "delhi public school" || !nameLower));
+
+  if (!isLegacyDefaultBrand) return sc;
+
+  return {
+    ...sc,
+    name: "Life Maker Public School",
+    code: !sc.code || codeUpper === "NSTZ" || codeUpper === "DPS_DEL" ? "LMPS" : sc.code,
+    email: !sc.email || String(sc.email).toLowerCase().includes("nstz.") ? "contact@lifemaker.edu.in" : sc.email,
+    adminEmail:
+      !sc.adminEmail || String(sc.adminEmail).toLowerCase().includes("nstz.") || sc.adminEmail === "admin@dps.edu.in"
+        ? "admin@lifemaker.edu.in"
+        : sc.adminEmail,
+    affiliation:
+      !sc.affiliation || sc.affiliation === "Affiliated Education Center"
+        ? "Ummid Educational & Welfare Trust"
+        : sc.affiliation,
+  };
+};
+
 export const getLocalSchools = (): School[] => {
   try {
     const deletedIds = getDeletedSchoolIds();
@@ -289,14 +328,7 @@ export const getLocalSchools = (): School[] => {
       const filtered = parsed
         .filter((s: any) => s && typeof s === "object" && s.id && !deletedIds.has(s.id))
         .map((s: School) => {
-          let updated = stripNestedSchoolCollections(s);
-          if (
-            updated.id === "dps_gurgaon_sector45" &&
-            updated.name === "Delhi Public School" &&
-            (!updated.code || updated.code === "DPS_DEL")
-          ) {
-            updated = { ...updated, name: "Nstz", code: "NSTZ" };
-          }
+          let updated = normalizeDefaultSchoolBrand(stripNestedSchoolCollections(s));
           if (updated.subscription && !updated.subscription.expiresAt) {
             updated.subscription.expiresAt = "2027-04-24T23:59:59.000Z";
             updated.subscription.paidUntil = "2027-04-24T23:59:59.000Z";
@@ -334,18 +366,62 @@ export const setLocalSchools = (schools: School[]) => {
 
 // ── SCHOOLS ──────────────────────────────────────────────────────────────────
 
+const normalizeSchoolPhotoAssets = async (target: any, schoolId: string) => {
+  if (!target || typeof target !== "object") return;
+  const directFields: Array<[string, string]> = [
+    ["logoUrl", `logo_${schoolId}`],
+    ["principalSignatureUrl", `sig_prin_${schoolId}`],
+    ["directorSignatureUrl", `sig_dir_${schoolId}`],
+    ["examControllerSignatureUrl", `sig_exam_${schoolId}`],
+    ["managerSignatureUrl", `sig_mgr_${schoolId}`],
+    ["accountantSignatureUrl", `sig_acc_${schoolId}`],
+    ["principalPhotoUrl", `photo_prin_${schoolId}`],
+    ["subPrincipalPhotoUrl", `photo_subprin_${schoolId}`],
+    ["directorPhotoUrl", `photo_dir_${schoolId}`],
+    ["managerPhotoUrl", `photo_mgr_${schoolId}`],
+    ["digitalCreatorPhotoUrl", `photo_creator_${schoolId}`],
+  ];
+  for (const [field, prefix] of directFields) {
+    if (target[field] && typeof target[field] === "string" && target[field].startsWith("data:image/")) {
+      target[field] = await ensureCloudImageUrl(target[field], prefix);
+    }
+  }
+  if (target.websiteConfig && typeof target.websiteConfig === "object") {
+    const cfg = { ...target.websiteConfig };
+    const cfgFields: Array<[string, string]> = [
+      ["heroBannerUrl", `web_hero_${schoolId}`],
+      ["subPrincipalPhotoUrl", `web_subprin_${schoolId}`],
+      ["directorPhotoUrl", `web_dir_${schoolId}`],
+      ["managerPhotoUrl", `web_mgr_${schoolId}`],
+      ["websiteAccountantPhotoUrl", `web_acc_${schoolId}`],
+      ["digitalCreatorPhotoUrl", `web_creator_${schoolId}`],
+    ];
+    for (const [field, prefix] of cfgFields) {
+      if (cfg[field] && typeof cfg[field] === "string" && cfg[field].startsWith("data:image/")) {
+        cfg[field] = await ensureCloudImageUrl(cfg[field], prefix);
+      }
+    }
+    if (cfg.admissionOffer && Array.isArray(cfg.admissionOffer.images)) {
+      const normalizedOfferImgs = [];
+      for (let i = 0; i < cfg.admissionOffer.images.length; i++) {
+        const im = cfg.admissionOffer.images[i];
+        if (!im || typeof im !== "object") continue;
+        let nextUrl = im.url;
+        if (nextUrl && typeof nextUrl === "string" && nextUrl.startsWith("data:image/")) {
+          nextUrl = await ensureCloudImageUrl(nextUrl, `web_offer_${schoolId}_${im.id || i}`);
+        }
+        normalizedOfferImgs.push({ ...im, url: nextUrl });
+      }
+      cfg.admissionOffer = { ...cfg.admissionOffer, images: normalizedOfferImgs };
+    }
+    target.websiteConfig = cfg;
+  }
+};
+
 export const saveSchool = async (school: School) => {
   clearSchoolFromDeletedList(school.id);
   const cleanMeta = stripNestedSchoolCollections({ ...school });
-  if (cleanMeta.logoUrl && cleanMeta.logoUrl.startsWith("data:image/")) {
-    cleanMeta.logoUrl = await ensureCloudImageUrl(cleanMeta.logoUrl, `logo_${school.id}`);
-  }
-  if (cleanMeta.principalSignatureUrl && cleanMeta.principalSignatureUrl.startsWith("data:image/")) {
-    cleanMeta.principalSignatureUrl = await ensureCloudImageUrl(cleanMeta.principalSignatureUrl, `sig_prin_${school.id}`);
-  }
-  if (cleanMeta.directorSignatureUrl && cleanMeta.directorSignatureUrl.startsWith("data:image/")) {
-    cleanMeta.directorSignatureUrl = await ensureCloudImageUrl(cleanMeta.directorSignatureUrl, `sig_dir_${school.id}`);
-  }
+  await normalizeSchoolPhotoAssets(cleanMeta, school.id);
   if (cleanMeta.logoUrl) {
     setSchoolLogoSync(school.id, cleanMeta.logoUrl);
   }
@@ -412,18 +488,11 @@ export const getSchool = async (schoolId: string): Promise<School | null> => {
 
   const sanitize = (sc: School | null): School | null => {
     if (!sc) return null;
-    const updated = stripNestedSchoolCollections(sc);
+    let updated = normalizeDefaultSchoolBrand(stripNestedSchoolCollections(sc));
     const sid = updated.id || schoolId;
     if (sid === "dps_gurgaon_sector45") {
-      if (updated.name === "Delhi Public School" && (!updated.code || updated.code === "DPS_DEL")) {
-        updated.name = "Nstz";
-        updated.code = "NSTZ";
-      }
       if (updated.address && updated.address.includes("Sector-45, Urban Estate, Gurgaon")) {
         updated.address = "Institutional Academic Campus, Educational Zone";
-      }
-      if (updated.adminEmail === "admin@dps.edu.in") {
-        updated.adminEmail = "admin@nstz.app";
       }
     }
     // Resolve strictly THIS school's logo (never another school's logo!)
@@ -499,7 +568,9 @@ export const getAllSchools = async (): Promise<School[]> => {
     } catch {}
   }
 
-  const finalSchools = Array.from(mergedMap.values()).filter(s => !deletedIds.has(s.id));
+  const finalSchools = Array.from(mergedMap.values())
+    .filter(s => !deletedIds.has(s.id))
+    .map(normalizeDefaultSchoolBrand);
   setLocalSchools(finalSchools);
   return finalSchools;
 };
@@ -530,7 +601,7 @@ export const subscribeToSchool = (schoolId: string, cb: (s: School | null) => vo
       rtdbUnsub = onValue(ref(rtdb, `schools_profiles/${schoolId}`), snap => {
         if (getDeletedSchoolIds().has(schoolId)) { cb(null); return; }
         const val = snap.val();
-        if (val && (val.id || val.name)) cb(stripNestedSchoolCollections({ id: schoolId, ...val }));
+        if (val && (val.id || val.name)) cb(normalizeDefaultSchoolBrand(stripNestedSchoolCollections({ id: schoolId, ...val })));
       });
     } catch {}
   }
@@ -542,7 +613,7 @@ export const subscribeToSchool = (schoolId: string, cb: (s: School | null) => vo
         d(`schools/${schoolId}`),
         snap => {
           if (getDeletedSchoolIds().has(schoolId)) { cb(null); return; }
-          if (snap.exists()) cb(stripNestedSchoolCollections({ ...(snap.data() as School), id: schoolId }));
+          if (snap.exists()) cb(normalizeDefaultSchoolBrand(stripNestedSchoolCollections({ ...(snap.data() as School), id: schoolId })));
         },
         err => { console.warn(`[school-firebase] subscribeToSchool error:`, err?.code || err); }
       );
@@ -577,7 +648,9 @@ export const subscribeToAllSchools = (
         }
       });
     }
-    const list = Array.from(map.values()).filter(s => !deletedIds.has(s.id));
+    const list = Array.from(map.values())
+      .filter(s => !deletedIds.has(s.id))
+      .map(normalizeDefaultSchoolBrand);
     setLocalSchools(list);
     cb(list);
   };
@@ -645,17 +718,7 @@ export const subscribeToAllSchools = (
 
 export const updateSchool = async (schoolId: string, data: Partial<School>) => {
   const prepared: any = { ...stripNestedSchoolCollections(data) };
-
-  // Auto-upload any Base64 logo or signatures to Cloud CDN so Firestore doc stays ~1 KB
-  if (prepared.logoUrl && typeof prepared.logoUrl === "string" && prepared.logoUrl.startsWith("data:image/")) {
-    prepared.logoUrl = await ensureCloudImageUrl(prepared.logoUrl, `logo_${schoolId}`);
-  }
-  if (prepared.principalSignatureUrl && typeof prepared.principalSignatureUrl === "string" && prepared.principalSignatureUrl.startsWith("data:image/")) {
-    prepared.principalSignatureUrl = await ensureCloudImageUrl(prepared.principalSignatureUrl, `sig_prin_${schoolId}`);
-  }
-  if (prepared.directorSignatureUrl && typeof prepared.directorSignatureUrl === "string" && prepared.directorSignatureUrl.startsWith("data:image/")) {
-    prepared.directorSignatureUrl = await ensureCloudImageUrl(prepared.directorSignatureUrl, `sig_dir_${schoolId}`);
-  }
+  await normalizeSchoolPhotoAssets(prepared, schoolId);
 
   const sanitized = sanitizeForFirestore(prepared);
 
@@ -837,70 +900,153 @@ export const saveSession = async (session: SchoolSession) => {
   }
 };
 
+const isValidRealSessionRecord = (s: any, allowDemo = false): boolean => {
+  if (!s || typeof s !== "object") return false;
+  const id = String(s.id || "").trim();
+  const name = String(s.name || "").trim();
+  if (!id || !name) return false;
+  if (!allowDemo && (isDemoSessionId(id) || isDemoRecord(s))) return false;
+  return true;
+};
+
+const provisionedUpcomingSessions = new Set<string>();
+
+const extractSessionYear = (s?: Partial<SchoolSession> | null): number | null => {
+  const txt = `${s?.name || ""} ${s?.startDate || ""} ${s?.id || ""}`;
+  const match = txt.match(/(20\d{2})/);
+  return match ? Number(match[1]) : null;
+};
+
+const buildDynamicSessionBounds = (date: Date = new Date()) => {
+  const yr = date.getFullYear();
+  const m = date.getMonth();
+  const currentStartYear = m >= 3 ? yr : yr - 1;
+  const endShort = String((currentStartYear + 1) % 100).padStart(2, "0");
+  const nextStartYear = currentStartYear + 1;
+  const nextEndShort = String((nextStartYear + 1) % 100).padStart(2, "0");
+  return {
+    currentStartYear,
+    currentLabel: `${currentStartYear}-${endShort}`,
+    nextStartYear,
+    nextLabel: `${nextStartYear}-${nextEndShort}`,
+    isOctToMarWindow: m >= 9 || m < 3,
+  };
+};
+
+const ensureOctoberUpcomingSession = (
+  schoolId: string,
+  list: SchoolSession[],
+  now: Date = new Date()
+): SchoolSession[] => {
+  if (!schoolId || isDemoSchoolId(schoolId) || !Array.isArray(list) || list.length === 0) {
+    return list;
+  }
+  const { currentStartYear, nextStartYear, nextLabel, isOctToMarWindow } = buildDynamicSessionBounds(now);
+  if (!isOctToMarWindow) return list;
+
+  const activeItem = list.find((s) => s.active) || list[0];
+  const activeStartYr = extractSessionYear(activeItem) ?? currentStartYear;
+  const targetNextStartYr = Math.max(activeStartYr + 1, nextStartYear);
+  const targetNextEndShort = String((targetNextStartYr + 1) % 100).padStart(2, "0");
+  const targetNextLabel =
+    targetNextStartYr === nextStartYear ? nextLabel : `${targetNextStartYr}-${targetNextEndShort}`;
+
+  const alreadyExists = list.some((s) => {
+    const sy = extractSessionYear(s);
+    return (sy !== null && sy >= targetNextStartYr) || String(s.name || "").includes(targetNextLabel);
+  });
+  if (alreadyExists) return list;
+
+  const nextSessId = `sess_${schoolId}_${targetNextStartYr}_${targetNextEndShort}`;
+  const autoNextSession: SchoolSession = {
+    id: nextSessId,
+    schoolId,
+    name: `Academic Session ${targetNextLabel}`,
+    startDate: `${targetNextStartYr}-04-01`,
+    endDate: `${targetNextStartYr + 1}-03-31`,
+    active: false, // Keep current session active while auto-opening next session for admissions
+    createdAt: new Date().toISOString(),
+  };
+
+  const guardKey = `${schoolId}_${targetNextStartYr}`;
+  if (!provisionedUpcomingSessions.has(guardKey)) {
+    provisionedUpcomingSessions.add(guardKey);
+    saveSession(autoNextSession).catch(() => {
+      provisionedUpcomingSessions.delete(guardKey);
+    });
+  }
+
+  return [...list, autoNextSession];
+};
+
 export const getSessions = async (schoolId: string): Promise<SchoolSession[]> => {
-  const useDemo = shouldUseDemoForSchool(schoolId);
+  const isDemoSchool = isDemoSchoolId(schoolId);
   if (rtdb) {
     try {
       const snap = await withTimeout(get(ref(rtdb, `schools/${schoolId}/sessions`)), 2000);
       const val = (snap as any)?.val?.();
       if (val && typeof val === "object") {
         const list: SchoolSession[] = Object.values(val);
-        const filtered = !useDemo ? list.filter(s => !isDemoRecord(s)) : list;
-        if (filtered.length > 0) return filtered;
+        const filtered = list.filter(s => isValidRealSessionRecord(s, isDemoSchool));
+        if (filtered.length > 0) return ensureOctoberUpcomingSession(schoolId, filtered);
       }
     } catch {}
   }
   try {
     const snap = await withTimeout(getDocs(col(`schools/${schoolId}/sessions`)), 2500);
     const list = (snap as any).docs.map((docSnap: any) => docSnap.data() as SchoolSession);
-    const filtered = !useDemo ? list.filter((s: any) => !isDemoRecord(s)) : list;
-    if (filtered.length > 0) return filtered;
+    const filtered = list.filter((s: any) => isValidRealSessionRecord(s, isDemoSchool));
+    if (filtered.length > 0) return ensureOctoberUpcomingSession(schoolId, filtered);
   } catch {}
 
-  if (useDemo) {
-    const demo = getDemoSchoolDataset();
+  if (isDemoSchool && shouldUseDemoForSchool(schoolId)) {
+    const demo = getDemoSchoolDataset(true);
     if (demo && demo.sessions && demo.sessions.length > 0) return demo.sessions;
     if (demo && demo.session) return [demo.session];
   }
 
-  // Auto-provision a clean real session for newly added schools so they work out of the box
+  // Auto-provision current active session (and next session if Oct-Mar) for newly added schools
+  const { currentStartYear, currentLabel } = buildDynamicSessionBounds();
+  const currentEndShort = String((currentStartYear + 1) % 100).padStart(2, "0");
   const autoSession: SchoolSession = {
-    id: `sess_${schoolId}_2026_27`,
+    id: `sess_${schoolId}_${currentStartYear}_${currentEndShort}`,
     schoolId,
-    name: "Academic Session 2026-27",
-    startDate: "2026-04-01",
-    endDate: "2027-03-31",
+    name: `Academic Session ${currentLabel}`,
+    startDate: `${currentStartYear}-04-01`,
+    endDate: `${currentStartYear + 1}-03-31`,
     active: true,
     createdAt: new Date().toISOString(),
   };
   saveSession(autoSession).catch(() => {});
-  return [autoSession];
+  return ensureOctoberUpcomingSession(schoolId, [autoSession]);
 };
 
 export const subscribeToSessions = (schoolId: string, cb: (sessions: SchoolSession[]) => void) => {
-  const useDemo = shouldUseDemoForSchool(schoolId);
+  const isDemoSchool = isDemoSchoolId(schoolId);
   let deliveredAny = false;
   let demoUnsub: (() => void) | null = null;
 
-  if (useDemo) {
+  if (isDemoSchool && shouldUseDemoForSchool(schoolId)) {
     deliveredAny = true;
     demoUnsub = subscribeDemoSessions(cb);
   }
 
   const ensureFallbackRealSession = () => {
-    if (!deliveredAny && !useDemo && schoolId) {
+    if (!deliveredAny && !isDemoSchool && schoolId) {
+      const { currentStartYear, currentLabel } = buildDynamicSessionBounds();
+      const currentEndShort = String((currentStartYear + 1) % 100).padStart(2, "0");
       const autoSession: SchoolSession = {
-        id: `sess_${schoolId}_2026_27`,
+        id: `sess_${schoolId}_${currentStartYear}_${currentEndShort}`,
         schoolId,
-        name: "Academic Session 2026-27",
-        startDate: "2026-04-01",
-        endDate: "2027-03-31",
+        name: `Academic Session ${currentLabel}`,
+        startDate: `${currentStartYear}-04-01`,
+        endDate: `${currentStartYear + 1}-03-31`,
         active: true,
         createdAt: new Date().toISOString(),
       };
       deliveredAny = true;
-      cb([autoSession]);
       saveSession(autoSession).catch(() => {});
+      cb(ensureOctoberUpcomingSession(schoolId, [autoSession]));
     }
   };
 
@@ -911,10 +1057,10 @@ export const subscribeToSessions = (schoolId: string, cb: (sessions: SchoolSessi
         const val = snap.val();
         if (val && typeof val === "object") {
           const list: SchoolSession[] = Object.values(val);
-          const filtered = !useDemo ? list.filter(s => !isDemoRecord(s)) : list;
+          const filtered = list.filter(s => isValidRealSessionRecord(s, isDemoSchool));
           if (filtered.length > 0) {
             deliveredAny = true;
-            cb(filtered);
+            cb(ensureOctoberUpcomingSession(schoolId, filtered));
             return;
           }
         }
@@ -930,10 +1076,10 @@ export const subscribeToSessions = (schoolId: string, cb: (sessions: SchoolSessi
         snap => {
           if (!snap.empty) {
             const list = snap.docs.map(docSnap => docSnap.data() as SchoolSession);
-            const filtered = !useDemo ? list.filter(s => !isDemoRecord(s)) : list;
+            const filtered = list.filter(s => isValidRealSessionRecord(s, isDemoSchool));
             if (filtered.length > 0) {
               deliveredAny = true;
-              cb(filtered);
+              cb(ensureOctoberUpcomingSession(schoolId, filtered));
               return;
             }
           }
@@ -954,6 +1100,12 @@ export const subscribeToSessions = (schoolId: string, cb: (sessions: SchoolSessi
 };
 
 export const updateSession = async (schoolId: string, sessionId: string, data: Partial<SchoolSession>) => {
+  if (!sessionId || isDemoSessionId(sessionId)) {
+    if (isDemoSessionId(sessionId)) {
+      updateDemoSession(sessionId, data);
+    }
+    return;
+  }
   if (shouldUseDemoForSchool(schoolId)) {
     updateDemoSession(sessionId, data);
   }
@@ -1018,6 +1170,18 @@ export const saveClass = async (cls: SchoolClass) => {
 
 export const getClasses = async (schoolId: string, sessionId?: string): Promise<SchoolClass[]> => {
   const useDemo = shouldUseDemoForSchool(schoolId, sessionId);
+  if (useDemo) {
+    const demo = getDemoSchoolDataset(true);
+    if (demo && demo.classes && demo.classes.length > 0) {
+      const targetSess = sessionId || demo.session?.id;
+      const filtered = targetSess
+        ? demo.classes.filter(c => c.sessionId === targetSess)
+        : demo.classes;
+      const resolved = filtered.length > 0 ? filtered : demo.classes.filter(c => c.sessionId === demo.session?.id);
+      return sortSchoolClasses(resolved.length > 0 ? resolved : demo.classes);
+    }
+  }
+
   const local = getLocalClasses(schoolId);
 
   if (local.length > 0) {
@@ -1031,53 +1195,43 @@ export const getClasses = async (schoolId: string, sessionId?: string): Promise<
       const val = (snap as any)?.val?.();
       if (val && typeof val === "object") {
         const allRaw: SchoolClass[] = Object.values(val);
-        const all = !useDemo ? allRaw.filter(c => !isDemoRecord(c)) : allRaw;
+        const all = allRaw.filter(c => c && !isDemoRecord(c));
         setLocalClasses(schoolId, all);
         const filtered = sessionId ? all.filter(c => c.sessionId === sessionId) : all;
-        if (filtered.length > 0 || !useDemo) return sortSchoolClasses(filtered);
+        return sortSchoolClasses(filtered);
       }
     } catch {}
   }
   try {
     const snap = await withTimeout(getDocs(col(`schools/${schoolId}/classes`)), 2500);
     const allRaw = (snap as any).docs.map((docSnap: any) => docSnap.data() as SchoolClass);
-    const all = !useDemo ? allRaw.filter((c: any) => !isDemoRecord(c)) : allRaw;
+    const all = allRaw.filter((c: any) => c && !isDemoRecord(c));
     if (all.length > 0) {
       setLocalClasses(schoolId, all);
       return sortSchoolClasses(sessionId ? all.filter((c: any) => c.sessionId === sessionId) : all);
     }
   } catch {}
 
-  if (useDemo) {
-    const demo = getDemoSchoolDataset();
-    if (demo && demo.classes && demo.classes.length > 0) {
-      const filtered = sessionId ? demo.classes.filter(c => c.sessionId === sessionId || !c.sessionId) : demo.classes;
-      return sortSchoolClasses(filtered);
-    }
-  }
   return [];
 };
 
 export const subscribeToClasses = (schoolId: string, sessionId: string, cb: (classes: SchoolClass[]) => void) => {
   const useDemo = shouldUseDemoForSchool(schoolId, sessionId);
   const deliverLocal = () => {
-    const local = getLocalClasses(schoolId);
-    if (!useDemo) {
-      const realClasses = local.filter(c => !isDemoRecord(c));
-      const filtered = sessionId ? realClasses.filter(c => c.sessionId === sessionId) : realClasses;
-      cb(sortSchoolClasses(filtered));
-    } else if (local && local.length > 0) {
-      const filtered = sessionId ? local.filter(c => c.sessionId === sessionId) : local;
-      cb(sortSchoolClasses(filtered));
-    } else {
-      const demo = getDemoSchoolDataset();
+    if (useDemo) {
+      const demo = getDemoSchoolDataset(true);
       if (demo && demo.classes && demo.classes.length > 0) {
-        const filtered = sessionId ? demo.classes.filter(c => c.sessionId === sessionId || !c.sessionId) : demo.classes;
-        cb(sortSchoolClasses(filtered));
-      } else {
-        cb([]);
+        const targetSess = sessionId || demo.session?.id;
+        const filtered = targetSess ? demo.classes.filter(c => c.sessionId === targetSess) : demo.classes;
+        const resolved = filtered.length > 0 ? filtered : demo.classes.filter(c => c.sessionId === demo.session?.id);
+        cb(sortSchoolClasses(resolved.length > 0 ? resolved : demo.classes));
+        return;
       }
     }
+    const local = getLocalClasses(schoolId);
+    const realClasses = local.filter(c => !isDemoRecord(c));
+    const filtered = sessionId ? realClasses.filter(c => c.sessionId === sessionId) : realClasses;
+    cb(sortSchoolClasses(filtered));
   };
   deliverLocal();
 
@@ -1086,13 +1240,13 @@ export const subscribeToClasses = (schoolId: string, sessionId: string, cb: (cla
   }
 
   let rtdbUnsub: any = null;
-  if (rtdb) {
+  if (rtdb && !useDemo) {
     try {
       rtdbUnsub = onValue(ref(rtdb, `schools/${schoolId}/classes`), snap => {
         const val = snap.val();
         if (val && typeof val === "object") {
           const all: SchoolClass[] = Object.values(val);
-          const cleanAll = !useDemo ? all.filter(c => !isDemoRecord(c)) : all;
+          const cleanAll = all.filter(c => c && !isDemoRecord(c));
           setLocalClasses(schoolId, cleanAll);
           const filtered = sessionId ? cleanAll.filter(c => c.sessionId === sessionId) : cleanAll;
           cb(sortSchoolClasses(filtered));
@@ -1101,16 +1255,16 @@ export const subscribeToClasses = (schoolId: string, sessionId: string, cb: (cla
     } catch {}
   }
   let fsUnsub: any = null;
-  if (db) {
+  if (db && !useDemo) {
     try {
       fsUnsub = onSnapshot(
         query(col(`schools/${schoolId}/classes`), where("sessionId", "==", sessionId)),
         snap => {
           if (!snap.empty) {
             const list = snap.docs.map(docSnap => docSnap.data() as SchoolClass);
-            const clean = !useDemo ? list.filter(c => !isDemoRecord(c)) : list;
+            const clean = list.filter(c => !isDemoRecord(c));
             cb(sortSchoolClasses(clean));
-          } else if (!useDemo) {
+          } else {
             cb([]);
           }
         },
@@ -1213,7 +1367,7 @@ export const getSubjects = async (schoolId: string, classId?: string): Promise<S
   } catch {}
 
   if (useDemo) {
-    const demo = getDemoSchoolDataset();
+    const demo = getDemoSchoolDataset(true);
     if (demo && demo.subjects && demo.subjects.length > 0) {
       return classId ? demo.subjects.filter(s => s.classId === classId) : demo.subjects;
     }
@@ -1224,7 +1378,7 @@ export const getSubjects = async (schoolId: string, classId?: string): Promise<S
 export const subscribeToSubjects = (schoolId: string, classId: string, cb: (subjects: SchoolSubject[]) => void) => {
   const useDemo = shouldUseDemoForSchool(schoolId);
   if (useDemo) {
-    const demo = getDemoSchoolDataset();
+    const demo = getDemoSchoolDataset(true);
     if (demo && demo.subjects && demo.subjects.length > 0) {
       cb(classId ? demo.subjects.filter(s => s.classId === classId) : demo.subjects);
     } else {
@@ -1333,11 +1487,203 @@ export const deleteLesson = async (schoolId: string, lessonId: string) => {
 };
 
 // ── TEACHERS ─────────────────────────────────────────────────────────────────
+const LOCAL_TEACHERS_PREFIX = "nst_school_teachers_";
+const DELETED_TEACHERS_PREFIX = "nst_deleted_teachers_";
+const LOCAL_STAFF_PREFIX = "nst_school_staff_";
+const DELETED_STAFF_PREFIX = "nst_deleted_staff_";
+
+export const isActiveSchoolTeacherRecord = (t: any): boolean => {
+  if (!t || typeof t !== "object" || !t.id) return false;
+  if (t.active === false || t.isDeleted === true) return false;
+  const st = typeof t.status === "string" ? t.status.trim().toLowerCase() : "";
+  if (st === "deleted" || st === "disabled" || st === "inactive" || st === "removed") return false;
+  return true;
+};
+
+export const isActiveStaffRecord = (s: any): boolean => {
+  if (!s || typeof s !== "object" || !s.id) return false;
+  if (s.active === false || s.isDeleted === true) return false;
+  const st = typeof s.status === "string" ? s.status.trim().toLowerCase() : "";
+  if (st === "deleted" || st === "disabled" || st === "inactive" || st === "removed") return false;
+  return true;
+};
+
+const readIdSetFromStores = (key: string): Set<string> => {
+  const out = new Set<string>();
+  try {
+    const cached = getSchoolCacheSync<string[]>(key, []);
+    if (Array.isArray(cached)) cached.forEach((id) => id && out.add(String(id)));
+  } catch {}
+  try {
+    if (typeof localStorage !== "undefined") {
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) parsed.forEach((id) => id && out.add(String(id)));
+      }
+    }
+  } catch {}
+  return out;
+};
+
+const writeIdSetToStores = (key: string, setVal: Set<string>) => {
+  const arr = Array.from(setVal);
+  try {
+    setSchoolCacheSync(key, arr);
+  } catch {}
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(key, JSON.stringify(arr));
+    }
+  } catch {}
+};
+
+export const getDeletedTeacherIds = (schoolId: string): Set<string> => {
+  if (!schoolId) return new Set<string>();
+  const combined = readIdSetFromStores(`${DELETED_TEACHERS_PREFIX}${schoolId}`);
+  readIdSetFromStores(`${DELETED_STAFF_PREFIX}${schoolId}`).forEach((id) => combined.add(id));
+  return combined;
+};
+
+const markTeacherDeletedLocally = (schoolId: string, teacherId: string) => {
+  if (!schoolId || !teacherId) return;
+  const tSet = readIdSetFromStores(`${DELETED_TEACHERS_PREFIX}${schoolId}`);
+  tSet.add(teacherId);
+  writeIdSetToStores(`${DELETED_TEACHERS_PREFIX}${schoolId}`, tSet);
+
+  const sSet = readIdSetFromStores(`${DELETED_STAFF_PREFIX}${schoolId}`);
+  sSet.add(teacherId);
+  writeIdSetToStores(`${DELETED_STAFF_PREFIX}${schoolId}`, sSet);
+
+  // Purge immediately from both teacher and staff caches
+  try {
+    const curTeachers = getSchoolCacheSync<SchoolTeacher[]>(`${LOCAL_TEACHERS_PREFIX}${schoolId}`, []);
+    if (Array.isArray(curTeachers)) {
+      const filteredT = curTeachers.filter((t: any) => t && t.id !== teacherId);
+      setSchoolCacheSync(`${LOCAL_TEACHERS_PREFIX}${schoolId}`, filteredT);
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem(`${LOCAL_TEACHERS_PREFIX}${schoolId}`, JSON.stringify(filteredT));
+      }
+    }
+  } catch {}
+  try {
+    if (typeof localStorage !== "undefined") {
+      const rawT = localStorage.getItem(`${LOCAL_TEACHERS_PREFIX}${schoolId}`);
+      if (rawT) {
+        const parsedT = JSON.parse(rawT);
+        if (Array.isArray(parsedT)) {
+          localStorage.setItem(
+            `${LOCAL_TEACHERS_PREFIX}${schoolId}`,
+            JSON.stringify(parsedT.filter((t: any) => t && t.id !== teacherId))
+          );
+        }
+      }
+    }
+  } catch {}
+
+  try {
+    const curStaff = getSchoolCacheSync<any[]>(`${LOCAL_STAFF_PREFIX}${schoolId}`, []);
+    if (Array.isArray(curStaff)) {
+      const filteredS = curStaff.filter((s: any) => s && s.id !== teacherId);
+      setSchoolCacheSync(`${LOCAL_STAFF_PREFIX}${schoolId}`, filteredS);
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem(`${LOCAL_STAFF_PREFIX}${schoolId}`, JSON.stringify(filteredS));
+      }
+    }
+  } catch {}
+  try {
+    if (typeof localStorage !== "undefined") {
+      const rawS = localStorage.getItem(`${LOCAL_STAFF_PREFIX}${schoolId}`);
+      if (rawS) {
+        const parsedS = JSON.parse(rawS);
+        if (Array.isArray(parsedS)) {
+          localStorage.setItem(
+            `${LOCAL_STAFF_PREFIX}${schoolId}`,
+            JSON.stringify(parsedS.filter((s: any) => s && s.id !== teacherId))
+          );
+        }
+      }
+    }
+  } catch {}
+};
+
+const clearTeacherDeletedLocally = (schoolId: string, teacherId: string) => {
+  if (!schoolId || !teacherId) return;
+  const tSet = readIdSetFromStores(`${DELETED_TEACHERS_PREFIX}${schoolId}`);
+  if (tSet.delete(teacherId)) writeIdSetToStores(`${DELETED_TEACHERS_PREFIX}${schoolId}`, tSet);
+  const sSet = readIdSetFromStores(`${DELETED_STAFF_PREFIX}${schoolId}`);
+  if (sSet.delete(teacherId)) writeIdSetToStores(`${DELETED_STAFF_PREFIX}${schoolId}`, sSet);
+};
+
+export const setLocalTeachers = (schoolId: string, teachers: SchoolTeacher[]) => {
+  if (!schoolId) return;
+  const deletedIds = getDeletedTeacherIds(schoolId);
+  const useDemo = shouldUseDemoForSchool(schoolId);
+  const clean = (Array.isArray(teachers) ? teachers : []).filter(
+    (t) => isActiveSchoolTeacherRecord(t) && !deletedIds.has(t.id) && (useDemo || !isDemoRecord(t))
+  );
+  try {
+    setSchoolCacheSync(`${LOCAL_TEACHERS_PREFIX}${schoolId}`, clean);
+  } catch {}
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(`${LOCAL_TEACHERS_PREFIX}${schoolId}`, JSON.stringify(clean));
+    }
+  } catch {}
+};
+
+export const getLocalTeachers = (schoolId: string): SchoolTeacher[] => {
+  if (!schoolId) return [];
+  const deletedIds = getDeletedTeacherIds(schoolId);
+  const useDemo = shouldUseDemoForSchool(schoolId);
+  let pool: SchoolTeacher[] = [];
+  try {
+    const idbList = getSchoolCacheSync<SchoolTeacher[]>(`${LOCAL_TEACHERS_PREFIX}${schoolId}`, []);
+    if (Array.isArray(idbList) && idbList.length > 0) {
+      pool = idbList;
+    }
+  } catch {}
+  if (pool.length === 0) {
+    try {
+      const raw = typeof localStorage !== "undefined" ? localStorage.getItem(`${LOCAL_TEACHERS_PREFIX}${schoolId}`) : null;
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) pool = parsed;
+      }
+    } catch {}
+  }
+  return pool.filter(
+    (t) => isActiveSchoolTeacherRecord(t) && !deletedIds.has(t.id) && (useDemo || !isDemoRecord(t))
+  );
+};
 
 export const saveTeacher = async (teacher: SchoolTeacher) => {
-  const sanitized = sanitizeForFirestore(teacher);
+  clearTeacherDeletedLocally(teacher.schoolId, teacher.id);
+  const prepared: SchoolTeacher = {
+    ...teacher,
+    active: teacher.active ?? true,
+  };
+  if (prepared.signatureUrl && typeof prepared.signatureUrl === "string" && prepared.signatureUrl.startsWith("data:image/")) {
+    prepared.signatureUrl = await ensureCloudImageUrl(prepared.signatureUrl, `sig_tch_${teacher.id}`);
+  }
+  const sanitized = sanitizeForFirestore(prepared);
+
+  // Immediately update local cache
+  const current = getLocalTeachers(teacher.schoolId);
+  setLocalTeachers(teacher.schoolId, [sanitized, ...current.filter((t) => t.id !== teacher.id)]);
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("teacher-updated", { detail: { schoolId: teacher.schoolId, teacher: sanitized } }));
+  }
+
   if (rtdb) {
-    try { await withTimeout(set(ref(rtdb, `schools/${teacher.schoolId}/teachers/${teacher.id}`), sanitized), 2000); } catch {}
+    try {
+      await Promise.allSettled([
+        withTimeout(set(ref(rtdb, `schools/${teacher.schoolId}/teachers/${teacher.id}`), sanitized), 2000),
+        withTimeout(remove(ref(rtdb, `schools/${teacher.schoolId}/deleted_teachers/${teacher.id}`)), 2000),
+        withTimeout(remove(ref(rtdb, `schools/${teacher.schoolId}/deleted_staff/${teacher.id}`)), 2000),
+      ]);
+    } catch {}
   }
   if (db) {
     try { await withTimeout(setDoc(d(`schools/${teacher.schoolId}/teachers/${teacher.id}`), sanitized), 3000); } catch {}
@@ -1345,62 +1691,481 @@ export const saveTeacher = async (teacher: SchoolTeacher) => {
 };
 
 export const getTeachers = async (schoolId: string): Promise<SchoolTeacher[]> => {
-  try {
-    const snap = await withTimeout(getDocs(col(`schools/${schoolId}/teachers`)), 2500);
-    const list = (snap as any).docs.map((doc: any) => doc.data() as SchoolTeacher);
-    return !isDemoDataEnabled() ? list.filter((t: SchoolTeacher) => !isDemoRecord(t)) : list;
-  } catch {
-    return [];
+  if (!schoolId) return [];
+  const useDemo = shouldUseDemoForSchool(schoolId);
+  const deletedIds = getDeletedTeacherIds(schoolId);
+  const rawMap = new Map<string, SchoolTeacher>();
+  let fsOk = false;
+  let rtdbOk = false;
+
+  const jobs: Promise<void>[] = [];
+
+  if (rtdb) {
+    jobs.push(
+      withTimeout(get(ref(rtdb, `schools/${schoolId}/deleted_teachers`)), 2000)
+        .then((snap: any) => {
+          const val = snap?.val?.();
+          if (val && typeof val === "object") {
+            Object.keys(val).forEach((id) => id && deletedIds.add(id));
+          }
+        })
+        .catch(() => {})
+    );
+    jobs.push(
+      withTimeout(get(ref(rtdb, `schools/${schoolId}/deleted_staff`)), 2000)
+        .then((snap: any) => {
+          const val = snap?.val?.();
+          if (val && typeof val === "object") {
+            Object.keys(val).forEach((id) => id && deletedIds.add(id));
+          }
+        })
+        .catch(() => {})
+    );
+    jobs.push(
+      withTimeout(get(ref(rtdb, `schools/${schoolId}/teachers`)), 2500)
+        .then((snap: any) => {
+          rtdbOk = true;
+          const val = snap?.val?.();
+          if (val && typeof val === "object") {
+            Object.entries(val).forEach(([k, v]: [string, any]) => {
+              if (!v || typeof v !== "object") return;
+              const tid = v.id || k;
+              if (!tid || (!useDemo && isDemoRecord(v))) return;
+              rawMap.set(tid, { ...v, id: tid, schoolId: v.schoolId || schoolId } as SchoolTeacher);
+            });
+          }
+        })
+        .catch(() => {})
+    );
   }
+
+  if (db) {
+    jobs.push(
+      withTimeout(getDocs(col(`schools/${schoolId}/teachers`)), 2500)
+        .then((snap: any) => {
+          fsOk = true;
+          (snap?.docs || []).forEach((docSnap: any) => {
+            const data = docSnap.data() as SchoolTeacher;
+            const tid = data?.id || docSnap.id;
+            if (!tid || (!useDemo && isDemoRecord(data))) return;
+            const existing = rawMap.get(tid);
+            if (existing) {
+              const deletedEither = !isActiveSchoolTeacherRecord(existing) || !isActiveSchoolTeacherRecord(data);
+              rawMap.set(tid, {
+                ...existing,
+                ...data,
+                id: tid,
+                schoolId: data?.schoolId || existing.schoolId || schoolId,
+                active: deletedEither ? false : (data.active ?? existing.active),
+                isDeleted: Boolean((existing as any).isDeleted || (data as any).isDeleted),
+              } as SchoolTeacher);
+            } else {
+              rawMap.set(tid, { ...data, id: tid, schoolId: data?.schoolId || schoolId } as SchoolTeacher);
+            }
+          });
+        })
+        .catch(() => {})
+    );
+  }
+
+  await Promise.all(jobs);
+
+  if (fsOk || rtdbOk) {
+    const activeList = Array.from(rawMap.values()).filter(
+      (t) => isActiveSchoolTeacherRecord(t) && !deletedIds.has(t.id) && (useDemo || !isDemoRecord(t))
+    );
+    setLocalTeachers(schoolId, activeList);
+    return activeList;
+  }
+
+  return getLocalTeachers(schoolId);
 };
 
-export const getLocalTeachers = (schoolId: string): SchoolTeacher[] => {
-  try {
-    const raw = localStorage.getItem(`nst_school_teachers_${schoolId}`);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+export const subscribeToTeachers = (schoolId: string, cb: (teachers: SchoolTeacher[]) => void) => {
+  if (!schoolId) {
+    cb([]);
+    return () => {};
+  }
+
+  let hasFsSnapshot = false;
+  let hasRtdbSnapshot = false;
+  let fsDocsMap = new Map<string, SchoolTeacher>();
+  let rtdbDocsMap = new Map<string, SchoolTeacher>();
+  let rtdbDeletedTeacherIds = new Set<string>();
+  let rtdbDeletedStaffIds = new Set<string>();
+  const getCombinedRtdbDeleted = () => new Set<string>([...rtdbDeletedTeacherIds, ...rtdbDeletedStaffIds]);
+
+  const computeAndDeliver = () => {
+    const useDemo = shouldUseDemoForSchool(schoolId);
+    const localDeleted = getDeletedTeacherIds(schoolId);
+    const allDeleted = new Set<string>([...localDeleted, ...getCombinedRtdbDeleted()]);
+
+    if (!hasFsSnapshot && !hasRtdbSnapshot) {
+      const local = getLocalTeachers(schoolId).filter((t) => !allDeleted.has(t.id));
+      cb(local);
+      return;
     }
-  } catch {}
-  return [];
-};
 
-export const subscribeToTeachers = (schoolId: string, cb: (teachers: SchoolTeacher[]) => void) =>
-  onSnapshot(
-    col(`schools/${schoolId}/teachers`),
-    snap => {
-      const list = snap.docs.map(d => d.data() as SchoolTeacher);
-      cb(!isDemoDataEnabled() ? list.filter(t => !isDemoRecord(t)) : list);
-    },
-    err => { console.warn(`[school-firebase] subscribeToTeachers error:`, err?.code || err); cb([]); }
-  );
+    const merged = new Map<string, SchoolTeacher>();
+    rtdbDocsMap.forEach((t, id) => merged.set(id, t));
+    fsDocsMap.forEach((t, id) => {
+      const existing = merged.get(id);
+      if (existing) {
+        const deletedEither = !isActiveSchoolTeacherRecord(existing) || !isActiveSchoolTeacherRecord(t);
+        merged.set(id, {
+          ...existing,
+          ...t,
+          id,
+          schoolId: t.schoolId || existing.schoolId || schoolId,
+          active: deletedEither ? false : (t.active ?? existing.active),
+          isDeleted: Boolean((existing as any).isDeleted || (t as any).isDeleted),
+        } as SchoolTeacher);
+      } else {
+        merged.set(id, t);
+      }
+    });
+
+    const cleanList = Array.from(merged.values()).filter(
+      (t) => isActiveSchoolTeacherRecord(t) && !allDeleted.has(t.id) && (useDemo || !isDemoRecord(t))
+    );
+    setLocalTeachers(schoolId, cleanList);
+    cb(cleanList);
+  };
+
+  // Deliver instant local cache immediately
+  computeAndDeliver();
+
+  const onLocalSyncEvent = (e: any) => {
+    if (e?.detail?.schoolId && e.detail.schoolId !== schoolId) return;
+    if (e?.type === "teacher-deleted" && e?.detail?.teacherId) {
+      fsDocsMap.delete(e.detail.teacherId);
+      rtdbDocsMap.delete(e.detail.teacherId);
+      rtdbDeletedTeacherIds.add(e.detail.teacherId);
+    }
+    if (e?.type === "staff-deleted" && e?.detail?.staffId) {
+      fsDocsMap.delete(e.detail.staffId);
+      rtdbDocsMap.delete(e.detail.staffId);
+      rtdbDeletedStaffIds.add(e.detail.staffId);
+    }
+    if (e?.type === "teacher-role-unassigned" && e?.detail?.teacherId) {
+      fsDocsMap.delete(e.detail.teacherId);
+      rtdbDocsMap.delete(e.detail.teacherId);
+    }
+    if ((e?.type === "teacher-updated" || e?.type === "teacher-restored") && e?.detail?.teacher?.id) {
+      const t = e.detail.teacher as SchoolTeacher;
+      rtdbDeletedTeacherIds.delete(t.id);
+      rtdbDeletedStaffIds.delete(t.id);
+      fsDocsMap.set(t.id, t);
+      rtdbDocsMap.set(t.id, t);
+    }
+    computeAndDeliver();
+  };
+
+  if (typeof window !== "undefined") {
+    window.addEventListener("school-idb-hydrated", onLocalSyncEvent);
+    window.addEventListener("teacher-deleted", onLocalSyncEvent);
+    window.addEventListener("teacher-role-unassigned", onLocalSyncEvent);
+    window.addEventListener("staff-deleted", onLocalSyncEvent);
+    window.addEventListener("teacher-updated", onLocalSyncEvent);
+    window.addEventListener("teacher-restored", onLocalSyncEvent);
+    window.addEventListener("nst_demo_toggle_changed", onLocalSyncEvent);
+  }
+
+  let rtdbTeachersUnsub: any = null;
+  let rtdbDeletedUnsub: any = null;
+  let rtdbDeletedStaffUnsub: any = null;
+  if (rtdb) {
+    try {
+      rtdbDeletedUnsub = onValue(ref(rtdb, `schools/${schoolId}/deleted_teachers`), (snap) => {
+        const val = snap.val();
+        const nextDel = new Set<string>();
+        if (val && typeof val === "object") {
+          Object.keys(val).forEach((k) => k && nextDel.add(k));
+        }
+        rtdbDeletedTeacherIds = nextDel;
+        computeAndDeliver();
+      });
+    } catch {}
+    try {
+      rtdbDeletedStaffUnsub = onValue(ref(rtdb, `schools/${schoolId}/deleted_staff`), (snap) => {
+        const val = snap.val();
+        const nextDel = new Set<string>();
+        if (val && typeof val === "object") {
+          Object.keys(val).forEach((k) => k && nextDel.add(k));
+        }
+        rtdbDeletedStaffIds = nextDel;
+        computeAndDeliver();
+      });
+    } catch {}
+    try {
+      rtdbTeachersUnsub = onValue(ref(rtdb, `schools/${schoolId}/teachers`), (snap) => {
+        hasRtdbSnapshot = true;
+        const val = snap.val();
+        const nextMap = new Map<string, SchoolTeacher>();
+        if (val && typeof val === "object") {
+          Object.entries(val).forEach(([k, v]: [string, any]) => {
+            if (!v || typeof v !== "object") return;
+            const tid = v.id || k;
+            if (tid) nextMap.set(tid, { ...v, id: tid, schoolId: v.schoolId || schoolId } as SchoolTeacher);
+          });
+        }
+        rtdbDocsMap = nextMap;
+        computeAndDeliver();
+      });
+    } catch {}
+  }
+
+  let fsUnsub: any = null;
+  if (db) {
+    try {
+      fsUnsub = onSnapshot(
+        col(`schools/${schoolId}/teachers`),
+        (snap) => {
+          hasFsSnapshot = true;
+          const nextMap = new Map<string, SchoolTeacher>();
+          snap.docs.forEach((docSnap) => {
+            const data = docSnap.data() as SchoolTeacher;
+            const tid = data?.id || docSnap.id;
+            if (tid) nextMap.set(tid, { ...data, id: tid, schoolId: data?.schoolId || schoolId });
+          });
+          fsDocsMap = nextMap;
+          computeAndDeliver();
+        },
+        (err) => {
+          console.warn(`[school-firebase] subscribeToTeachers error:`, err?.code || err);
+          computeAndDeliver();
+        }
+      );
+    } catch {}
+  }
+
+  return () => {
+    if (typeof window !== "undefined") {
+      window.removeEventListener("school-idb-hydrated", onLocalSyncEvent);
+      window.removeEventListener("teacher-deleted", onLocalSyncEvent);
+      window.removeEventListener("teacher-role-unassigned", onLocalSyncEvent);
+      window.removeEventListener("staff-deleted", onLocalSyncEvent);
+      window.removeEventListener("teacher-updated", onLocalSyncEvent);
+      window.removeEventListener("teacher-restored", onLocalSyncEvent);
+      window.removeEventListener("nst_demo_toggle_changed", onLocalSyncEvent);
+    }
+    if (typeof fsUnsub === "function") fsUnsub();
+    if (typeof rtdbTeachersUnsub === "function") rtdbTeachersUnsub();
+    if (typeof rtdbDeletedUnsub === "function") rtdbDeletedUnsub();
+    if (typeof rtdbDeletedStaffUnsub === "function") rtdbDeletedStaffUnsub();
+  };
+};
 
 export const updateTeacher = async (schoolId: string, teacherId: string, data: Partial<SchoolTeacher>) => {
-  const sanitized = sanitizeForFirestore(data);
+  const preparedData: any = { ...data };
+  if (preparedData.signatureUrl && typeof preparedData.signatureUrl === "string" && preparedData.signatureUrl.startsWith("data:image/")) {
+    preparedData.signatureUrl = await ensureCloudImageUrl(preparedData.signatureUrl, `sig_tch_${teacherId}`);
+  }
+  const sanitized = sanitizeForFirestore(preparedData);
+  const st = typeof (data as any)?.status === "string" ? (data as any).status.toLowerCase() : "";
+  const isSoftDelete =
+    data?.active === false ||
+    (data as any)?.isDeleted === true ||
+    st === "deleted" ||
+    st === "disabled" ||
+    st === "inactive";
+
+  if (isSoftDelete) {
+    markTeacherDeletedLocally(schoolId, teacherId);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("teacher-deleted", { detail: { schoolId, teacherId } }));
+    }
+  } else {
+    const current = getLocalTeachers(schoolId);
+    const updatedList = current.map((t) => (t.id === teacherId ? { ...t, ...sanitized } : t));
+    setLocalTeachers(schoolId, updatedList);
+    const updatedItem = updatedList.find((t) => t.id === teacherId);
+    if (updatedItem && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("teacher-updated", { detail: { schoolId, teacher: updatedItem } }));
+    }
+  }
+
   if (rtdb) {
     try { await withTimeout(update(ref(rtdb, `schools/${schoolId}/teachers/${teacherId}`), sanitized), 2000); } catch {}
   }
   if (db) {
-    try { await withTimeout(updateDoc(d(`schools/${schoolId}/teachers/${teacherId}`), sanitized), 3000); } catch {}
+    try { await withTimeout(setDoc(d(`schools/${schoolId}/teachers/${teacherId}`), sanitized, { merge: true }), 3000); } catch {}
   }
-  const st = typeof (data as any)?.status === "string" ? (data as any).status.toLowerCase() : "";
-  if (data?.active === false || (data as any)?.isDeleted === true || st === "deleted" || st === "disabled" || st === "inactive") {
+  if (isSoftDelete) {
     import("./utils/faceRecognitionEngineV2")
       .then((m) => m.deleteFaceDescriptor(teacherId, schoolId))
       .catch(() => {});
   }
 };
 
+const LOCAL_RECYCLE_TEACHERS_PREFIX = "nst_school_recycle_teachers_";
+const LOCAL_RECYCLE_STUDENTS_PREFIX = "nst_school_recycle_students_";
+
+export const getLocalRecycleTeachers = (schoolId: string): Array<SchoolTeacher & { deletedAt?: string }> => {
+  if (!schoolId) return [];
+  try {
+    const list = getSchoolCacheSync<any[]>(`${LOCAL_RECYCLE_TEACHERS_PREFIX}${schoolId}`, []);
+    if (Array.isArray(list) && list.length > 0) return list;
+  } catch {}
+  try {
+    if (typeof localStorage !== "undefined") {
+      const raw = localStorage.getItem(`${LOCAL_RECYCLE_TEACHERS_PREFIX}${schoolId}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    }
+  } catch {}
+  return [];
+};
+
+const setLocalRecycleTeachers = (schoolId: string, list: Array<SchoolTeacher & { deletedAt?: string }>) => {
+  if (!schoolId) return;
+  try { setSchoolCacheSync(`${LOCAL_RECYCLE_TEACHERS_PREFIX}${schoolId}`, list); } catch {}
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(`${LOCAL_RECYCLE_TEACHERS_PREFIX}${schoolId}`, JSON.stringify(list));
+    }
+  } catch {}
+};
+
+export const getLocalRecycleStudents = (schoolId: string): Array<SchoolStudent & { deletedAt?: string }> => {
+  if (!schoolId) return [];
+  try {
+    const list = getSchoolCacheSync<any[]>(`${LOCAL_RECYCLE_STUDENTS_PREFIX}${schoolId}`, []);
+    if (Array.isArray(list) && list.length > 0) return list;
+  } catch {}
+  try {
+    if (typeof localStorage !== "undefined") {
+      const raw = localStorage.getItem(`${LOCAL_RECYCLE_STUDENTS_PREFIX}${schoolId}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    }
+  } catch {}
+  return [];
+};
+
+const setLocalRecycleStudents = (schoolId: string, list: Array<SchoolStudent & { deletedAt?: string }>) => {
+  if (!schoolId) return;
+  try { setSchoolCacheSync(`${LOCAL_RECYCLE_STUDENTS_PREFIX}${schoolId}`, list); } catch {}
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(`${LOCAL_RECYCLE_STUDENTS_PREFIX}${schoolId}`, JSON.stringify(list));
+    }
+  } catch {}
+};
+
 export const deleteTeacher = async (schoolId: string, teacherId: string) => {
+  if (!schoolId || !teacherId) return;
+  const deletedAt = new Date().toISOString();
+  const deletePatch = {
+    active: false,
+    isDeleted: true,
+    status: "deleted",
+    deletedAt,
+  };
+
+  // 0. Capture full teacher snapshot before purging so it can be restored from Recycle Bin
+  let teacherSnapshot: any = null;
+  try {
+    teacherSnapshot = getLocalTeachers(schoolId).find((t) => t.id === teacherId) || null;
+  } catch {}
+  if (!teacherSnapshot && rtdb) {
+    try {
+      const snap = await withTimeout(get(ref(rtdb, `schools/${schoolId}/teachers/${teacherId}`)), 1500);
+      if (snap && snap.exists()) teacherSnapshot = snap.val();
+    } catch {}
+  }
+  if (!teacherSnapshot && db) {
+    try {
+      const snap = await withTimeout(getDoc(d(`schools/${schoolId}/teachers/${teacherId}`)), 1500);
+      if (snap && snap.exists()) teacherSnapshot = snap.data();
+    } catch {}
+  }
+
+  const binRecord = sanitizeForFirestore({
+    ...(teacherSnapshot || { id: teacherId, schoolId, name: "Removed Teacher" }),
+    id: teacherId,
+    schoolId,
+    deletedAt,
+    deletedEntityType: "teacher",
+  });
+
+  try {
+    const curBin = getLocalRecycleTeachers(schoolId);
+    setLocalRecycleTeachers(schoolId, [binRecord, ...curBin.filter((item) => item.id !== teacherId)]);
+  } catch {}
+
+  // 1. Immediately purge from all local caches + persist tombstone
+  markTeacherDeletedLocally(schoolId, teacherId);
+
+  // 2. Notify all active UI panels & Recycle Bin immediately (0ms)
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("teacher-deleted", { detail: { schoolId, teacherId } }));
+    window.dispatchEvent(new CustomEvent("staff-deleted", { detail: { schoolId, staffId: teacherId } }));
+    window.dispatchEvent(new CustomEvent("recycle-bin-updated", { detail: { schoolId, type: "teacher", id: teacherId } }));
+  }
+
+  // 3. Remove from RTDB & write Recycle Bin snapshot + tombstones
   if (rtdb) {
-    try { await withTimeout(remove(ref(rtdb, `schools/${schoolId}/teachers/${teacherId}`)), 2000); } catch {}
+    try {
+      await Promise.allSettled([
+        withTimeout(set(ref(rtdb, `schools/${schoolId}/recycle_bin_teachers/${teacherId}`), binRecord), 2500),
+        withTimeout(remove(ref(rtdb, `schools/${schoolId}/teachers/${teacherId}`)), 2500),
+        withTimeout(remove(ref(rtdb, `schools/${schoolId}/staff/${teacherId}`)), 2500),
+        withTimeout(set(ref(rtdb, `schools/${schoolId}/deleted_teachers/${teacherId}`), { id: teacherId, deletedAt }), 2500),
+        withTimeout(set(ref(rtdb, `schools/${schoolId}/deleted_staff/${teacherId}`), { id: teacherId, deletedAt }), 2500),
+      ]);
+    } catch {}
   }
+
+  // 4. Write Recycle Bin doc & delete from active Firestore collections
   if (db) {
-    try { await withTimeout(deleteDoc(d(`schools/${schoolId}/teachers/${teacherId}`)), 2500); } catch {}
+    try {
+      await withTimeout(setDoc(d(`schools/${schoolId}/recycle_bin_teachers/${teacherId}`), binRecord), 2500);
+    } catch {}
+    try {
+      await withTimeout(deleteDoc(d(`schools/${schoolId}/teachers/${teacherId}`)), 3000);
+    } catch {
+      try {
+        await withTimeout(setDoc(d(`schools/${schoolId}/teachers/${teacherId}`), deletePatch, { merge: true }), 3000);
+      } catch {}
+    }
+    try {
+      await withTimeout(deleteDoc(d(`schools/${schoolId}/staff/${teacherId}`)), 3000);
+    } catch {
+      try {
+        await withTimeout(setDoc(d(`schools/${schoolId}/staff/${teacherId}`), deletePatch, { merge: true }), 3000);
+      } catch {}
+    }
   }
+
+  // 5. Cleanup enrolled Face ID descriptor
   import("./utils/faceRecognitionEngineV2")
     .then((m) => m.deleteFaceDescriptor(teacherId, schoolId))
     .catch(() => {});
+};
+
+/**
+ * Unassigns a Teacher record strictly when converting a Teacher into Accountant-Only
+ * WITHOUT placing the ID in Recycle Bin or deleted_teachers/deleted_staff pools
+ * and WITHOUT wiping StaffEmployee payroll/attendance or Face ID.
+ */
+export const unassignTeacherForAccountantRole = async (schoolId: string, teacherId: string) => {
+  if (!schoolId || !teacherId) return;
+  const current = getLocalTeachers(schoolId);
+  setLocalTeachers(schoolId, current.filter((t) => t.id !== teacherId));
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("teacher-role-unassigned", { detail: { schoolId, teacherId } }));
+  }
+  if (rtdb) {
+    try { await withTimeout(remove(ref(rtdb, `schools/${schoolId}/teachers/${teacherId}`)), 2500); } catch {}
+  }
+  if (db) {
+    try { await withTimeout(deleteDoc(d(`schools/${schoolId}/teachers/${teacherId}`)), 3000); } catch {}
+  }
 };
 
 // ── STUDENTS ─────────────────────────────────────────────────────────────────
@@ -1510,7 +2275,7 @@ export const getStudentOrAdmissionRecord = async (
       address: "Chapra",
       classId: "cls_nursery",
       className: "NURSERY",
-      schoolName: "Nstz",
+      schoolName: "Life Maker Public School",
       monthlyFee: 1800
     };
   }
@@ -1621,7 +2386,7 @@ export const getStudentOrAdmissionRecord = async (
 
   // 4. Fallback to demo students dataset ONLY if demo applies to this schoolId
   if (shouldUseDemoForSchool(schoolId)) {
-    const demo = getDemoSchoolDataset();
+    const demo = getDemoSchoolDataset(true);
     if (demo && demo.students) {
       const found = demo.students.find(s => {
         const sAdm = (s.admissionNo || "").trim().toLowerCase();
@@ -1801,63 +2566,66 @@ export const getStudents = async (schoolId: string, classId?: string, className?
     return matchingLocal;
   }
 
+  if (useDemo) {
+    const demo = getDemoSchoolDataset(true);
+    if (demo && demo.students && demo.students.length > 0) {
+      const targetSess = sessionId || demo.session?.id;
+      const sessFiltered = demo.students.filter(s => !targetSess || s.sessionId === targetSess);
+      const basePool = sessFiltered.length > 0 ? sessFiltered : demo.students.filter(s => s.sessionId === demo.session?.id);
+      const filteredDemo = basePool.filter(s => {
+        if (!isActiveSchoolStudentRecord(s)) return false;
+        if (classId && !isStudentInClass(s, classId, className)) return false;
+        return true;
+      });
+      return filteredDemo;
+    }
+    return [];
+  }
+
+  const realLocal = matchingLocal.filter(s => !isDemoRecord(s));
+  if (realLocal.length > 0) {
+    return realLocal;
+  }
+
   const { students: cloudStudents } = await getActiveCloudStudents(schoolId);
   if (cloudStudents.length > 0) {
-    const filtered = cloudStudents.filter((s: any) => {
+    return cloudStudents.filter((s: any) => {
+      if (isDemoRecord(s)) return false;
       if (classId && !isStudentInClass(s, classId, className)) return false;
-      if (sessionId && s.sessionId && s.sessionId !== sessionId) return false;
+      if (sessionId && s.sessionId !== sessionId) return false;
       return true;
     });
-    if (filtered.length > 0) return filtered;
   }
 
-  const demo = getDemoSchoolDataset();
-  if (demo && demo.students && demo.students.length > 0) {
-    const filteredDemo = demo.students.filter(s => {
-      if (!isActiveSchoolStudentRecord(s)) return false;
-      if (classId && !isStudentInClass(s, classId, className)) return false;
-      if (sessionId && s.sessionId && s.sessionId !== sessionId) return false;
-      return true;
-    });
-
-    if (filteredDemo.length > 0) {
-      const demoIds = new Set(filteredDemo.map(s => s.id));
-      const extraLocal = matchingLocal.filter(s => !demoIds.has(s.id));
-      return [...filteredDemo, ...extraLocal];
-    }
-    return classId ? filteredDemo : (sessionId ? demo.students.filter(s => !s.sessionId || s.sessionId === sessionId) : demo.students);
-  }
-  return matchingLocal;
+  return realLocal;
 };
 
 export const subscribeToStudents = (schoolId: string, classId: string, cb: (students: SchoolStudent[]) => void, sessionId?: string) => {
   const useDemo = shouldUseDemoForSchool(schoolId, sessionId);
   const deliverLocal = () => {
-    const local = getLocalStudents(schoolId);
-    const matchingLocal = local.filter(s => {
-      if (s.active === false) return false;
-      if (classId && !isStudentInClass(s, classId)) return false;
-      if (sessionId && s.sessionId && s.sessionId !== sessionId) return false;
-      return true;
-    });
-    if (!useDemo) {
-      cb(matchingLocal.filter(s => !isDemoRecord(s)));
-    } else if (matchingLocal.length > 0) {
-      cb(matchingLocal);
-    } else {
-      const demo = getDemoSchoolDataset();
+    if (useDemo) {
+      const demo = getDemoSchoolDataset(true);
       if (demo && demo.students && demo.students.length > 0) {
-        const filteredDemo = demo.students.filter(s => {
+        const targetSess = sessionId || demo.session?.id;
+        const sessFiltered = demo.students.filter(s => !targetSess || s.sessionId === targetSess);
+        const basePool = sessFiltered.length > 0 ? sessFiltered : demo.students.filter(s => s.sessionId === demo.session?.id);
+        const filteredDemo = basePool.filter(s => {
           if (s.active === false) return false;
           if (classId && !isStudentInClass(s, classId)) return false;
-          if (sessionId && s.sessionId && s.sessionId !== sessionId) return false;
           return true;
         });
         cb(filteredDemo);
-      } else {
-        cb(matchingLocal);
+        return;
       }
     }
+    const local = getLocalStudents(schoolId);
+    const matchingLocal = local.filter(s => {
+      if (s.active === false || isDemoRecord(s)) return false;
+      if (classId && !isStudentInClass(s, classId)) return false;
+      if (sessionId && s.sessionId !== sessionId) return false;
+      return true;
+    });
+    cb(matchingLocal);
   };
   deliverLocal();
 
@@ -1868,12 +2636,15 @@ export const subscribeToStudents = (schoolId: string, classId: string, cb: (stud
   const fsUnsub = onSnapshot(
     query(col(`schools/${schoolId}/students`), where("active", "==", true)),
     snap => {
+      if (useDemo) return;
       if (!snap.empty) {
-        const all = snap.docs.map(docSnap => docSnap.data() as SchoolStudent);
-        setLocalStudents(schoolId, !useDemo ? all.filter(s => !isDemoRecord(s)) : all);
-        const filtered = classId ? all.filter(s => isStudentInClass(s, classId)) : all;
-        const result = !useDemo ? filtered.filter(s => !isDemoRecord(s)) : filtered;
-        cb(result.sort((a, b) => (a.rollNo || "").localeCompare(b.rollNo || "", undefined, { numeric: true })));
+        const all = snap.docs.map(docSnap => docSnap.data() as SchoolStudent).filter(s => !isDemoRecord(s));
+        setLocalStudents(schoolId, all);
+        let filtered = classId ? all.filter(s => isStudentInClass(s, classId)) : all;
+        if (sessionId) {
+          filtered = filtered.filter(s => s.sessionId === sessionId);
+        }
+        cb(filtered.sort((a, b) => (a.rollNo || "").localeCompare(b.rollNo || "", undefined, { numeric: true })));
       }
     },
     err => { console.warn(`[school-firebase] subscribeToStudents error:`, err?.code || err); }
@@ -1889,26 +2660,31 @@ export const subscribeToAllStudents = (schoolId: string, cb: (students: SchoolSt
   const useDemo = shouldUseDemoForSchool(schoolId);
   const deliverLocal = () => {
     const local = getLocalStudents(schoolId);
-    const demo = useDemo ? getDemoSchoolDataset() : null;
+    const demo = useDemo ? getDemoSchoolDataset(true) : null;
     if (!useDemo) {
-      cb(local.filter(s => s.active !== false && !isDemoRecord(s)));
-    } else if (local.length >= (demo?.students?.length || 50)) {
-      cb(local.filter(s => s.active !== false));
+      cb(local.filter(s => isActiveSchoolStudentRecord(s) && !isDemoRecord(s)));
     } else if (demo && demo.students && demo.students.length > 0) {
       const localMap = new Map(local.map(s => [s.id, s]));
-      const merged = demo.students.map(s => localMap.get(s.id) || s);
-      local.forEach(s => {
-        if (!merged.some(m => m.id === s.id)) merged.push(s);
-      });
-      cb(merged.filter(s => s.active !== false));
+      const primaryPool = demo.students.filter(s => !demo.session?.id || s.sessionId === demo.session.id);
+      const basePool = primaryPool.length > 0 ? primaryPool : demo.students;
+      const merged = basePool.map(s => localMap.get(s.id) || s);
+      cb(merged.filter(s => isActiveSchoolStudentRecord(s)));
     } else {
-      cb(local.filter(s => s.active !== false));
+      cb(local.filter(s => isActiveSchoolStudentRecord(s)));
     }
   };
   deliverLocal();
 
+  const onLocalStudentSync = (e: any) => {
+    if (e?.detail?.schoolId && e.detail.schoolId !== schoolId) return;
+    deliverLocal();
+  };
+
   if (typeof window !== "undefined") {
-    window.addEventListener("school-idb-hydrated", deliverLocal);
+    window.addEventListener("school-idb-hydrated", onLocalStudentSync);
+    window.addEventListener("student-deleted", onLocalStudentSync);
+    window.addEventListener("student-restored", onLocalStudentSync);
+    window.addEventListener("student-updated", onLocalStudentSync);
   }
 
   let rtdbUnsub: any = null;
@@ -1917,12 +2693,13 @@ export const subscribeToAllStudents = (schoolId: string, cb: (students: SchoolSt
       rtdbUnsub = onValue(ref(rtdb, `schools/${schoolId}/students`), snap => {
         const val = snap.val();
         if (val && typeof val === "object") {
-          const all = (Object.values(val) as SchoolStudent[]).filter(s => s && s.active !== false);
-          if (all.length > 0) {
-            const clean = !useDemo ? all.filter(s => !isDemoRecord(s)) : all;
-            setLocalStudents(schoolId, clean);
-            cb(clean);
-          }
+          const all = (Object.values(val) as SchoolStudent[]).filter(s => isActiveSchoolStudentRecord(s));
+          const clean = !useDemo ? all.filter(s => !isDemoRecord(s)) : all;
+          setLocalStudents(schoolId, clean);
+          cb(clean);
+        } else if (val === null) {
+          setLocalStudents(schoolId, []);
+          cb([]);
         }
       });
     } catch {}
@@ -1932,7 +2709,7 @@ export const subscribeToAllStudents = (schoolId: string, cb: (students: SchoolSt
     query(col(`schools/${schoolId}/students`), where("active", "==", true)),
     snap => {
       if (!snap.empty) {
-        const all = snap.docs.map(docSnap => docSnap.data() as SchoolStudent).filter(s => s.active !== false);
+        const all = snap.docs.map(docSnap => docSnap.data() as SchoolStudent).filter(s => isActiveSchoolStudentRecord(s));
         const clean = !useDemo ? all.filter(s => !isDemoRecord(s)) : all;
         setLocalStudents(schoolId, clean);
         cb(clean);
@@ -1942,7 +2719,12 @@ export const subscribeToAllStudents = (schoolId: string, cb: (students: SchoolSt
   );
 
   return () => {
-    if (typeof window !== "undefined") window.removeEventListener("school-idb-hydrated", deliverLocal);
+    if (typeof window !== "undefined") {
+      window.removeEventListener("school-idb-hydrated", onLocalStudentSync);
+      window.removeEventListener("student-deleted", onLocalStudentSync);
+      window.removeEventListener("student-restored", onLocalStudentSync);
+      window.removeEventListener("student-updated", onLocalStudentSync);
+    }
     if (typeof rtdbUnsub === "function") rtdbUnsub();
     if (typeof fsUnsub === "function") fsUnsub();
   };
@@ -1964,7 +2746,7 @@ export const subscribeToStudent = (
         cb({ ...found, active: false, isDeleted: true, status: "deleted" } as any);
       }
     } else if (useDemo) {
-      const demo = getDemoSchoolDataset();
+      const demo = getDemoSchoolDataset(true);
       const demoFound = demo?.students?.find(s => s.id === studentId || (s.admissionNo && s.admissionNo.toLowerCase() === studentId.toLowerCase()));
       if (demoFound) cb(demoFound);
     }
@@ -2080,6 +2862,7 @@ export const updateStudent = async (schoolId: string, studentId: string, data: P
 };
 
 export const deleteStudent = async (schoolId: string, studentId: string) => {
+  if (!schoolId || !studentId) return;
   const deletedAt = new Date().toISOString();
   const deletePatch = {
     active: false,
@@ -2087,16 +2870,50 @@ export const deleteStudent = async (schoolId: string, studentId: string) => {
     status: "deleted",
     deletedAt,
   };
+
+  // 0. Capture full student snapshot for Recycle Bin before removing from active list
+  let studentSnapshot: any = null;
+  try {
+    studentSnapshot = getLocalStudents(schoolId).find((s) => s.id === studentId) || null;
+  } catch {}
+  if (!studentSnapshot && rtdb) {
+    try {
+      const snap = await withTimeout(get(ref(rtdb, `schools/${schoolId}/students/${studentId}`)), 1500);
+      if (snap && snap.exists()) studentSnapshot = snap.val();
+    } catch {}
+  }
+  if (!studentSnapshot && db) {
+    try {
+      const snap = await withTimeout(getDoc(d(`schools/${schoolId}/students/${studentId}`)), 1500);
+      if (snap && snap.exists()) studentSnapshot = snap.data();
+    } catch {}
+  }
+
+  const binRecord = sanitizeForFirestore({
+    ...(studentSnapshot || { id: studentId, schoolId, name: "Removed Student" }),
+    id: studentId,
+    schoolId,
+    deletedAt,
+    deletedEntityType: "student",
+  });
+
+  try {
+    const curBin = getLocalRecycleStudents(schoolId);
+    setLocalRecycleStudents(schoolId, [binRecord, ...curBin.filter((item) => item.id !== studentId)]);
+  } catch {}
+
   try {
     const local = getLocalStudents(schoolId);
     setLocalStudents(schoolId, local.filter(s => s.id !== studentId));
   } catch {}
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("student-deleted", { detail: { schoolId, studentId } }));
+    window.dispatchEvent(new CustomEvent("recycle-bin-updated", { detail: { schoolId, type: "student", id: studentId } }));
   }
   if (rtdb) {
     try {
       await Promise.allSettled([
+        withTimeout(set(ref(rtdb, `schools/${schoolId}/recycle_bin_students/${studentId}`), binRecord), 2500),
         withTimeout(update(ref(rtdb, `schools/${schoolId}/students/${studentId}`), deletePatch), 2000),
         withTimeout(set(ref(rtdb, `schools/${schoolId}/deleted_students/${studentId}`), { id: studentId, deletedAt }), 2000),
       ]);
@@ -2104,12 +2921,311 @@ export const deleteStudent = async (schoolId: string, studentId: string) => {
   }
   if (db) {
     try {
-      await withTimeout(setDoc(d(`schools/${schoolId}/students/${studentId}`), deletePatch, { merge: true }), 2500);
+      await Promise.allSettled([
+        withTimeout(setDoc(d(`schools/${schoolId}/recycle_bin_students/${studentId}`), binRecord), 2500),
+        withTimeout(setDoc(d(`schools/${schoolId}/students/${studentId}`), deletePatch, { merge: true }), 2500),
+      ]);
     } catch {}
   }
   import("./utils/faceRecognitionEngineV2")
     .then((m) => m.deleteFaceDescriptor(studentId, schoolId))
     .catch(() => {});
+};
+
+// ── RECYCLE BIN (DELETED TEACHERS & STUDENTS MANAGEMENT) ─────────────────────
+export const subscribeToRecycleBin = (
+  schoolId: string,
+  cb: (data: {
+    teachers: Array<SchoolTeacher & { deletedAt?: string }>;
+    students: Array<SchoolStudent & { deletedAt?: string }>;
+  }) => void
+) => {
+  if (!schoolId) {
+    cb({ teachers: [], students: [] });
+    return () => {};
+  }
+
+  let rtdbTeachersMap = new Map<string, SchoolTeacher & { deletedAt?: string }>();
+  let fsTeachersMap = new Map<string, SchoolTeacher & { deletedAt?: string }>();
+  let rtdbStudentsMap = new Map<string, SchoolStudent & { deletedAt?: string }>();
+  let fsStudentsMap = new Map<string, SchoolStudent & { deletedAt?: string }>();
+  let hasRtdbT = false;
+  let hasFsT = false;
+  let hasRtdbS = false;
+  let hasFsS = false;
+
+  const emit = () => {
+    const localT = getLocalRecycleTeachers(schoolId);
+    const localS = getLocalRecycleStudents(schoolId);
+
+    const tMap = new Map<string, SchoolTeacher & { deletedAt?: string }>();
+    if (!hasRtdbT && !hasFsT) {
+      localT.forEach((t) => t?.id && tMap.set(t.id, t));
+    } else {
+      rtdbTeachersMap.forEach((t, id) => tMap.set(id, t));
+      fsTeachersMap.forEach((t, id) => tMap.set(id, { ...(tMap.get(id) || {}), ...t }));
+      // Keep any optimistic local additions created moments ago before cloud confirms
+      localT.forEach((t) => {
+        if (t?.id && !tMap.has(t.id) && t.deletedAt && Date.now() - Date.parse(t.deletedAt) < 8000) {
+          tMap.set(t.id, t);
+        }
+      });
+      setLocalRecycleTeachers(schoolId, Array.from(tMap.values()));
+    }
+
+    const sMap = new Map<string, SchoolStudent & { deletedAt?: string }>();
+    if (!hasRtdbS && !hasFsS) {
+      localS.forEach((s) => s?.id && sMap.set(s.id, s));
+    } else {
+      rtdbStudentsMap.forEach((s, id) => sMap.set(id, s));
+      fsStudentsMap.forEach((s, id) => sMap.set(id, { ...(sMap.get(id) || {}), ...s }));
+      localS.forEach((s) => {
+        if (s?.id && !sMap.has(s.id) && s.deletedAt && Date.now() - Date.parse(s.deletedAt) < 8000) {
+          sMap.set(s.id, s);
+        }
+      });
+      setLocalRecycleStudents(schoolId, Array.from(sMap.values()));
+    }
+
+    const teachers = Array.from(tMap.values()).sort((a, b) => (b.deletedAt || "").localeCompare(a.deletedAt || ""));
+    const students = Array.from(sMap.values()).sort((a, b) => (b.deletedAt || "").localeCompare(a.deletedAt || ""));
+    cb({ teachers, students });
+  };
+
+  emit();
+
+  const onBinEvent = (e: any) => {
+    if (e?.detail?.schoolId && e.detail.schoolId !== schoolId) return;
+    if (e?.detail?.removedId && e?.detail?.type === "teacher") {
+      rtdbTeachersMap.delete(e.detail.removedId);
+      fsTeachersMap.delete(e.detail.removedId);
+    }
+    if (e?.detail?.removedId && e?.detail?.type === "student") {
+      rtdbStudentsMap.delete(e.detail.removedId);
+      fsStudentsMap.delete(e.detail.removedId);
+    }
+    emit();
+  };
+  if (typeof window !== "undefined") {
+    window.addEventListener("recycle-bin-updated", onBinEvent);
+    window.addEventListener("school-idb-hydrated", onBinEvent);
+  }
+
+  let unsubRtdbT: any = null;
+  let unsubRtdbS: any = null;
+  if (rtdb) {
+    try {
+      unsubRtdbT = onValue(ref(rtdb, `schools/${schoolId}/recycle_bin_teachers`), (snap) => {
+        hasRtdbT = true;
+        const val = snap?.val?.();
+        const next = new Map<string, any>();
+        if (val && typeof val === "object") {
+          Object.entries(val).forEach(([k, v]: [string, any]) => {
+            if (v && typeof v === "object") next.set(v.id || k, { ...v, id: v.id || k, schoolId: v.schoolId || schoolId });
+          });
+        }
+        rtdbTeachersMap = next;
+        emit();
+      });
+    } catch {}
+    try {
+      unsubRtdbS = onValue(ref(rtdb, `schools/${schoolId}/recycle_bin_students`), (snap) => {
+        hasRtdbS = true;
+        const val = snap?.val?.();
+        const next = new Map<string, any>();
+        if (val && typeof val === "object") {
+          Object.entries(val).forEach(([k, v]: [string, any]) => {
+            if (v && typeof v === "object") next.set(v.id || k, { ...v, id: v.id || k, schoolId: v.schoolId || schoolId });
+          });
+        }
+        rtdbStudentsMap = next;
+        emit();
+      });
+    } catch {}
+  }
+
+  let unsubFsT: any = null;
+  let unsubFsS: any = null;
+  if (db) {
+    try {
+      unsubFsT = onSnapshot(col(`schools/${schoolId}/recycle_bin_teachers`), (snap) => {
+        hasFsT = true;
+        const next = new Map<string, any>();
+        snap.docs.forEach((docSnap) => {
+          const data = docSnap.data() as any;
+          const id = data?.id || docSnap.id;
+          if (id) next.set(id, { ...data, id, schoolId: data?.schoolId || schoolId });
+        });
+        fsTeachersMap = next;
+        emit();
+      });
+    } catch {}
+    try {
+      unsubFsS = onSnapshot(col(`schools/${schoolId}/recycle_bin_students`), (snap) => {
+        hasFsS = true;
+        const next = new Map<string, any>();
+        snap.docs.forEach((docSnap) => {
+          const data = docSnap.data() as any;
+          const id = data?.id || docSnap.id;
+          if (id) next.set(id, { ...data, id, schoolId: data?.schoolId || schoolId });
+        });
+        fsStudentsMap = next;
+        emit();
+      });
+    } catch {}
+  }
+
+  return () => {
+    if (typeof window !== "undefined") {
+      window.removeEventListener("recycle-bin-updated", onBinEvent);
+      window.removeEventListener("school-idb-hydrated", onBinEvent);
+    }
+    if (typeof unsubRtdbT === "function") unsubRtdbT();
+    if (typeof unsubRtdbS === "function") unsubRtdbS();
+    if (typeof unsubFsT === "function") unsubFsT();
+    if (typeof unsubFsS === "function") unsubFsS();
+  };
+};
+
+export const restoreTeacherFromRecycleBin = async (schoolId: string, teacherId: string): Promise<SchoolTeacher | null> => {
+  if (!schoolId || !teacherId) return null;
+  let snapshot: any = getLocalRecycleTeachers(schoolId).find((t) => t.id === teacherId) || null;
+  if (!snapshot && rtdb) {
+    try {
+      const snap = await withTimeout(get(ref(rtdb, `schools/${schoolId}/recycle_bin_teachers/${teacherId}`)), 2000);
+      if (snap && snap.exists()) snapshot = snap.val();
+    } catch {}
+  }
+  if (!snapshot && db) {
+    try {
+      const snap = await withTimeout(getDoc(d(`schools/${schoolId}/recycle_bin_teachers/${teacherId}`)), 2000);
+      if (snap && snap.exists()) snapshot = snap.data();
+    } catch {}
+  }
+  if (!snapshot) return null;
+
+  const { deletedAt: _d, deletedEntityType: _et, isDeleted: _id, ...cleanFields } = snapshot;
+  const restoredTeacher: SchoolTeacher = {
+    ...cleanFields,
+    id: teacherId,
+    schoolId,
+    active: true,
+    status: "active",
+  };
+
+  // Clear local & cloud tombstones and save restored teacher
+  clearTeacherDeletedLocally(schoolId, teacherId);
+  await saveTeacher(restoredTeacher);
+
+  // Remove from Recycle Bin stores
+  setLocalRecycleTeachers(schoolId, getLocalRecycleTeachers(schoolId).filter((t) => t.id !== teacherId));
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("teacher-restored", { detail: { schoolId, teacher: restoredTeacher } }));
+    window.dispatchEvent(new CustomEvent("recycle-bin-updated", { detail: { schoolId, type: "teacher", removedId: teacherId } }));
+  }
+
+  const cleanupTasks: Promise<any>[] = [];
+  if (rtdb) {
+    cleanupTasks.push(withTimeout(remove(ref(rtdb, `schools/${schoolId}/recycle_bin_teachers/${teacherId}`)), 2500).catch(() => {}));
+  }
+  if (db) {
+    cleanupTasks.push(withTimeout(deleteDoc(d(`schools/${schoolId}/recycle_bin_teachers/${teacherId}`)), 2500).catch(() => {}));
+  }
+  await Promise.allSettled(cleanupTasks);
+  return restoredTeacher;
+};
+
+export const restoreStudentFromRecycleBin = async (schoolId: string, studentId: string): Promise<SchoolStudent | null> => {
+  if (!schoolId || !studentId) return null;
+  let snapshot: any = getLocalRecycleStudents(schoolId).find((s) => s.id === studentId) || null;
+  if (!snapshot && rtdb) {
+    try {
+      const snap = await withTimeout(get(ref(rtdb, `schools/${schoolId}/recycle_bin_students/${studentId}`)), 2000);
+      if (snap && snap.exists()) snapshot = snap.val();
+    } catch {}
+  }
+  if (!snapshot && db) {
+    try {
+      const snap = await withTimeout(getDoc(d(`schools/${schoolId}/recycle_bin_students/${studentId}`)), 2000);
+      if (snap && snap.exists()) snapshot = snap.data();
+    } catch {}
+  }
+  if (!snapshot && rtdb) {
+    try {
+      const snap = await withTimeout(get(ref(rtdb, `schools/${schoolId}/students/${studentId}`)), 2000);
+      if (snap && snap.exists()) snapshot = snap.val();
+    } catch {}
+  }
+  if (!snapshot) return null;
+
+  const { deletedAt: _d, deletedEntityType: _et, isDeleted: _id, ...cleanFields } = snapshot;
+  const restoredStudent: SchoolStudent = sanitizeForFirestore({
+    ...cleanFields,
+    id: studentId,
+    schoolId,
+    active: true,
+    isDeleted: false,
+    status: "active",
+  });
+
+  // Update active students local cache + cloud
+  const current = getLocalStudents(schoolId);
+  setLocalStudents(schoolId, [restoredStudent, ...current.filter((s) => s.id !== studentId)]);
+  setLocalRecycleStudents(schoolId, getLocalRecycleStudents(schoolId).filter((s) => s.id !== studentId));
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("student-updated", { detail: { schoolId, studentId, data: restoredStudent } }));
+    window.dispatchEvent(new CustomEvent("student-restored", { detail: { schoolId, student: restoredStudent } }));
+    window.dispatchEvent(new CustomEvent("recycle-bin-updated", { detail: { schoolId, type: "student", removedId: studentId } }));
+  }
+
+  const tasks: Promise<any>[] = [];
+  if (rtdb) {
+    tasks.push(withTimeout(set(ref(rtdb, `schools/${schoolId}/students/${studentId}`), restoredStudent), 2500).catch(() => {}));
+    tasks.push(withTimeout(remove(ref(rtdb, `schools/${schoolId}/deleted_students/${studentId}`)), 2500).catch(() => {}));
+    tasks.push(withTimeout(remove(ref(rtdb, `schools/${schoolId}/recycle_bin_students/${studentId}`)), 2500).catch(() => {}));
+  }
+  if (db) {
+    tasks.push(withTimeout(setDoc(d(`schools/${schoolId}/students/${studentId}`), restoredStudent), 2500).catch(() => {}));
+    tasks.push(withTimeout(deleteDoc(d(`schools/${schoolId}/recycle_bin_students/${studentId}`)), 2500).catch(() => {}));
+  }
+  await Promise.allSettled(tasks);
+  return restoredStudent;
+};
+
+export const permanentDeleteTeacherFromBin = async (schoolId: string, teacherId: string): Promise<void> => {
+  if (!schoolId || !teacherId) return;
+  setLocalRecycleTeachers(schoolId, getLocalRecycleTeachers(schoolId).filter((t) => t.id !== teacherId));
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("recycle-bin-updated", { detail: { schoolId, type: "teacher", removedId: teacherId } }));
+  }
+  const tasks: Promise<any>[] = [];
+  if (rtdb) {
+    tasks.push(withTimeout(remove(ref(rtdb, `schools/${schoolId}/recycle_bin_teachers/${teacherId}`)), 2500).catch(() => {}));
+  }
+  if (db) {
+    tasks.push(withTimeout(deleteDoc(d(`schools/${schoolId}/recycle_bin_teachers/${teacherId}`)), 2500).catch(() => {}));
+  }
+  await Promise.allSettled(tasks);
+};
+
+export const permanentDeleteStudentFromBin = async (schoolId: string, studentId: string): Promise<void> => {
+  if (!schoolId || !studentId) return;
+  setLocalRecycleStudents(schoolId, getLocalRecycleStudents(schoolId).filter((s) => s.id !== studentId));
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("recycle-bin-updated", { detail: { schoolId, type: "student", removedId: studentId } }));
+  }
+  const tasks: Promise<any>[] = [];
+  if (rtdb) {
+    tasks.push(withTimeout(remove(ref(rtdb, `schools/${schoolId}/recycle_bin_students/${studentId}`)), 2500).catch(() => {}));
+    tasks.push(withTimeout(remove(ref(rtdb, `schools/${schoolId}/students/${studentId}`)), 2500).catch(() => {}));
+    tasks.push(withTimeout(remove(ref(rtdb, `schools/${schoolId}/deleted_students/${studentId}`)), 2500).catch(() => {}));
+  }
+  if (db) {
+    tasks.push(withTimeout(deleteDoc(d(`schools/${schoolId}/recycle_bin_students/${studentId}`)), 2500).catch(() => {}));
+    tasks.push(withTimeout(deleteDoc(d(`schools/${schoolId}/students/${studentId}`)), 2500).catch(() => {}));
+  }
+  await Promise.allSettled(tasks);
 };
 
 // ── ATTENDANCE ───────────────────────────────────────────────────────────────
@@ -2122,7 +3238,7 @@ export const getLocalAttendance = (schoolId: string): AttendanceRecord[] => {
       return Array.isArray(list) ? list.filter(r => !isDemoRecord(r)) : [];
     }
     if (Array.isArray(list) && list.length > 0) return list;
-    const demo = getDemoSchoolDataset();
+    const demo = getDemoSchoolDataset(true);
     if (demo && demo.attendanceRecords && demo.attendanceRecords.length > 0) {
       return demo.attendanceRecords;
     }
@@ -2222,6 +3338,46 @@ export const getMonthlyAttendance = async (schoolId: string, classId: string, mo
     } catch {}
   }
   return local;
+};
+
+export const getAllSchoolAttendance = async (schoolId: string): Promise<AttendanceRecord[]> => {
+  const local = getLocalAttendance(schoolId);
+  const byKey = new Map<string, AttendanceRecord>();
+  local.forEach((r: any) => {
+    if (r?.classId && r?.date) byKey.set(`${r.classId}_${r.date}`, r);
+  });
+
+  if (db) {
+    try {
+      const snap = await withTimeout(getDocs(col(`schools/${schoolId}/attendance`)), 3500);
+      if (snap?.docs) {
+        snap.docs.forEach((docSnap: any) => {
+          const r = docSnap.data() as AttendanceRecord;
+          if (r?.classId && r?.date) byKey.set(`${r.classId}_${r.date}`, r);
+        });
+      }
+    } catch {}
+  }
+
+  if (rtdb) {
+    try {
+      const snap = await withTimeout(get(ref(rtdb, `schools/${schoolId}/attendance`)), 3000);
+      const val = (snap as any)?.val?.();
+      if (val && typeof val === "object") {
+        Object.values(val).forEach((r: any) => {
+          if (r?.classId && r?.date && !byKey.has(`${r.classId}_${r.date}`)) {
+            byKey.set(`${r.classId}_${r.date}`, r as AttendanceRecord);
+          }
+        });
+      }
+    } catch {}
+  }
+
+  const merged = Array.from(byKey.values());
+  if (merged.length > 0) {
+    setLocalAttendance(schoolId, merged);
+  }
+  return merged;
 };
 
 export const subscribeToAttendance = (
@@ -2820,6 +3976,83 @@ export const saveStaffDailyAttendance = async (
   };
 };
 
+export const getMonthlyStaffDailyAttendance = async (
+  schoolId: string,
+  yearMonth: string
+): Promise<Record<string, Record<string, any>>> => {
+  if (!schoolId || !yearMonth) return {};
+  const prefix = `${yearMonth}-`;
+  const result: Record<string, Record<string, any>> = {};
+
+  const mergeDateRecord = (dateStr: string, recs: Record<string, any> | undefined) => {
+    if (!dateStr || !dateStr.startsWith(prefix) || !recs || typeof recs !== "object") return;
+    if (!result[dateStr]) result[dateStr] = {};
+    Object.entries(recs).forEach(([staffId, entry]) => {
+      if (entry && typeof entry === "object") {
+        result[dateStr][staffId] = { ...(result[dateStr][staffId] || {}), ...entry };
+      }
+    });
+  };
+
+  // 1. Seed from localStorage cache
+  try {
+    const lsPrefix = `nst_staff_daily_att_${schoolId}_${prefix}`;
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(lsPrefix)) {
+        const dateStr = k.slice(`nst_staff_daily_att_${schoolId}_`.length);
+        const parsed = JSON.parse(localStorage.getItem(k) || "{}");
+        mergeDateRecord(dateStr, parsed?.records);
+      }
+    }
+  } catch {}
+
+  // 2. Merge RTDB records for school
+  if (rtdb) {
+    try {
+      const snap = await withTimeout(get(ref(rtdb, `school_staff_attendance/${schoolId}`)), 3000);
+      if (snap && snap.exists()) {
+        const val = snap.val() || {};
+        Object.entries(val).forEach(([dateStr, dayRec]: [string, any]) => {
+          if (dateStr.startsWith(prefix) && dayRec?.records) {
+            mergeDateRecord(dateStr, dayRec.records);
+          }
+        });
+      }
+    } catch (e) {
+      console.warn("[school-firebase] getMonthlyStaffDailyAttendance RTDB failed:", e);
+    }
+  }
+
+  // 3. Merge Firestore records for school
+  if (db) {
+    try {
+      const colSnap = await withTimeout(getDocs(collection(db, `schools/${schoolId}/staff_attendance`)), 3000);
+      if (colSnap && !colSnap.empty) {
+        colSnap.forEach((docSnap) => {
+          const data = docSnap.data() as StaffDailyAttendanceRecord;
+          const dateStr = data?.date || docSnap.id;
+          if (dateStr.startsWith(prefix) && data?.records) {
+            mergeDateRecord(dateStr, data.records);
+          }
+        });
+      }
+    } catch (e) {
+      console.warn("[school-firebase] getMonthlyStaffDailyAttendance Firestore failed:", e);
+    }
+  }
+
+  // 4. Refresh localStorage cache for synced dates
+  try {
+    Object.entries(result).forEach(([dateStr, records]) => {
+      const key = `nst_staff_daily_att_${schoolId}_${dateStr}`;
+      localStorage.setItem(key, JSON.stringify({ schoolId, date: dateStr, records }));
+    });
+  } catch {}
+
+  return result;
+};
+
 export const markStaffAttendanceAtomic = async (params: {
   schoolId: string;
   staffId: string;
@@ -2829,11 +4062,13 @@ export const markStaffAttendanceAtomic = async (params: {
   date?: string;
   scanMode?: "auto" | "in" | "out";
   currentShiftMode?: "in" | "out";
+  cutoffTime?: string;
   outStartTime?: string;
 }): Promise<{
   success: boolean;
   cloudSaved: boolean;
   action: "in" | "out";
+  isLate?: boolean;
   alreadyMarked?: boolean;
   tooEarlyForOut?: boolean;
   inTime?: string;
@@ -2863,12 +4098,17 @@ export const markStaffAttendanceAtomic = async (params: {
     };
   }
 
+  let storedCutoff: string | null = null;
   let storedOutStart: string | null = null;
   try {
     if (typeof window !== "undefined") {
+      storedCutoff = localStorage.getItem(`nst_kiosk_in_cutoff_${params.schoolId}`);
       storedOutStart = localStorage.getItem(`nst_kiosk_out_start_${params.schoolId}`);
     }
   } catch {}
+  const cutoffRaw = params.cutoffTime || storedCutoff || "08:15";
+  const [cH, cM] = cutoffRaw.split(":").map(Number);
+  const cutoffMinutes = (Number.isFinite(cH) ? cH : 8) * 60 + (Number.isFinite(cM) ? cM : 15);
   const outStartRaw = params.outStartTime || storedOutStart || "12:30";
   const [oH, oM] = outStartRaw.split(":").map(Number);
   const outStartMinutes = (Number.isFinite(oH) ? oH : 12) * 60 + (Number.isFinite(oM) ? oM : 30);
@@ -2876,6 +4116,7 @@ export const markStaffAttendanceAtomic = async (params: {
   const outHour12 = Math.floor(outStartMinutes / 60) % 12 === 0 ? 12 : Math.floor(outStartMinutes / 60) % 12;
   const outStart12h = `${String(outHour12).padStart(2, "0")}:${String(outStartMinutes % 60).padStart(2, "0")} ${outPeriod}`;
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const isPastCutoff = nowMinutes > cutoffMinutes;
 
   const dayRef = ref(rtdb, `school_staff_attendance/${params.schoolId}/${date}`);
   let rejectedOutcome: {
@@ -3012,13 +4253,20 @@ export const markStaffAttendanceAtomic = async (params: {
             ? calculateStayDuration(inTime, outTime, inTimestamp, outTimestamp)
             : existingRec?.stayDuration;
 
+        const entryIsLate =
+          action === "in"
+            ? Boolean(isPastCutoff)
+            : Boolean(existingRec?.status === "late" || (existingRec as any)?.isLate);
+        const entryStatus = entryIsLate ? "late" : "present";
+
         dayObj.records[params.staffId] = sanitizeForFirestore({
           id: params.staffId,
           name: params.staffName,
           role: params.role || "TEACHER",
           employeeId: params.employeeId || "Faculty",
           present: true,
-          status: "present",
+          status: entryStatus,
+          isLate: entryIsLate,
           inTime,
           outTime,
           inTimestamp,
@@ -3077,10 +4325,12 @@ export const markStaffAttendanceAtomic = async (params: {
     }
 
     const finalAction = (savedEntry?.scanType || "in") as "in" | "out";
+    const finalIsLate = Boolean((savedEntry as any)?.isLate || savedEntry?.status === "late");
     return {
       success: true,
       cloudSaved: true,
       action: finalAction,
+      isLate: finalIsLate,
       alreadyMarked: false,
       inTime: savedEntry?.inTime,
       outTime: savedEntry?.outTime,
@@ -3089,7 +4339,9 @@ export const markStaffAttendanceAtomic = async (params: {
       stayDuration: savedEntry?.stayDuration,
       message:
         finalAction === "in"
-          ? `शिक्षक ${params.staffName} का आगमन (IN) दर्ज हुआ (${savedEntry?.inTime})।`
+          ? finalIsLate
+            ? `⚠️ शिक्षक ${params.staffName} का आगमन (Late) दर्ज हुआ (${savedEntry?.inTime})।`
+            : `शिक्षक ${params.staffName} का आगमन (IN) दर्ज हुआ (${savedEntry?.inTime})।`
           : `शिक्षक ${params.staffName} का प्रस्थान (OUT) दर्ज हुआ (${savedEntry?.outTime})।`,
       record: committedDay,
     };
@@ -3158,7 +4410,7 @@ export const getLocalExams = (schoolId: string): ExamEntry[] => {
     const filtered = !shouldUseDemoForSchool(schoolId) ? arr.filter(e => !isDemoRecord(e)) : arr;
     if (filtered.length > 0) return filtered;
     if (shouldUseDemoForSchool(schoolId)) {
-      const demo = getDemoSchoolDataset();
+      const demo = getDemoSchoolDataset(true);
       if (demo && demo.exams && demo.exams.length > 0) {
         return demo.exams;
       }
@@ -3292,7 +4544,7 @@ const LOCAL_FEES_PREFIX = "nst_school_fees_";
 export const getLocalFees = (schoolId: string): MonthlyFee[] => {
   const useDemo = shouldUseDemoForSchool(schoolId);
   if (useDemo) {
-    const demo = getDemoSchoolDataset();
+    const demo = getDemoSchoolDataset(true);
     if (demo && demo.fees && Array.isArray(demo.fees) && demo.fees.length > 0) {
       return demo.fees;
     }
@@ -3309,7 +4561,7 @@ export const getLocalFees = (schoolId: string): MonthlyFee[] => {
     return [];
   }
 
-  const demo = getDemoSchoolDataset();
+  const demo = getDemoSchoolDataset(true);
   if (demo && demo.fees && Array.isArray(demo.fees) && demo.fees.length > 0) {
     setSchoolCacheSync(`${LOCAL_FEES_PREFIX}${schoolId}`, demo.fees);
     return demo.fees;
@@ -3474,10 +4726,10 @@ export const getMonthlyFees = async (schoolId: string, month: string, classId?: 
   const local = getLocalFees(schoolId).filter(
     f => f.month === month && (!classId || isStudentInClass(f, classId)) && (!sessionId || f.sessionId === sessionId)
   );
-  const demo = useDemo ? getDemoSchoolDataset() : null;
+  const demo = useDemo ? getDemoSchoolDataset(true) : null;
   let demoFees = (demo && demo.fees && demo.fees.length > 0)
     ? demo.fees.filter(
-        f => f.month === month && (!classId || isStudentInClass(f, classId)) && (!sessionId || f.sessionId === sessionId)
+        f => f.month === month && (!classId || isStudentInClass(f, classId)) && (!sessionId || isDemoSessionId(sessionId) || f.sessionId === sessionId)
       )
     : [];
 
@@ -3562,9 +4814,9 @@ export const getAllMonthlyFees = getMonthlyFees;
 export const getSchoolFeeHistory = async (schoolId: string, sessionId?: string): Promise<MonthlyFee[]> => {
   const useDemo = shouldUseDemoForSchool(schoolId, sessionId);
   const local = getLocalFees(schoolId);
-  const demo = useDemo ? getDemoSchoolDataset() : null;
+  const demo = useDemo ? getDemoSchoolDataset(true) : null;
   let demoFees: MonthlyFee[] = (demo && demo.fees) ? demo.fees : [];
-  if (sessionId) {
+  if (sessionId && !isDemoSessionId(sessionId)) {
     demoFees = demoFees.filter((f: any) => f.sessionId === sessionId);
   }
 
@@ -3617,6 +4869,466 @@ export const getSchoolFeeHistory = async (schoolId: string, sessionId?: string):
   return Array.from(feeMap.values());
 };
 
+const getRawFeeDedupKey = (f: any): string => {
+  const recNo = String(f?.receiptNo || f?.receiptNumber || "").trim().toUpperCase();
+  const sId = String(f?.studentId || "").trim();
+  if (recNo) {
+    return `${sId}|REC|${recNo}`;
+  }
+  const isAdm = f?.feeType === "admission" || f?.receiptCategory === "admission";
+  if (isAdm) {
+    return `${sId}|ADM|${f?.month || f?.id || f?._docId || ""}`;
+  }
+  return `${sId}|MON|${f?.month || f?.id || f?._docId || Math.random()}`;
+};
+
+const pickNewerFeeRecord = (prev: any, next: any): any => {
+  if (!prev) return next;
+  const prevCancelled = String(prev.status || "").toUpperCase() === "CANCELLED" || prev.cancelled === true;
+  const nextCancelled = String(next.status || "").toUpperCase() === "CANCELLED" || next.cancelled === true;
+  if (nextCancelled && !prevCancelled) {
+    return { ...prev, ...next, _docId: next._docId || prev._docId };
+  }
+  if (prevCancelled && !nextCancelled) {
+    return { ...next, ...prev, _docId: prev._docId || next._docId };
+  }
+  if (next.updatedAt && (!prev.updatedAt || next.updatedAt > prev.updatedAt)) {
+    return { ...prev, ...next, _docId: next._docId || prev._docId };
+  }
+  const prevPaid = Number(prev.paidAmount || (prev.paid ? prev.amount : 0) || 0);
+  const nextPaid = Number(next.paidAmount || (next.paid ? next.amount : 0) || 0);
+  if ((!prev.paid && next.paid) || nextPaid > prevPaid || (next.receiptNo && !prev.receiptNo)) {
+    return { ...prev, ...next, _docId: next._docId || prev._docId };
+  }
+  return { ...next, ...prev, _docId: prev._docId || next._docId };
+};
+
+export const getAllSchoolFeeReceiptsRaw = async (schoolId: string): Promise<Array<MonthlyFee & {
+  _docId?: string;
+  _source?: string;
+  _appId?: string;
+  _isSynthetic?: boolean;
+  admissionNo?: string;
+  phone?: string;
+  receiptNumber?: string;
+}>> => {
+  if (!schoolId) return [];
+  const useDemo = shouldUseDemoForSchool(schoolId);
+  const feeMap = new Map<string, any>();
+
+  const upsert = (item: any) => {
+    if (!item || typeof item !== "object") return;
+    if (!useDemo && isDemoRecord(item)) return;
+    const key = getRawFeeDedupKey(item);
+    feeMap.set(key, pickNewerFeeRecord(feeMap.get(key), item));
+  };
+
+  // 1. Local IndexedDB cache (`nst_school_fees_<schoolId>`)
+  try {
+    const localFees = getLocalFees(schoolId);
+    localFees.forEach((lf) => upsert({ ...lf, _source: "local_fees" }));
+  } catch {}
+
+  // 2. Legacy `school_fee_records_<schoolId>` localStorage key
+  try {
+    const rawLegacy = localStorage.getItem(`school_fee_records_${schoolId}`);
+    if (rawLegacy) {
+      const parsed = JSON.parse(rawLegacy);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((rf) => upsert({ ...rf, _source: "legacy_local" }));
+      }
+    }
+  } catch {}
+
+  // 3. Fetch Firestore fees, RTDB fees, students, classes, and admission applications in parallel
+  const [fsFees, rtdbFees, studentsList, classesList, applicationsList] = await Promise.all([
+    (async () => {
+      if (!db) return [] as any[];
+      try {
+        const snap = await withTimeout(getDocs(col(`schools/${schoolId}/fees`)), 3000);
+        return snap.docs.map((docSnap) => ({
+          ...(docSnap.data() as MonthlyFee),
+          _docId: docSnap.id,
+          _source: "fees_firestore",
+        }));
+      } catch {
+        return [] as any[];
+      }
+    })(),
+    (async () => {
+      if (!rtdb) return [] as any[];
+      try {
+        const snap = await withTimeout(get(ref(rtdb, `schools/${schoolId}/fees`)), 2500);
+        if (!snap.exists()) return [] as any[];
+        const val = snap.val() || {};
+        return Object.entries(val)
+          .filter(([, v]) => v && typeof v === "object")
+          .map(([k, v]) => ({
+            ...(v as MonthlyFee),
+            _docId: k,
+            _source: "fees_rtdb",
+          }));
+      } catch {
+        return [] as any[];
+      }
+    })(),
+    getStudents(schoolId).catch(() => getLocalStudents(schoolId)),
+    getClasses(schoolId).catch(() => getLocalClasses(schoolId)),
+    getAdmissionApplications(schoolId).catch(() => [] as any[]),
+  ]);
+
+  fsFees.forEach(upsert);
+  rtdbFees.forEach(upsert);
+
+  const studentById = new Map<string, SchoolStudent>();
+  (studentsList || []).forEach((st) => {
+    if (st?.id && (useDemo || !isDemoRecord(st))) {
+      studentById.set(st.id, st);
+    }
+  });
+
+  const classById = new Map<string, string>();
+  (classesList || []).forEach((cls) => {
+    if (cls?.id) {
+      classById.set(cls.id, `${cls.name}${cls.section ? ` (${cls.section})` : ""}`.trim());
+    }
+  });
+
+  // Track seen receipt numbers so synthetic fallbacks never duplicate real fee docs
+  const seenReceiptNos = new Set<string>();
+  feeMap.forEach((f) => {
+    const rNo = String(f.receiptNo || f.receiptNumber || "").trim().toUpperCase();
+    if (rNo) seenReceiptNos.add(rNo);
+  });
+
+  // 4. Fallback synthesis from Student admissionReceiptNo / admissionBalanceHistory / reAdmissionReceiptNo
+  studentById.forEach((st) => {
+    const clsName = st.className || classById.get(st.classId) || "";
+    const admRec = String(st.admissionReceiptNo || "").trim();
+    const admPaid = Number(st.admissionPaidAmount || 0);
+    if (admRec && admPaid > 0 && !seenReceiptNos.has(admRec.toUpperCase()) && !(st as any).admissionReceiptCancelled) {
+      seenReceiptNos.add(admRec.toUpperCase());
+      upsert({
+        schoolId,
+        sessionId: st.sessionId || "",
+        studentId: st.id,
+        studentName: st.name,
+        rollNo: st.rollNo || "",
+        classId: st.classId || "",
+        className: clsName,
+        admissionNo: st.admissionNo || "",
+        phone: st.phone || "",
+        month: ((st as any).admissionDate || st.joinDate || st.createdAt || new Date().toISOString()).slice(0, 7),
+        amount: Number(st.admissionTotalAmount || admPaid),
+        paid: Number(st.admissionDueBalance || 0) <= 0,
+        paidDate: (st as any).admissionDate || st.joinDate || st.createdAt,
+        receiptNo: admRec,
+        paidAmount: admPaid,
+        balanceDue: Number(st.admissionDueBalance || 0),
+        feeType: "admission",
+        receiptCategory: "admission",
+        paymentMode: "Counter / Admission",
+        _source: "student_admission",
+        _isSynthetic: true,
+      });
+    }
+
+    if (Array.isArray(st.admissionBalanceHistory)) {
+      st.admissionBalanceHistory.forEach((hist: any, idx: number) => {
+        const hRec = String(hist?.receiptNo || "").trim();
+        const hPaid = Number(hist?.paidAmount || 0);
+        if (hRec && hPaid > 0 && !hist?.cancelled && !seenReceiptNos.has(hRec.toUpperCase())) {
+          seenReceiptNos.add(hRec.toUpperCase());
+          upsert({
+            schoolId,
+            sessionId: st.sessionId || "",
+            studentId: st.id,
+            studentName: st.name,
+            rollNo: st.rollNo || "",
+            classId: st.classId || "",
+            className: clsName,
+            admissionNo: st.admissionNo || "",
+            phone: st.phone || "",
+            month: String(hist.date || new Date().toISOString()).slice(0, 7),
+            amount: hPaid,
+            paid: true,
+            paidDate: hist.date || new Date().toISOString().slice(0, 10),
+            receiptNo: hRec,
+            paidAmount: hPaid,
+            feeType: "admission",
+            receiptCategory: "admission",
+            paymentMode: hist.paymentMode || "Cash",
+            _source: "student_balance_history",
+            _balHistoryIndex: idx,
+            _isSynthetic: true,
+          });
+        }
+      });
+    }
+
+    const readmRec = String(st.reAdmissionReceiptNo || "").trim();
+    const readmPaid = Number(st.reAdmissionPaidAmount || 0);
+    if (readmRec && readmPaid > 0 && !seenReceiptNos.has(readmRec.toUpperCase())) {
+      seenReceiptNos.add(readmRec.toUpperCase());
+      upsert({
+        schoolId,
+        sessionId: st.sessionId || "",
+        studentId: st.id,
+        studentName: st.name,
+        rollNo: st.rollNo || "",
+        classId: st.classId || "",
+        className: clsName,
+        admissionNo: st.admissionNo || "",
+        phone: st.phone || "",
+        month: (st.reAdmissionDate || new Date().toISOString()).slice(0, 7),
+        amount: Number(st.reAdmissionFee || readmPaid),
+        paid: true,
+        paidDate: st.reAdmissionDate || st.createdAt,
+        receiptNo: readmRec,
+        paidAmount: readmPaid,
+        feeType: "admission",
+        receiptCategory: "admission",
+        paymentMode: "Re-Admission",
+        _source: "student_readmission",
+        _isSynthetic: true,
+      });
+    }
+  });
+
+  // 5. Fallback synthesis from Admission Applications (`admissionFeeDetails`)
+  (applicationsList || []).forEach((app: any) => {
+    const det = app?.admissionFeeDetails;
+    const aRec = String(det?.receiptNo || "").trim();
+    const aPaid = Number(det?.paidAmount || 0);
+    if (aRec && aPaid > 0 && !det?.cancelled && !seenReceiptNos.has(aRec.toUpperCase())) {
+      seenReceiptNos.add(aRec.toUpperCase());
+      const st = app.enrolledStudentId ? studentById.get(app.enrolledStudentId) : undefined;
+      upsert({
+        schoolId,
+        sessionId: app.targetSessionId || st?.sessionId || "",
+        studentId: app.enrolledStudentId || app.id,
+        studentName: app.studentName || st?.name || "Student",
+        rollNo: app.assignedRollNo || st?.rollNo || "",
+        classId: app.classId || st?.classId || "",
+        className: app.className || st?.className || classById.get(app.classId) || "",
+        admissionNo: st?.admissionNo || app.applicationNo || "",
+        phone: app.phone || st?.phone || "",
+        month: String(det.paidDate || app.appliedAt || new Date().toISOString()).slice(0, 7),
+        amount: Number(det.totalPayable || aPaid),
+        paid: Number(det.balanceDue || 0) <= 0,
+        paidDate: det.paidDate || app.appliedAt,
+        receiptNo: aRec,
+        paidAmount: aPaid,
+        balanceDue: Number(det.balanceDue || 0),
+        feeType: "admission",
+        receiptCategory: "admission",
+        paymentMode: det.paymentMode || "Cash",
+        items: det.items,
+        _appId: app.id,
+        _source: "admission_application",
+        _isSynthetic: true,
+      });
+    }
+  });
+
+  // Enrich missing metadata (className, admissionNo, phone, paymentMode)
+  const list = Array.from(feeMap.values()).map((f) => {
+    const st = f.studentId ? studentById.get(f.studentId) : undefined;
+    const resolvedClassName = f.className || st?.className || classById.get(f.classId) || "";
+    const resolvedPayMode = f.paymentMode || f.payModeInfo?.payMode || "Cash";
+    return {
+      ...f,
+      id: f.id || f.receiptNo || f._docId || `${f.studentId}_${f.month || "fee"}`,
+      className: resolvedClassName,
+      rollNo: f.rollNo || st?.rollNo || "",
+      admissionNo: f.admissionNo || st?.admissionNo || "",
+      phone: f.phone || st?.phone || "",
+      paymentMode: resolvedPayMode,
+    };
+  });
+
+  return list.sort((a, b) => {
+    const da = String(a.paidDate || a.updatedAt || a.month || "");
+    const dbDate = String(b.paidDate || b.updatedAt || b.month || "");
+    return dbDate.localeCompare(da);
+  });
+};
+
+export const cancelSchoolFeeReceipt = async (
+  schoolId: string,
+  receipt: any,
+  cancelDetails: {
+    voucherNo: string;
+    reason: string;
+    remarks: string;
+    refundMode: string;
+    authorizedBy: string;
+    refundAmount: number;
+  }
+): Promise<void> => {
+  if (!schoolId || !receipt) return;
+  const nowIso = new Date().toISOString();
+  const targetRecNo = String(receipt.receiptNo || receipt.receiptNumber || "").trim();
+
+  // Strip internal UI/meta keys before saving to Firestore/RTDB
+  const cleanBase: Record<string, any> = {};
+  Object.entries(receipt).forEach(([k, v]) => {
+    if (!k.startsWith("_") && k !== "admissionNo" && k !== "phone" && k !== "receiptNumber") {
+      cleanBase[k] = v;
+    }
+  });
+
+  const cancelledRecord: MonthlyFee & Record<string, any> = {
+    ...(cleanBase as MonthlyFee),
+    schoolId,
+    status: "CANCELLED",
+    cancelled: true,
+    paid: false,
+    paidAmount: 0,
+    cancelledAt: nowIso,
+    cancellationReason: cancelDetails.reason,
+    refundVoucherNo: cancelDetails.voucherNo,
+    refundMode: cancelDetails.refundMode,
+    refundRemarks: cancelDetails.remarks,
+    authorizedBy: cancelDetails.authorizedBy,
+    refundedAmount: cancelDetails.refundAmount,
+    updatedAt: nowIso,
+  };
+
+  // 1. Update local cache `nst_school_fees_<schoolId>`
+  try {
+    const currentLocal = getLocalFees(schoolId);
+    const isMatch = (f: any) => {
+      if (targetRecNo && (f.receiptNo === targetRecNo || (f as any).receiptNumber === targetRecNo)) return true;
+      if (receipt.id && f.id === receipt.id) return true;
+      if (
+        f.studentId === receipt.studentId &&
+        f.month === receipt.month &&
+        Boolean(f.feeType === "admission" || f.receiptCategory === "admission") ===
+          Boolean(receipt.feeType === "admission" || receipt.receiptCategory === "admission")
+      ) {
+        return true;
+      }
+      return false;
+    };
+    const foundLocal = currentLocal.some(isMatch);
+    const updatedLocal = foundLocal
+      ? currentLocal.map((f) => (isMatch(f) ? { ...f, ...cancelledRecord } : f))
+      : [cancelledRecord, ...currentLocal];
+    setLocalFees(schoolId, updatedLocal);
+  } catch {}
+
+  // 2. Update Firestore & RTDB under BOTH canonical saveFee id and original _docId (if different)
+  const sanitized = sanitizeForFirestore(cancelledRecord);
+  const isAdmissionFee = cancelledRecord.feeType === "admission" || cancelledRecord.receiptCategory === "admission";
+  const canonicalId = isAdmissionFee
+    ? `${cancelledRecord.studentId}_adm_${cancelledRecord.receiptNo || cancelledRecord.month || Date.now()}`
+    : `${cancelledRecord.studentId}_${cancelledRecord.month || cancelledRecord.receiptNo || Date.now()}`;
+  const docIdsToUpdate = Array.from(
+    new Set([canonicalId, receipt._docId].filter((x): x is string => Boolean(x && typeof x === "string")))
+  );
+
+  await Promise.allSettled(
+    docIdsToUpdate.flatMap((docId) => [
+      rtdb ? withTimeout(set(ref(rtdb, `schools/${schoolId}/fees/${docId}`), sanitized), 2500) : Promise.resolve(),
+      db ? withTimeout(setDoc(d(`schools/${schoolId}/fees/${docId}`), sanitized, { merge: true }), 3000) : Promise.resolve(),
+    ])
+  );
+
+  // 3. Update legacy `school_fee_records_<schoolId>` if present
+  try {
+    const legacyKey = `school_fee_records_${schoolId}`;
+    const rawLegacy = localStorage.getItem(legacyKey);
+    if (rawLegacy) {
+      const legacyArr = JSON.parse(rawLegacy);
+      if (Array.isArray(legacyArr)) {
+        const updatedLegacy = legacyArr.map((f: any) => {
+          if (
+            (targetRecNo && (f.receiptNo === targetRecNo || f.receiptNumber === targetRecNo)) ||
+            (receipt.id && f.id === receipt.id)
+          ) {
+            return { ...f, ...cancelledRecord };
+          }
+          return f;
+        });
+        localStorage.setItem(legacyKey, JSON.stringify(updatedLegacy));
+      }
+    }
+  } catch {}
+
+  // 4. Restore student admission dues / mark balance history entry cancelled if applicable
+  if (receipt.studentId && (isAdmissionFee || (targetRecNo && targetRecNo.startsWith("ADM-")))) {
+    try {
+      const studentsList = await getStudents(schoolId).catch(() => getLocalStudents(schoolId));
+      const matchedStudent = studentsList.find((s) => s.id === receipt.studentId);
+      if (matchedStudent) {
+        const studentPatch: Record<string, any> = {};
+        if (targetRecNo && matchedStudent.admissionReceiptNo === targetRecNo && !(matchedStudent as any).admissionReceiptCancelled) {
+          const curPaid = Number(matchedStudent.admissionPaidAmount || 0);
+          const restoreAmt = Math.min(curPaid, Number(cancelDetails.refundAmount || 0));
+          studentPatch.admissionPaidAmount = Math.max(0, curPaid - restoreAmt);
+          if (cancelDetails.refundMode !== "ADJUST_FUTURE_DUES") {
+            studentPatch.admissionDueBalance = Number(matchedStudent.admissionDueBalance || 0) + restoreAmt;
+          }
+          studentPatch.admissionReceiptCancelled = true;
+          studentPatch.admissionRefundVoucherNo = cancelDetails.voucherNo;
+        }
+        if (targetRecNo && Array.isArray(matchedStudent.admissionBalanceHistory)) {
+          let changedHist = false;
+          const nextHist = matchedStudent.admissionBalanceHistory.map((h: any) => {
+            if (h?.receiptNo === targetRecNo && !h.cancelled) {
+              changedHist = true;
+              return { ...h, cancelled: true, refundVoucherNo: cancelDetails.voucherNo, cancelledAt: nowIso };
+            }
+            return h;
+          });
+          if (changedHist) {
+            studentPatch.admissionBalanceHistory = nextHist;
+            if (cancelDetails.refundMode !== "ADJUST_FUTURE_DUES") {
+              studentPatch.admissionDueBalance =
+                Number(matchedStudent.admissionDueBalance || 0) + Number(cancelDetails.refundAmount || 0);
+            }
+          }
+        }
+        if (Object.keys(studentPatch).length > 0) {
+          await updateStudent(schoolId, matchedStudent.id, studentPatch);
+        }
+      }
+    } catch {}
+  }
+
+  // 5. Update admission_application if this receipt also exists inside admissionFeeDetails
+  if (targetRecNo) {
+    try {
+      const apps = await getAdmissionApplications(schoolId).catch(() => [] as any[]);
+      const matchingApp = apps.find(
+        (a: any) =>
+          (receipt._appId && a.id === receipt._appId) ||
+          (a?.admissionFeeDetails?.receiptNo === targetRecNo && !a?.admissionFeeDetails?.cancelled)
+      );
+      if (matchingApp && matchingApp.admissionFeeDetails) {
+        await saveAdmissionApplication(schoolId, {
+          ...matchingApp,
+          admissionFeeDetails: {
+            ...matchingApp.admissionFeeDetails,
+            cancelled: true,
+            refundVoucherNo: cancelDetails.voucherNo,
+            cancelledAt: nowIso,
+          } as any,
+        });
+      }
+    } catch {}
+  }
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("fee-updated", {
+        detail: { schoolId, studentId: receipt.studentId, fee: sanitized },
+      })
+    );
+  }
+};
+
 
 export const subscribeToClassFees = (schoolId: string, month: string, classId: string, cb: (fees: MonthlyFee[]) => void) => {
   const local = getLocalFees(schoolId).filter(f => f.month === month && f.classId === classId);
@@ -3629,14 +5341,29 @@ export const subscribeToClassFees = (schoolId: string, month: string, classId: s
   );
 };
 
-export const markFeePaid = async (schoolId: string, studentId: string, month: string, paidBy: string) => {
+export const markFeePaid = async (
+  schoolId: string,
+  studentId: string,
+  month: string,
+  paidBy: string,
+  collectorInfo?: {
+    collectedBy?: string;
+    collectedByRole?: "accountant" | "manager";
+    collectedByName?: string;
+    collectorSignatureUrl?: string;
+  }
+) => {
   const id = `${studentId}_${month}`;
-  const patch = {
+  const patch: Record<string, any> = {
     paid: true,
     paidDate: new Date().toISOString(),
     paidBy,
     receiptNo: `RCP-${Date.now()}`
   };
+  if (collectorInfo?.collectedBy) patch.collectedBy = collectorInfo.collectedBy;
+  if (collectorInfo?.collectedByRole) patch.collectedByRole = collectorInfo.collectedByRole;
+  if (collectorInfo?.collectedByName) patch.collectedByName = collectorInfo.collectedByName;
+  if (collectorInfo?.collectorSignatureUrl) patch.collectorSignatureUrl = collectorInfo.collectorSignatureUrl;
   let paidAmount = 0;
   try {
     const cur = getLocalFees(schoolId);
@@ -4275,42 +6002,326 @@ export const getAdmitCardConfigs = async (schoolId: string): Promise<import('./s
 };
 
 // 4. STAFF HRM & LEAVE MANAGEMENT
+export const setLocalStaffEmployees = (schoolId: string, staffList: import('./school-types').StaffEmployee[]) => {
+  if (!schoolId) return;
+  const deletedIds = getDeletedTeacherIds(schoolId);
+  const useDemo = shouldUseDemoForSchool(schoolId);
+  const clean = (Array.isArray(staffList) ? staffList : []).filter(
+    (s) => isActiveStaffRecord(s) && !deletedIds.has(s.id) && (useDemo || !isDemoRecord(s))
+  );
+  try {
+    setSchoolCacheSync(`${LOCAL_STAFF_PREFIX}${schoolId}`, clean);
+  } catch {}
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(`${LOCAL_STAFF_PREFIX}${schoolId}`, JSON.stringify(clean));
+    }
+  } catch {}
+};
+
+export const getLocalStaffEmployees = (schoolId: string): import('./school-types').StaffEmployee[] => {
+  if (!schoolId) return [];
+  const deletedIds = getDeletedTeacherIds(schoolId);
+  const useDemo = shouldUseDemoForSchool(schoolId);
+  let pool: import('./school-types').StaffEmployee[] = [];
+  try {
+    const idbList = getSchoolCacheSync<import('./school-types').StaffEmployee[]>(`${LOCAL_STAFF_PREFIX}${schoolId}`, []);
+    if (Array.isArray(idbList) && idbList.length > 0) pool = idbList;
+  } catch {}
+  if (pool.length === 0) {
+    try {
+      const raw = typeof localStorage !== "undefined" ? localStorage.getItem(`${LOCAL_STAFF_PREFIX}${schoolId}`) : null;
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) pool = parsed;
+      }
+    } catch {}
+  }
+  return pool.filter(
+    (s) => isActiveStaffRecord(s) && !deletedIds.has(s.id) && (useDemo || !isDemoRecord(s))
+  );
+};
+
 export const saveStaffEmployee = async (staff: import('./school-types').StaffEmployee) => {
-  await setDoc(d(`schools/${staff.schoolId}/staff/${staff.id}`), sanitizeForFirestore(staff));
+  clearTeacherDeletedLocally(staff.schoolId, staff.id);
+  const prepared = { ...staff, active: staff.active ?? true };
+  const sanitized = sanitizeForFirestore(prepared);
+
+  const cur = getLocalStaffEmployees(staff.schoolId);
+  setLocalStaffEmployees(staff.schoolId, [sanitized, ...cur.filter((s) => s.id !== staff.id)]);
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("staff-updated", { detail: { schoolId: staff.schoolId, staff: sanitized } }));
+  }
+
+  if (rtdb) {
+    try {
+      await Promise.allSettled([
+        withTimeout(set(ref(rtdb, `schools/${staff.schoolId}/staff/${staff.id}`), sanitized), 2000),
+        withTimeout(remove(ref(rtdb, `schools/${staff.schoolId}/deleted_staff/${staff.id}`)), 2000),
+      ]);
+    } catch {}
+  }
+  if (db) {
+    try { await withTimeout(setDoc(d(`schools/${staff.schoolId}/staff/${staff.id}`), sanitized), 3000); } catch {}
+  }
 };
 
 export const getStaffEmployees = async (schoolId: string): Promise<import('./school-types').StaffEmployee[]> => {
-  try {
-    const snap = await getDocs(col(`schools/${schoolId}/staff`));
-    const list = snap.docs.map(doc => doc.data() as import('./school-types').StaffEmployee);
-    const filtered = !isDemoDataEnabled() ? list.filter(s => !isDemoRecord(s)) : list;
-    if (filtered.length > 0) return filtered;
-  } catch {}
-  if (shouldUseDemoForSchool(schoolId)) {
-    const demo = getDemoSchoolDataset();
+  if (!schoolId) return [];
+  const useDemo = shouldUseDemoForSchool(schoolId);
+  const deletedIds = getDeletedTeacherIds(schoolId);
+  const rawMap = new Map<string, import('./school-types').StaffEmployee>();
+  let fsOk = false;
+  let rtdbOk = false;
+
+  const jobs: Promise<void>[] = [];
+
+  if (rtdb) {
+    jobs.push(
+      withTimeout(get(ref(rtdb, `schools/${schoolId}/deleted_staff`)), 2000)
+        .then((snap: any) => {
+          const val = snap?.val?.();
+          if (val && typeof val === "object") Object.keys(val).forEach((id) => id && deletedIds.add(id));
+        })
+        .catch(() => {})
+    );
+    jobs.push(
+      withTimeout(get(ref(rtdb, `schools/${schoolId}/deleted_teachers`)), 2000)
+        .then((snap: any) => {
+          const val = snap?.val?.();
+          if (val && typeof val === "object") Object.keys(val).forEach((id) => id && deletedIds.add(id));
+        })
+        .catch(() => {})
+    );
+    jobs.push(
+      withTimeout(get(ref(rtdb, `schools/${schoolId}/staff`)), 2500)
+        .then((snap: any) => {
+          rtdbOk = true;
+          const val = snap?.val?.();
+          if (val && typeof val === "object") {
+            Object.entries(val).forEach(([k, v]: [string, any]) => {
+              if (!v || typeof v !== "object") return;
+              const sid = v.id || k;
+              if (!sid || (!useDemo && isDemoRecord(v))) return;
+              rawMap.set(sid, { ...v, id: sid, schoolId: v.schoolId || schoolId });
+            });
+          }
+        })
+        .catch(() => {})
+    );
+  }
+
+  if (db) {
+    jobs.push(
+      withTimeout(getDocs(col(`schools/${schoolId}/staff`)), 2500)
+        .then((snap: any) => {
+          fsOk = true;
+          (snap?.docs || []).forEach((docSnap: any) => {
+            const data = docSnap.data() as import('./school-types').StaffEmployee;
+            const sid = data?.id || docSnap.id;
+            if (!sid || (!useDemo && isDemoRecord(data))) return;
+            const existing = rawMap.get(sid);
+            if (existing) {
+              const deletedEither = !isActiveStaffRecord(existing) || !isActiveStaffRecord(data);
+              rawMap.set(sid, {
+                ...existing,
+                ...data,
+                id: sid,
+                schoolId: data?.schoolId || existing.schoolId || schoolId,
+                active: deletedEither ? false : (data.active ?? existing.active),
+              });
+            } else {
+              rawMap.set(sid, { ...data, id: sid, schoolId: data?.schoolId || schoolId });
+            }
+          });
+        })
+        .catch(() => {})
+    );
+  }
+
+  // Also cross-check active teachers to auto-purge orphaned teacher-synced staff records ("Academic / Faculty")
+  let activeTeacherIds: Set<string> | null = null;
+  jobs.push(
+    getTeachers(schoolId)
+      .then((tList) => {
+        activeTeacherIds = new Set(tList.map((t) => t.id));
+      })
+      .catch(() => {})
+  );
+
+  await Promise.all(jobs);
+
+  if (fsOk || rtdbOk) {
+    const cleanList: import('./school-types').StaffEmployee[] = [];
+    const orphanIds: string[] = [];
+    rawMap.forEach((s) => {
+      if (!isActiveStaffRecord(s) || deletedIds.has(s.id) || (!useDemo && isDemoRecord(s))) return;
+      if (
+        activeTeacherIds !== null &&
+        s.department === "Academic / Faculty" &&
+        !activeTeacherIds.has(s.id)
+      ) {
+        orphanIds.push(s.id);
+        return;
+      }
+      cleanList.push(s);
+    });
+
+    if (orphanIds.length > 0) {
+      orphanIds.forEach((oid) => {
+        void deleteStaffEmployee(schoolId, oid).catch(() => {});
+      });
+    }
+
+    setLocalStaffEmployees(schoolId, cleanList);
+    if (cleanList.length > 0) return cleanList;
+  }
+
+  if (useDemo) {
+    const demo = getDemoSchoolDataset(true);
     if (demo && demo.staffEmployees && demo.staffEmployees.length > 0) {
       return demo.staffEmployees;
     }
   }
-  return [];
+  return fsOk || rtdbOk ? [] : getLocalStaffEmployees(schoolId);
 };
 
 export const deleteStaffEmployee = async (schoolId: string, staffId: string) => {
-  await deleteDoc(d(`schools/${schoolId}/staff/${staffId}`));
+  if (!schoolId || !staffId) return;
+  const deletedAt = new Date().toISOString();
+  const deletePatch = {
+    active: false,
+    isDeleted: true,
+    status: "deleted",
+    deletedAt,
+  };
+
+  markTeacherDeletedLocally(schoolId, staffId);
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("staff-deleted", { detail: { schoolId, staffId } }));
+    window.dispatchEvent(new CustomEvent("teacher-deleted", { detail: { schoolId, teacherId: staffId } }));
+  }
+
+  if (rtdb) {
+    try {
+      await Promise.allSettled([
+        withTimeout(remove(ref(rtdb, `schools/${schoolId}/staff/${staffId}`)), 2500),
+        withTimeout(remove(ref(rtdb, `schools/${schoolId}/teachers/${staffId}`)), 2500),
+        withTimeout(set(ref(rtdb, `schools/${schoolId}/deleted_staff/${staffId}`), { id: staffId, deletedAt }), 2500),
+        withTimeout(set(ref(rtdb, `schools/${schoolId}/deleted_teachers/${staffId}`), { id: staffId, deletedAt }), 2500),
+      ]);
+    } catch {}
+  }
+
+  if (db) {
+    try {
+      await withTimeout(deleteDoc(d(`schools/${schoolId}/staff/${staffId}`)), 3000);
+    } catch {
+      try {
+        await withTimeout(setDoc(d(`schools/${schoolId}/staff/${staffId}`), deletePatch, { merge: true }), 3000);
+      } catch {}
+    }
+    try {
+      await withTimeout(deleteDoc(d(`schools/${schoolId}/teachers/${staffId}`)), 3000);
+    } catch {
+      try {
+        await withTimeout(setDoc(d(`schools/${schoolId}/teachers/${staffId}`), deletePatch, { merge: true }), 3000);
+      } catch {}
+    }
+  }
+
+  import("./utils/faceRecognitionEngineV2")
+    .then((m) => m.deleteFaceDescriptor(staffId, schoolId))
+    .catch(() => {});
+};
+
+const LOCAL_STAFF_LEAVES_PREFIX = "nst_staff_leaves_";
+
+const mergeStaffLeaveLists = (
+  ...lists: import('./school-types').StaffLeave[][]
+): import('./school-types').StaffLeave[] => {
+  const byId = new Map<string, import('./school-types').StaffLeave>();
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      if (!item?.id) continue;
+      const prev = byId.get(item.id);
+      if (!prev) {
+        byId.set(item.id, item);
+      } else {
+        // Prefer finalized (approved/rejected) or newer status
+        const prevFinal = prev.status !== "pending";
+        const nextFinal = item.status !== "pending";
+        byId.set(item.id, nextFinal && !prevFinal ? item : { ...prev, ...item });
+      }
+    }
+  }
+  return Array.from(byId.values()).sort((a, b) =>
+    String(b.appliedAt || "").localeCompare(String(a.appliedAt || ""))
+  );
+};
+
+export const getLocalStaffLeaves = (schoolId: string): import('./school-types').StaffLeave[] => {
+  try {
+    return getSchoolCacheSync<import('./school-types').StaffLeave[]>(`${LOCAL_STAFF_LEAVES_PREFIX}${schoolId}`, []);
+  } catch {
+    return [];
+  }
+};
+
+export const setLocalStaffLeaves = (schoolId: string, leaves: import('./school-types').StaffLeave[]) => {
+  try {
+    setSchoolCacheSync(`${LOCAL_STAFF_LEAVES_PREFIX}${schoolId}`, Array.isArray(leaves) ? leaves : []);
+  } catch {}
 };
 
 export const saveStaffLeave = async (leave: import('./school-types').StaffLeave) => {
-  await setDoc(d(`schools/${leave.schoolId}/leaves/${leave.id}`), sanitizeForFirestore(leave));
+  const clean = sanitizeForFirestore(leave) as import('./school-types').StaffLeave;
+  const current = getLocalStaffLeaves(leave.schoolId);
+  const next = mergeStaffLeaveLists([clean], current);
+  setLocalStaffLeaves(leave.schoolId, next);
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("staff-leaves-updated", { detail: { schoolId: leave.schoolId, leave: clean } }));
+  }
+
+  await Promise.allSettled([
+    withTimeout(set(ref(rtdb, `schools/${leave.schoolId}/staff_leaves/${leave.id}`), clean), 2500),
+    withTimeout(setDoc(d(`schools/${leave.schoolId}/leaves/${leave.id}`), clean, { merge: true }), 3000),
+  ]);
 };
 
 export const getStaffLeaves = async (schoolId: string): Promise<import('./school-types').StaffLeave[]> => {
-  try {
-    const snap = await getDocs(col(`schools/${schoolId}/leaves`));
-    const list = snap.docs.map(doc => doc.data() as import('./school-types').StaffLeave).sort((a, b) => b.appliedAt.localeCompare(a.appliedAt));
-    if (list.length > 0) return list;
-  } catch {}
+  const local = getLocalStaffLeaves(schoolId);
+  const remoteLists: import('./school-types').StaffLeave[][] = [local];
+
+  await Promise.allSettled([
+    (async () => {
+      try {
+        const rtdbSnap = await withTimeout(get(ref(rtdb, `schools/${schoolId}/staff_leaves`)), 2500);
+        if (rtdbSnap.exists()) {
+          const val = rtdbSnap.val() || {};
+          remoteLists.push(Object.values(val) as import('./school-types').StaffLeave[]);
+        }
+      } catch {}
+    })(),
+    (async () => {
+      try {
+        const snap = await withTimeout(getDocs(col(`schools/${schoolId}/leaves`)), 2500);
+        remoteLists.push(snap.docs.map(doc => doc.data() as import('./school-types').StaffLeave));
+      } catch {}
+    })(),
+  ]);
+
+  const merged = mergeStaffLeaveLists(...remoteLists);
+  if (merged.length > 0) {
+    setLocalStaffLeaves(schoolId, merged);
+    return merged;
+  }
   if (shouldUseDemoForSchool(schoolId)) {
-    const demo = getDemoSchoolDataset();
+    const demo = getDemoSchoolDataset(true);
     if (demo && demo.staffLeaves && demo.staffLeaves.length > 0) {
       return demo.staffLeaves;
     }
@@ -4318,8 +6329,87 @@ export const getStaffLeaves = async (schoolId: string): Promise<import('./school
   return [];
 };
 
-export const updateStaffLeaveStatus = async (schoolId: string, leaveId: string, status: 'approved' | 'rejected', remarks?: string) => {
-  await updateDoc(d(`schools/${schoolId}/leaves/${leaveId}`), sanitizeForFirestore({ status, remarks: remarks || '' }));
+export const updateStaffLeaveStatus = async (
+  schoolId: string,
+  leaveId: string,
+  status: 'approved' | 'rejected',
+  remarks?: string
+) => {
+  const patch = sanitizeForFirestore({
+    status,
+    remarks: remarks || '',
+    reviewedAt: new Date().toISOString(),
+  });
+  const local = getLocalStaffLeaves(schoolId);
+  const updatedLocal = local.map((l) => (l.id === leaveId ? { ...l, ...patch } : l));
+  setLocalStaffLeaves(schoolId, updatedLocal);
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("staff-leaves-updated", { detail: { schoolId, leaveId, status } }));
+  }
+
+  await Promise.allSettled([
+    withTimeout(update(ref(rtdb, `schools/${schoolId}/staff_leaves/${leaveId}`), patch), 2500),
+    withTimeout(setDoc(d(`schools/${schoolId}/leaves/${leaveId}`), patch, { merge: true }), 3000),
+  ]);
+};
+
+export const subscribeStaffLeaves = (
+  schoolId: string,
+  cb: (leaves: import('./school-types').StaffLeave[]) => void
+) => {
+  if (!schoolId) return () => {};
+  let rtdbList: import('./school-types').StaffLeave[] = [];
+  let fsList: import('./school-types').StaffLeave[] = [];
+
+  const emit = () => {
+    const local = getLocalStaffLeaves(schoolId);
+    const merged = mergeStaffLeaveLists(rtdbList, fsList, local);
+    if (merged.length > 0) {
+      setLocalStaffLeaves(schoolId, merged);
+      cb(merged);
+    } else if (shouldUseDemoForSchool(schoolId)) {
+      const demo = getDemoSchoolDataset(true);
+      cb(demo?.staffLeaves || []);
+    } else {
+      cb([]);
+    }
+  };
+
+  emit();
+
+  let unsubRtdb: (() => void) | null = null;
+  try {
+    unsubRtdb = onValue(ref(rtdb, `schools/${schoolId}/staff_leaves`), (snap) => {
+      const val = snap.val();
+      rtdbList = val ? (Object.values(val) as import('./school-types').StaffLeave[]) : [];
+      emit();
+    });
+  } catch {}
+
+  let unsubFs: (() => void) | null = null;
+  try {
+    unsubFs = onSnapshot(col(`schools/${schoolId}/leaves`), (snap) => {
+      fsList = snap.docs.map((doc) => doc.data() as import('./school-types').StaffLeave);
+      emit();
+    });
+  } catch {}
+
+  const onLocalEvent = (e: any) => {
+    if (e?.detail?.schoolId && e.detail.schoolId !== schoolId) return;
+    emit();
+  };
+  if (typeof window !== "undefined") {
+    window.addEventListener("staff-leaves-updated", onLocalEvent);
+  }
+
+  return () => {
+    if (unsubRtdb) try { unsubRtdb(); } catch {}
+    if (unsubFs) try { unsubFs(); } catch {}
+    if (typeof window !== "undefined") {
+      window.removeEventListener("staff-leaves-updated", onLocalEvent);
+    }
+  };
 };
 
 // 5. STUDENT PROMOTION SYSTEM (Batch promote)
@@ -4414,7 +6504,7 @@ export const getAdmissionApplications = async (schoolId: string): Promise<import
     return finalApps;
   }
   if (shouldUseDemoForSchool(schoolId)) {
-    const demo = getDemoSchoolDataset();
+    const demo = getDemoSchoolDataset(true);
     if (demo && demo.admissions && demo.admissions.length > 0) {
       return demo.admissions;
     }
@@ -4446,7 +6536,7 @@ export const saveAdmissionApplication = async (schoolId: string, appData: import
 export const updateAdmissionStatus = async (
   schoolId: string,
   appId: string,
-  status: 'approved' | 'rejected',
+  status: 'pending' | 'approved' | 'rejected',
   details?: Partial<import('./school-types').AdmissionApplication>
 ): Promise<void> => {
   const patch = sanitizeForFirestore({
@@ -4471,38 +6561,198 @@ export const updateAdmissionStatus = async (
   }
 };
 
+export const subscribeAdmissionApplications = (
+  schoolId: string,
+  cb: (apps: import('./school-types').AdmissionApplication[]) => void
+) => {
+  const sortApps = (list: import('./school-types').AdmissionApplication[]) =>
+    [...list].sort((a, b) => (b.appliedAt || "").localeCompare(a.appliedAt || ""));
+
+  const mergedMap = new Map<string, import('./school-types').AdmissionApplication>();
+
+  const emitMerged = () => {
+    const finalApps = sortApps(Array.from(mergedMap.values()));
+    if (finalApps.length > 0) {
+      setSchoolCacheSync(LOCAL_ADMISSIONS_KEY(schoolId), finalApps);
+      cb(finalApps);
+      return;
+    }
+    if (shouldUseDemoForSchool(schoolId)) {
+      const demo = getDemoSchoolDataset(true);
+      if (demo && demo.admissions && demo.admissions.length > 0) {
+        cb(demo.admissions);
+        return;
+      }
+    }
+    cb(finalApps);
+  };
+
+  const loadLocal = () => {
+    const localRaw = getSchoolCacheSync<import('./school-types').AdmissionApplication[]>(LOCAL_ADMISSIONS_KEY(schoolId), []);
+    if (Array.isArray(localRaw)) {
+      localRaw.forEach((a) => { if (a?.id) mergedMap.set(a.id, a); });
+    }
+    emitMerged();
+  };
+  loadLocal();
+
+  const onHydrated = () => loadLocal();
+  const onAdmissionAlert = () => loadLocal();
+  if (typeof window !== "undefined") {
+    window.addEventListener("school-idb-hydrated", onHydrated);
+    window.addEventListener("school-admission-alert", onAdmissionAlert);
+  }
+
+  let rtdbUnsub: any = null;
+  if (rtdb) {
+    try {
+      rtdbUnsub = onValue(ref(rtdb, `schools/${schoolId}/admissions`), (snap) => {
+        const val = snap?.val?.();
+        if (val && typeof val === "object") {
+          Object.values(val).forEach((item: any) => {
+            if (item?.id) mergedMap.set(item.id, { ...(mergedMap.get(item.id) || {}), ...item });
+          });
+          emitMerged();
+        }
+      });
+    } catch {}
+  }
+
+  let fsUnsub: any = null;
+  if (db) {
+    try {
+      fsUnsub = onSnapshot(
+        col(`schools/${schoolId}/admissions`),
+        (snap) => {
+          snap.docs.forEach((docSnap) => {
+            const data = docSnap.data() as import('./school-types').AdmissionApplication;
+            if (data?.id) mergedMap.set(data.id, { ...(mergedMap.get(data.id) || {}), ...data });
+          });
+          emitMerged();
+        },
+        (err) => {
+          console.warn("[subscribeAdmissionApplications] error:", err?.code || err);
+        }
+      );
+    } catch {}
+  }
+
+  return () => {
+    if (typeof window !== "undefined") {
+      window.removeEventListener("school-idb-hydrated", onHydrated);
+      window.removeEventListener("school-admission-alert", onAdmissionAlert);
+    }
+    if (typeof rtdbUnsub === "function") rtdbUnsub();
+    if (typeof fsUnsub === "function") fsUnsub();
+  };
+};
+
 // ── PUBLIC INQUIRIES ──────────────────────────────────────────────────────────
 
+const LOCAL_INQUIRIES_KEY = (schoolId: string) => `nst_inquiries_${schoolId}`;
+const LOCAL_GALLERY_KEY = (schoolId: string) => `nst_gallery_${schoolId}`;
+
 export const getSchoolPublicInquiries = async (schoolId: string): Promise<import('./school-types').SchoolPublicInquiry[]> => {
-  try {
-    const snap = await getDocs(col(`schools/${schoolId}/inquiries`));
-    return snap.docs.map(doc => doc.data() as import('./school-types').SchoolPublicInquiry).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  } catch (e) {
-    return [];
+  const local = getSchoolCacheSync<import('./school-types').SchoolPublicInquiry[]>(LOCAL_INQUIRIES_KEY(schoolId), []);
+  const localList = Array.isArray(local) ? local : [];
+  if (isDemoSchoolId(schoolId) || !db) {
+    return [...localList].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
   }
+  try {
+    const snap = await withTimeout(getDocs(col(`schools/${schoolId}/inquiries`)), 2500);
+    if (snap && !snap.empty) {
+      const remote = snap.docs.map(doc => doc.data() as import('./school-types').SchoolPublicInquiry);
+      const mergedMap = new Map<string, import('./school-types').SchoolPublicInquiry>();
+      localList.forEach(item => { if (item?.id) mergedMap.set(item.id, item); });
+      remote.forEach(item => { if (item?.id) mergedMap.set(item.id, item); });
+      const merged = Array.from(mergedMap.values()).sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+      setSchoolCacheSync(LOCAL_INQUIRIES_KEY(schoolId), merged);
+      return merged;
+    }
+  } catch (e) {}
+  return [...localList].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
 };
 
 export const saveSchoolPublicInquiry = async (schoolId: string, inquiry: import('./school-types').SchoolPublicInquiry): Promise<void> => {
-  await setDoc(d(`schools/${schoolId}/inquiries/${inquiry.id}`), sanitizeForFirestore(inquiry));
+  const payload = sanitizeForFirestore({ ...inquiry, schoolId, updatedAt: new Date().toISOString() });
+  try {
+    const cur = getSchoolCacheSync<import('./school-types').SchoolPublicInquiry[]>(LOCAL_INQUIRIES_KEY(schoolId), []);
+    const next = [payload, ...(Array.isArray(cur) ? cur : []).filter(i => i.id !== payload.id)];
+    setSchoolCacheSync(LOCAL_INQUIRIES_KEY(schoolId), next);
+  } catch {}
+  if (!isDemoSchoolId(schoolId) && db) {
+    try {
+      await withTimeout(setDoc(d(`schools/${schoolId}/inquiries/${payload.id}`), payload, { merge: true }), 2500);
+    } catch {}
+  }
+};
+
+export const updateSchoolPublicInquiry = async (
+  schoolId: string,
+  inquiryId: string,
+  patch: Partial<import('./school-types').SchoolPublicInquiry>
+): Promise<void> => {
+  const cleanPatch = sanitizeForFirestore({ ...patch, updatedAt: new Date().toISOString() });
+  try {
+    const cur = getSchoolCacheSync<import('./school-types').SchoolPublicInquiry[]>(LOCAL_INQUIRIES_KEY(schoolId), []);
+    const next = (Array.isArray(cur) ? cur : []).map(i => (i.id === inquiryId ? { ...i, ...cleanPatch } : i));
+    setSchoolCacheSync(LOCAL_INQUIRIES_KEY(schoolId), next);
+  } catch {}
+  if (!isDemoSchoolId(schoolId) && db) {
+    try {
+      await withTimeout(setDoc(d(`schools/${schoolId}/inquiries/${inquiryId}`), cleanPatch, { merge: true }), 2500);
+    } catch {}
+  }
 };
 
 // ── GALLERY & EVENTS ─────────────────────────────────────────────────────────
 
 export const getSchoolGallery = async (schoolId: string): Promise<import('./school-types').SchoolGalleryItem[]> => {
-  try {
-    const snap = await getDocs(col(`schools/${schoolId}/gallery`));
-    return snap.docs.map(doc => doc.data() as import('./school-types').SchoolGalleryItem);
-  } catch (e) {
-    return [];
+  const local = getSchoolCacheSync<import('./school-types').SchoolGalleryItem[]>(LOCAL_GALLERY_KEY(schoolId), []);
+  const localList = Array.isArray(local) ? local : [];
+  if (isDemoSchoolId(schoolId) || !db) {
+    return localList;
   }
+  try {
+    const snap = await withTimeout(getDocs(col(`schools/${schoolId}/gallery`)), 2500);
+    if (snap && !snap.empty) {
+      const remote = snap.docs.map(doc => doc.data() as import('./school-types').SchoolGalleryItem);
+      const mergedMap = new Map<string, import('./school-types').SchoolGalleryItem>();
+      localList.forEach(item => { if (item?.id) mergedMap.set(item.id, item); });
+      remote.forEach(item => { if (item?.id) mergedMap.set(item.id, item); });
+      const merged = Array.from(mergedMap.values());
+      setSchoolCacheSync(LOCAL_GALLERY_KEY(schoolId), merged);
+      return merged;
+    }
+  } catch (e) {}
+  return localList;
 };
 
 export const saveSchoolGalleryItem = async (schoolId: string, item: import('./school-types').SchoolGalleryItem): Promise<void> => {
-  await setDoc(d(`schools/${schoolId}/gallery/${item.id}`), sanitizeForFirestore(item));
+  const payload = sanitizeForFirestore({ ...item, schoolId });
+  try {
+    const cur = getSchoolCacheSync<import('./school-types').SchoolGalleryItem[]>(LOCAL_GALLERY_KEY(schoolId), []);
+    const next = [payload, ...(Array.isArray(cur) ? cur : []).filter(g => g.id !== payload.id)];
+    setSchoolCacheSync(LOCAL_GALLERY_KEY(schoolId), next);
+  } catch {}
+  if (!isDemoSchoolId(schoolId) && db) {
+    try {
+      await withTimeout(setDoc(d(`schools/${schoolId}/gallery/${payload.id}`), payload, { merge: true }), 2500);
+    } catch {}
+  }
 };
 
 export const deleteSchoolGalleryItem = async (schoolId: string, itemId: string): Promise<void> => {
-  await deleteDoc(d(`schools/${schoolId}/gallery/${itemId}`));
+  try {
+    const cur = getSchoolCacheSync<import('./school-types').SchoolGalleryItem[]>(LOCAL_GALLERY_KEY(schoolId), []);
+    const next = (Array.isArray(cur) ? cur : []).filter(g => g.id !== itemId);
+    setSchoolCacheSync(LOCAL_GALLERY_KEY(schoolId), next);
+  } catch {}
+  if (!isDemoSchoolId(schoolId) && db) {
+    try {
+      await withTimeout(deleteDoc(d(`schools/${schoolId}/gallery/${itemId}`)), 2500);
+    } catch {}
+  }
 };
 
 // ── HOLIDAYS & FESTIVALS (LIVE REALTIME SYNC) ────────────────────────────────
@@ -5490,7 +7740,7 @@ export const getClassLectures = async (schoolId: string, classId?: string, date?
   if (!Array.isArray(local)) local = [];
 
   if (useDemo) {
-    const demo = getDemoSchoolDataset();
+    const demo = getDemoSchoolDataset(true);
     if (demo && demo.videoLectures && demo.videoLectures.length > 0) {
       // Merge demo lectures with local edits
       const mergedDemo = [...local, ...demo.videoLectures.filter(dl => !local.some(l => l.id === dl.id))];
@@ -5601,29 +7851,78 @@ export const saveNstaMessage = async (msg: NstaMessage): Promise<void> => {
   await Promise.allSettled(writes);
 };
 
+export const NSTA_MESSAGE_RETENTION_DAYS = 7;
+export const NSTA_MESSAGE_RETENTION_MS = NSTA_MESSAGE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+
+export const isNstaMessageExpired = (msg: Partial<NstaMessage> | null | undefined, nowMs = Date.now()): boolean => {
+  if (!msg || !msg.createdAt) return false;
+  const ts = Date.parse(msg.createdAt);
+  if (Number.isNaN(ts)) return false;
+  return nowMs - ts > NSTA_MESSAGE_RETENTION_MS;
+};
+
+const nstaPurgeCooldown = new Map<string, number>();
+
 export const deleteNstaMessage = async (schoolId: string, messageId: string): Promise<void> => {
+  await bulkPermanentDeleteNstaMessages(schoolId, [messageId]);
+};
+
+export const bulkPermanentDeleteNstaMessages = async (
+  schoolId: string,
+  messageIds: string[]
+): Promise<number> => {
+  if (!schoolId || !Array.isArray(messageIds) || messageIds.length === 0) return 0;
+  const uniqueIds = Array.from(new Set(messageIds.filter(Boolean)));
+  if (uniqueIds.length === 0) return 0;
+
+  const idSet = new Set<string>(uniqueIds);
   const cacheKey = `nst_school_nsta_msgs_${schoolId}`;
 
   try {
     const cur = getSchoolCacheSync<NstaMessage[]>(cacheKey, []);
-    const updated = Array.isArray(cur) ? cur.filter(m => m.id !== messageId) : [];
+    const updated = Array.isArray(cur) ? cur.filter((m) => m && !idSet.has(m.id)) : [];
     setSchoolCacheSync(cacheKey, updated);
   } catch {}
 
   if (typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent("nsta-messages-updated", { detail: { schoolId, messageId, action: "DELETE" } }));
+    window.dispatchEvent(
+      new CustomEvent("nsta-messages-updated", {
+        detail: { schoolId, messageIds: uniqueIds, action: "BULK_DELETE_PERMANENT" },
+      })
+    );
   }
 
+  // RTDB chunked multi-path deletes (null removes nodes in one request per 200 keys)
   if (rtdb) {
-    try {
-      await withTimeout(remove(ref(rtdb, `schools/${schoolId}/nsta_messages/${messageId}`)), 2000);
-    } catch {}
+    const CHUNK = 200;
+    for (let i = 0; i < uniqueIds.length; i += CHUNK) {
+      const slice = uniqueIds.slice(i, i + CHUNK);
+      const patch: Record<string, null> = {};
+      slice.forEach((id) => {
+        patch[id] = null;
+      });
+      try {
+        await withTimeout(update(ref(rtdb, `schools/${schoolId}/nsta_messages`), patch), 6000);
+      } catch {}
+    }
   }
+
+  // Firestore chunked writeBatch deletes (max 500 ops/batch; use 400 safely)
   if (db) {
-    try {
-      await withTimeout(deleteDoc(d(`schools/${schoolId}/nsta_messages/${messageId}`)), 2500);
-    } catch {}
+    const CHUNK = 400;
+    for (let i = 0; i < uniqueIds.length; i += CHUNK) {
+      const slice = uniqueIds.slice(i, i + CHUNK);
+      try {
+        const batch = writeBatch(db);
+        slice.forEach((id) => {
+          batch.delete(d(`schools/${schoolId}/nsta_messages/${id}`));
+        });
+        await withTimeout(batch.commit(), 8000);
+      } catch {}
+    }
   }
+
+  return uniqueIds.length;
 };
 
 export const deleteNstaMessageForMe = async (
@@ -5631,18 +7930,31 @@ export const deleteNstaMessageForMe = async (
   messageId: string,
   userId: string
 ): Promise<void> => {
-  if (!schoolId || !messageId || !userId) return;
+  await bulkDeleteNstaMessagesForMe(schoolId, [messageId], userId);
+};
+
+export const bulkDeleteNstaMessagesForMe = async (
+  schoolId: string,
+  messageIds: string[],
+  userId: string
+): Promise<number> => {
+  if (!schoolId || !userId || !Array.isArray(messageIds) || messageIds.length === 0) return 0;
+  const uniqueIds = Array.from(new Set(messageIds.filter(Boolean)));
+  if (uniqueIds.length === 0) return 0;
+
+  const idSet = new Set<string>(uniqueIds);
   const cacheKey = `nst_school_nsta_msgs_${schoolId}`;
-  let updatedMsg: NstaMessage | null = null;
+  const modifiedMsgs: NstaMessage[] = [];
 
   try {
     const cur = getSchoolCacheSync<NstaMessage[]>(cacheKey, []);
     const updated = (Array.isArray(cur) ? cur : []).map((m) => {
-      if (m.id === messageId) {
+      if (m && idSet.has(m.id)) {
         const deletedFor = Array.isArray(m.deletedFor) ? [...m.deletedFor] : [];
         if (!deletedFor.includes(userId)) deletedFor.push(userId);
-        updatedMsg = { ...m, deletedFor };
-        return updatedMsg;
+        const nextMsg = { ...m, deletedFor };
+        modifiedMsgs.push(nextMsg);
+        return nextMsg;
       }
       return m;
     });
@@ -5652,48 +7964,88 @@ export const deleteNstaMessageForMe = async (
   if (typeof window !== "undefined") {
     window.dispatchEvent(
       new CustomEvent("nsta-messages-updated", {
-        detail: { schoolId, messageId, action: "DELETE_FOR_ME", userId }
+        detail: { schoolId, messageIds: uniqueIds, action: "BULK_DELETE_FOR_ME", userId },
       })
     );
   }
 
-  if (updatedMsg) {
-    const sanitized = sanitizeForFirestore(updatedMsg);
+  if (modifiedMsgs.length > 0) {
     if (rtdb) {
-      try {
-        await withTimeout(set(ref(rtdb, `schools/${schoolId}/nsta_messages/${messageId}`), sanitized), 2000);
-      } catch {}
+      const CHUNK = 200;
+      for (let i = 0; i < modifiedMsgs.length; i += CHUNK) {
+        const slice = modifiedMsgs.slice(i, i + CHUNK);
+        const patch: Record<string, any> = {};
+        slice.forEach((m) => {
+          patch[`${m.id}/deletedFor`] = m.deletedFor || [userId];
+        });
+        try {
+          await withTimeout(update(ref(rtdb, `schools/${schoolId}/nsta_messages`), patch), 6000);
+        } catch {}
+      }
     }
     if (db) {
-      try {
-        await withTimeout(setDoc(d(`schools/${schoolId}/nsta_messages/${messageId}`), sanitized), 2500);
-      } catch {}
+      const CHUNK = 400;
+      for (let i = 0; i < modifiedMsgs.length; i += CHUNK) {
+        const slice = modifiedMsgs.slice(i, i + CHUNK);
+        try {
+          const batch = writeBatch(db);
+          slice.forEach((m) => {
+            batch.set(
+              d(`schools/${schoolId}/nsta_messages/${m.id}`),
+              { deletedFor: m.deletedFor || [userId] },
+              { merge: true }
+            );
+          });
+          await withTimeout(batch.commit(), 8000);
+        } catch {}
+      }
     }
   }
+
+  return modifiedMsgs.length;
 };
 
 export const deleteNstaMessageForEveryone = async (
   schoolId: string,
   messageId: string
 ): Promise<void> => {
-  if (!schoolId || !messageId) return;
+  await bulkDeleteNstaMessagesForEveryone(schoolId, [messageId]);
+};
+
+export const bulkDeleteNstaMessagesForEveryone = async (
+  schoolId: string,
+  messageIds: string[],
+  options?: { permanentOnBulk?: boolean }
+): Promise<number> => {
+  if (!schoolId || !Array.isArray(messageIds) || messageIds.length === 0) return 0;
+  const uniqueIds = Array.from(new Set(messageIds.filter(Boolean)));
+  if (uniqueIds.length === 0) return 0;
+
+  // For bulk deletions (> 5 messages) or explicit permanent mode, delete completely so 1000+ deleted bubbles vanish cleanly
+  if (options?.permanentOnBulk !== false && uniqueIds.length > 5) {
+    return bulkPermanentDeleteNstaMessages(schoolId, uniqueIds);
+  }
+
+  const idSet = new Set<string>(uniqueIds);
   const cacheKey = `nst_school_nsta_msgs_${schoolId}`;
-  let updatedMsg: NstaMessage | null = null;
+  const nowIso = new Date().toISOString();
+  const modifiedMsgs: NstaMessage[] = [];
 
   try {
     const cur = getSchoolCacheSync<NstaMessage[]>(cacheKey, []);
     const updated = (Array.isArray(cur) ? cur : []).map((m) => {
-      if (m.id === messageId) {
-        updatedMsg = {
+      if (m && idSet.has(m.id)) {
+        const nextMsg: NstaMessage = {
           ...m,
           text: "🚫 This message was deleted",
           deletedForEveryone: true,
-          deletedForEveryoneAt: new Date().toISOString(),
+          deletedForEveryoneAt: nowIso,
           attachmentUrl: undefined,
           attachmentType: undefined,
-          feeSlip: undefined
+          feeSlip: undefined,
         };
-        return updatedMsg;
+        modifiedMsgs.push(nextMsg);
+        return nextMsg;
       }
       return m;
     });
@@ -5703,24 +8055,41 @@ export const deleteNstaMessageForEveryone = async (
   if (typeof window !== "undefined") {
     window.dispatchEvent(
       new CustomEvent("nsta-messages-updated", {
-        detail: { schoolId, messageId, action: "DELETE_FOR_EVERYONE" }
+        detail: { schoolId, messageIds: uniqueIds, action: "BULK_DELETE_FOR_EVERYONE" },
       })
     );
   }
 
-  if (updatedMsg) {
-    const sanitized = sanitizeForFirestore(updatedMsg);
+  if (modifiedMsgs.length > 0) {
     if (rtdb) {
-      try {
-        await withTimeout(set(ref(rtdb, `schools/${schoolId}/nsta_messages/${messageId}`), sanitized), 2000);
-      } catch {}
+      const CHUNK = 200;
+      for (let i = 0; i < modifiedMsgs.length; i += CHUNK) {
+        const slice = modifiedMsgs.slice(i, i + CHUNK);
+        const patch: Record<string, any> = {};
+        slice.forEach((m) => {
+          patch[m.id] = sanitizeForFirestore(m);
+        });
+        try {
+          await withTimeout(update(ref(rtdb, `schools/${schoolId}/nsta_messages`), patch), 6000);
+        } catch {}
+      }
     }
     if (db) {
-      try {
-        await withTimeout(setDoc(d(`schools/${schoolId}/nsta_messages/${messageId}`), sanitized), 2500);
-      } catch {}
+      const CHUNK = 400;
+      for (let i = 0; i < modifiedMsgs.length; i += CHUNK) {
+        const slice = modifiedMsgs.slice(i, i + CHUNK);
+        try {
+          const batch = writeBatch(db);
+          slice.forEach((m) => {
+            batch.set(d(`schools/${schoolId}/nsta_messages/${m.id}`), sanitizeForFirestore(m));
+          });
+          await withTimeout(batch.commit(), 8000);
+        } catch {}
+      }
     }
   }
+
+  return modifiedMsgs.length;
 };
 
 export const toggleNstaMessageReaction = async (
@@ -5889,9 +8258,23 @@ export const subscribeToNstaMessages = (
   const cacheKey = `nst_school_nsta_msgs_${schoolId}`;
 
   const loadFromCacheAndNotify = () => {
-    const all = getSchoolCacheSync<NstaMessage[]>(cacheKey, []);
-    if (Array.isArray(all)) {
-      const filtered = all.filter(m => {
+    const raw = getSchoolCacheSync<NstaMessage[]>(cacheKey, []);
+    if (Array.isArray(raw)) {
+      const nowMs = Date.now();
+      const expiredIds: string[] = [];
+      const activeAll = raw.filter((m) => {
+        if (!m) return false;
+        if (isNstaMessageExpired(m, nowMs)) {
+          if (m.id) expiredIds.push(m.id);
+          return false;
+        }
+        return true;
+      });
+      if (expiredIds.length > 0) {
+        setSchoolCacheSync(cacheKey, activeAll);
+      }
+
+      const filtered = activeAll.filter(m => {
         if (!m || !m.threadType) return false;
         // 1. Strict threadType match - class, school, or teacher
         if (m.threadType !== filter.threadType) return false;
@@ -5944,8 +8327,11 @@ export const subscribeToNstaMessages = (
   const mergeAndEmit = () => {
     const cur = getSchoolCacheSync<NstaMessage[]>(cacheKey, []);
     const mergedMap = new Map<string, NstaMessage>();
+    const expiredIds: string[] = [];
+    const nowMs = Date.now();
+
     // Preserve optimistic local sends created in the last 30s until remote confirms
-    const cutoff = Date.now() - 30_000;
+    const cutoff = nowMs - 30_000;
     if (Array.isArray(cur)) {
       for (const m of cur) {
         if (m?.id && m.createdAt && new Date(m.createdAt).getTime() >= cutoff) {
@@ -5955,16 +8341,35 @@ export const subscribeToNstaMessages = (
     }
     if (Array.isArray(rtdbList)) {
       for (const m of rtdbList) {
-        if (m?.id) mergedMap.set(m.id, m);
+        if (!m?.id) continue;
+        if (isNstaMessageExpired(m, nowMs)) {
+          expiredIds.push(m.id);
+        } else {
+          mergedMap.set(m.id, m);
+        }
       }
     }
     if (Array.isArray(fsList)) {
       for (const m of fsList) {
-        if (m?.id) mergedMap.set(m.id, m);
+        if (!m?.id) continue;
+        if (isNstaMessageExpired(m, nowMs)) {
+          expiredIds.push(m.id);
+        } else {
+          mergedMap.set(m.id, m);
+        }
       }
     }
     setSchoolCacheSync(cacheKey, Array.from(mergedMap.values()));
     loadFromCacheAndNotify();
+
+    // Auto-purge expired (>7 days) messages from cloud & cache (throttled per school)
+    if (expiredIds.length > 0) {
+      const lastPurge = nstaPurgeCooldown.get(schoolId) || 0;
+      if (nowMs - lastPurge > 60_000) {
+        nstaPurgeCooldown.set(schoolId, nowMs);
+        void bulkPermanentDeleteNstaMessages(schoolId, expiredIds);
+      }
+    }
   };
 
   // Realtime Database listener
@@ -6041,34 +8446,64 @@ export const autoSendFeeSlipToSchoolDesk = async (payload: {
   oldArrears?: number;
   earlyDiscount?: number;
   netPayableWithDiscount?: number;
+  discountLabel?: string;
+  discountSlabs?: import("./school-types").FeeDiscountSlab[];
+  forceApplyDiscount?: boolean;
   receiptNo?: string;
   dueDate?: string;
   payLink?: string;
 }): Promise<void> => {
   const isReceipt = payload.slipType === "FEE_RECEIPT";
   const todayDateNum = new Date().getDate();
-  const isBeforeOrOn10th = todayDateNum <= 10;
+  const slabs = Array.isArray(payload.discountSlabs) ? [...payload.discountSlabs].sort((a, b) => a.uptoDay - b.uptoDay) : [];
 
   const currentMonthFee = Number(payload.monthlyAmount || payload.amount || 0);
   const arrears = Math.max(0, Number(payload.oldArrears || Math.max(0, payload.balanceDue - currentMonthFee)));
-  
-  // 5% Early Discount Rule: Strictly applies to current month regular fee, NEVER on old arrears!
-  const earlyDiscount = isBeforeOrOn10th && currentMonthFee > 0
-    ? (payload.earlyDiscount !== undefined ? payload.earlyDiscount : Math.round(currentMonthFee * 0.05))
-    : 0;
-  const netPayableWithDiscount = earlyDiscount > 0
-    ? (currentMonthFee - earlyDiscount) + arrears
-    : payload.balanceDue;
+
+  let earlyDiscount = 0;
+  let resolvedDiscountLabel = payload.discountLabel || "";
+
+  if (slabs.length > 0) {
+    const matched = slabs.find((s) => todayDateNum <= s.uptoDay);
+    if (matched && currentMonthFee > 0) {
+      earlyDiscount =
+        matched.discountType === "fixed"
+          ? Math.min(currentMonthFee, Math.round(matched.discountValue))
+          : Math.min(currentMonthFee, Math.round((currentMonthFee * matched.discountValue) / 100));
+      const valTxt = matched.discountType === "fixed" ? `₹${matched.discountValue} OFF` : `${matched.discountValue}% OFF`;
+      resolvedDiscountLabel = `${matched.uptoDay} तारीख तक ${valTxt}`;
+    }
+  } else if (payload.forceApplyDiscount || todayDateNum <= 10) {
+    earlyDiscount =
+      payload.earlyDiscount !== undefined
+        ? Math.max(0, Number(payload.earlyDiscount))
+        : currentMonthFee > 0 && todayDateNum <= 10
+        ? Math.round(currentMonthFee * 0.05)
+        : 0;
+    if (!resolvedDiscountLabel && earlyDiscount > 0) {
+      resolvedDiscountLabel = "10 तारीख तक 5% OFF";
+    }
+  }
+
+  const netPayableWithDiscount =
+    payload.netPayableWithDiscount !== undefined
+      ? payload.netPayableWithDiscount
+      : earlyDiscount > 0
+      ? Math.max(0, payload.balanceDue - earlyDiscount)
+      : payload.balanceDue;
 
   let text = "";
   if (isReceipt) {
     text = `Aapka ${payload.monthLabel} ka fee payment (₹${payload.amount.toLocaleString("en-IN")}) safalta-purvak receive ho gaya hai. Official receipt no: ${payload.receiptNo || "N/A"}. Dhanyawad!`;
+  } else if (slabs.length > 0) {
+    const slabSummary = slabs
+      .map((s) => `${s.uptoDay} तारीख तक ${s.discountType === "fixed" ? `₹${s.discountValue}` : `${s.discountValue}%`} OFF`)
+      .join(" • ");
+    text = `📢 ${payload.monthLabel} फीस सूचना: कुल बकाया ₹${payload.balanceDue.toLocaleString("en-IN")} है। ⏳ अर्ली पेमेंट ऑफर: ${slabSummary}। (तय तिथि के बाद स्लिप की पूरी राशि ₹${payload.balanceDue.toLocaleString("en-IN")} देय होगी)।`;
+  } else if (earlyDiscount > 0) {
+    text = `📢 ${payload.monthLabel} फीस सूचना: कुल बकाया ₹${payload.balanceDue.toLocaleString("en-IN")} है। ⚡ ${resolvedDiscountLabel} (बचत: ₹${earlyDiscount.toLocaleString("en-IN")})! तय तिथि के बाद पूरा भुगतान देय होगा।`;
   } else {
-    if (isBeforeOrOn10th && earlyDiscount > 0) {
-      text = `📢 ${payload.monthLabel} फीस सूचना: कुल बकाया ₹${payload.balanceDue.toLocaleString("en-IN")} है। ⚡ 10 तारीख तक जमा करने पर चालू माह फीस पर 5% विशेष छूट (बचत: ₹${earlyDiscount.toLocaleString("en-IN")})! छूट के बाद देय: ₹${netPayableWithDiscount.toLocaleString("en-IN")}${arrears > 0 ? ` (पुराने बकाए ₹${arrears.toLocaleString("en-IN")} पर छूट लागू नहीं)` : ""}।`;
-    } else {
-      text = `Aapka ${payload.monthLabel} ka shulk baaki hai. Kul deya rashi: ₹${payload.balanceDue.toLocaleString("en-IN")}. Kripya antam tithi ${payload.dueDate || "jaldi"} se pehle jama karein. (10 तारीख के बाद 5% छूट समाप्त)।`;
-    }
+    text = `Aapka ${payload.monthLabel} ka shulk baaki hai. Kul deya rashi: ₹${payload.balanceDue.toLocaleString("en-IN")}. Kripya antam tithi ${payload.dueDate || "jaldi"} se pehle jama karein.`;
   }
 
   const msg: NstaMessage = {
@@ -6091,15 +8526,20 @@ export const autoSendFeeSlipToSchoolDesk = async (payload: {
       oldArrears: arrears,
       earlyDiscount,
       netPayableWithDiscount,
-      discountValidUntil: "10 तारीख तक",
-      isEligibleForEarlyDiscount: isBeforeOrOn10th && earlyDiscount > 0,
+      discountLabel: resolvedDiscountLabel || undefined,
+      discountSlabs: slabs.length > 0 ? slabs : undefined,
+      discountValidUntil:
+        slabs.length > 0
+          ? `${slabs[slabs.length - 1].uptoDay} तारीख तक`
+          : payload.dueDate || "10 तारीख तक",
+      isEligibleForEarlyDiscount: earlyDiscount > 0,
       studentName: payload.studentName,
       className: payload.className,
       rollNo: payload.rollNo,
       admissionNo: payload.admissionNo,
       feeItems: payload.feeItems,
       receiptNo: payload.receiptNo,
-      dueDate: payload.dueDate || "10th of Month",
+      dueDate: payload.dueDate || (slabs.length > 0 ? `${slabs[slabs.length - 1].uptoDay} तारीख तक` : "10th of Month"),
       payLink: payload.payLink,
     },
     createdAt: new Date().toISOString(),
@@ -6497,7 +8937,7 @@ export const getLocalSchoolEvents = (schoolId: string): SchoolEvent[] => {
     const list = getSchoolCacheSync<SchoolEvent[]>(`${LOCAL_EVENTS_PREFIX}${schoolId}`, []);
     if (Array.isArray(list) && list.length > 0) return list;
     if (shouldUseDemoForSchool(schoolId)) {
-      const demo = getDemoSchoolDataset();
+      const demo = getDemoSchoolDataset(true);
       if (demo && demo.events && demo.events.length > 0) {
         return demo.events;
       }
@@ -6806,7 +9246,7 @@ export const getLocalAccountants = (schoolId: string): SchoolAccountant[] => {
     const list = getSchoolCacheSync<SchoolAccountant[]>(`${LOCAL_ACCOUNTANTS_PREFIX}${schoolId}`, []);
     if (Array.isArray(list) && list.length > 0) return list;
     if (shouldUseDemoForSchool(schoolId)) {
-      const demo = getDemoSchoolDataset();
+      const demo = getDemoSchoolDataset(true);
       if (demo && demo.accountants && demo.accountants.length > 0) {
         return demo.accountants;
       }
@@ -6828,6 +9268,10 @@ export const saveAccountant = async (accountant: SchoolAccountant) => {
   const current = getLocalAccountants(accountant.schoolId);
   const next = [sanitized, ...current.filter((a: any) => a.id !== accountant.id)];
   setLocalAccountants(accountant.schoolId, next);
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("accountants-updated", { detail: { schoolId: accountant.schoolId, accountants: next } }));
+  }
 
   if (rtdb) {
     try { await withTimeout(set(ref(rtdb, `schools/${accountant.schoolId}/accountants/${accountant.id}`), sanitized), 2000); } catch {}
@@ -6857,13 +9301,15 @@ export const getAccountants = async (schoolId: string): Promise<SchoolAccountant
 };
 
 export const subscribeToAccountants = (schoolId: string, cb: (accountants: SchoolAccountant[]) => void) => {
-  const deliverLocal = () => {
+  const deliverLocal = (e?: any) => {
+    if (e?.detail?.schoolId && e.detail.schoolId !== schoolId) return;
     cb(getLocalAccountants(schoolId));
   };
   deliverLocal();
 
   if (typeof window !== "undefined") {
     window.addEventListener("school-idb-hydrated", deliverLocal);
+    window.addEventListener("accountants-updated", deliverLocal);
   }
 
   const fsUnsub = onSnapshot(
@@ -6879,14 +9325,22 @@ export const subscribeToAccountants = (schoolId: string, cb: (accountants: Schoo
   );
 
   return () => {
-    if (typeof window !== "undefined") window.removeEventListener("school-idb-hydrated", deliverLocal);
+    if (typeof window !== "undefined") {
+      window.removeEventListener("school-idb-hydrated", deliverLocal);
+      window.removeEventListener("accountants-updated", deliverLocal);
+    }
     if (typeof fsUnsub === "function") fsUnsub();
   };
 };
 
 export const deleteAccountant = async (schoolId: string, accountantId: string) => {
   const current = getLocalAccountants(schoolId);
-  setLocalAccountants(schoolId, current.filter(a => a.id !== accountantId));
+  const next = current.filter(a => a.id !== accountantId);
+  setLocalAccountants(schoolId, next);
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("accountants-updated", { detail: { schoolId, accountants: next } }));
+  }
 
   if (rtdb) {
     try { await withTimeout(remove(ref(rtdb, `schools/${schoolId}/accountants/${accountantId}`)), 2000); } catch {}
@@ -6904,7 +9358,7 @@ export const getLocalExpenseVouchers = (schoolId: string): SchoolExpenseVoucher[
     const list = getSchoolCacheSync<SchoolExpenseVoucher[]>(`${LOCAL_EXPENSES_PREFIX}${schoolId}`, []);
     if (Array.isArray(list) && list.length > 0) return list;
     if (shouldUseDemoForSchool(schoolId)) {
-      const demo = getDemoSchoolDataset();
+      const demo = getDemoSchoolDataset(true);
       if (demo && demo.expenseVouchers && demo.expenseVouchers.length > 0) {
         return demo.expenseVouchers;
       }
@@ -7252,3 +9706,272 @@ export const subscribeToSchoolCurriculumNotes = (
     }
   };
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEACHER RULES & PAYROLL POLICY CONFIGURATION (LIFE MAKER RULES ENGINE)
+// ─────────────────────────────────────────────────────────────────────────────
+const LOCAL_TEACHER_RULES_KEY = (schoolId: string) => `nst_teacher_rules_${schoolId}`;
+const LOCAL_TEACHER_RULES_ACK_KEY = (schoolId: string) => `nst_teacher_rules_ack_${schoolId}`;
+const LOCAL_MONTHLY_POLICY_ADJ_KEY = (schoolId: string, yearMonth: string) =>
+  `nst_payroll_policy_adj_${schoolId}_${yearMonth}`;
+
+export const getTeacherRulesConfig = async (
+  schoolId: string,
+  school?: import('./school-types').School | null
+): Promise<import('./utils/schoolTeacherRules').SchoolTeacherRulesConfig> => {
+  const { getDefaultTeacherRulesConfig } = await import('./utils/schoolTeacherRules');
+  const fallback = getSchoolCacheSync<import('./utils/schoolTeacherRules').SchoolTeacherRulesConfig | null>(
+    LOCAL_TEACHER_RULES_KEY(schoolId),
+    null
+  );
+
+  if (rtdb) {
+    try {
+      const snap = await withTimeout(get(ref(rtdb, `schools/${schoolId}/teacher_rules_config`)), 2000);
+      const val = snap?.val?.();
+      if (val && typeof val === "object" && Array.isArray(val.rules)) {
+        const def = getDefaultTeacherRulesConfig(schoolId, school);
+        const normalized = { ...def, ...val, policy: { ...def.policy, ...(val.policy || {}) } };
+        setSchoolCacheSync(LOCAL_TEACHER_RULES_KEY(schoolId), normalized);
+        return normalized;
+      }
+    } catch {}
+  }
+
+  if (db) {
+    try {
+      const snap = await withTimeout(getDoc(d(`schools/${schoolId}/settings/teacher_rules`)), 2500);
+      if (snap.exists()) {
+        const val = snap.data() as import('./utils/schoolTeacherRules').SchoolTeacherRulesConfig;
+        const def = getDefaultTeacherRulesConfig(schoolId, school);
+        const normalized = { ...def, ...val, policy: { ...def.policy, ...(val.policy || {}) } };
+        setSchoolCacheSync(LOCAL_TEACHER_RULES_KEY(schoolId), normalized);
+        return normalized;
+      }
+    } catch {}
+  }
+
+  if (fallback && Array.isArray(fallback.rules)) {
+    const def = getDefaultTeacherRulesConfig(schoolId, school);
+    return { ...def, ...fallback, policy: { ...def.policy, ...(fallback.policy || {}) } };
+  }
+
+  return getDefaultTeacherRulesConfig(schoolId, school);
+};
+
+export const saveTeacherRulesConfig = async (
+  schoolId: string,
+  config: import('./utils/schoolTeacherRules').SchoolTeacherRulesConfig
+): Promise<import('./utils/schoolTeacherRules').SchoolTeacherRulesConfig> => {
+  const clean = sanitizeForFirestore({
+    ...config,
+    schoolId,
+    updatedAt: new Date().toISOString(),
+  });
+  setSchoolCacheSync(LOCAL_TEACHER_RULES_KEY(schoolId), clean);
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("teacher-rules-updated", { detail: { schoolId, config: clean } })
+    );
+  }
+
+  if (rtdb) {
+    try {
+      await withTimeout(set(ref(rtdb, `schools/${schoolId}/teacher_rules_config`), clean), 2000);
+    } catch {}
+  }
+  if (db) {
+    try {
+      await withTimeout(setDoc(d(`schools/${schoolId}/settings/teacher_rules`), clean, { merge: true }), 2500);
+    } catch {}
+  }
+  return clean;
+};
+
+export const subscribeToTeacherRulesConfig = (
+  schoolId: string,
+  school: import('./school-types').School | null,
+  callback: (config: import('./utils/schoolTeacherRules').SchoolTeacherRulesConfig) => void
+): (() => void) => {
+  let active = true;
+  getTeacherRulesConfig(schoolId, school)
+    .then((cfg) => {
+      if (active) callback(cfg);
+    })
+    .catch(() => {});
+
+  const handleLocalEvent = (e: any) => {
+    if (!active) return;
+    if (e?.detail?.schoolId === schoolId && e?.detail?.config) {
+      callback(e.detail.config);
+    }
+  };
+  if (typeof window !== "undefined") {
+    window.addEventListener("teacher-rules-updated", handleLocalEvent);
+  }
+
+  let unsubFirestore: (() => void) | null = null;
+  if (db) {
+    try {
+      unsubFirestore = onSnapshot(d(`schools/${schoolId}/settings/teacher_rules`), (snap) => {
+        if (!active || !snap.exists()) return;
+        const val = snap.data() as import('./utils/schoolTeacherRules').SchoolTeacherRulesConfig;
+        if (val && Array.isArray(val.rules)) {
+          setSchoolCacheSync(LOCAL_TEACHER_RULES_KEY(schoolId), val);
+          callback(val);
+        }
+      });
+    } catch {}
+  }
+
+  return () => {
+    active = false;
+    if (typeof window !== "undefined") {
+      window.removeEventListener("teacher-rules-updated", handleLocalEvent);
+    }
+    if (unsubFirestore) {
+      try { unsubFirestore(); } catch {}
+    }
+  };
+};
+
+export const getTeacherRuleAcceptances = async (
+  schoolId: string
+): Promise<Record<string, import('./utils/schoolTeacherRules').TeacherRuleAcceptance>> => {
+  const local = getSchoolCacheSync<Record<string, import('./utils/schoolTeacherRules').TeacherRuleAcceptance>>(
+    LOCAL_TEACHER_RULES_ACK_KEY(schoolId),
+    {}
+  );
+  const merged: Record<string, import('./utils/schoolTeacherRules').TeacherRuleAcceptance> = { ...(local || {}) };
+
+  if (rtdb) {
+    try {
+      const snap = await withTimeout(get(ref(rtdb, `schools/${schoolId}/teacher_rules_acceptances`)), 2000);
+      const val = snap?.val?.();
+      if (val && typeof val === "object") {
+        Object.assign(merged, val);
+      }
+    } catch {}
+  }
+  if (db) {
+    try {
+      const snap = await withTimeout(getDocs(col(`schools/${schoolId}/teacher_rules_acceptances`)), 2500);
+      snap.docs.forEach((docSnap) => {
+        const dObj = docSnap.data() as import('./utils/schoolTeacherRules').TeacherRuleAcceptance;
+        if (dObj?.staffId) merged[dObj.staffId] = dObj;
+      });
+    } catch {}
+  }
+  setSchoolCacheSync(LOCAL_TEACHER_RULES_ACK_KEY(schoolId), merged);
+  return merged;
+};
+
+export const saveTeacherRuleAcceptance = async (
+  schoolId: string,
+  acceptance: import('./utils/schoolTeacherRules').TeacherRuleAcceptance
+): Promise<Record<string, import('./utils/schoolTeacherRules').TeacherRuleAcceptance>> => {
+  const current = getSchoolCacheSync<Record<string, import('./utils/schoolTeacherRules').TeacherRuleAcceptance>>(
+    LOCAL_TEACHER_RULES_ACK_KEY(schoolId),
+    {}
+  );
+  const clean = sanitizeForFirestore({
+    ...acceptance,
+    schoolId,
+    acceptedAt: acceptance.acceptedAt || new Date().toISOString(),
+  });
+  const next = { ...(current || {}), [clean.staffId]: clean };
+  setSchoolCacheSync(LOCAL_TEACHER_RULES_ACK_KEY(schoolId), next);
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("teacher-rules-ack-updated", { detail: { schoolId, acceptances: next } })
+    );
+  }
+  if (rtdb) {
+    try {
+      await withTimeout(set(ref(rtdb, `schools/${schoolId}/teacher_rules_acceptances/${clean.staffId}`), clean), 2000);
+    } catch {}
+  }
+  if (db) {
+    try {
+      await withTimeout(setDoc(doc(db, `schools/${schoolId}/teacher_rules_acceptances`, clean.staffId), clean, { merge: true }), 2500);
+    } catch {}
+  }
+  return next;
+};
+
+export const getMonthlyPolicyAdjustments = async (
+  schoolId: string,
+  yearMonth: string
+): Promise<Record<string, import('./utils/schoolTeacherRules').StaffMonthlyPolicyAdjustments>> => {
+  const local = getSchoolCacheSync<Record<string, import('./utils/schoolTeacherRules').StaffMonthlyPolicyAdjustments>>(
+    LOCAL_MONTHLY_POLICY_ADJ_KEY(schoolId, yearMonth),
+    {}
+  );
+  const merged = { ...(local || {}) };
+
+  if (rtdb) {
+    try {
+      const snap = await withTimeout(get(ref(rtdb, `schools/${schoolId}/payroll_policy_adj/${yearMonth}`)), 2000);
+      const val = snap?.val?.();
+      if (val && typeof val === "object") Object.assign(merged, val);
+    } catch {}
+  }
+  if (db) {
+    try {
+      const snap = await withTimeout(getDoc(d(`schools/${schoolId}/payroll_policy_adj/${yearMonth}`)), 2500);
+      if (snap.exists()) {
+        const data = snap.data() as Record<string, any>;
+        if (data && typeof data === "object") Object.assign(merged, data);
+      }
+    } catch {}
+  }
+  setSchoolCacheSync(LOCAL_MONTHLY_POLICY_ADJ_KEY(schoolId, yearMonth), merged);
+  return merged;
+};
+
+export const saveStaffMonthlyPolicyAdjustment = async (
+  schoolId: string,
+  yearMonth: string,
+  staffId: string,
+  adjustment: import('./utils/schoolTeacherRules').StaffMonthlyPolicyAdjustments
+): Promise<Record<string, import('./utils/schoolTeacherRules').StaffMonthlyPolicyAdjustments>> => {
+  const current = getSchoolCacheSync<Record<string, import('./utils/schoolTeacherRules').StaffMonthlyPolicyAdjustments>>(
+    LOCAL_MONTHLY_POLICY_ADJ_KEY(schoolId, yearMonth),
+    {}
+  );
+  const clean = sanitizeForFirestore({
+    lateDays: Math.max(0, Number(adjustment.lateDays) || 0),
+    dressViolationDays: Math.max(0, Number(adjustment.dressViolationDays) || 0),
+    lateEmergencyExcused: Boolean(adjustment.lateEmergencyExcused),
+    bonusWaived: Boolean(adjustment.bonusWaived),
+    updatedAt: new Date().toISOString(),
+  });
+  const next = { ...(current || {}), [staffId]: clean };
+  setSchoolCacheSync(LOCAL_MONTHLY_POLICY_ADJ_KEY(schoolId, yearMonth), next);
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("payroll-policy-adjustments-updated", { detail: { schoolId, yearMonth, next } })
+    );
+  }
+  if (rtdb) {
+    try {
+      await withTimeout(set(ref(rtdb, `schools/${schoolId}/payroll_policy_adj/${yearMonth}/${staffId}`), clean), 2000);
+    } catch {}
+  }
+  if (db) {
+    try {
+      await withTimeout(setDoc(d(`schools/${schoolId}/payroll_policy_adj/${yearMonth}`), { [staffId]: clean }, { merge: true }), 2500);
+    } catch {}
+  }
+  return next;
+};
+
+// Backward-compatible exports used by offlineSyncService replay queue
+export const saveAttendanceDirectCloud = saveAttendance;
+export const replayOfflineStudentAttendancePunch = (payload: any) => markStudentQrAttendance(payload);
+export const replayOfflineStaffAttendancePunch = (payload: any) => markStaffAttendanceAtomic(payload);
+
+

@@ -3,6 +3,9 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import QRCode from "react-qr-code";
 import {
   ChevronLeft,
+  ChevronDown,
+  ChevronUp,
+  History,
   UserPlus,
   CheckCircle2,
   XCircle,
@@ -43,12 +46,14 @@ import {
   UserCheck,
   Users,
   Eye,
+  EyeOff,
   FolderOpen,
   Calendar,
   ArrowRight,
   CreditCard,
   ScanFace,
   Link2,
+  RotateCcw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
@@ -57,6 +62,13 @@ import {
   startOnlineAdmissionRazorpayCheckout,
   type PublicRazorpayConfig,
 } from "../../utils/razorpayCheckout";
+import { getLocalRoutes } from "../../utils/schoolTransportStore";
+import {
+  getUpcomingAdmissionSessionLabel,
+  isOctoberToMarchAdmissionWindow,
+  parseSessionStartYear,
+} from "../../utils/safeBrowserActions";
+import { AdmissionEnquiryCrm } from "./AdmissionEnquiryCrm";
 import type {
   School,
   SchoolClass,
@@ -71,7 +83,10 @@ import type {
   ClassAdmissionHeadToggles,
   SeniorStream,
   AdmissionFormFieldSettings,
+  AdmissionOfferConfig,
+  EntranceDiscountConfig,
 } from "../../school-types";
+import { isAdmissionOfferActive } from "../../utils/admissionOfferUtils";
 import {
   BLOOD_GROUPS,
   ADMISSION_CATEGORIES,
@@ -85,9 +100,16 @@ import {
 import { enrollStudentFromPhotoUrl } from "../../utils/faceRecognitionEngine";
 import {
   getAdmissionApplications,
+  subscribeAdmissionApplications,
   saveAdmissionApplication,
   updateAdmissionStatus,
   saveStudent,
+  getStudent,
+  getStudents,
+  getSessions,
+  getClasses,
+  getStudentFees,
+  getSchoolFeeHistory,
   updateStudent,
   updateStudentPhoto,
   saveFee,
@@ -109,17 +131,26 @@ import {
   updateClassFeeStructure,
   updateSchool,
 } from "../../school-firebase";
+import { computeCompleteBackLedger, type BackLedgerSummary } from "../../utils/reAdmissionUtils";
 import { saveUserToLive } from "../../firebase";
 import { DirectUploadButton } from "../DirectUploadButton";
 import { ProfileCameraModal } from "../ProfileCameraModal";
 import { OfficialFeeReceiptModal } from "./OfficialFeeReceiptModal";
 import { AdmissionFormPrintModal, type AdmissionPrintMode, calculateAgeOnAprilFirst } from "./AdmissionFormPrintModal";
+import { maskSensitive2Chars } from "./feeReceiptUtils";
 import {
   detectFamilySiblings,
   mergeSchoolReferrerList,
   type ReferrerOption,
 } from "../../utils/schoolReferralSiblingEngine";
 import { AdmissionReferralAndSiblingPanel } from "./AdmissionReferralAndSiblingPanel";
+import { getGroupNetItems, isItemShownInAdmission } from "../../utils/feeStructureUtils";
+import {
+  calculateEntranceScoreDiscount,
+  clearEntranceAdmissionPrefill,
+  evaluateEntranceScore,
+  peekEntranceAdmissionPrefill,
+} from "../../utils/entranceTestEngine";
 
 // Clean class label helper: prevents duplicate "(B)" if the class name already contains "Section B"
 export const formatClassLabel = (c?: SchoolClass | null): string => {
@@ -298,8 +329,134 @@ export const getClassFees = (
     usesBus?: boolean;
     config?: AdmissionFeeConfig;
     customBusFee?: number;
+    offer?: AdmissionOfferConfig | null;
+    entranceDiscount?: {
+      scorePct?: number | null;
+      config?: EntranceDiscountConfig | null;
+      cancelled?: boolean;
+      fixedAmountOverride?: number;
+      labelOverride?: string;
+    };
   }
 ) => {
+  const applyOfferToResult = (
+    rawHeads: {
+      key: string;
+      label: string;
+      amount: number;
+      hint?: string;
+      isAdmissionPrimary?: boolean;
+      isBus?: boolean;
+    }[],
+    baseResult: {
+      registrationFee: number;
+      examinationFee: number;
+      republicDayCharge: number;
+      independenceDayCharge: number;
+      diaryCharge: number;
+      idCardCharge: number;
+      tieBeltCharge: number;
+      developmentCharge: number;
+      admissionFee: number;
+      annualCharges: number;
+      tuitionFee: number;
+      busFee: number;
+      rawBusFee: number;
+      busAvailable: boolean;
+      cautionMoney: number;
+      customHeads: ClassFeeHead[];
+      totalPayable: number;
+    }
+  ) => {
+    const offer = options?.offer;
+    const offerActive = Boolean(offer?.enabled);
+    const offerDiscountPercent = offerActive
+      ? Math.max(0, Math.min(90, Math.round(Number(offer?.discountPercent || 0))))
+      : 0;
+    const applyScope = offer?.applyScope === "admission_only" ? "admission_only" : "all";
+
+    const enabledHeads = rawHeads.map((h) => {
+      const originalAmount = Math.max(0, Number(h.amount || 0));
+      const isBusItem = Boolean(h.isBus || h.key === "busFee" || h.key.startsWith("bus_"));
+      const eligible =
+        offerDiscountPercent > 0 &&
+        !isBusItem &&
+        (applyScope === "all" || Boolean(h.isAdmissionPrimary));
+      const discountAmount = eligible
+        ? Math.min(originalAmount, Math.round((originalAmount * offerDiscountPercent) / 100))
+        : 0;
+      const netAmount = Math.max(0, originalAmount - discountAmount);
+      return {
+        key: h.key,
+        label: h.label,
+        amount: netAmount,
+        originalAmount,
+        discountAmount,
+        hint: h.hint,
+      };
+    });
+
+    const grossTotalPayable = Math.max(0, Number(baseResult.totalPayable || 0));
+    const offerDiscountTotal = enabledHeads.reduce((s, h) => s + h.discountAmount, 0);
+    const netAfterOffer = Math.max(0, grossTotalPayable - offerDiscountTotal);
+
+    // Apply Entrance Exam Percentage Merit Fee Off (excluding Bus items, after website offer)
+    const entOpt = options?.entranceDiscount;
+    const entCancelled = Boolean(entOpt?.cancelled);
+    let entranceDiscountTotal = 0;
+    let entranceDiscountLabel = "";
+    let entranceDiscountBadge = "";
+
+    if (!entCancelled && entOpt) {
+      const entScope = entOpt.config?.applyScope === "admission_only" ? "admission_only" : "all";
+      const entranceEligiblePool = rawHeads.reduce((sum, rawH, idx) => {
+        const isBusItem = Boolean(rawH.isBus || rawH.key === "busFee" || rawH.key.startsWith("bus_"));
+        if (isBusItem) return sum;
+        if (entScope === "admission_only" && !rawH.isAdmissionPrimary) return sum;
+        return sum + Number(enabledHeads[idx]?.amount || 0);
+      }, 0);
+
+      const calc = calculateEntranceScoreDiscount(
+        entOpt.scorePct,
+        entOpt.config,
+        entranceEligiblePool
+      );
+      if (calc.eligible && calc.discountAmount > 0) {
+        entranceDiscountTotal = Math.min(netAfterOffer, calc.discountAmount);
+        entranceDiscountLabel = calc.label;
+        entranceDiscountBadge = calc.displayBadge;
+      } else if (
+        !entOpt.config &&
+        entOpt.fixedAmountOverride !== undefined &&
+        entOpt.fixedAmountOverride > 0
+      ) {
+        entranceDiscountTotal = Math.min(
+          netAfterOffer,
+          Math.min(entranceEligiblePool, Math.round(Number(entOpt.fixedAmountOverride)))
+        );
+        entranceDiscountLabel = entOpt.labelOverride || "Entrance Merit Off";
+        entranceDiscountBadge = `₹${entranceDiscountTotal.toLocaleString("en-IN")} OFF`;
+      }
+    }
+
+    const netTotalPayable = Math.max(0, netAfterOffer - entranceDiscountTotal);
+
+    return {
+      ...baseResult,
+      totalPayable: netTotalPayable,
+      grossTotalPayable,
+      offerDiscountTotal,
+      offerDiscountPercent,
+      offerBadgeText: offer?.badgeText || (offerDiscountPercent > 0 ? `${offerDiscountPercent}% OFF` : ""),
+      offerTitle: offer?.title || "Special Admission Offer",
+      entranceDiscountTotal,
+      entranceDiscountLabel,
+      entranceDiscountBadge,
+      entranceDiscountCancelled: entCancelled,
+      enabledHeads,
+    };
+  };
+
   if (!cls) {
     return {
       admissionFee: 0,
@@ -319,8 +476,132 @@ export const getClassFees = (
       cautionMoney: 0,
       customHeads: [] as ClassFeeHead[],
       totalPayable: 0,
-      enabledHeads: [] as { key: string; label: string; amount: number; hint?: string }[],
+      grossTotalPayable: 0,
+      offerDiscountTotal: 0,
+      offerDiscountPercent: 0,
+      offerBadgeText: "",
+      offerTitle: "",
+      entranceDiscountTotal: 0,
+      entranceDiscountLabel: "",
+      entranceDiscountBadge: "",
+      entranceDiscountCancelled: false,
+      enabledHeads: [] as {
+        key: string;
+        label: string;
+        amount: number;
+        originalAmount: number;
+        discountAmount: number;
+        hint?: string;
+      }[],
     };
+  }
+
+  const fs = cls?.feeStructure;
+
+  // New dynamic unlimited Fee Groups & Sub-Groups path
+  if (fs?.feeGroups && Array.isArray(fs.feeGroups) && fs.feeGroups.length > 0) {
+    const rawHeads: {
+      key: string;
+      label: string;
+      amount: number;
+      hint?: string;
+      isAdmissionPrimary?: boolean;
+      isBus?: boolean;
+    }[] = [];
+    let gAdm = 0;
+    let gReg = 0;
+    let gExam = 0;
+    let gDev = 0;
+    let gAnn = 0;
+    let gTui = 0;
+    let gCau = 0;
+    let gBus = 0;
+    let gBusAvailable = false;
+    const gCustomHeads: ClassFeeHead[] = [];
+
+    fs.feeGroups.forEach((grp) => {
+      if (grp.enabled === false) return;
+      const { summary: grpSummary, itemsWithNet } = getGroupNetItems(grp);
+      const offNote =
+        grpSummary.discount > 0
+          ? ` (${grp.discountLabel ? `${grp.discountLabel} • ` : ""}${grpSummary.badgeText})`
+          : "";
+      itemsWithNet.forEach(({ item: it, netAmount, itemDiscount }) => {
+        if (it.enabled === false) return;
+        if (!isItemShownInAdmission(it, grp)) return;
+        const rawAmt = Math.max(0, Number(it.amount || 0));
+        const amt = netAmount;
+        const isBus = Boolean(it.isUserOptional || it.legacyKey === "busFee");
+        if (isBus) {
+          gBusAvailable = true;
+          const effectiveBus = options?.customBusFee !== undefined ? Math.max(0, Number(options.customBusFee)) : amt;
+          gBus += effectiveBus;
+          if (options?.usesBus) {
+            rawHeads.push({
+              key: `bus_${it.id}`,
+              label: it.name,
+              amount: effectiveBus,
+              hint: `${grp.title}${itemDiscount > 0 ? offNote : ""}`,
+              isAdmissionPrimary: false,
+              isBus: true,
+            });
+          }
+          return;
+        }
+
+        const sec = it.billingSection || grp.billingSection || "admission";
+        if (it.legacyKey === "registrationFee") gReg += amt;
+        else if (it.legacyKey === "admissionFee") gAdm += amt;
+        else if (it.legacyKey === "examinationFee" || sec === "exam") gExam += amt;
+        else if (it.legacyKey === "developmentCharge") gDev += amt;
+        else if (it.legacyKey === "annualCharges" || sec === "annual") gAnn += amt;
+        else if (it.legacyKey === "tuitionFee" || sec === "monthly") gTui += amt;
+        else if (it.legacyKey === "cautionMoney") gCau += amt;
+        else {
+          gCustomHeads.push({ ...it, amount: amt, enabled: true });
+        }
+
+        if (rawAmt > 0 && (amt > 0 || itemDiscount > 0)) {
+          rawHeads.push({
+            key: `fg_${it.id}`,
+            label: it.name,
+            amount: amt,
+            hint: `${grp.title}${itemDiscount > 0 ? `${offNote} — Saved ₹${itemDiscount}` : ""}`,
+            isAdmissionPrimary:
+              it.legacyKey === "admissionFee" ||
+              it.legacyKey === "registrationFee" ||
+              sec === "admission",
+            isBus: false,
+          });
+        }
+      });
+    });
+
+    const activeUsesBus = Boolean(options?.usesBus) && gBusAvailable;
+    const payableBus = activeUsesBus ? gBus : 0;
+    const nonBusTotal = rawHeads
+      .filter((h) => !h.isBus)
+      .reduce((sum, h) => sum + (Number(h.amount) || 0), 0);
+
+    return applyOfferToResult(rawHeads, {
+      registrationFee: gReg,
+      examinationFee: gExam,
+      republicDayCharge: 0,
+      independenceDayCharge: 0,
+      diaryCharge: 0,
+      idCardCharge: 0,
+      tieBeltCharge: 0,
+      developmentCharge: gDev,
+      admissionFee: gAdm,
+      annualCharges: gAnn,
+      tuitionFee: gTui,
+      busFee: payableBus,
+      rawBusFee: gBus,
+      busAvailable: gBusAvailable,
+      cautionMoney: gCau,
+      customHeads: gCustomHeads,
+      totalPayable: nonBusTotal + payableBus,
+    });
   }
 
   const draft = buildClassFeeDraft(cls);
@@ -354,18 +635,26 @@ export const getClassFees = (
     0
   );
 
-  const enabledHeads: { key: string; label: string; amount: number; hint?: string }[] = [];
+  const rawHeads: {
+    key: string;
+    label: string;
+    amount: number;
+    hint?: string;
+    isAdmissionPrimary?: boolean;
+    isBus?: boolean;
+  }[] = [];
 
   if (toggles.registrationFee) {
-    enabledHeads.push({
+    rawHeads.push({
       key: "registrationFee",
       label: "Registration Fee (पंजीकरण शुल्क)",
       amount: registrationFee,
       hint: "प्रवेश पंजीकरण व फॉर्म शुल्क",
+      isAdmissionPrimary: true,
     });
   }
   if (toggles.examinationFee) {
-    enabledHeads.push({
+    rawHeads.push({
       key: "examinationFee",
       label: "1. Examination Fee (6 Exams: P.A-1, P.A-2, HYE, P.A-3, P.A-4, Annual Exam)",
       amount: examinationFee,
@@ -373,7 +662,7 @@ export const getClassFees = (
     });
   }
   if (toggles.republicDayCharge) {
-    enabledHeads.push({
+    rawHeads.push({
       key: "republicDayCharge",
       label: "2. Republic Day Charge (गणतंत्र दिवस शुल्क)",
       amount: republicDayCharge,
@@ -381,7 +670,7 @@ export const getClassFees = (
     });
   }
   if (toggles.independenceDayCharge) {
-    enabledHeads.push({
+    rawHeads.push({
       key: "independenceDayCharge",
       label: "3. Independence Day (स्वतंत्रता दिवस शुल्क)",
       amount: independenceDayCharge,
@@ -389,7 +678,7 @@ export const getClassFees = (
     });
   }
   if (toggles.diaryCharge) {
-    enabledHeads.push({
+    rawHeads.push({
       key: "diaryCharge",
       label: "4. Diary (स्कूल डायरी)",
       amount: diaryCharge,
@@ -397,7 +686,7 @@ export const getClassFees = (
     });
   }
   if (toggles.idCardCharge) {
-    enabledHeads.push({
+    rawHeads.push({
       key: "idCardCharge",
       label: "5. I.Card (छात्र पहचान पत्र)",
       amount: idCardCharge,
@@ -405,7 +694,7 @@ export const getClassFees = (
     });
   }
   if (toggles.tieBeltCharge) {
-    enabledHeads.push({
+    rawHeads.push({
       key: "tieBeltCharge",
       label: "6. Tie + Belt (स्कूल टाई व बेल्ट)",
       amount: tieBeltCharge,
@@ -413,7 +702,7 @@ export const getClassFees = (
     });
   }
   if (toggles.developmentCharge) {
-    enabledHeads.push({
+    rawHeads.push({
       key: "developmentCharge",
       label: "7. Development Charge (विकास शुल्क)",
       amount: developmentCharge,
@@ -422,15 +711,16 @@ export const getClassFees = (
   }
 
   if (toggles.admissionFee) {
-    enabledHeads.push({
+    rawHeads.push({
       key: "admissionFee",
       label: "प्रवेश शुल्क (Admission Charge)",
       amount: admissionFee,
       hint: "कक्षा के लिए एकमुश्त प्रवेश शुल्क",
+      isAdmissionPrimary: true,
     });
   }
   if (toggles.annualCharges) {
-    enabledHeads.push({
+    rawHeads.push({
       key: "annualCharges",
       label: "अन्य वार्षिक शुल्क (Other Annual Charges)",
       amount: annualCharges,
@@ -438,7 +728,7 @@ export const getClassFees = (
     });
   }
   if (toggles.tuitionFee) {
-    enabledHeads.push({
+    rawHeads.push({
       key: "tuitionFee",
       label: "प्रथम माह शिक्षण शुल्क (1st Month Tuition)",
       amount: tuitionFee,
@@ -446,7 +736,7 @@ export const getClassFees = (
     });
   }
   if (toggles.cautionMoney) {
-    enabledHeads.push({
+    rawHeads.push({
       key: "cautionMoney",
       label: "कॉशन / सिक्योरिटी राशि (Caution Money)",
       amount: cautionMoney,
@@ -455,7 +745,7 @@ export const getClassFees = (
   }
 
   activeCustomHeads.forEach((h) => {
-    enabledHeads.push({
+    rawHeads.push({
       key: `custom_${h.id}`,
       label: h.name,
       amount: Math.max(0, Number(h.amount || 0)),
@@ -464,11 +754,12 @@ export const getClassFees = (
   });
 
   if (busAvailable && usesBus) {
-    enabledHeads.push({
+    rawHeads.push({
       key: "busFee",
       label: "वाहन / बस शुल्क (Transport / Bus Fee)",
       amount: busFee,
       hint: "बस सुविधा चयनित",
+      isBus: true,
     });
   }
 
@@ -488,7 +779,7 @@ export const getClassFees = (
     customHeadsTotal +
     busFee;
 
-  return {
+  return applyOfferToResult(rawHeads, {
     registrationFee,
     examinationFee,
     republicDayCharge,
@@ -506,8 +797,7 @@ export const getClassFees = (
     cautionMoney,
     customHeads: activeCustomHeads,
     totalPayable,
-    enabledHeads,
-  };
+  });
 };
 
 interface Props {
@@ -515,8 +805,10 @@ interface Props {
   classes: SchoolClass[];
   sessions: SchoolSession[];
   activeSession: SchoolSession | null;
+  admissionSessionLabel?: string;
   isAdmin?: boolean;
   viewMode?: "all" | "admissions_only" | "fee_setup_only";
+  hideTopNavbar?: boolean;
   onBack: () => void;
   onStudentEnrolledAndLink?: (student: SchoolStudent) => void;
 }
@@ -525,6 +817,7 @@ interface FeeItemRow {
   id: string;
   description: string;
   due: number;
+  offerCon?: number;
 }
 
 export const OnlineAdmissionManager: React.FC<Props> = ({
@@ -532,11 +825,27 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
   classes: propClasses,
   sessions,
   activeSession,
+  admissionSessionLabel,
   isAdmin = true,
   viewMode = "all",
+  hideTopNavbar = false,
   onBack,
   onStudentEnrolledAndLink,
 }) => {
+  const effectivePublicAdmissionSession = useMemo(
+    () => admissionSessionLabel || getUpcomingAdmissionSessionLabel(activeSession?.name, sessions),
+    [admissionSessionLabel, activeSession?.name, sessions]
+  );
+  const effectivePublicTargetSessionObj = useMemo(() => {
+    if (!isOctoberToMarchAdmissionWindow()) {
+      return activeSession || sessions[0] || null;
+    }
+    const targetYr = parseSessionStartYear(effectivePublicAdmissionSession);
+    const matchedFuture = targetYr
+      ? sessions.find((s) => parseSessionStartYear(s?.name || s?.startDate) === targetYr)
+      : undefined;
+    return matchedFuture || activeSession || sessions[0] || null;
+  }, [activeSession, sessions, effectivePublicAdmissionSession]);
   // Live classes list: strictly shows only classes created for this school, sorted Nursery to 12!
   const [classesList, setClassesList] = useState<SchoolClass[]>(() => {
     try {
@@ -598,11 +907,14 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
     };
   }, [school.id, activeSession?.id]);
 
-  const [activeTab, setActiveTab] = useState<"applications" | "new_form" | "fee_setup" | "field_settings">(() => {
+  const [activeTab, setActiveTab] = useState<"applications" | "new_form" | "enquiry_crm" | "fee_setup" | "field_settings">(() => {
     if (viewMode === "fee_setup_only") return "fee_setup";
     if (viewMode === "admissions_only") return isAdmin ? "applications" : "new_form";
     return isAdmin ? "applications" : "new_form";
   });
+  const [maskSensitiveData, setMaskSensitiveData] = useState<boolean>(false);
+
+  const configuredRoutes = useMemo(() => (school?.id ? getLocalRoutes(school.id) : []), [school?.id]);
 
   // Admin Admission Form Field Customization (What to show/hide in the form)
   const [fieldSettings, setFieldSettings] = useState<AdmissionFormFieldSettings>(() => {
@@ -660,6 +972,10 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
   const [statusFilter, setStatusFilter] = useState<"all" | "today" | "pending" | "approved" | "rejected">("all");
   const [submitting, setSubmitting] = useState(false);
   const [submittedApp, setSubmittedApp] = useState<AdmissionApplication | null>(null);
+  const [admissionStep, setAdmissionStep] = useState<1 | 2 | 3>(1);
+  const [adminFormStep, setAdminFormStep] = useState<1 | 2>(1);
+  const [jumpingToPortalApp, setJumpingToPortalApp] = useState<AdmissionApplication | null>(null);
+  const autoJumpedAppIdsRef = useRef<Set<string>>(new Set());
   const [formError, setFormError] = useState<string | null>(null);
 
   // Parent Portal & Multiple Admissions under single ID / Mobile state
@@ -697,6 +1013,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
   // Live Camera Studio Modal for Admission Photo Capture
   const [showLiveCameraModal, setShowLiveCameraModal] = useState(false);
   const [cameraTarget, setCameraTarget] = useState<"form" | "enroll" | "post_pay_photo">("form");
+  const [showAdmissionTypeDrawer, setShowAdmissionTypeDrawer] = useState(false);
 
   // Direct Razorpay Admission Payment + Mandatory Face ID Photo + User Account Link States
   const [razorpayCfg, setRazorpayCfg] = useState<PublicRazorpayConfig | null>(null);
@@ -710,9 +1027,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
     fetchSchoolRazorpayConfig(school.id).then((cfg) => setRazorpayCfg(cfg)).catch(() => {});
   }, [school?.id]);
 
-  // Auto-Operator Identification (1–3s scan without open camera viewfinder)
-  const [operatorCheckState, setOperatorCheckState] = useState<"VERIFYING" | "VERIFIED">("VERIFYING");
-  const [verifiedOperator, setVerifiedOperator] = useState<{
+  const [verifiedOperator] = useState<{
     role: "TEACHER" | "PARENT_SELF" | "ADMIN";
     name: string;
     verifiedMethod: "face_auto" | "session_auth" | "manual";
@@ -723,13 +1038,6 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
   });
   const [teacherCustomAdmissionFee, setTeacherCustomAdmissionFee] = useState<string>("");
   const [teacherCustomConcession, setTeacherCustomConcession] = useState<string>("");
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setOperatorCheckState("VERIFIED");
-    }, 1800);
-    return () => clearTimeout(timer);
-  }, []);
 
   // Dynamic Admission Fee Items in Enroll Modal
   const [enrollFeeItems, setEnrollFeeItems] = useState<FeeItemRow[]>([]);
@@ -992,10 +1300,19 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
     feeRecord?: MonthlyFee | null;
   } | null>(null);
   const screenshotFileInputRef = useRef<HTMLInputElement | null>(null);
+  const submitAsPendingRequestRef = useRef<boolean>(false);
 
   // Inline Reject Confirmation State (Replaces window.confirm)
   const [rejectingAppId, setRejectingAppId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState<string>("Criteria / Documents incomplete");
+
+  // Inline Resubmit Rejected Application (Screenshot + UTR) State
+  const [resubmittingAppId, setResubmittingAppId] = useState<string | null>(null);
+  const [resubmitScreenshot, setResubmitScreenshot] = useState<string | null>(null);
+  const [resubmitUtr, setResubmitUtr] = useState<string>("");
+  const [resubmitNote, setResubmitNote] = useState<string>("");
+  const [resubmittingRejected, setResubmittingRejected] = useState<boolean>(false);
+  const resubmitFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Print & Receipt Modals
   const [printStudioState, setPrintStudioState] = useState<{
@@ -1031,6 +1348,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
     identificationMark: "",
     motherTongue: "Hindi (हिंदी)",
     previousSchool: "",
+    previousClass: "",
     previousMarks: "",
     previousBoard: "CBSE",
     previousTcNo: "",
@@ -1085,6 +1403,352 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
     transactionRef: "",
   });
 
+  const [entrancePrefillBanner, setEntrancePrefillBanner] = useState<{
+    studentName: string;
+    phone: string;
+    classLevel?: number;
+    classLabel: string;
+    bestScorePct?: number;
+    lastSetId?: string;
+    evaluationTier?: 'MERIT' | 'QUALIFIED' | 'FOUNDATION_SUPPORT' | 'COUNSELING';
+    evaluationTag?: string;
+    recommendedClassLevel?: number;
+    recommendedClassLabel?: string;
+  } | null>(null);
+  const [entrancePrefillDiscountCancelled, setEntrancePrefillDiscountCancelled] = useState(false);
+
+  useEffect(() => {
+    const applyPrefill = () => {
+      const prefill = peekEntranceAdmissionPrefill();
+      if (!prefill) return;
+      if (prefill.schoolId && school?.id && prefill.schoolId !== school.id) return;
+
+      const targetNum = String(prefill.recommendedClassLevel || prefill.classLevel || "");
+      const targetLabel = (prefill.recommendedClassLabel || prefill.classLabel || "").toLowerCase();
+      const matchedCls = classesList.find((c) => {
+        const cname = (c.name || "").toLowerCase();
+        return (
+          cname === targetLabel ||
+          new RegExp(`\\b${targetNum}\\b`).test(cname)
+        );
+      });
+
+      setForm((prev) => ({
+        ...prev,
+        studentName: prev.studentName || prefill.studentName || "",
+        phone: prev.phone || prefill.phone || "",
+        fatherPhone: prev.fatherPhone || prefill.phone || "",
+        fatherWhatsapp: prev.fatherWhatsapp || prefill.phone || "",
+        classId: matchedCls?.id || prev.classId || classesList[0]?.id || "",
+      }));
+
+      setEntrancePrefillDiscountCancelled(false);
+      setEntrancePrefillBanner({
+        studentName: prefill.studentName,
+        phone: prefill.phone,
+        classLevel: prefill.classLevel,
+        classLabel: prefill.classLabel,
+        bestScorePct: prefill.bestScorePct,
+        lastSetId: prefill.lastSetId,
+        evaluationTier: prefill.evaluationTier,
+        evaluationTag: prefill.evaluationTag,
+        recommendedClassLevel: prefill.recommendedClassLevel,
+        recommendedClassLabel: prefill.recommendedClassLabel,
+      });
+
+      if (!isAdmin) {
+        setParentView("form");
+      } else {
+        setActiveTab("new_form");
+      }
+    };
+
+    applyPrefill();
+    window.addEventListener("nst_entrance_admission_prefill", applyPrefill);
+    return () => window.removeEventListener("nst_entrance_admission_prefill", applyPrefill);
+  }, [classesList, school?.id, isAdmin]);
+
+  // Re-Admission Cascade States (Old Session -> Old Class -> Old Student -> Auto-Fill & Back Due)
+  const [readmSessionsPool, setReadmSessionsPool] = useState<SchoolSession[]>([]);
+  const [readmClassesPool, setReadmClassesPool] = useState<SchoolClass[]>([]);
+  const [readmStudentsPool, setReadmStudentsPool] = useState<SchoolStudent[]>([]);
+  const [readmFeesPool, setReadmFeesPool] = useState<MonthlyFee[]>([]);
+  const [loadingReadmPool, setLoadingReadmPool] = useState<boolean>(false);
+  const [oldSessionId, setOldSessionId] = useState<string>("");
+  const [targetSessionId, setTargetSessionId] = useState<string>(() => activeSession?.id || sessions[0]?.id || "");
+  const [includeBackDueInAdm, setIncludeBackDueInAdm] = useState<boolean>(true);
+  const [oldClassFilter, setOldClassFilter] = useState<string>("all");
+  const [oldStudentId, setOldStudentId] = useState<string>("");
+  const [oldStudentSearch, setOldStudentSearch] = useState<string>("");
+  const [pulledOldStudent, setPulledOldStudent] = useState<SchoolStudent | null>(null);
+  const [pulledBackLedger, setPulledBackLedger] = useState<BackLedgerSummary | null>(null);
+  const [showReadmMonthTable, setShowReadmMonthTable] = useState<boolean>(false);
+  const [carriedBackDueInput, setCarriedBackDueInput] = useState<string>("0");
+
+  useEffect(() => {
+    if (!isAdmin || form.admissionType !== "READMISSION" || !school?.id) return;
+    let cancelled = false;
+    setLoadingReadmPool(true);
+    Promise.all([
+      getSessions(school.id).catch(() => []),
+      getClasses(school.id).catch(() => []),
+      getStudents(school.id).catch(() => []),
+      getSchoolFeeHistory(school.id).catch(() => []),
+    ])
+      .then(([remoteSess, remoteCls, remoteSt, remoteFees]) => {
+        if (cancelled) return;
+        const sessMap = new Map<string, SchoolSession>();
+        [...(sessions || []), ...(remoteSess || [])].forEach((s) => {
+          if (s && s.id && !isDemoRecord(s)) sessMap.set(s.id, s);
+        });
+        const mergedSess = Array.from(sessMap.values());
+        setReadmSessionsPool(mergedSess);
+
+        const clsMap = new Map<string, SchoolClass>();
+        [...(classesList || []), ...(remoteCls || [])].forEach((c) => {
+          if (c && c.id && !isDemoRecord(c)) clsMap.set(c.id, c);
+        });
+        setReadmClassesPool(Array.from(clsMap.values()));
+
+        const stMap = new Map<string, SchoolStudent>();
+        [...getLocalStudents(school.id), ...(remoteSt || [])].forEach((s) => {
+          if (s && s.id && !isDemoRecord(s)) stMap.set(s.id, s);
+        });
+        const mergedSt = Array.from(stMap.values());
+        setReadmStudentsPool(mergedSt);
+
+        const feeMap = new Map<string, MonthlyFee>();
+        [...(getLocalFees(school.id) || []), ...(remoteFees || [])].forEach((f, idx) => {
+          if (f && !isDemoRecord(f)) {
+            feeMap.set(`${f.studentId}_${f.month}_${f.receiptNo || f.id || idx}`, f);
+          }
+        });
+        setReadmFeesPool(Array.from(feeMap.values()));
+
+        let resolvedOldId = oldSessionId;
+        if (!resolvedOldId && mergedSess.length > 0) {
+          const prevWithStudents = mergedSess.find(
+            (s) => s.id !== activeSession?.id && mergedSt.some((st) => st.sessionId === s.id)
+          );
+          const anyPrev = mergedSess.find((s) => s.id !== activeSession?.id);
+          resolvedOldId = prevWithStudents?.id || anyPrev?.id || mergedSess[0].id;
+          setOldSessionId(resolvedOldId);
+        }
+
+        if (mergedSess.length > 0) {
+          const sortedAsc = [...mergedSess].sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+          const curTargetValid = mergedSess.some((s) => s.id === targetSessionId);
+          if (!targetSessionId || !curTargetValid || (mergedSess.length > 1 && targetSessionId === resolvedOldId)) {
+            const activeValid = activeSession?.id && activeSession.id !== resolvedOldId && mergedSess.some((s) => s.id === activeSession.id);
+            const oldIdx = sortedAsc.findIndex((s) => s.id === resolvedOldId);
+            const nextAfterOld = oldIdx >= 0 && oldIdx + 1 < sortedAsc.length ? sortedAsc[oldIdx + 1] : undefined;
+            const otherSess = nextAfterOld || sortedAsc.find((s) => s.id !== resolvedOldId) || mergedSess[0];
+            setTargetSessionId(activeValid ? (activeSession?.id || otherSess.id) : otherSess.id);
+          }
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingReadmPool(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin, form.admissionType, school?.id]);
+
+  const availableReadmSessionsList = useMemo(() => {
+    const map = new Map<string, SchoolSession>();
+    [...(sessions || []), ...readmSessionsPool].forEach((s) => {
+      if (s && s.id && !isDemoRecord(s)) map.set(s.id, s);
+    });
+    return Array.from(map.values()).sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  }, [sessions, readmSessionsPool]);
+
+  const effectiveTargetClasses = useMemo(() => {
+    if (isAdmin && form.admissionType === "READMISSION" && targetSessionId) {
+      const targetCls = readmClassesPool.filter((c) => c.sessionId === targetSessionId);
+      if (targetCls.length > 0) return sortSchoolClasses(targetCls);
+    }
+    return classesList;
+  }, [isAdmin, form.admissionType, targetSessionId, readmClassesPool, classesList]);
+
+  const selectedOldSessionObj = useMemo(
+    () => readmSessionsPool.find((s) => s.id === oldSessionId) || null,
+    [readmSessionsPool, oldSessionId]
+  );
+
+  const oldClassesForSession = useMemo(() => {
+    const filtered = readmClassesPool.filter((c) => !oldSessionId || c.sessionId === oldSessionId);
+    if (filtered.length > 0) return sortSchoolClasses(filtered);
+    const seen = new Map<string, SchoolClass>();
+    readmStudentsPool
+      .filter((st) => !oldSessionId || st.sessionId === oldSessionId)
+      .forEach((st) => {
+        if (st.classId && !seen.has(st.classId)) {
+          seen.set(st.classId, {
+            id: st.classId,
+            schoolId: school.id,
+            sessionId: st.sessionId,
+            name: st.className || "Class",
+            defaultFee: Number(st.monthlyFee || 0),
+          } as SchoolClass);
+        }
+      });
+    return sortSchoolClasses(Array.from(seen.values()));
+  }, [readmClassesPool, readmStudentsPool, oldSessionId, school.id]);
+
+  const studentsInOldClass = useMemo(() => {
+    if (!isAdmin || form.admissionType !== "READMISSION") return [];
+    const targetClsObj = oldClassesForSession.find((c) => c.id === oldClassFilter);
+    return readmStudentsPool
+      .filter((s) => !oldSessionId || s.sessionId === oldSessionId)
+      .filter((s) => {
+        if (oldClassFilter === "all") return true;
+        return (
+          s.classId === oldClassFilter ||
+          (targetClsObj?.name &&
+            (s.className || "").trim().toLowerCase() === targetClsObj.name.trim().toLowerCase())
+        );
+      })
+      .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  }, [isAdmin, form.admissionType, readmStudentsPool, oldSessionId, oldClassFilter, oldClassesForSession]);
+
+  const matchingReadmStudents = useMemo(() => {
+    const q = oldStudentSearch.trim().toLowerCase();
+    if (!q || !isAdmin || form.admissionType !== "READMISSION") return [];
+    return studentsInOldClass
+      .filter(
+        (s) =>
+          (s.name || "").toLowerCase().includes(q) ||
+          (s.fatherName || "").toLowerCase().includes(q) ||
+          (s.admissionNo || "").toLowerCase().includes(q) ||
+          (s.phone || "").includes(q) ||
+          (s.rollNo || "").toLowerCase().includes(q)
+      )
+      .slice(0, 10);
+  }, [oldStudentSearch, isAdmin, form.admissionType, studentsInOldClass]);
+
+  const handlePullReadmStudent = (src: SchoolStudent) => {
+    setPulledOldStudent(src);
+    setOldStudentId(src.id);
+    setOldStudentSearch("");
+
+    // Determine promoted target class in selected target session
+    let nextClassId = form.classId;
+    const tgtClsList = effectiveTargetClasses.length > 0 ? effectiveTargetClasses : classesList;
+    if (tgtClsList.length > 0) {
+      const oldIdx = oldClassesForSession.findIndex(
+        (c) =>
+          c.id === src.classId ||
+          (c.name || "").trim().toLowerCase() === (src.className || "").trim().toLowerCase()
+      );
+      const tgtIdx = tgtClsList.findIndex(
+        (c) => (c.name || "").trim().toLowerCase() === (src.className || "").trim().toLowerCase()
+      );
+      let promotedTarget: SchoolClass | undefined;
+      if (tgtIdx >= 0 && tgtIdx + 1 < tgtClsList.length) {
+        promotedTarget = tgtClsList[tgtIdx + 1];
+      } else if (oldIdx >= 0 && oldIdx + 1 < oldClassesForSession.length) {
+        const nextOldName = (oldClassesForSession[oldIdx + 1].name || "").trim().toLowerCase();
+        promotedTarget = tgtClsList.find((c) => (c.name || "").trim().toLowerCase() === nextOldName);
+      }
+      if (promotedTarget) {
+        nextClassId = promotedTarget.id;
+      }
+    }
+
+    setForm((prev) => ({
+      ...prev,
+      admissionType: "READMISSION",
+      classId: nextClassId,
+      stream: src.stream || prev.stream,
+      studentName: src.name || prev.studentName,
+      dateOfBirth: src.dateOfBirth || prev.dateOfBirth,
+      gender: src.gender || prev.gender,
+      category: src.category || prev.category,
+      religion: src.religion || prev.religion,
+      nationality: src.nationality || prev.nationality,
+      bloodGroup: src.bloodGroup || "",
+      apaarId: src.apaarId || "",
+      photoUrl: src.photoUrl || "",
+      isOnlyChild: Boolean(src.isOnlyChild),
+      identificationMark: src.identificationMark || "",
+      motherTongue: src.motherTongue || prev.motherTongue,
+      previousSchool: school?.name || prev.previousSchool,
+      previousClass: src.className || "",
+      previousMarks: src.className ? `${src.className} (Promoted)` : prev.previousMarks,
+      fatherName: src.fatherName || prev.fatherName,
+      fatherQualification: src.fatherQualification || prev.fatherQualification,
+      fatherOccupation: src.fatherOccupation || "",
+      fatherPhone: src.fatherPhone || "",
+      fatherWhatsapp: src.fatherWhatsapp || "",
+      motherName: src.motherName || prev.motherName,
+      motherQualification: src.motherQualification || prev.motherQualification,
+      motherOccupation: src.motherOccupation || prev.motherOccupation,
+      motherPhone: src.motherPhone || "",
+      motherWhatsapp: src.motherWhatsapp || "",
+      annualIncome: src.annualIncome || "",
+      emergencyContact: src.emergencyContact || "",
+      emergencyPhone: src.emergencyPhone || "",
+      emergencyRelation: src.emergencyRelation || prev.emergencyRelation,
+      emergencyWhatsapp: src.emergencyWhatsapp || "",
+      medicalHistory: src.medicalHistory || prev.medicalHistory,
+      aadhaarNo: src.aadhaarNo || "",
+      fatherAadhaar: src.fatherAadhaar || "",
+      motherAadhaar: src.motherAadhaar || "",
+      phone: src.phone || prev.phone,
+      whatsappNo: src.whatsappNo || src.fatherWhatsapp || src.phone || prev.whatsappNo,
+      email: src.email || "",
+      address: src.address || "",
+      city: src.city || "",
+      pincode: src.pincode || "",
+      correspondenceAddress: src.correspondenceAddress || src.address || "",
+      isSameAddress: src.isSameAddress !== undefined ? src.isSameAddress : true,
+      usesBus: Boolean(src.usesBus),
+      busRoute: src.busRoute || "",
+      bankAccountName: src.bankAccountName || "",
+      bankName: src.bankName || "",
+      bankAccountNumber: src.bankAccountNumber || "",
+      bankIfsc: src.bankIfsc || "",
+      siblingDetails: Array.isArray(src.siblingDetails) ? src.siblingDetails : prev.siblingDetails,
+      submittedDocs:
+        Array.isArray(src.submittedDocs) && src.submittedDocs.length > 0
+          ? src.submittedDocs
+          : prev.submittedDocs,
+    }));
+
+    const srcSess =
+      readmSessionsPool.find((s) => s.id === (src.sessionId || oldSessionId)) || selectedOldSessionObj;
+    const initialFees = readmFeesPool.filter((f) => f.studentId === src.id);
+    const ledger = computeCompleteBackLedger(
+      src,
+      initialFees,
+      srcSess,
+      oldClassesForSession.length > 0 ? oldClassesForSession : classesList
+    );
+    setPulledBackLedger(ledger);
+    setCarriedBackDueInput(String(ledger.totalBackDue));
+
+    getStudentFees(school.id, src.id)
+      .then((freshFees) => {
+        if (!Array.isArray(freshFees) || freshFees.length === 0) return;
+        const merged = new Map<string, MonthlyFee>();
+        [...initialFees, ...freshFees].forEach((f, idx) => {
+          if (f && !isDemoRecord(f)) {
+            merged.set(`${f.month}_${f.receiptNo || f.id || idx}`, f);
+          }
+        });
+        const refined = computeCompleteBackLedger(
+          src,
+          Array.from(merged.values()),
+          srcSess,
+          oldClassesForSession.length > 0 ? oldClassesForSession : classesList
+        );
+        setPulledBackLedger(refined);
+        setCarriedBackDueInput(String(refined.totalBackDue));
+      })
+      .catch(() => {});
+  };
+
   // Calculate age as on 1st April of current academic session
   const sessionYearNum = useMemo(() => {
     const sName = activeSession?.name || sessions[0]?.name || "";
@@ -1097,10 +1761,16 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
   }, [form.dateOfBirth, sessionYearNum]);
 
   const parentApplications = useMemo(() => {
-    if (!parentPortalPhone.trim()) return [];
-    const clean = parentPortalPhone.trim().replace(/\D/g, "");
-    if (!clean) return [];
+    const raw = parentPortalPhone.trim();
+    if (!raw) return [];
+    const rawLower = raw.toLowerCase();
+    const clean = raw.replace(/\D/g, "");
     return applications.filter((app) => {
+      const appNo = String(app.applicationNo || "").toLowerCase();
+      if (appNo && (appNo === rawLower || (rawLower.length >= 4 && appNo.includes(rawLower)))) {
+        return true;
+      }
+      if (!clean) return false;
       const p1 = (app.phone || "").replace(/\D/g, "");
       const p2 = (app.whatsappNo || "").replace(/\D/g, "");
       return (
@@ -1194,6 +1864,8 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
     setSubmittedApp(null);
     setConfirmedAdmission(null);
     setPaymentSubmittedNotice(false);
+    setAdmissionStep(1);
+    setAdminFormStep(1);
     setParentView("form");
     setActiveTab("new_form");
   };
@@ -1207,10 +1879,13 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
   const [adminPaidManual, setAdminPaidManual] = useState<boolean>(false);
   const [adminMonthlyFee, setAdminMonthlyFee] = useState<string>("");
 
-  // Sync admin roll no & default amounts when class or bus changes
+  // Sync admin roll no & default amounts when class, bus, or back due changes
   useEffect(() => {
     if (!form.classId) return;
-    const selectedCls = classesList.find((c) => c.id === form.classId) || classes.find((c) => c.id === form.classId);
+    const selectedCls =
+      effectiveTargetClasses.find((c) => c.id === form.classId) ||
+      classesList.find((c) => c.id === form.classId) ||
+      classes.find((c) => c.id === form.classId);
     if (!selectedCls) return;
 
     // Auto-calculate next available Roll No for this class
@@ -1232,28 +1907,63 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
       const defMonthly = Number(selectedCls.feeStructure?.tuitionFee ?? selectedCls.defaultFee ?? 0);
       setAdminMonthlyFee(String(defMonthly));
 
-      // Default total payable
-      const fees = getClassFees(selectedCls, { usesBus: form.usesBus });
+      // Default total payable (including Re-Admission Back Due if toggled ON, minus active Website Offer % OFF & Entrance Merit Off)
+      const fees = getClassFees(selectedCls, {
+        usesBus: form.usesBus,
+        offer: school?.websiteConfig?.admissionOffer,
+        entranceDiscount:
+          entrancePrefillBanner?.bestScorePct !== undefined
+            ? {
+                scorePct: entrancePrefillBanner.bestScorePct,
+                config: school?.websiteConfig?.entranceDiscountConfig,
+                cancelled: entrancePrefillDiscountCancelled,
+              }
+            : undefined,
+      });
+      const backDueExtra =
+        form.admissionType === "READMISSION" && includeBackDueInAdm
+          ? Math.max(0, Number(carriedBackDueInput || 0))
+          : 0;
       if (!adminPaidManual) {
-        setAdminPaidAmount(String(fees.totalPayable));
+        setAdminPaidAmount(String(fees.totalPayable + backDueExtra));
       }
     } catch {
       setAdminRollNo("1");
     }
-  }, [form.classId, form.usesBus, school.id, classesList, classes, adminPaidManual]);
+  }, [
+    form.classId,
+    form.usesBus,
+    form.admissionType,
+    includeBackDueInAdm,
+    carriedBackDueInput,
+    school.id,
+    school?.websiteConfig?.admissionOffer,
+    school?.websiteConfig?.entranceDiscountConfig,
+    entrancePrefillBanner?.bestScorePct,
+    entrancePrefillDiscountCancelled,
+    effectiveTargetClasses,
+    classesList,
+    classes,
+    adminPaidManual,
+  ]);
 
-  // Keep form.classId pointing to a valid class in classesList
+  // Keep form.classId pointing to a valid class in effectiveTargetClasses
   useEffect(() => {
-    if (classesList.length > 0) {
+    const activeClsList = effectiveTargetClasses.length > 0 ? effectiveTargetClasses : classesList;
+    if (activeClsList.length > 0) {
       setForm((prev) => {
-        const exists = classesList.some((c) => c.id === prev.classId);
+        const exists = activeClsList.some((c) => c.id === prev.classId);
         if (!exists || !prev.classId) {
-          return { ...prev, classId: classesList[0].id };
+          const oldCls = classesList.find((c) => c.id === prev.classId) || readmClassesPool.find((c) => c.id === prev.classId);
+          const byName = oldCls?.name
+            ? activeClsList.find((c) => (c.name || "").trim().toLowerCase() === oldCls.name.trim().toLowerCase())
+            : undefined;
+          return { ...prev, classId: (byName || activeClsList[0]).id };
         }
         return prev;
       });
     }
-  }, [classesList]);
+  }, [effectiveTargetClasses, classesList, readmClassesPool]);
 
   useEffect(() => {
     fetchApplications();
@@ -1271,6 +1981,141 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
     });
   }, [school.id]);
 
+  const resolveRealStudentRecord = async (app: AdmissionApplication): Promise<SchoolStudent> => {
+    const locals = getLocalStudents(school.id);
+    const findMatch = (list: SchoolStudent[]) =>
+      list.find(
+        (s) =>
+          (app.enrolledStudentId && s.id === app.enrolledStudentId) ||
+          (s.admissionNo && app.applicationNo && s.admissionNo === app.applicationNo)
+      ) || null;
+
+    let matched = findMatch(locals);
+    if (!matched && app.enrolledStudentId) {
+      try {
+        const direct = await getStudent(school.id, app.enrolledStudentId);
+        if (direct) matched = direct;
+      } catch {}
+    }
+    if (!matched) {
+      try {
+        const remoteList = await getStudents(school.id);
+        matched = findMatch(remoteList);
+      } catch {}
+    }
+
+    if (matched) {
+      try {
+        setLocalStudents(school.id, [matched, ...locals.filter((s) => s.id !== matched!.id)]);
+      } catch {}
+      return matched;
+    }
+
+    const fallbackCls = classes.find((c) => c.id === app.classId);
+    const constructed: SchoolStudent = {
+      id: app.enrolledStudentId || app.id,
+      schoolId: school.id,
+      sessionId: activeSession?.id || sessions[0]?.id || "2026-27",
+      classId: app.classId,
+      className: app.className || (fallbackCls ? `${fallbackCls.name} ${fallbackCls.section || ""}`.trim() : "Class"),
+      name: app.studentName,
+      rollNo: app.assignedRollNo || "1",
+      admissionNo: app.applicationNo,
+      gender: app.gender,
+      category: app.category || "General",
+      religion: app.religion || "Hindu",
+      nationality: app.nationality || "Indian",
+      fatherName: app.fatherName,
+      motherName: app.motherName,
+      phone: app.phone,
+      whatsappNo: app.whatsappNo || app.phone,
+      email: app.email,
+      dateOfBirth: app.dateOfBirth,
+      bloodGroup: app.bloodGroup,
+      address: app.address,
+      city: app.city,
+      pincode: app.pincode,
+      photoUrl: app.photoUrl,
+      usesBus: app.usesBus,
+      busRoute: app.busRoute,
+      busFee: app.busFee,
+      monthlyFee: Number(app.monthlyFee ?? fallbackCls?.feeStructure?.tuitionFee ?? fallbackCls?.defaultFee ?? 0),
+      joinDate: (app.reviewedAt || app.appliedAt || new Date().toISOString()).slice(0, 10),
+      active: true,
+      createdAt: app.appliedAt || new Date().toISOString(),
+    };
+    try {
+      setLocalStudents(school.id, [constructed, ...locals.filter((s) => s.id !== constructed.id)]);
+    } catch {}
+    return constructed;
+  };
+
+  useEffect(() => {
+    if (!school?.id) return;
+    const unsub = subscribeAdmissionApplications(school.id, (liveApps) => {
+      setApplications(liveApps);
+      setLoading(false);
+    });
+    const onStorageSync = (ev: StorageEvent) => {
+      if (ev.key && (ev.key.includes("admission") || ev.key.includes(school.id))) {
+        fetchApplications();
+      }
+    };
+    window.addEventListener("storage", onStorageSync);
+    return () => {
+      if (typeof unsub === "function") unsub();
+      window.removeEventListener("storage", onStorageSync);
+    };
+  }, [school.id]);
+
+  // Fast background sync & real-time auto-jump to Student Portal when Admin approves while Parent is waiting
+  useEffect(() => {
+    if (isAdmin || !school?.id) return;
+    const isWaitingForApproval =
+      paymentSubmittedNotice ||
+      submittedApp?.status === "pending" ||
+      parentApplications.some((a) => a.status === "pending");
+    if (!isWaitingForApproval) return;
+
+    const timer = window.setInterval(() => {
+      void getAdmissionApplications(school.id)
+        .then((apps) => setApplications(apps))
+        .catch(() => {});
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [isAdmin, school?.id, paymentSubmittedNotice, submittedApp?.status, parentApplications]);
+
+  useEffect(() => {
+    if (isAdmin || !submittedApp?.id || !onStudentEnrolledAndLink) return;
+    const latest = applications.find((a) => a.id === submittedApp.id);
+    if (!latest || latest.status !== "approved") return;
+    if (autoJumpedAppIdsRef.current.has(latest.id)) return;
+
+    autoJumpedAppIdsRef.current.add(latest.id);
+    setSubmittedApp(latest);
+    setJumpingToPortalApp(latest);
+    toast.success(`🎉 ${latest.studentName} का एडमिशन अप्रूव हो गया! Student Portal खुल रहा है...`);
+
+    let cancelled = false;
+    resolveRealStudentRecord(latest)
+      .then((studentRecord) => {
+        if (cancelled) return;
+        window.setTimeout(() => {
+          if (cancelled) return;
+          setJumpingToPortalApp(null);
+          setPaymentSubmittedNotice(false);
+          onStudentEnrolledAndLink(studentRecord);
+        }, 700);
+      })
+      .catch(() => {
+        if (!cancelled) setJumpingToPortalApp(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [applications, isAdmin, submittedApp?.id, onStudentEnrolledAndLink]);
+
   const fetchApplications = async () => {
     setLoading(true);
     const data = await getAdmissionApplications(school.id);
@@ -1278,21 +2123,76 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
     setLoading(false);
   };
 
+  const getAppEntranceDiscountOpt = (app?: AdmissionApplication | null) =>
+    app?.entranceTestScorePct !== undefined
+      ? {
+          scorePct: app.entranceTestScorePct,
+          config: school?.websiteConfig?.entranceDiscountConfig,
+          cancelled: Boolean(app.entranceDiscountCancelled),
+          fixedAmountOverride:
+            !app.entranceDiscountCancelled && app.entranceDiscountAmount !== undefined
+              ? app.entranceDiscountAmount
+              : undefined,
+          labelOverride: app.entranceDiscountLabel,
+        }
+      : undefined;
+
+  const handleToggleAppEntranceDiscount = async (app: AdmissionApplication) => {
+    const nextCancelled = !Boolean(app.entranceDiscountCancelled);
+    await updateAdmissionStatus(school.id, app.id, app.status, {
+      entranceDiscountCancelled: nextCancelled,
+    });
+    setApplications((prev) =>
+      prev.map((a) => (a.id === app.id ? { ...a, entranceDiscountCancelled: nextCancelled } : a))
+    );
+    if (enrollingApp?.id === app.id) {
+      const updatedApp = { ...app, entranceDiscountCancelled: nextCancelled };
+      setEnrollingApp(updatedApp);
+      const selectedCls =
+        classes.find((c) => c.id === enrollClassId) ||
+        readmClassesPool.find((c) => c.id === enrollClassId) ||
+        classes[0];
+      const nextFees = getClassFees(selectedCls, {
+        usesBus: enrollUsesBus,
+        customBusFee: enrollBusFee,
+        offer: school?.websiteConfig?.admissionOffer,
+        entranceDiscount: getAppEntranceDiscountOpt(updatedApp),
+      });
+      const autoOffer = nextFees.offerDiscountTotal || 0;
+      const autoEntrance = nextFees.entranceDiscountTotal || 0;
+      setEnrollConcession(autoOffer + autoEntrance);
+      setEnrollPaidManual(false);
+    }
+    toast.success(
+      nextCancelled
+        ? `${app.studentName} का Entrance Fee Off रद्द (Cancel) कर दिया गया।`
+        : `${app.studentName} का Entrance Fee Off पुनः लागू (Restore) कर दिया गया!`
+    );
+  };
+
   const buildDefaultFeeItems = (cls: SchoolClass | undefined, withBus: boolean, customBusAmt?: number): FeeItemRow[] => {
-    const fees = getClassFees(cls, { usesBus: withBus, customBusFee: customBusAmt });
+    const fees = getClassFees(cls, {
+      usesBus: withBus,
+      customBusFee: customBusAmt,
+      offer: school?.websiteConfig?.admissionOffer,
+    });
     const rows: FeeItemRow[] = fees.enabledHeads.map((h) => ({
       id: h.key === "busFee" ? "fs_bus" : `fs_${h.key}`,
       description: h.label,
-      due: h.amount,
+      due: h.originalAmount,
+      offerCon: h.discountAmount,
     }));
     if (rows.length === 0) {
-      rows.push({ id: "adm_0", description: "Admission Fee (प्रवेश शुल्क)", due: 0 });
+      rows.push({ id: "adm_0", description: "Admission Fee (प्रवेश शुल्क)", due: 0, offerCon: 0 });
     }
     return rows;
   };
 
   const openEnrollModal = (app: AdmissionApplication) => {
-    const selectedCls = classes.find((c) => c.id === app.classId) || classes[0];
+    const selectedCls =
+      classes.find((c) => c.id === app.classId) ||
+      readmClassesPool.find((c) => c.id === app.classId) ||
+      classes[0];
     const targetClsId = selectedCls?.id || app.classId || "";
     const localStudents = getLocalStudents(school.id);
     const clsStudents = localStudents.filter((s) => isStudentInClass(s, targetClsId, selectedCls?.name));
@@ -1323,8 +2223,25 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
         ? app.submittedDocs
         : ["Birth Certificate (जन्म प्रमाण पत्र)", "Student Aadhaar Card (छात्र आधार)", "Passport Photos (पासपोर्ट फोटो)"]
     );
-    setEnrollFeeItems(buildDefaultFeeItems(selectedCls, wantsBus, defBus));
-    setEnrollConcession(0);
+    const baseItems = buildDefaultFeeItems(selectedCls, wantsBus, defBus);
+    const appBackDue = app.admissionType === "READMISSION" ? Math.max(0, Number(app.previousSessionDue || 0)) : 0;
+    if (appBackDue > 0 && app.includeBackDueInAdm !== false) {
+      baseItems.push({
+        id: "readm_back_due",
+        description: `पिछला सत्र बकाया (Back Session Due${app.previousSessionName ? ` · ${app.previousSessionName}` : ""})`,
+        due: appBackDue,
+      });
+    }
+    const autoOfferCon = baseItems.reduce((s, r) => s + (Number(r.offerCon) || 0), 0);
+    const entFees = getClassFees(selectedCls, {
+      usesBus: wantsBus,
+      customBusFee: defBus,
+      offer: school?.websiteConfig?.admissionOffer,
+      entranceDiscount: getAppEntranceDiscountOpt(app),
+    });
+    const autoEntranceCon = Number(entFees.entranceDiscountTotal || 0);
+    setEnrollFeeItems(baseItems);
+    setEnrollConcession(autoOfferCon + autoEntranceCon);
     setEnrollPaidManual(false);
     setEnrollPayMode("Cash");
     setEnrollPayRef("");
@@ -1422,8 +2339,10 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
 
   const handleEnrollSiblingPresetPct = (pct: number) => {
     setEnrollSiblingDiscountPct(pct);
-    const admDisc = pct > 0 ? Math.round((enrollEligibleGrossExclBus * pct) / 100) : 0;
-    setEnrollConcession(admDisc);
+    const offerBaseCon = enrollFeeItems.reduce((s, r) => s + (Number(r.offerCon) || 0), 0);
+    const remainingAfterOffer = Math.max(0, enrollEligibleGrossExclBus - offerBaseCon);
+    const admDisc = pct > 0 ? Math.round((remainingAfterOffer * pct) / 100) : 0;
+    setEnrollConcession(offerBaseCon + admDisc);
     setEnrollPaidManual(false);
     if (enrollApplyMonthlySibling) {
       const mDisc = pct > 0 ? Math.round((enrollBaseMonthlyFee * pct) / 100) : 0;
@@ -1451,12 +2370,41 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
     setSubmitting(true);
     setFormError(null);
     try {
-      const selectedCls = classes.find((c) => c.id === form.classId);
+      const selectedCls =
+        effectiveTargetClasses.find((c) => c.id === form.classId) ||
+        classes.find((c) => c.id === form.classId) ||
+        readmClassesPool.find((c) => c.id === form.classId);
       const isSenior = isSeniorClass(selectedCls?.name);
       const chosenStream = isSenior ? (form.stream || selectedCls?.stream || "Science") : undefined;
-      const appNo = generateNextAdmissionNo(school, applications.length);
+      const appId = (!isAdmin && submittedApp?.id) ? submittedApp.id : generateId();
+      const appNo = (!isAdmin && submittedApp?.applicationNo)
+        ? submittedApp.applicationNo
+        : (form.admissionType === "READMISSION" && pulledOldStudent?.admissionNo)
+        ? pulledOldStudent.admissionNo
+        : generateNextAdmissionNo(school, applications.length);
+      const readmCarriedDueAmt =
+        form.admissionType === "READMISSION" ? Math.max(0, Number(carriedBackDueInput || 0)) : 0;
+      const readmPrevSessionName =
+        selectedOldSessionObj?.name ||
+        readmSessionsPool.find((s) => s.id === pulledOldStudent?.sessionId)?.name ||
+        "";
+      const defaultNewAdmSession =
+        !isAdmin || viewMode === "admissions_only"
+          ? effectivePublicTargetSessionObj
+          : activeSession || sessions[0];
+      const resolvedTargetSessionId =
+        form.admissionType === "READMISSION" && targetSessionId
+          ? targetSessionId
+          : defaultNewAdmSession?.id || activeSession?.id || sessions[0]?.id || "";
+      const resolvedTargetSessionName =
+        (readmSessionsPool.find((s) => s.id === resolvedTargetSessionId) ||
+          sessions.find((s) => s.id === resolvedTargetSessionId))?.name ||
+        defaultNewAdmSession?.name ||
+        effectivePublicAdmissionSession ||
+        activeSession?.name ||
+        "";
       const newApp: AdmissionApplication = {
-        id: generateId(),
+        id: appId,
         schoolId: school.id,
         applicationNo: appNo,
         studentName: form.studentName.trim(),
@@ -1474,6 +2422,18 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
         identificationMark: form.identificationMark.trim() || undefined,
         medicalHistory: form.medicalHistory.trim() || undefined,
         admissionType: form.admissionType || "NEW",
+        ...(form.admissionType === "READMISSION"
+          ? {
+              targetSessionId: resolvedTargetSessionId || undefined,
+              targetSessionName: resolvedTargetSessionName || undefined,
+              includeBackDueInAdm,
+              previousStudentId: pulledOldStudent?.id,
+              previousSessionId: pulledOldStudent?.sessionId || oldSessionId || undefined,
+              previousSessionName: readmPrevSessionName || undefined,
+              previousClassName: pulledOldStudent?.className || form.previousClass.trim() || undefined,
+              previousSessionDue: readmCarriedDueAmt,
+            }
+          : {}),
         bloodGroup: form.bloodGroup || undefined,
         apaarId: form.apaarId.trim() || undefined,
         photoUrl: form.photoUrl || undefined,
@@ -1544,17 +2504,88 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
         customAdmissionFeeApplied: verifiedOperator.role === "TEACHER" && teacherCustomAdmissionFee !== "" ? Number(teacherCustomAdmissionFee) : undefined,
         teacherConcessionApplied: verifiedOperator.role === "TEACHER" && Number(teacherCustomConcession) > 0 ? Number(teacherCustomConcession) : undefined,
         admissionMarkedTimestamp: new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true }),
+        ...(entrancePrefillBanner && entrancePrefillBanner.bestScorePct !== undefined
+          ? (() => {
+              const evalMeta = evaluateEntranceScore(
+                entrancePrefillBanner.bestScorePct,
+                entrancePrefillBanner.classLabel,
+                entrancePrefillBanner.classLevel
+              );
+              const prefillFees = getClassFees(selectedCls, {
+                usesBus: form.usesBus,
+                offer: school?.websiteConfig?.admissionOffer,
+                entranceDiscount: {
+                  scorePct: entrancePrefillBanner.bestScorePct,
+                  config: school?.websiteConfig?.entranceDiscountConfig,
+                  cancelled: entrancePrefillDiscountCancelled,
+                },
+              });
+              return {
+                entranceTestScorePct: entrancePrefillBanner.bestScorePct,
+                entranceTestTier: evalMeta.tier,
+                entranceTestTag: evalMeta.adminShortBadge,
+                entranceTestSetId: entrancePrefillBanner.lastSetId,
+                entranceRecommendedClass:
+                  entrancePrefillBanner.recommendedClassLabel || evalMeta.recommendedClassLabel,
+                entranceDiscountAmount:
+                  prefillFees.entranceDiscountTotal > 0
+                    ? prefillFees.entranceDiscountTotal
+                    : undefined,
+                entranceDiscountLabel: prefillFees.entranceDiscountLabel || undefined,
+                entranceDiscountCancelled: entrancePrefillDiscountCancelled || undefined,
+              };
+            })()
+          : {}),
         status: "pending",
         appliedAt: new Date().toISOString(),
       };
 
-      if (isAdmin) {
+      const forcePendingRequest = submitAsPendingRequestRef.current;
+      submitAsPendingRequestRef.current = false;
+
+      if (isAdmin && !forcePendingRequest) {
         // Teacher / Admin Counter Enrollment: Direct Active Student + Offline Cash / Counter Fee Record!
         const studentId = generateId();
-        const feeCalc = getClassFees(selectedCls, { usesBus: form.usesBus });
-        const netPayable = Math.max(0, feeCalc.totalPayable - (Number(adminConcession) || 0));
+        const feeCalc = getClassFees(selectedCls, {
+          usesBus: form.usesBus,
+          offer: school?.websiteConfig?.admissionOffer,
+          entranceDiscount:
+            entrancePrefillBanner?.bestScorePct !== undefined
+              ? {
+                  scorePct: entrancePrefillBanner.bestScorePct,
+                  config: school?.websiteConfig?.entranceDiscountConfig,
+                  cancelled: entrancePrefillDiscountCancelled,
+                }
+              : undefined,
+        });
+        const offerConAmt =
+          Number(feeCalc.offerDiscountTotal || 0) +
+          Number(feeCalc.entranceDiscountTotal || 0);
+        const backDueInAdmAmt =
+          form.admissionType === "READMISSION" && includeBackDueInAdm
+            ? readmCarriedDueAmt
+            : 0;
+        const concessionAmt = Number(adminConcession) || 0;
+        const totalConcessionWithOffer = offerConAmt + concessionAmt;
+        const grossPayableWithBack = feeCalc.totalPayable + backDueInAdmAmt;
+        const netPayable = Math.max(0, grossPayableWithBack - concessionAmt);
         const paidAdmissionAmt = adminPaidAmount !== "" ? Math.max(0, Number(adminPaidAmount)) : netPayable;
         const balanceAmt = Math.max(0, netPayable - paidAdmissionAmt);
+
+        // Zero-double-counting split between Back Due & Re-Admission Fees (FIFO: Back Due first)
+        let remainingBackDueToSave = readmCarriedDueAmt;
+        let remainingAdmDueToSave = balanceAmt > 0 ? balanceAmt : 0;
+        if (backDueInAdmAmt > 0) {
+          const conOnAdm = Math.min(feeCalc.totalPayable, concessionAmt);
+          const conOnBack = Math.max(0, concessionAmt - conOnAdm);
+          const backNet = Math.max(0, backDueInAdmAmt - conOnBack);
+          const admNet = Math.max(0, feeCalc.totalPayable - conOnAdm);
+          const paidTowardBack = Math.min(backNet, Math.max(0, paidAdmissionAmt));
+          remainingBackDueToSave = Math.max(0, backNet - paidTowardBack);
+          const paidTowardAdm = Math.max(0, paidAdmissionAmt - paidTowardBack);
+          remainingAdmDueToSave = Math.max(0, admNet - paidTowardAdm);
+        }
+
         const receiptNo = `ADM-${Math.floor(10000 + Math.random() * 90000)}`;
         const paidIso = new Date().toISOString();
 
@@ -1571,7 +2602,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
         const newStudent: SchoolStudent = {
           id: studentId,
           schoolId: school.id,
-          sessionId: activeSession?.id || sessions[0]?.id || "",
+          sessionId: resolvedTargetSessionId,
           classId: form.classId,
           className: selectedCls ? `${selectedCls.name} ${selectedCls.section || ""}`.trim() : (form.className || "Class"),
           stream: chosenStream,
@@ -1590,6 +2621,17 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
           identificationMark: form.identificationMark.trim() || undefined,
           medicalHistory: form.medicalHistory.trim() || undefined,
           admissionType: form.admissionType || "NEW",
+          ...(form.admissionType === "READMISSION"
+            ? {
+                previousStudentId: pulledOldStudent?.id,
+                previousSessionId: pulledOldStudent?.sessionId || oldSessionId || undefined,
+                previousSessionName: readmPrevSessionName || "पिछला सत्र",
+                previousClassName: pulledOldStudent?.className || form.previousClass.trim() || "",
+                previousSessionDue: remainingBackDueToSave,
+                previousSessionDueInitial: readmCarriedDueAmt,
+                reAdmissionDate: paidIso.slice(0, 10),
+              }
+            : {}),
           apaarId: form.apaarId.trim() || undefined,
           fatherName: form.fatherName.trim(),
           fatherOccupation: form.fatherOccupation.trim() || undefined,
@@ -1616,6 +2658,9 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
           usesBus: Boolean(form.usesBus && getClassFees(selectedCls).busAvailable),
           busRoute: form.usesBus && getClassFees(selectedCls).busAvailable ? form.busRoute.trim() : undefined,
           busFee: form.usesBus && getClassFees(selectedCls).busAvailable ? getClassFees(selectedCls, { usesBus: true }).busFee : 0,
+          busNumber: form.usesBus ? configuredRoutes.find((r) => r.routeName === form.busRoute)?.busNumber : undefined,
+          driverName: form.usesBus ? configuredRoutes.find((r) => r.routeName === form.busRoute)?.driverName : undefined,
+          driverPhone: form.usesBus ? configuredRoutes.find((r) => r.routeName === form.busRoute)?.driverPhone : undefined,
           submittedDocs: form.submittedDocs,
           admissionReceiptNo: receiptNo,
           monthlyFee: monthlyTuition,
@@ -1645,6 +2690,9 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
           bankAccountNumber: form.bankAccountNumber.trim() || undefined,
           bankIfsc: form.bankIfsc.trim() || undefined,
           ageOnAprilFirst: ageOnApril1 || undefined,
+          admissionTotalAmount: netPayable,
+          admissionPaidAmount: paidAdmissionAmt,
+          admissionDueBalance: remainingAdmDueToSave,
           joinDate: paidIso.slice(0, 10),
           active: true,
           createdAt: paidIso,
@@ -1660,24 +2708,70 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
           console.warn("Student cache sync note:", cacheErr);
         }
 
-        // Build admission fee items
+        // Build admission fee items (allocating Back Due + Admission heads FIFO item-by-item)
         const rawFeeItems = buildDefaultFeeItems(
           selectedCls,
           Boolean(form.usesBus && getClassFees(selectedCls).busAvailable),
           form.usesBus && getClassFees(selectedCls).busAvailable ? getClassFees(selectedCls, { usesBus: true }).busFee : 0
         );
+        if (backDueInAdmAmt > 0) {
+          rawFeeItems.push({
+            id: "readm_back_due",
+            description: `पिछला सत्र बकाया (Back Session Due${readmPrevSessionName ? ` · ${readmPrevSessionName}` : ""})`,
+            due: backDueInAdmAmt,
+          });
+        }
+        let remConDirect = concessionAmt;
+        const conByDirectId = new Map<string, number>();
+        rawFeeItems.forEach((it) => {
+          const itemOffer = Math.min(Number(it.due) || 0, Number(it.offerCon) || 0);
+          if (it.id !== "readm_back_due") {
+            const availAfterOffer = Math.max(0, (Number(it.due) || 0) - itemOffer);
+            const cVal = Math.min(availAfterOffer, Math.max(0, remConDirect));
+            conByDirectId.set(it.id, itemOffer + cVal);
+            remConDirect = Math.max(0, remConDirect - cVal);
+          } else {
+            conByDirectId.set(it.id, itemOffer);
+          }
+        });
+        rawFeeItems.forEach((it) => {
+          if (it.id === "readm_back_due") {
+            const prevCon = conByDirectId.get(it.id) || 0;
+            const cVal = Math.min(Math.max(0, (Number(it.due) || 0) - prevCon), Math.max(0, remConDirect));
+            conByDirectId.set(it.id, prevCon + cVal);
+            remConDirect = Math.max(0, remConDirect - cVal);
+          }
+        });
+        let remDirectPaid = paidAdmissionAmt;
+        const paidByDirectId = new Map<string, number>();
+        rawFeeItems.forEach((it) => {
+          if (it.id === "readm_back_due") {
+            const netItemDue = Math.max(0, (Number(it.due) || 0) - (conByDirectId.get(it.id) || 0));
+            const pVal = Math.min(netItemDue, Math.max(0, remDirectPaid));
+            paidByDirectId.set(it.id, pVal);
+            remDirectPaid = Math.max(0, remDirectPaid - pVal);
+          }
+        });
+        rawFeeItems.forEach((it) => {
+          if (it.id !== "readm_back_due") {
+            const netItemDue = Math.max(0, (Number(it.due) || 0) - (conByDirectId.get(it.id) || 0));
+            const pVal = Math.min(netItemDue, Math.max(0, remDirectPaid));
+            paidByDirectId.set(it.id, pVal);
+            remDirectPaid = Math.max(0, remDirectPaid - pVal);
+          }
+        });
         const finalItems = rawFeeItems.map((it, idx) => ({
           id: it.id,
           slNo: idx + 1,
           description: it.description.trim(),
           due: Number(it.due) || 0,
-          con: idx === 0 ? Math.min(Number(it.due) || 0, Number(adminConcession) || 0) : 0,
-          paid: Number(it.due) || 0,
+          con: conByDirectId.get(it.id) || 0,
+          paid: paidByDirectId.get(it.id) || 0,
         }));
 
         const admissionFeeRecord: MonthlyFee = {
           schoolId: school.id,
-          sessionId: activeSession?.id || "2026-27",
+          sessionId: resolvedTargetSessionId || "2026-27",
           studentId: savedStudent.id,
           studentName: savedStudent.name,
           rollNo: savedStudent.rollNo,
@@ -1691,7 +2785,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
           receiptNo,
           paidAmount: paidAdmissionAmt,
           balanceDue: balanceAmt,
-          concession: Number(adminConcession) || 0,
+          concession: totalConcessionWithOffer,
           feeType: "admission",
           receiptCategory: "admission",
           includeBusFee: savedStudent.usesBus,
@@ -1719,7 +2813,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
             developmentFee: finalItems[2]?.due || 0,
             idKitFee: finalItems[3]?.due || 0,
             examFund: finalItems[4]?.due || 0,
-            concession: Number(adminConcession) || 0,
+            concession: totalConcessionWithOffer,
             totalPayable: netPayable,
             paidAmount: paidAdmissionAmt,
             balanceDue: balanceAmt,
@@ -1752,9 +2846,36 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
         return;
       }
 
-      // Online Parent flow: Save as pending and show WhatsApp payment step
+      // Online Parent flow OR Admin "Submit as Request": Save as pending
       await saveAdmissionApplication(school.id, newApp);
+      try {
+        window.dispatchEvent(new CustomEvent("school-admission-alert", {
+          detail: {
+            id: generateId(),
+            schoolId: school.id,
+            studentName: newApp.studentName,
+            className: newApp.className,
+            applicationNo: newApp.applicationNo,
+            timestamp: new Date().toISOString(),
+          },
+        }));
+      } catch {}
+
+      if (isAdmin) {
+        setSubmittedApp(null);
+        setConfirmedAdmission(null);
+        setAdminFormStep(1);
+        setActiveTab("applications");
+        setStatusFilter("pending");
+        setSuccessToast(`📩 ${newApp.studentName} (${newApp.applicationNo}) का आवेदन Pending सूची में जुड़ गया! अब इसे Accept या Reject करें।`);
+        setTimeout(() => setSuccessToast(null), 5000);
+        fetchApplications();
+        return;
+      }
+
       setSubmittedApp(newApp);
+      setAdmissionStep(2);
+      setPaymentSubmittedNotice(false);
       if (form.phone.trim()) {
         try {
           localStorage.setItem("nsta_parent_portal_phone", form.phone.trim());
@@ -1766,7 +2887,11 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
       setConfirmedAdmission(null);
       setScreenshotError(null);
       fetchApplications();
+      try {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      } catch {}
     } catch (err: any) {
+      submitAsPendingRequestRef.current = false;
       setFormError("आवेदन जमा करने में त्रुटि: " + (err?.message || "पुनः प्रयास करें"));
     } finally {
       setSubmitting(false);
@@ -1778,12 +2903,77 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
     setEnrolling(true);
     setEnrollError(null);
     try {
-      const selectedCls = classes.find((c) => c.id === enrollClassId);
+      const selectedCls =
+        classes.find((c) => c.id === enrollClassId) ||
+        readmClassesPool.find((c) => c.id === enrollClassId);
       const studentId = generateId();
       const paidAdmissionAmt = Math.max(0, Number(enrollPaidAmount) || 0);
       const balanceAmt = Math.max(0, enrollNetPayable - paidAdmissionAmt);
       const receiptNo = `ADM-${Math.floor(10000 + Math.random() * 90000)}`;
       const paidIso = new Date().toISOString();
+      const resolvedEnrollSessionId =
+        enrollingApp.admissionType === "READMISSION" && enrollingApp.targetSessionId
+          ? enrollingApp.targetSessionId
+          : activeSession?.id || sessions[0]?.id || "";
+
+      // Zero-double-counting split for pending Re-Admission enrollment
+      const validEnrollLines = enrollFeeItems.filter((it) => it.description.trim() && Number(it.due) >= 0);
+      const enrollConAmt = Number(enrollConcession) || 0;
+      let remConEnroll = enrollConAmt;
+      const conByEnrollId = new Map<string, number>();
+      validEnrollLines.forEach((it) => {
+        if (it.id !== "readm_back_due") {
+          const cVal = Math.min(Number(it.due) || 0, Math.max(0, remConEnroll));
+          conByEnrollId.set(it.id, cVal);
+          remConEnroll = Math.max(0, remConEnroll - cVal);
+        }
+      });
+      validEnrollLines.forEach((it) => {
+        if (it.id === "readm_back_due") {
+          const cVal = Math.min(Number(it.due) || 0, Math.max(0, remConEnroll));
+          conByEnrollId.set(it.id, cVal);
+          remConEnroll = Math.max(0, remConEnroll - cVal);
+        }
+      });
+      let remEnrollPaid = paidAdmissionAmt;
+      const paidByEnrollId = new Map<string, number>();
+      validEnrollLines.forEach((it) => {
+        if (it.id === "readm_back_due") {
+          const netIt = Math.max(0, (Number(it.due) || 0) - (conByEnrollId.get(it.id) || 0));
+          const pVal = Math.min(netIt, Math.max(0, remEnrollPaid));
+          paidByEnrollId.set(it.id, pVal);
+          remEnrollPaid = Math.max(0, remEnrollPaid - pVal);
+        }
+      });
+      validEnrollLines.forEach((it) => {
+        if (it.id !== "readm_back_due") {
+          const netIt = Math.max(0, (Number(it.due) || 0) - (conByEnrollId.get(it.id) || 0));
+          const pVal = Math.min(netIt, Math.max(0, remEnrollPaid));
+          paidByEnrollId.set(it.id, pVal);
+          remEnrollPaid = Math.max(0, remEnrollPaid - pVal);
+        }
+      });
+      const enrollBackItem = validEnrollLines.find((it) => it.id === "readm_back_due" && Number(it.due) > 0);
+      const appPrevDueInitial = Math.max(0, Number(enrollingApp.previousSessionDue || 0));
+      const enrollRemainingBackDue = enrollBackItem
+        ? Math.max(
+            0,
+            (Number(enrollBackItem.due) || 0) -
+              (conByEnrollId.get("readm_back_due") || 0) -
+              (paidByEnrollId.get("readm_back_due") || 0)
+          )
+        : appPrevDueInitial;
+      const enrollRemainingAdmDue = enrollBackItem
+        ? validEnrollLines
+            .filter((it) => it.id !== "readm_back_due")
+            .reduce(
+              (sum, it) =>
+                sum + Math.max(0, (Number(it.due) || 0) - (conByEnrollId.get(it.id) || 0) - (paidByEnrollId.get(it.id) || 0)),
+              0
+            )
+        : balanceAmt > 0
+        ? balanceAmt
+        : 0;
 
       const isFamilyMarked = enrollSiblingDetection.isExactFamily || enrollManualSibling;
       const linkedSiblings =
@@ -1820,7 +3010,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
       const newStudent: SchoolStudent = {
         id: studentId,
         schoolId: school.id,
-        sessionId: activeSession?.id || sessions[0]?.id || "",
+        sessionId: resolvedEnrollSessionId,
         classId: enrollClassId,
         className: selectedCls ? `${selectedCls.name} ${selectedCls.section || ""}`.trim() : enrollingApp.className || "Class",
         stream: chosenStream,
@@ -1839,6 +3029,17 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
         identificationMark: enrollingApp.identificationMark,
         medicalHistory: enrollingApp.medicalHistory,
         admissionType: enrollingApp.admissionType || "NEW",
+        ...(enrollingApp.admissionType === "READMISSION"
+          ? {
+              previousStudentId: enrollingApp.previousStudentId,
+              previousSessionId: enrollingApp.previousSessionId,
+              previousSessionName: enrollingApp.previousSessionName,
+              previousClassName: enrollingApp.previousClassName,
+              previousSessionDue: enrollRemainingBackDue,
+              previousSessionDueInitial: appPrevDueInitial,
+              reAdmissionDate: paidIso.slice(0, 10),
+            }
+          : {}),
         apaarId: enrollApaarId.trim() || enrollingApp.apaarId || undefined,
         fatherName: enrollingApp.fatherName,
         fatherOccupation: enrollingApp.fatherOccupation,
@@ -1867,11 +3068,14 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
         usesBus: enrollUsesBus,
         busRoute: enrollUsesBus ? enrollBusRoute.trim() : undefined,
         busFee: enrollUsesBus ? Number(enrollBusFee) || 0 : 0,
+        busNumber: enrollUsesBus ? configuredRoutes.find((r) => r.routeName === enrollBusRoute)?.busNumber : undefined,
+        driverName: enrollUsesBus ? configuredRoutes.find((r) => r.routeName === enrollBusRoute)?.driverName : undefined,
+        driverPhone: enrollUsesBus ? configuredRoutes.find((r) => r.routeName === enrollBusRoute)?.driverPhone : undefined,
         submittedDocs: enrollSubmittedDocs,
         admissionReceiptNo: receiptNo,
         admissionTotalAmount: enrollNetPayable,
         admissionPaidAmount: paidAdmissionAmt,
-        admissionDueBalance: balanceAmt > 0 ? balanceAmt : 0,
+        admissionDueBalance: enrollRemainingAdmDue,
         advanceMonthlyFeePaid: false,
         advanceMonthlyFeeDue: Number(enrollMonthlyFee) || 0,
         advanceMonthlyFeeMonth: paidIso.slice(0, 7),
@@ -1924,7 +3128,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
           email: studentEmail,
           studentRef: savedStudent.id,
           classId: enrollClassId,
-          sessionId: activeSession?.id || "2026-27",
+          sessionId: resolvedEnrollSessionId || "2026-27",
         }).catch(() => {});
 
         saveUserToLive(
@@ -1973,20 +3177,18 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
         console.warn("Student profile sync notice:", cacheErr);
       }
 
-      const finalItems = enrollFeeItems
-        .filter((it) => it.description.trim() && Number(it.due) >= 0)
-        .map((it, idx) => ({
-          id: it.id,
-          slNo: idx + 1,
-          description: it.description.trim(),
-          due: Number(it.due) || 0,
-          con: idx === 0 ? Math.min(Number(it.due) || 0, Number(enrollConcession) || 0) : 0,
-          paid: Number(it.due) || 0,
-        }));
+      const finalItems = validEnrollLines.map((it, idx) => ({
+        id: it.id,
+        slNo: idx + 1,
+        description: it.description.trim(),
+        due: Number(it.due) || 0,
+        con: conByEnrollId.get(it.id) || 0,
+        paid: paidByEnrollId.get(it.id) || 0,
+      }));
 
       const admissionFeeRecord: MonthlyFee = {
         schoolId: school.id,
-        sessionId: activeSession?.id || "2026-27",
+        sessionId: resolvedEnrollSessionId || "2026-27",
         studentId: savedStudent.id,
         studentName: savedStudent.name,
         rollNo: savedStudent.rollNo,
@@ -2029,7 +3231,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
         concession: Number(enrollConcession) || 0,
         totalPayable: enrollNetPayable,
         paidAmount: paidAdmissionAmt,
-        balanceDue: balanceAmt,
+        balanceDue: enrollRemainingAdmDue,
         paymentMode: enrollPayMode,
         receiptNo,
         paidDate: paidIso,
@@ -2058,6 +3260,9 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
       setShowEnrollModal(false);
       setSuccessToast(`🎉 ${savedStudent.name} नामांकित हो गए (Roll #${savedStudent.rollNo})! एडमिशन फॉर्म व रसीद तैयार है।`);
       setTimeout(() => setSuccessToast(null), 5000);
+      try {
+        window.dispatchEvent(new CustomEvent("school-admission-alert", { detail: { schoolId: school.id, appId: enrollingApp.id, status: "approved" } }));
+      } catch {}
       fetchApplications();
 
       // Open Single A4 Full Admission Form Studio
@@ -2105,23 +3310,32 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
     setScreenshotError(null);
     try {
       const selectedCls = classes.find((c) => c.id === submittedApp.classId);
-      const fees = getClassFees(selectedCls, { usesBus: submittedApp.usesBus });
+      const fees = getClassFees(selectedCls, {
+        usesBus: submittedApp.usesBus,
+        offer: school?.websiteConfig?.admissionOffer,
+        entranceDiscount: getAppEntranceDiscountOpt(submittedApp),
+      });
 
-      // 1. Update application with payment proof, status remains PENDING for admin review
+      // 1. Update application with payment proof, status remains PENDING for admin review (also clears previous rejection if resubmitted)
+      const isWasRejected = submittedApp.status === "rejected";
+      const nextCount = isWasRejected ? Number(submittedApp.resubmitCount || 0) + 1 : submittedApp.resubmitCount;
       await updateAdmissionStatus(school.id, submittedApp.id, "pending", {
-        paymentScreenshotUrl: paymentScreenshot || undefined,
-        transactionRef: transactionRef.trim() || undefined,
+        paymentScreenshotUrl: paymentScreenshot || submittedApp.paymentScreenshotUrl || undefined,
+        transactionRef: transactionRef.trim() || submittedApp.transactionRef || undefined,
         paymentMode: "WhatsApp UPI",
         paymentSubmittedAt: new Date().toISOString(),
-        remarks: `WhatsApp payment submitted. UTR: ${transactionRef.trim() || "N/A"}. Awaiting Admin Approval.`,
+        ...(isWasRejected ? { resubmittedAt: new Date().toISOString(), resubmitCount: nextCount, rejectionReason: "" } : {}),
+        remarks: `${isWasRejected ? "Resubmitted with updated proof. " : "WhatsApp payment submitted. "}UTR: ${transactionRef.trim() || "N/A"}. Awaiting Admin Approval.`,
       });
 
       // 2. Send Live Push Notification to School Admin
       try {
         await sendSchoolPushNotification({
           schoolId: school.id,
-          title: `📩 New Admission Payment: ${submittedApp.studentName}`,
-          body: `${submittedApp.studentName} (${submittedApp.className}) ne ₹${fees.totalPayable} ka WhatsApp payment proof submit kiya hai. Kripya Admin portal me verify karke approve karein.`,
+          title: isWasRejected
+            ? `🔄 Rejected Admission Resubmitted: ${submittedApp.studentName}`
+            : `📩 New Admission Payment: ${submittedApp.studentName}`,
+          body: `${submittedApp.studentName} (${submittedApp.className}) ne ₹${fees.totalPayable} ka payment screenshot & UTR submit kiya hai. Kripya verify karke Accept ya Reject karein.`,
           urgent: true,
           type: "FEE_RECEIPT",
         });
@@ -2150,9 +3364,10 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
       // 4. Update UI to pending notice
       setSubmittedApp((prev) => (prev ? {
         ...prev,
-        paymentScreenshotUrl: paymentScreenshot || undefined,
-        transactionRef: transactionRef.trim() || undefined,
+        paymentScreenshotUrl: paymentScreenshot || prev.paymentScreenshotUrl || undefined,
+        transactionRef: transactionRef.trim() || prev.transactionRef || undefined,
         status: "pending",
+        ...(isWasRejected ? { resubmittedAt: new Date().toISOString(), resubmitCount: nextCount, rejectionReason: undefined } : {}),
       } : null));
 
       setPaymentSubmittedNotice(true);
@@ -2190,19 +3405,33 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
     const usesBus = Boolean(app.usesBus && getClassFees(targetCls).busAvailable);
     const busFeeAmt = usesBus ? Number(app.busFee ?? getClassFees(targetCls, { usesBus: true }).busFee ?? 0) : 0;
     const rawFeeItems = buildDefaultFeeItems(targetCls, usesBus, busFeeAmt);
-    const finalItems = rawFeeItems.map((it, idx) => ({
-      id: it.id,
-      slNo: idx + 1,
-      description: it.description.trim(),
-      due: Number(it.due) || 0,
-      con: 0,
-      paid: Number(it.due) || 0,
-    }));
+    const appFeesSummary = getClassFees(targetCls, {
+      usesBus,
+      customBusFee: busFeeAmt,
+      offer: school?.websiteConfig?.admissionOffer,
+      entranceDiscount: getAppEntranceDiscountOpt(app),
+    });
+    const finalItems = rawFeeItems.map((it, idx) => {
+      const dueAmt = Number(it.due) || 0;
+      const conAmt = Math.min(dueAmt, Number(it.offerCon) || 0);
+      const paidAmt = Math.max(0, dueAmt - conAmt);
+      return {
+        id: it.id,
+        slNo: idx + 1,
+        description: it.description.trim(),
+        due: dueAmt,
+        con: conAmt,
+        paid: paidAmt,
+      };
+    });
 
-    const netPayable = Math.max(
-      Number(paymentMeta.totalPayable || 0),
-      finalItems.reduce((sum, it) => sum + Number(it.due || 0), 0)
-    );
+    const offerConTotal =
+      finalItems.reduce((sum, it) => sum + Number(it.con || 0), 0) +
+      Number(appFeesSummary.entranceDiscountTotal || 0);
+    const netPayable =
+      Number(paymentMeta.totalPayable || 0) > 0
+        ? Number(paymentMeta.totalPayable || 0)
+        : appFeesSummary.totalPayable;
     const monthlyTuition = Number(targetCls?.feeStructure?.tuitionFee ?? targetCls?.defaultFee ?? 0);
 
     const newStudent: SchoolStudent = {
@@ -2351,7 +3580,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
       receiptNo: paymentMeta.receiptNo,
       paidAmount: netPayable,
       balanceDue: 0,
-      concession: 0,
+      concession: offerConTotal,
       feeType: "admission",
       receiptCategory: "admission",
       includeBusFee: usesBus,
@@ -2374,7 +3603,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
       developmentFee: finalItems[2]?.due || 0,
       idKitFee: finalItems[3]?.due || 0,
       examFund: finalItems[4]?.due || 0,
-      concession: 0,
+      concession: offerConTotal,
       totalPayable: netPayable,
       paidAmount: netPayable,
       balanceDue: 0,
@@ -2456,7 +3685,11 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
       }
 
       const targetCls = classes.find((c) => c.id === app.classId);
-      const fees = getClassFees(targetCls, { usesBus: app.usesBus });
+      const fees = getClassFees(targetCls, {
+        usesBus: app.usesBus,
+        offer: school?.websiteConfig?.admissionOffer,
+        entranceDiscount: getAppEntranceDiscountOpt(app),
+      });
       const totalPayable = Number(fees.totalPayable || 0);
 
       if (totalPayable <= 0) {
@@ -2684,11 +3917,97 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
   };
 
   const handleConfirmReject = async (app: AdmissionApplication) => {
+    const reasonText = rejectReason.trim() || "Application declined";
     await updateAdmissionStatus(school.id, app.id, "rejected", {
-      remarks: rejectReason.trim() || "Application declined",
+      remarks: reasonText,
+      rejectionReason: reasonText,
     });
     setRejectingAppId(null);
+    toast.success(`${app.studentName} का आवेदन Reject किया गया। अब यह नया स्क्रीनशॉट व UTR नंबर जोड़कर दोबारा भेजा जा सकता है।`);
     fetchApplications();
+  };
+
+  const handleResubmitScreenshotFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) {
+      toast.error("स्क्रीनशॉट फ़ाइल 8MB से कम होनी चाहिए।");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      setResubmitScreenshot(dataUrl);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleResubmitRejectedApp = async (app: AdmissionApplication) => {
+    const utrVal = resubmitUtr.trim();
+    if (!resubmitScreenshot && !utrVal) {
+      toast.error("दोबारा भेजने के लिए कृपया Payment Screenshot अपलोड करें और/या UTR नंबर दर्ज करें।");
+      return;
+    }
+    setResubmittingRejected(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const nextCount = Number(app.resubmitCount || 0) + 1;
+      const selectedCls = classes.find((c) => c.id === app.classId);
+      const fees = getClassFees(selectedCls, {
+        usesBus: app.usesBus,
+        offer: school?.websiteConfig?.admissionOffer,
+        entranceDiscount: getAppEntranceDiscountOpt(app),
+      });
+
+      await updateAdmissionStatus(school.id, app.id, "pending", {
+        paymentScreenshotUrl: resubmitScreenshot || app.paymentScreenshotUrl || undefined,
+        transactionRef: utrVal || app.transactionRef || undefined,
+        paymentMode: "WhatsApp UPI",
+        paymentSubmittedAt: nowIso,
+        resubmittedAt: nowIso,
+        resubmitCount: nextCount,
+        rejectionReason: "",
+        remarks: `Resubmitted (#${nextCount}) with Screenshot & UTR: ${utrVal || "Screenshot attached"}${resubmitNote.trim() ? ` • Note: ${resubmitNote.trim()}` : ""}`,
+      });
+
+      try {
+        await sendSchoolPushNotification({
+          schoolId: school.id,
+          title: `🔄 Admission Request Resubmitted: ${app.studentName}`,
+          body: `${app.studentName} (${app.className}) ne Screenshot aur UTR (${utrVal || "Attached"}) ke saath apna rejected aavedan dubara bheja hai (₹${fees.totalPayable}).`,
+          urgent: true,
+          type: "FEE_RECEIPT",
+        });
+      } catch {}
+
+      try {
+        const alertItem = {
+          id: generateId(),
+          schoolId: school.id,
+          studentName: app.studentName,
+          className: app.className,
+          applicationNo: app.applicationNo,
+          amount: fees.totalPayable,
+          screenshotUrl: resubmitScreenshot || app.paymentScreenshotUrl,
+          transactionRef: utrVal,
+          timestamp: nowIso,
+        };
+        const existing = JSON.parse(localStorage.getItem(`school_admission_alerts_${school.id}`) || "[]");
+        localStorage.setItem(`school_admission_alerts_${school.id}`, JSON.stringify([alertItem, ...existing]));
+        window.dispatchEvent(new CustomEvent("school-admission-alert", { detail: alertItem }));
+      } catch {}
+
+      setResubmittingAppId(null);
+      setResubmitScreenshot(null);
+      setResubmitUtr("");
+      setResubmitNote("");
+      toast.success(`✅ ${app.studentName} का आवेदन नए Screenshot व UTR के साथ दोबारा (Pending Review में) भेज दिया गया!`);
+      fetchApplications();
+    } catch (err: any) {
+      toast.error("Resubmit करने में त्रुटि: " + (err?.message || "पुनः प्रयास करें"));
+    } finally {
+      setResubmittingRejected(false);
+    }
   };
 
   const toggleFormDoc = (docLabel: string) => {
@@ -2734,7 +4053,11 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
       }, 0);
       const assignedRoll = (customRoll && customRoll.trim()) || String(maxRoll + 1);
 
-      const feeCalc = getClassFees(selectedCls, { usesBus: app.usesBus });
+      const feeCalc = getClassFees(selectedCls, {
+        usesBus: app.usesBus,
+        offer: school?.websiteConfig?.admissionOffer,
+        entranceDiscount: getAppEntranceDiscountOpt(app),
+      });
       const totalAmount = feeCalc.totalPayable;
       const receiptNo = `ADM-${Math.floor(10000 + Math.random() * 90000)}`;
       const paidIso = new Date().toISOString();
@@ -2775,16 +4098,62 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
         createdAt: paidIso,
       };
 
-      await saveStudent(school.id, newStudent);
-      const updatedStudents = [...localStudents.filter((s) => s.id !== studentId), newStudent];
+      const savedQuickStudent = await saveStudent(newStudent);
+      const updatedStudents = [savedQuickStudent, ...localStudents.filter((s) => s.id !== studentId)];
       setLocalStudents(school.id, updatedStudents);
+
+      try {
+        const safeSlug = (school.code || school.id || "school").toLowerCase().replace(/[^a-z0-9]/g, "") || "school";
+        const studentEmail =
+          app.email ||
+          `${savedQuickStudent.admissionNo.toLowerCase().replace(/[^a-z0-9]/g, "")}@${safeSlug}.edu.in`;
+        await saveSchoolUserProfile({
+          uid: savedQuickStudent.id,
+          schoolId: school.id,
+          role: "SCHOOL_STUDENT",
+          name: savedQuickStudent.name,
+          email: studentEmail,
+          studentRef: savedQuickStudent.id,
+          classId: targetClsId,
+          sessionId: activeSession?.id || "2026-27",
+        }).catch(() => {});
+        saveUserToLive(
+          {
+            id: savedQuickStudent.id,
+            uid: savedQuickStudent.id,
+            displayId: `ROLL-${savedQuickStudent.rollNo}`,
+            name: savedQuickStudent.name,
+            email: studentEmail,
+            mobile: savedQuickStudent.phone,
+            role: "STUDENT",
+            schoolId: school.id,
+            classLevel: targetClsId,
+            stream: app.stream || "General",
+            credits: 100,
+            diamonds: 50,
+            streak: 1,
+            totalScore: 0,
+            profileCompleted: true,
+            subscriptionTier: "PRO",
+            provider: "qr_student_id",
+            isQrLogin: true,
+            admissionNo: savedQuickStudent.admissionNo,
+            rollNo: savedQuickStudent.rollNo,
+            fatherName: savedQuickStudent.fatherName,
+            motherName: savedQuickStudent.motherName,
+            bloodGroup: savedQuickStudent.bloodGroup,
+            monthlyFee: savedQuickStudent.monthlyFee,
+          },
+          { immediate: true }
+        ).catch(() => {});
+      } catch {}
 
       const itemsList = feeCalc.enabledHeads.map((h, i) => ({
         id: `item_${i + 1}`,
         slNo: i + 1,
         description: h.label,
-        due: h.amount,
-        con: 0,
+        due: h.originalAmount,
+        con: h.discountAmount,
         paid: h.amount,
       }));
 
@@ -2797,13 +4166,16 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
         rollNo: assignedRoll,
         classId: targetClsId,
         className: selectedCls ? `${selectedCls.name} ${selectedCls.section || ""}`.trim() : app.className || "Class",
-        month: "Admission Fee (दाखिला शुल्क)",
+        month: paidIso.slice(0, 7),
         year: new Date().getFullYear(),
         amount: totalAmount,
+        monthlyAmount: Number(selectedCls?.feeStructure?.tuitionFee ?? selectedCls?.defaultFee ?? 0),
         paid: true,
         paidAmount: totalAmount,
         paidDate: paidIso,
         receiptNo,
+        concession:
+          (feeCalc.offerDiscountTotal || 0) + (feeCalc.entranceDiscountTotal || 0),
         collectedBy: "Admin Online Payment Verification",
         paymentMode: "UPI / Online Screenshot Verified",
         remarks: `Online Payment Verified. Ref: ${app.transactionRef || "Screenshot Verified"}`,
@@ -2812,22 +4184,24 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
         createdAt: paidIso,
         items: itemsList,
       };
-      await saveFee(school.id, admissionFeeRecord);
+      await saveFee(admissionFeeRecord);
 
       await updateAdmissionStatus(school.id, app.id, "approved", {
         enrolledStudentId: studentId,
         assignedRollNo: assignedRoll,
         assignedSection: selectedCls?.section || "A",
+        monthlyFee: Number(selectedCls?.feeStructure?.tuitionFee ?? selectedCls?.defaultFee ?? 0),
         remarks: `Payment Verified & Confirmed by Admin (Roll #${assignedRoll}). Receipt #${receiptNo}`,
         admissionFeeDetails: {
-          admissionFee: feeCalc.enabledHeads.find((h) => h.key === "admissionFee")?.amount || 0,
-          registrationFee: feeCalc.enabledHeads.find((h) => h.key === "registrationFee")?.amount || 0,
-          developmentFee: feeCalc.enabledHeads.find((h) => h.key === "developmentCharge")?.amount || 0,
+          admissionFee: feeCalc.enabledHeads.find((h) => h.key === "admissionFee")?.originalAmount || 0,
+          registrationFee: feeCalc.enabledHeads.find((h) => h.key === "registrationFee")?.originalAmount || 0,
+          developmentFee: feeCalc.enabledHeads.find((h) => h.key === "developmentCharge")?.originalAmount || 0,
           idKitFee:
-            (feeCalc.enabledHeads.find((h) => h.key === "idCardCharge")?.amount || 0) +
-            (feeCalc.enabledHeads.find((h) => h.key === "diaryCharge")?.amount || 0) +
-            (feeCalc.enabledHeads.find((h) => h.key === "tieBeltCharge")?.amount || 0),
-          examFund: feeCalc.enabledHeads.find((h) => h.key === "examinationFee")?.amount || 0,
+            (feeCalc.enabledHeads.find((h) => h.key === "idCardCharge")?.originalAmount || 0) +
+            (feeCalc.enabledHeads.find((h) => h.key === "diaryCharge")?.originalAmount || 0) +
+            (feeCalc.enabledHeads.find((h) => h.key === "tieBeltCharge")?.originalAmount || 0),
+          examFund: feeCalc.enabledHeads.find((h) => h.key === "examinationFee")?.originalAmount || 0,
+          concession: feeCalc.offerDiscountTotal || 0,
           totalPayable: totalAmount,
           paidAmount: totalAmount,
           balanceDue: 0,
@@ -2845,6 +4219,10 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
           body: `कक्षा ${app.className} में प्रवेश कन्फर्म हो गया है। रोल नंबर: Roll #${assignedRoll}।`,
           url: "/?view=online_admissions",
         });
+      } catch {}
+
+      try {
+        window.dispatchEvent(new CustomEvent("school-admission-alert", { detail: { schoolId: school.id, appId: app.id, status: "approved" } }));
       } catch {}
 
       setSuccessToast(`🎉 ${app.studentName} का एडमिशन कन्फर्म हो गया! Roll #${assignedRoll} आवंटित हुआ।`);
@@ -2879,31 +4257,35 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
 
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-slate-900 pb-16">
-      {/* Top Navbar */}
-      <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-blue-950 px-4 py-4 text-white shadow-lg sticky top-0 z-30">
-        <div className="max-w-6xl mx-auto flex items-center justify-between gap-2">
-          <button
-            onClick={onBack}
-            className="flex items-center gap-1.5 text-blue-200 hover:text-white text-sm font-bold transition-colors cursor-pointer"
-          >
-            <ChevronLeft className="w-5 h-5" />
-            <span>Back</span>
-          </button>
-          <div className="flex items-center gap-2">
-            <UserPlus className="w-5 h-5 text-amber-400" />
-            <h1 className="text-base sm:text-lg font-black tracking-tight">
-              {viewMode === "fee_setup_only"
-                ? "कक्षा-वार प्रवेश शुल्क एवं हेड सेट-अप (Online Admission Fee Setup)"
-                : !isAdmin
-                ? "अभिभावक ऑनलाइन प्रवेश पोर्टल (Parent Online Admission)"
-                : "Online Admissions & Print Portal"}
-            </h1>
-          </div>
-          <div className="text-xs text-blue-200 hidden sm:block font-semibold">
-            {school.name}
+      {/* Top Navbar (Hidden when unified public shell renders a single combined header) */}
+      {!hideTopNavbar && (
+        <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-md px-4 py-3 text-slate-900 dark:text-white border-b border-slate-200 dark:border-slate-800 shadow-xs sticky top-0 z-30">
+          <div className="max-w-6xl mx-auto flex items-center justify-between gap-2">
+            <button
+              onClick={onBack}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition-colors cursor-pointer shrink-0"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              <span>Back</span>
+            </button>
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-7 h-7 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                <UserPlus className="w-4 h-4" />
+              </div>
+              <h1 className="text-sm sm:text-base font-black tracking-tight text-slate-900 dark:text-white truncate">
+                {viewMode === "fee_setup_only"
+                  ? "कक्षा-वार प्रवेश शुल्क एवं हेड सेट-अप (Online Admission Fee Setup)"
+                  : !isAdmin
+                  ? "अभिभावक ऑनलाइन प्रवेश पोर्टल (Parent Online Admission)"
+                  : "Online Admissions & Print Portal"}
+              </h1>
+            </div>
+            <div className="text-xs text-slate-500 dark:text-slate-400 hidden sm:block font-bold truncate max-w-[180px]">
+              {school.name}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Success Toast */}
       {successToast && (
@@ -2915,57 +4297,77 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
         </div>
       )}
 
-      <div className="max-w-6xl mx-auto px-4 mt-5">
-        {/* Mode Tabs: In fee_setup_only mode: NEVER show tabs (upar ke dono option nahi dikhenge) */}
+      <div className={`max-w-6xl mx-auto px-3 sm:px-4 ${hideTopNavbar ? "pt-4" : "mt-3"}`}>
+        {/* Mode Tabs: Top 3 options always in ONE single row */}
         {isAdmin && viewMode !== "fee_setup_only" && (
-          <div className="flex flex-wrap gap-2 bg-white dark:bg-slate-800 p-1.5 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 mb-6 w-fit">
-            <button
-              onClick={() => setActiveTab("applications")}
-              className={`px-4 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 transition cursor-pointer ${
-                activeTab === "applications"
-                  ? "bg-blue-600 text-white shadow"
-                  : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
-              }`}
-            >
-              <FileText className="w-4 h-4" /> Applications ({applications.length})
-            </button>
-            <button
-              onClick={() => {
-                setSubmittedApp(null);
-                setActiveTab("new_form");
-              }}
-              className={`px-4 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 transition cursor-pointer ${
-                activeTab === "new_form"
-                  ? "bg-blue-600 text-white shadow"
-                  : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
-              }`}
-            >
-              <UserPlus className="w-4 h-4" /> + New Admission Form
-            </button>
-            {/* In admissions_only mode: fee_setup tab is NEVER rendered (Online Admission & Fee wla part na dikhega) */}
+          <div className="space-y-2 mb-4">
+            <div className="grid grid-cols-3 gap-1.5 bg-white dark:bg-slate-800 p-1.5 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 w-full">
+              <button
+                type="button"
+                onClick={() => setActiveTab("applications")}
+                className={`w-full px-1.5 sm:px-3 py-2 rounded-xl text-[10.5px] sm:text-xs font-black flex items-center justify-center gap-1 min-w-0 transition cursor-pointer ${
+                  activeTab === "applications"
+                    ? "bg-blue-600 text-white shadow"
+                    : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+                }`}
+              >
+                <FileText className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Applications ({applications.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSubmittedApp(null);
+                  setActiveTab("new_form");
+                }}
+                className={`w-full px-1.5 sm:px-3 py-2 rounded-xl text-[10.5px] sm:text-xs font-black flex items-center justify-center gap-1 min-w-0 transition cursor-pointer ${
+                  activeTab === "new_form"
+                    ? "bg-blue-600 text-white shadow"
+                    : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+                }`}
+              >
+                <UserPlus className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">New Admission Form</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("enquiry_crm")}
+                className={`w-full px-1.5 sm:px-3 py-2 rounded-xl text-[10.5px] sm:text-xs font-black flex items-center justify-center gap-1 min-w-0 transition cursor-pointer ${
+                  activeTab === "enquiry_crm"
+                    ? "bg-amber-600 text-white shadow"
+                    : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+                }`}
+              >
+                <Users className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Enquiry CRM &amp; Seats</span>
+              </button>
+            </div>
+            {/* In admissions_only mode: fee_setup tab is NEVER rendered */}
             {viewMode !== "admissions_only" && (
-              <>
+              <div className="flex flex-wrap gap-1.5 bg-white dark:bg-slate-800 p-1.5 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 w-fit">
                 <button
+                  type="button"
                   onClick={() => setActiveTab("fee_setup")}
-                  className={`px-4 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 transition cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition cursor-pointer ${
                     activeTab === "fee_setup"
                       ? "bg-emerald-600 text-white shadow"
                       : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
                   }`}
                 >
-                  <Sliders className="w-4 h-4" /> Class-Wise Fee &amp; Heads Setup
+                  <Sliders className="w-3.5 h-3.5" /> Class-Wise Fee &amp; Heads Setup
                 </button>
                 <button
+                  type="button"
                   onClick={() => setActiveTab("field_settings")}
-                  className={`px-4 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 transition cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition cursor-pointer ${
                     activeTab === "field_settings"
                       ? "bg-purple-600 text-white shadow"
                       : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
                   }`}
                 >
-                  <Sliders className="w-4 h-4 text-purple-400" /> ⚙️ Form Fields Manager
+                  <Sliders className="w-3.5 h-3.5 text-purple-400" /> Form Fields Manager
                 </button>
-              </>
+              </div>
             )}
           </div>
         )}
@@ -3010,6 +4412,26 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
               </div>
             </div>
 
+            {isAdmissionOfferActive(school?.websiteConfig?.admissionOffer) &&
+              Number(school?.websiteConfig?.admissionOffer?.discountPercent || 0) > 0 && (
+              <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-700/70 rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2 text-amber-900 dark:text-amber-200 font-bold">
+                  <Sparkles className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                  <span>
+                    Website Offer Active:{" "}
+                    <strong>
+                      {school.websiteConfig?.admissionOffer?.title || "Special Admission Offer"} (
+                      {school.websiteConfig?.admissionOffer?.discountPercent}% OFF)
+                    </strong>{" "}
+                    — यह छूट नीचे हर क्लास के एडमिशन पैकेज पर स्वतः लागू दिख रही है।
+                  </span>
+                </div>
+                <span className="text-[11px] font-mono font-black text-amber-800 dark:text-amber-300">
+                  Website Manager CMS → Admission Offer
+                </span>
+              </div>
+            )}
+
             {classes.length === 0 ? (
               <div className="bg-white dark:bg-slate-800 rounded-2xl p-10 text-center border border-slate-200 dark:border-slate-700">
                 <AlertCircle className="w-10 h-10 text-slate-400 mx-auto mb-2" />
@@ -3037,11 +4459,11 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                     };
                     const previewWithoutBus = getClassFees(
                       { ...cls, feeStructure: draft },
-                      { usesBus: false }
+                      { usesBus: false, offer: school?.websiteConfig?.admissionOffer }
                     );
                     const previewWithBus = getClassFees(
                       { ...cls, feeStructure: draft },
-                      { usesBus: true }
+                      { usesBus: true, offer: school?.websiteConfig?.admissionOffer }
                     );
                     const isSavingOne = savingClassFeeId === cls.id;
                     const customInput = newCustomHeadInputs[cls.id] || { name: "", amount: "" };
@@ -3369,6 +4791,28 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
               </div>
             )}
           </div>
+        )}
+
+        {/* 0.4 ADMIN ENQUIRY CRM & SEAT MATRIX */}
+        {activeTab === "enquiry_crm" && isAdmin && (
+          <AdmissionEnquiryCrm
+            school={school}
+            classes={classes}
+            students={getLocalStudents(school.id)}
+            onConvertToAdmission={(prefill) => {
+              setSubmittedApp(null);
+              setForm((prev) => ({
+                ...prev,
+                name: prefill.studentName || prev.name,
+                fatherName: prefill.parentName || prev.fatherName,
+                phone: prefill.phone || prev.phone,
+                whatsappNo: prefill.phone || prev.whatsappNo,
+                classId: prefill.classId || prev.classId,
+              }));
+              setActiveTab("new_form");
+              toast.success("Enquiry pre-filled into Admission Form!");
+            }}
+          />
         )}
 
         {/* 0.5 ADMIN ADMISSION FORM FIELDS MANAGER (SCHOOL ADMIN CUSTOMIZATION) */}
@@ -3828,7 +5272,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                   className="w-full pl-9 pr-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-medium"
                 />
               </div>
-              <div className="flex gap-1.5 w-full sm:w-auto overflow-x-auto">
+              <div className="flex gap-1.5 w-full sm:w-auto overflow-x-auto items-center">
                 {(["all", "today", "pending", "approved", "rejected"] as const).map((st) => (
                   <button
                     key={st}
@@ -3842,6 +5286,15 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                     {st === "today" ? `⭐ Today (${applications.filter((a) => isTodayIso(a.appliedAt)).length})` : st}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  onClick={() => fetchApplications()}
+                  className="px-2.5 py-1.5 rounded-xl bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 text-xs font-bold flex items-center gap-1 cursor-pointer shrink-0 border border-blue-200 dark:border-blue-800"
+                  title="Refresh Applications"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Refresh</span>
+                </button>
               </div>
             </div>
 
@@ -3911,6 +5364,78 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                                 <XCircle className="w-3 h-3" /> Rejected
                               </span>
                             )}
+                            {app.resubmittedAt && (
+                              <span className="px-2.5 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-950/60 text-indigo-800 dark:text-indigo-200 text-[10px] font-black flex items-center gap-1 border border-indigo-300 dark:border-indigo-700">
+                                <RotateCcw className="w-3 h-3" /> Resubmitted{app.resubmitCount ? ` (#${app.resubmitCount})` : ""}
+                              </span>
+                            )}
+                            {app.entranceTestScorePct !== undefined && (() => {
+                              const evalMeta = evaluateEntranceScore(
+                                app.entranceTestScorePct,
+                                app.className
+                              );
+                              const appCls = classes.find((c) => c.id === app.classId);
+                              const appFees = getClassFees(appCls, {
+                                usesBus: app.usesBus,
+                                offer: school?.websiteConfig?.admissionOffer,
+                                entranceDiscount: {
+                                  scorePct: app.entranceTestScorePct,
+                                  config: school?.websiteConfig?.entranceDiscountConfig,
+                                  cancelled: false,
+                                  fixedAmountOverride: app.entranceDiscountAmount,
+                                  labelOverride: app.entranceDiscountLabel,
+                                },
+                              });
+                              const tagStyle =
+                                evalMeta.tier === "MERIT"
+                                  ? "bg-amber-100 text-amber-900 border-amber-300 dark:bg-amber-950/60 dark:text-amber-200 dark:border-amber-700"
+                                  : evalMeta.tier === "QUALIFIED"
+                                  ? "bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/60 dark:text-emerald-200 dark:border-emerald-700"
+                                  : evalMeta.tier === "FOUNDATION_SUPPORT"
+                                  ? "bg-amber-50 text-amber-800 border-amber-300 dark:bg-amber-950/50 dark:text-amber-200 dark:border-amber-700"
+                                  : "bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950/60 dark:text-rose-200 dark:border-rose-700";
+                              return (
+                                <>
+                                  <span
+                                    className={`px-2.5 py-0.5 rounded-full border text-[10px] font-black inline-flex items-center gap-1 tabular-nums ${tagStyle}`}
+                                    title={`${evalMeta.adminTag}: ${evalMeta.adminRuleNote}`}
+                                  >
+                                    🎓 Entrance: {app.entranceTestTag || evalMeta.adminShortBadge}
+                                  </span>
+                                  {(appFees.entranceDiscountTotal > 0 || app.entranceDiscountCancelled) && (
+                                    <span className="inline-flex items-center gap-1.5">
+                                      <span
+                                        className={`px-2 py-0.5 rounded-full text-[10px] font-black tabular-nums border ${
+                                          app.entranceDiscountCancelled
+                                            ? "bg-slate-100 dark:bg-slate-900 text-slate-400 border-slate-300 line-through"
+                                            : "bg-emerald-600 text-white border-emerald-600"
+                                        }`}
+                                      >
+                                        🎁 Merit Off: -₹{appFees.entranceDiscountTotal.toLocaleString("en-IN")}
+                                      </span>
+                                      {app.status !== "approved" && (
+                                        <button
+                                          type="button"
+                                          onClick={() => void handleToggleAppEntranceDiscount(app)}
+                                          className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold border cursor-pointer ${
+                                            app.entranceDiscountCancelled
+                                              ? "bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100"
+                                              : "bg-rose-50 text-rose-700 border-rose-300 hover:bg-rose-100"
+                                          }`}
+                                          title={
+                                            app.entranceDiscountCancelled
+                                              ? "Entrance Fee Off दोबारा लागू करें"
+                                              : "Entrance Fee Off रद्द (Cancel) करें"
+                                          }
+                                        >
+                                          {app.entranceDiscountCancelled ? "Restore Off" : "Cancel Off"}
+                                        </button>
+                                      )}
+                                    </span>
+                                  )}
+                                </>
+                              );
+                            })()}
                           </div>
 
                           <h3 className="text-base font-black text-slate-900 dark:text-white">
@@ -4013,6 +5538,14 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                           <>
                             <button
                               type="button"
+                              onClick={() => openEnrollModal(app)}
+                              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black flex items-center gap-1.5 shadow-md shadow-emerald-600/20 cursor-pointer"
+                              title="आवेदन स्वीकार करें व दाखिला दर्ज करें"
+                            >
+                              <Check className="w-4 h-4" /> ✅ Accept (Approve &amp; Enroll)
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => {
                                 setQuickVerifyConfirmApp(app);
                                 const selectedCls = classes.find((c) => c.id === app.classId) || classes[0];
@@ -4024,11 +5557,21 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                                 }, 0);
                                 setQuickConfirmRollNo(String(maxRoll + 1));
                               }}
-                              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black flex items-center gap-1.5 shadow-md shadow-emerald-600/25 active:scale-95 transition cursor-pointer"
+                              className="px-3 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-black flex items-center gap-1.5 shadow-sm active:scale-95 transition cursor-pointer"
                               title="पेमेंट चेक करके तुरंत दाखिला कन्फर्म करें"
                             >
                               <CheckCircle2 className="w-4 h-4" />
-                              <span>पेमेंट चेक व एडमिशन कन्फर्म</span>
+                              <span>Quick Confirm</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRejectingAppId(rejectingAppId === app.id ? null : app.id);
+                                setRejectReason(app.rejectionReason || "Criteria / Documents / Payment screenshot incomplete");
+                              }}
+                              className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black flex items-center gap-1 shadow-sm cursor-pointer"
+                            >
+                              <X className="w-4 h-4" /> ❌ Reject
                             </button>
                             <button
                               type="button"
@@ -4044,22 +5587,49 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                             >
                               <Printer className="w-3.5 h-3.5" /> फॉर्म प्रिंट
                             </button>
+                          </>
+                        )}
+
+                        {app.status === "rejected" && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (resubmittingAppId === app.id) {
+                                  setResubmittingAppId(null);
+                                } else {
+                                  setResubmittingAppId(app.id);
+                                  setResubmitScreenshot(app.paymentScreenshotUrl || null);
+                                  setResubmitUtr(app.transactionRef || "");
+                                  setResubmitNote("");
+                                }
+                              }}
+                              className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black flex items-center gap-1.5 shadow cursor-pointer"
+                              title="स्क्रीनशॉट व UTR नंबर जोड़कर यह आवेदन दोबारा भेजें"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                              <span>Resubmit (Screenshot + UTR)</span>
+                            </button>
                             <button
                               type="button"
                               onClick={() => openEnrollModal(app)}
                               className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black flex items-center gap-1.5 shadow cursor-pointer"
                             >
-                              <Check className="w-4 h-4" /> Approve &amp; Enroll
+                              <Check className="w-4 h-4" /> ✅ Accept Now
                             </button>
                             <button
                               type="button"
-                              onClick={() => {
-                                setRejectingAppId(rejectingAppId === app.id ? null : app.id);
-                                setRejectReason("Criteria / Documents incomplete");
-                              }}
-                              className="px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                              onClick={() =>
+                                setPrintStudioState({
+                                  open: true,
+                                  application: app,
+                                  className: app.className,
+                                  mode: "form_only",
+                                })
+                              }
+                              className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold flex items-center gap-1 cursor-pointer"
                             >
-                              <X className="w-4 h-4" /> Reject
+                              <Printer className="w-3.5 h-3.5" /> फॉर्म प्रिंट
                             </button>
                           </>
                         )}
@@ -4129,6 +5699,18 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                       </div>
                     </div>
 
+                    {/* Inline Rejection Reason Banner */}
+                    {app.status === "rejected" && (app.rejectionReason || app.remarks) && (
+                      <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/70 text-xs text-rose-800 dark:text-rose-200 flex items-center justify-between gap-2 flex-wrap">
+                        <span>
+                          <strong>Rejection Reason:</strong> {app.rejectionReason || app.remarks}
+                        </span>
+                        <span className="text-[11px] font-bold text-rose-600 dark:text-rose-300">
+                          Screenshot व UTR जोड़कर दोबारा भेजा जा सकता है
+                        </span>
+                      </div>
+                    )}
+
                     {/* Inline Reject Confirmation Bar */}
                     {rejectingAppId === app.id && (
                       <div className="pt-3 border-t border-rose-200 dark:border-rose-900/60 flex flex-col sm:flex-row items-center gap-2 bg-rose-50/60 dark:bg-rose-950/20 p-3 rounded-xl">
@@ -4139,7 +5721,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                           type="text"
                           value={rejectReason}
                           onChange={(e) => setRejectReason(e.target.value)}
-                          className="flex-1 px-3 py-1.5 rounded-lg border border-rose-300 bg-white dark:bg-slate-900 text-xs"
+                          className="flex-1 px-3 py-1.5 rounded-lg border border-rose-300 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white"
                         />
                         <div className="flex gap-2">
                           <button
@@ -4159,6 +5741,93 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                         </div>
                       </div>
                     )}
+
+                    {/* Inline Resubmit Rejected Application Bar (Screenshot + UTR) */}
+                    {resubmittingAppId === app.id && (
+                      <div className="pt-3 border-t border-indigo-200 dark:border-indigo-800 bg-indigo-50/70 dark:bg-indigo-950/30 p-3.5 rounded-2xl space-y-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-xs font-black text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
+                            <RotateCcw className="w-3.5 h-3.5 text-indigo-600" />
+                            <span>Rejected आवेदन दोबारा भेजें (Upload Payment Screenshot &amp; UTR Number)</span>
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => setResubmittingAppId(null)}
+                            className="p-1 rounded-lg text-slate-500 hover:bg-white/60 cursor-pointer"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+
+                        <input
+                          type="file"
+                          ref={resubmitFileInputRef}
+                          accept="image/*"
+                          onChange={handleResubmitScreenshotFileChange}
+                          className="hidden"
+                        />
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div className="flex items-center gap-3 p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-800">
+                            {resubmitScreenshot ? (
+                              <img
+                                src={resubmitScreenshot}
+                                alt="Updated Payment Screenshot"
+                                className="w-12 h-12 rounded-lg object-cover border border-indigo-300 shrink-0"
+                              />
+                            ) : (
+                              <div className="w-12 h-12 rounded-lg bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400 shrink-0">
+                                <Camera className="w-5 h-5" />
+                              </div>
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <p className="text-[11px] font-bold text-slate-700 dark:text-slate-200 truncate">
+                                {resubmitScreenshot ? "Screenshot Ready" : "Payment Screenshot *"}
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => resubmitFileInputRef.current?.click()}
+                                className="mt-1 px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-black cursor-pointer"
+                              >
+                                {resubmitScreenshot ? "Change Screenshot" : "Upload Screenshot"}
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <label className="text-[11px] font-bold text-slate-700 dark:text-slate-200 block">
+                              UTR / Transaction Ref Number *
+                            </label>
+                            <input
+                              type="text"
+                              value={resubmitUtr}
+                              onChange={(e) => setResubmitUtr(e.target.value)}
+                              placeholder="e.g. 512398471923"
+                              className="w-full px-3 py-2 rounded-xl border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 text-xs font-mono font-bold text-slate-900 dark:text-white"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                          <input
+                            type="text"
+                            value={resubmitNote}
+                            onChange={(e) => setResubmitNote(e.target.value)}
+                            placeholder="Optional remark / note for admin..."
+                            className="flex-1 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                          />
+                          <button
+                            type="button"
+                            disabled={resubmittingRejected}
+                            onClick={() => handleResubmitRejectedApp(app)}
+                            className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                          >
+                            <Send className="w-3.5 h-3.5" />
+                            <span>{resubmittingRejected ? "Resubmitting..." : "दोबारा भेजें (Resubmit Request)"}</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -4173,25 +5842,25 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
             {!isAdmin && parentView === "dashboard" && parentApplications.length > 0 && !submittedApp ? (
               <div className="max-w-4xl mx-auto space-y-5">
                 {/* Parent ID & Overview Card */}
-                <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-blue-900 text-white rounded-3xl p-5 sm:p-6 shadow-xl border border-indigo-700/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-sky-50 dark:from-slate-900 dark:via-slate-900 dark:to-indigo-950 text-slate-900 dark:text-white rounded-3xl p-5 sm:p-6 shadow-md border-2 border-blue-700 dark:border-blue-500 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div className="flex items-center gap-3.5">
-                    <div className="w-14 h-14 rounded-2xl bg-amber-500/20 border border-amber-400/40 text-amber-300 flex items-center justify-center font-black text-2xl shadow-inner">
+                    <div className="w-14 h-14 rounded-2xl bg-amber-100 dark:bg-amber-500/20 border-2 border-amber-600/60 dark:border-amber-400/40 text-amber-700 dark:text-amber-300 flex items-center justify-center font-black text-2xl shadow-inner">
                       👨‍👩‍👧
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 text-[10px] font-black uppercase tracking-wider">
+                        <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-900 border border-emerald-600/50 dark:bg-emerald-500/20 dark:text-emerald-300 dark:border-emerald-400/30 text-[10px] font-black uppercase tracking-wider">
                           Parent ID Active
                         </span>
-                        <span className="text-xs text-slate-300 font-mono">
+                        <span className="text-xs text-slate-700 dark:text-slate-300 font-mono font-bold">
                           +91 {parentPortalPhone || "Self"}
                         </span>
                       </div>
-                      <h2 className="text-lg sm:text-xl font-black mt-1">
+                      <h2 className="text-lg sm:text-xl font-black mt-1 text-slate-900 dark:text-white">
                         अभिभावक ऑनलाइन आवेदन डैशबोर्ड
                       </h2>
-                      <p className="text-xs text-indigo-200">
-                        आपके इस नंबर से कुल <strong className="text-amber-300">{parentApplications.length}</strong> छात्र आवेदन दर्ज हैं।
+                      <p className="text-xs text-blue-800 dark:text-indigo-200 font-semibold">
+                        आपके इस नंबर से कुल <strong className="text-amber-700 dark:text-amber-300">{parentApplications.length}</strong> छात्र आवेदन दर्ज हैं।
                       </p>
                     </div>
                   </div>
@@ -4215,19 +5884,19 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                   </span>
                   <div className="flex items-center gap-2 w-full sm:w-auto">
                     <input
-                      type="tel"
-                      maxLength={10}
+                      type="text"
                       value={parentPhoneInput}
-                      onChange={(e) => setParentPhoneInput(e.target.value.replace(/\D/g, ""))}
-                      placeholder="10 अंकों का मोबाइल नंबर"
-                      className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-xs font-mono w-44"
+                      onChange={(e) => setParentPhoneInput(e.target.value)}
+                      placeholder="Mobile No. ya App No. (APP-...)"
+                      className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-xs font-mono w-48"
                     />
                     <button
                       type="button"
                       onClick={() => {
-                        if (parentPhoneInput.length === 10) {
-                          localStorage.setItem("nsta_parent_portal_phone", parentPhoneInput);
-                          setParentPortalPhone(parentPhoneInput);
+                        const val = parentPhoneInput.trim();
+                        if (val.length >= 4) {
+                          localStorage.setItem("nsta_parent_portal_phone", val);
+                          setParentPortalPhone(val);
                           setParentPhoneInput("");
                         }
                       }}
@@ -4367,12 +6036,107 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                             type="button"
                             onClick={() => {
                               setSubmittedApp(app);
+                              setAdmissionStep(3);
                               setPaymentSubmittedNotice(false);
                             }}
                             className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-black cursor-pointer"
                           >
                             + स्क्रीनशॉट अपलोड करें
                           </button>
+                        </div>
+                      )}
+
+                      {/* Rejection Notice + Resubmit with Screenshot & UTR */}
+                      {app.status === "rejected" && (
+                        <div className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="text-xs text-rose-800 dark:text-rose-200">
+                              <p className="font-black flex items-center gap-1.5">
+                                <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                                <span>अस्वीकृत कारण (Rejection Reason): {app.rejectionReason || app.remarks || "Verification pending / incomplete proof"}</span>
+                              </p>
+                              <p className="text-[11px] mt-0.5 text-rose-700 dark:text-rose-300">
+                                आप नया Payment Screenshot और UTR / Transaction Number जोड़कर इस आवेदन को दोबारा भेज सकते हैं।
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (resubmittingAppId === app.id) {
+                                  setResubmittingAppId(null);
+                                } else {
+                                  setResubmittingAppId(app.id);
+                                  setResubmitScreenshot(app.paymentScreenshotUrl || null);
+                                  setResubmitUtr(app.transactionRef || "");
+                                  setResubmitNote("");
+                                }
+                              }}
+                              className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black flex items-center gap-1.5 shadow-sm cursor-pointer shrink-0"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                              <span>{resubmittingAppId === app.id ? "बंद करें" : "🔄 Screenshot व UTR से दोबारा भेजें"}</span>
+                            </button>
+                          </div>
+
+                          {resubmittingAppId === app.id && (
+                            <div className="pt-3 border-t border-rose-200 dark:border-rose-800 space-y-3">
+                              <input
+                                type="file"
+                                ref={resubmitFileInputRef}
+                                accept="image/*"
+                                onChange={handleResubmitScreenshotFileChange}
+                                className="hidden"
+                              />
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div className="flex items-center gap-3 p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-800">
+                                  {resubmitScreenshot ? (
+                                    <img
+                                      src={resubmitScreenshot}
+                                      alt="Updated Payment Screenshot"
+                                      className="w-12 h-12 rounded-lg object-cover border border-rose-300 shrink-0"
+                                    />
+                                  ) : (
+                                    <div className="w-12 h-12 rounded-lg bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400 shrink-0">
+                                      <Camera className="w-5 h-5" />
+                                    </div>
+                                  )}
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-[11px] font-bold text-slate-700 dark:text-slate-200 truncate">
+                                      {resubmitScreenshot ? "Screenshot Attached" : "Payment Screenshot *"}
+                                    </p>
+                                    <button
+                                      type="button"
+                                      onClick={() => resubmitFileInputRef.current?.click()}
+                                      className="mt-1 px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-black cursor-pointer"
+                                    >
+                                      {resubmitScreenshot ? "Change Photo" : "Upload Screenshot"}
+                                    </button>
+                                  </div>
+                                </div>
+                                <div>
+                                  <label className="text-[11px] font-bold text-slate-700 dark:text-slate-200 block mb-1">
+                                    UTR / Transaction Ref No. *
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={resubmitUtr}
+                                    onChange={(e) => setResubmitUtr(e.target.value)}
+                                    placeholder="e.g. 512398471923"
+                                    className="w-full px-3 py-2 rounded-xl border border-rose-300 dark:border-rose-700 bg-white dark:bg-slate-900 text-xs font-mono font-bold text-slate-900 dark:text-white"
+                                  />
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                disabled={resubmittingRejected}
+                                onClick={() => handleResubmitRejectedApp(app)}
+                                className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                              >
+                                <Send className="w-3.5 h-3.5" />
+                                <span>{resubmittingRejected ? "दोबारा भेजा जा रहा है..." : "✅ Screenshot व UTR के साथ दोबारा आवेदन भेजें (Resubmit)"}</span>
+                              </button>
+                            </div>
+                          )}
                         </div>
                       )}
 
@@ -4389,7 +6153,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                             <span>
                               {payingAdmissionAppId === app.id
                                 ? "Opening Razorpay..."
-                                : `💳 Pay ₹${getClassFees(classes.find((c) => c.id === app.classId), { usesBus: app.usesBus }).totalPayable} Online (Instant Admission)`}
+                                : `💳 Pay ₹${getClassFees(classes.find((c) => c.id === app.classId), { usesBus: app.usesBus, offer: school?.websiteConfig?.admissionOffer, entranceDiscount: getAppEntranceDiscountOpt(app) }).totalPayable} Online (Instant Admission)`}
                             </span>
                           </button>
                         )}
@@ -4397,23 +6161,9 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                         {app.status === "approved" && onStudentEnrolledAndLink && (
                           <button
                             type="button"
-                            onClick={() => {
-                              const { student, fee } = resolveApplicationStudentAndFee(app);
-                              if (!student.photoUrl) {
-                                const targetCls = classes.find((c) => c.id === app.classId);
-                                const fees = getClassFees(targetCls, { usesBus: app.usesBus });
-                                setSubmittedApp(app);
-                                setConfirmedAdmission({
-                                  student,
-                                  assignedRollNo: app.assignedRollNo || student.rollNo || "1",
-                                  existingCount: 0,
-                                  totalPayable: fees.totalPayable,
-                                  admissionCharge: fees.admissionFee,
-                                  annualCharge: fees.annualCharges,
-                                  receiptNo: app.admissionFeeDetails?.receiptNo || fee?.receiptNo || "APPROVED",
-                                  feeRecord: fee,
-                                });
-                              } else {
+                            onClick={async () => {
+                              const student = await resolveRealStudentRecord(app);
+                              if (student.photoUrl) {
                                 enrollStudentFromPhotoUrl({
                                   id: student.id,
                                   schoolId: school.id,
@@ -4423,15 +6173,13 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                                   className: student.className,
                                   photoUrl: student.photoUrl,
                                 }).catch(() => {});
-                                onStudentEnrolledAndLink(student);
                               }
+                              onStudentEnrolledAndLink(student);
                             }}
                             className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-black flex items-center gap-1.5 shadow-md cursor-pointer"
                           >
                             <Link2 className="w-3.5 h-3.5" />
-                            <span>
-                              {app.photoUrl ? "🔗 My Account se Link karein" : "📸 Face ID Photo Add & Link"}
-                            </span>
+                            <span>🎓 Student Portal खोलें (Go to Portal)</span>
                           </button>
                         )}
 
@@ -4490,63 +6238,150 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
             {submittedApp ? (
               (() => {
                 const targetCls = classes.find((c) => c.id === submittedApp.classId);
-                const fees = getClassFees(targetCls, { usesBus: submittedApp.usesBus });
+                const fees = getClassFees(targetCls, {
+                  usesBus: submittedApp.usesBus,
+                  offer: school?.websiteConfig?.admissionOffer,
+                  entranceDiscount: getAppEntranceDiscountOpt(submittedApp),
+                });
                 const totalPayable = fees.totalPayable;
-                const schoolPhone = (school.whatsappNo || school.mobile || school.phone || "").replace(/\D/g, "");
-                const cleanWhatsAppNumber = schoolPhone.length === 10 ? `91${schoolPhone}` : schoolPhone;
+                const rawSchoolWa = (school.whatsappNo || "").replace(/\D/g, "");
+                const targetWaDigits = rawSchoolWa.length >= 10 && rawSchoolWa !== "0000000000" ? rawSchoolWa : "9835763641";
+                const cleanWhatsAppNumber = targetWaDigits.length === 10 ? `91${targetWaDigits}` : targetWaDigits;
+                const displayWhatsAppNumber = targetWaDigits.length >= 10 ? targetWaDigits.slice(-10) : "9835763641";
 
                 const whatsappLines = [
                   `*🏛️ ${school.name || "School"}*`,
-                  `*📋 नए प्रवेश हेतु ऑनलाइन आवेदन (Online Admission Application)*`,
+                  `*📋 ऑनलाइन एडमिशन पेमेंट QR अनुरोध (QR Request)*`,
                   `----------------------------------`,
                   `• *आवेदन संख्या (App No):* ${submittedApp.applicationNo}`,
                   `• *छात्र का नाम (Student Name):* ${submittedApp.studentName}`,
-                  `• *कक्षा (Class Applied):* ${submittedApp.className}`,
+                  `• *कक्षा (Class):* ${submittedApp.className}`,
                   `• *पिता का नाम (Father's Name):* ${submittedApp.fatherName}`,
                   `• *मोबाइल नंबर (Mobile):* ${submittedApp.phone}`,
-                  `• *बस / वाहन सुविधा:* ${submittedApp.usesBus ? `हाँ (Route: ${submittedApp.busRoute || "निर्दिष्ट नहीं"})` : "नहीं (लागू नहीं)"}`,
+                  `• *बस सुविधा:* ${submittedApp.usesBus ? `हाँ (${submittedApp.busRoute || "निर्दिष्ट रूट"})` : "नहीं"}`,
                   ``,
-                  `*💰 निर्धारित प्रवेश शुल्क विवरण (Fee Breakdown):*`,
-                  ...fees.enabledHeads.map((h) => `• ${h.label}: ₹${h.amount}`),
+                  `*💰 शुल्क विवरण (Fee Breakdown):*`,
+                  ...fees.enabledHeads.map((h) =>
+                    h.discountAmount > 0
+                      ? `• ${h.label}: ~₹${h.originalAmount}~ → ₹${h.amount} (${fees.offerDiscountPercent}% OFF)`
+                      : `• ${h.label}: ₹${h.amount}`
+                  ),
+                  ...(fees.offerDiscountTotal > 0 || fees.entranceDiscountTotal > 0
+                    ? [
+                        `----------------------------------`,
+                        `• *कुल पैकेज मूल्य (Original Total):* ₹${fees.grossTotalPayable}`,
+                        ...(fees.offerDiscountTotal > 0
+                          ? [`• *🎉 ${fees.offerTitle || "Admission Offer"} (${fees.offerDiscountPercent}% OFF):* -₹${fees.offerDiscountTotal}`]
+                          : []),
+                        ...(fees.entranceDiscountTotal > 0
+                          ? [`• *🎓 Entrance Merit Off (${fees.entranceDiscountBadge || fees.entranceDiscountLabel}):* -₹${fees.entranceDiscountTotal}`]
+                          : []),
+                      ]
+                    : []),
                   `----------------------------------`,
                   `*👉 कुल देय राशि (Total Payable): ₹${totalPayable}*`,
                   `----------------------------------`,
-                  `नमस्ते, मैंने स्कूल पोर्टल पर एडमिशन फॉर्म भर दिया है। कृपया फीस भुगतान हेतु स्कूल का QR कोड / बैंक विवरण भेजें ताकि हम ₹${totalPayable} का भुगतान कर सकें। धन्यवाद!`,
+                  `नमस्ते, मैंने स्कूल पोर्टल पर एडमिशन फॉर्म पूरा भर दिया है। कृपया ₹${totalPayable} भुगतान के लिए स्कूल का QR कोड भेजें ताकि मैं पेमेंट करके स्क्रीनशॉट व UTR सबमिट कर सकूँ। धन्यवाद!`,
                 ];
                 const whatsappUrl = `https://wa.me/${cleanWhatsAppNumber}?text=${encodeURIComponent(whatsappLines.join("\n"))}`;
 
-                // If pending notice after screenshot/WhatsApp submission
+                const currentStepIdx: 2 | 3 = paymentSubmittedNotice ? 3 : admissionStep === 3 ? 3 : 2;
+
+                // Auto-jump Celebration Banner when Admin just approved while user was waiting
+                if (jumpingToPortalApp && jumpingToPortalApp.id === submittedApp.id) {
+                  return (
+                    <div className="bg-white dark:bg-slate-800 rounded-3xl p-6 sm:p-10 shadow-xl border-2 border-emerald-400 dark:border-emerald-600 text-center space-y-5">
+                      <div className="w-20 h-20 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto shadow-inner animate-bounce">
+                        <CheckCircle2 className="w-12 h-12" />
+                      </div>
+                      <span className="px-3.5 py-1 rounded-full bg-emerald-100 dark:bg-emerald-900/50 text-emerald-800 dark:text-emerald-200 text-xs font-black uppercase tracking-wider">
+                        🎉 Admission Approved • Live Portal Active
+                      </span>
+                      <h2 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white">
+                        मुबारक हो! एडमिशन कन्फर्म हो गया
+                      </h2>
+                      <p className="text-sm font-bold text-slate-600 dark:text-slate-300 max-w-md mx-auto">
+                        <strong>{jumpingToPortalApp.studentName}</strong> ({jumpingToPortalApp.className}) का दाखिला अप्रूव हो गया है। अब आप सीधे इनके असली <strong>Student Portal</strong> पर जा रहे हैं...
+                      </p>
+                      {onStudentEnrolledAndLink && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const st = await resolveRealStudentRecord(jumpingToPortalApp);
+                            setJumpingToPortalApp(null);
+                            onStudentEnrolledAndLink(st);
+                          }}
+                          className="px-6 py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-black shadow-lg cursor-pointer inline-flex items-center gap-2"
+                        >
+                          <GraduationCap className="w-5 h-5" />
+                          <span>🎓 तुरंत Student Portal खोलें →</span>
+                        </button>
+                      )}
+                    </div>
+                  );
+                }
+
+                // 30-Min Pending Verification Screen after submitting Screenshot + UTR
                 if (paymentSubmittedNotice) {
                   return (
                     <div className="bg-white dark:bg-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl border border-amber-300 dark:border-amber-700 space-y-6 text-center">
-                      <div className="w-20 h-20 rounded-full bg-amber-100 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 flex items-center justify-center mx-auto mb-3 shadow-inner">
+                      <div className="w-20 h-20 rounded-full bg-amber-100 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 flex items-center justify-center mx-auto mb-2 shadow-inner">
                         <Clock className="w-12 h-12" />
                       </div>
-                      <span className="px-3.5 py-1 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200 text-xs font-black uppercase tracking-wider">
-                        ⏳ सत्यापन हेतु लंबित (Pending Admin Approval)
+                      <span className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200 text-xs font-black uppercase tracking-wider">
+                        ⏳ 30 मिनट के अंदर कन्फर्मेशन (Confirm Within 30 Minutes)
                       </span>
-                      <h2 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mt-2">
-                        आवेदन व भुगतान विवरण दर्ज हो गया!
+                      <h2 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white">
+                        पेमेंट स्क्रीनशॉट और UTR सबमिट हो गया!
                       </h2>
-                      <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 max-w-lg mx-auto">
-                        आवेदन संख्या: <strong className="font-mono text-indigo-600 dark:text-indigo-400">{submittedApp.applicationNo}</strong> • {submittedApp.studentName} ({submittedApp.className})
+                      <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 max-w-lg mx-auto leading-relaxed">
+                        आवेदन संख्या: <strong className="font-mono text-indigo-600 dark:text-indigo-400">{submittedApp.applicationNo}</strong> • <strong>{submittedApp.studentName}</strong> ({submittedApp.className})
+                        {transactionRef && (
+                          <>
+                            {" "}• UTR: <strong className="font-mono text-emerald-700 dark:text-emerald-300">{transactionRef}</strong>
+                          </>
+                        )}
                       </p>
-                      <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/40 text-left text-xs space-y-2.5 text-slate-700 dark:text-slate-200 max-w-md mx-auto">
-                        <div className="flex items-start gap-2">
+
+                      <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-amber-50 via-emerald-50/50 to-indigo-50/40 dark:from-amber-950/30 dark:via-slate-900 dark:to-indigo-950/30 border border-amber-200 dark:border-amber-800 text-left text-xs space-y-3 text-slate-700 dark:text-slate-200 max-w-lg mx-auto">
+                        <div className="flex items-start gap-2.5">
                           <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                          <span>आपका एडमिशन फॉर्म व फीस भुगतान विवरण स्कूल एडमिन को प्राप्त हो गया है।</span>
+                          <span>
+                            आपका भुगतान विवरण सफलतापूर्वक दर्ज कर लिया गया है। <strong>30 मिनट के अंदर</strong> स्कूल द्वारा जाँच कर आपका एडमिशन कन्फर्म कर दिया जाएगा।
+                          </span>
                         </div>
-                        <div className="flex items-start gap-2">
-                          <Clock className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                          <span>स्कूल एडमिन द्वारा WhatsApp पर प्राप्त भुगतान का सत्यापन करके आवेदन अप्रूव (Approve) किया जाएगा।</span>
-                        </div>
-                        <div className="flex items-start gap-2">
+                        <div className="flex items-start gap-2.5">
                           <Sparkles className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
-                          <span>एडमिन द्वारा अप्रूव होते ही छात्र को रोल नंबर आवंटित हो जाएगा और स्टूडेंट पोर्टल पर लॉगिन सक्रिय हो जाएगा।</span>
+                          <span>
+                            <strong>अप्रूव होते ही सीधा Student Portal खुलेगा:</strong> जैसे ही स्कूल एडमिन आपका आवेदन Accept करेंगे, आप इसी स्क्रीन से सीधे छात्र के असली स्टूडेंट पोर्टल पर पहुंच जाएंगे।
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 pt-2 border-t border-amber-200/70 dark:border-slate-700 text-[11px] font-bold text-emerald-700 dark:text-emerald-400">
+                          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                          <span>लाइव अप्रूवल जांच सक्रिय है — कृपया प्रतीक्षा करें या नीचे से स्टेटस जांचें।</span>
                         </div>
                       </div>
 
                       <div className="flex flex-wrap justify-center gap-3 pt-2">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const latestApps = await getAdmissionApplications(school.id);
+                            setApplications(latestApps);
+                            const found = latestApps.find((a) => a.id === submittedApp.id);
+                            if (found?.status === "approved" && onStudentEnrolledAndLink) {
+                              const st = await resolveRealStudentRecord(found);
+                              setPaymentSubmittedNotice(false);
+                              onStudentEnrolledAndLink(st);
+                            } else {
+                              toast.info("अभी पेंडिंग है — 30 मिनट के अंदर एडमिन कन्फर्म कर देंगे।");
+                            }
+                          }}
+                          className="px-5 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-black flex items-center gap-2 shadow-lg shadow-emerald-600/25 active:scale-95 transition cursor-pointer"
+                        >
+                          <RefreshCw className="w-4 h-4" /> स्टेटस अभी चेक करें
+                        </button>
+
                         <button
                           type="button"
                           onClick={() =>
@@ -4559,21 +6394,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                           }
                           className="px-5 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-black flex items-center gap-2 shadow-lg shadow-blue-600/25 active:scale-95 transition cursor-pointer"
                         >
-                          <Printer className="w-4 h-4" /> एडमिशन फॉर्म प्रिंट करें (A4)
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSubmittedApp(null);
-                            setPaymentSubmittedNotice(false);
-                            setConfirmedAdmission(null);
-                            setPaymentScreenshot(null);
-                            setTransactionRef("");
-                          }}
-                          className="px-5 py-3 rounded-2xl bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 text-slate-800 dark:text-white text-xs sm:text-sm font-bold active:scale-95 transition cursor-pointer"
-                        >
-                          नया आवेदन दर्ज करें
+                          <Printer className="w-4 h-4" /> फॉर्म प्रिंट करें (A4)
                         </button>
 
                         {!isAdmin && (
@@ -4582,11 +6403,12 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                             onClick={() => {
                               setSubmittedApp(null);
                               setPaymentSubmittedNotice(false);
+                              setAdmissionStep(1);
                               setParentView("dashboard");
                             }}
                             className="px-5 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-black flex items-center gap-1.5 shadow-lg shadow-indigo-600/30 active:scale-95 transition cursor-pointer"
                           >
-                            <span>👨‍👩‍👧 मेरे सभी आवेदन व स्थिति देखें (+ Admission)</span>
+                            <span>👨‍👩‍👧 मेरे सभी आवेदन देखें</span>
                           </button>
                         )}
                       </div>
@@ -4594,7 +6416,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                   );
                 }
 
-                // If confirmed after submitting screenshot
+                // If confirmed after direct counter or Razorpay
                 if (confirmedAdmission) {
                   return (
                     <div className="bg-white dark:bg-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl border border-emerald-300 dark:border-emerald-700 space-y-6">
@@ -4603,7 +6425,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                           <CheckCircle2 className="w-12 h-12" />
                         </div>
                         <span className="px-3.5 py-1 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 text-xs font-black uppercase tracking-wider">
-                          🎉 Online Admission Confirmed
+                          🎉 Admission Confirmed
                         </span>
                         <h2 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mt-2">
                           मुबारक हो! आपका एडमिशन पक्का हो गया
@@ -4613,7 +6435,6 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                         </p>
                       </div>
 
-                      {/* Allocated Roll Number Highlight Box */}
                       <div className="bg-gradient-to-br from-amber-500 via-amber-600 to-orange-600 text-white rounded-3xl p-6 text-center shadow-lg relative overflow-hidden">
                         <div className="absolute -right-4 -bottom-4 opacity-15">
                           <GraduationCap className="w-32 h-32" />
@@ -4627,15 +6448,29 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                         <div className="inline-flex items-center gap-2 bg-black/25 backdrop-blur-xs px-4 py-1.5 rounded-full text-xs font-bold text-white/95">
                           <Sparkles className="w-4 h-4 text-amber-300" />
                           <span>
-                            कक्षा {submittedApp.className} के कुल {confirmedAdmission.existingCount} छात्रों के बाद अगला रोल नंबर मिला है
+                            कक्षा {submittedApp.className} • रोल नंबर आवंटित
                           </span>
                         </div>
                       </div>
 
-                      {/* Details & Fee Summary */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left">
                         <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-700 space-y-2 text-xs">
-                          <p className="font-extrabold text-slate-400 uppercase text-[10px] tracking-wider mb-2">छात्र व आवेदन विवरण</p>
+                          <div className="flex items-center justify-between gap-2 mb-2">
+                            <p className="font-extrabold text-slate-400 uppercase text-[10px] tracking-wider">छात्र व आवेदन विवरण</p>
+                            <button
+                              type="button"
+                              onClick={() => setMaskSensitiveData((prev) => !prev)}
+                              className={`px-2 py-0.5 rounded-lg text-[10px] font-bold flex items-center gap-1 border transition cursor-pointer ${
+                                maskSensitiveData
+                                  ? "bg-amber-600 text-white border-amber-500"
+                                  : "bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+                              }`}
+                              title="मोबाइल, आधार, पिता व माता का नाम 2 अक्षर के बाद xxxx में दिखाएं / पूरा दिखाएं"
+                            >
+                              {maskSensitiveData ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                              <span>{maskSensitiveData ? "Mask: ON" : "Mask (xxxx)"}</span>
+                            </button>
+                          </div>
                           <div className="flex justify-between">
                             <span className="text-slate-500">Application No:</span>
                             <strong className="font-mono text-indigo-600 dark:text-indigo-400">{submittedApp.applicationNo}</strong>
@@ -4650,153 +6485,58 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                           </div>
                           <div className="flex justify-between">
                             <span className="text-slate-500">Father's Name:</span>
-                            <strong className="text-slate-800 dark:text-white">{submittedApp.fatherName}</strong>
+                            <strong className="text-slate-800 dark:text-white">
+                              {maskSensitiveData ? maskSensitive2Chars(submittedApp.fatherName, true) : (submittedApp.fatherName || "—")}
+                            </strong>
                           </div>
-                          <div className="flex justify-between">
-                            <span className="text-slate-500">Mobile:</span>
-                            <strong className="text-slate-800 dark:text-white">{submittedApp.phone}</strong>
-                          </div>
+                          {submittedApp.motherName && (
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">Mother's Name:</span>
+                              <strong className="text-slate-800 dark:text-white">
+                                {maskSensitiveData ? maskSensitive2Chars(submittedApp.motherName, true) : submittedApp.motherName}
+                              </strong>
+                            </div>
+                          )}
+                          {submittedApp.phone && (
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">Mobile:</span>
+                              <strong className="text-slate-800 dark:text-white font-mono">
+                                {maskSensitiveData ? maskSensitive2Chars(submittedApp.phone, true) : submittedApp.phone}
+                              </strong>
+                            </div>
+                          )}
+                          {submittedApp.aadhaarNo && (
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">Aadhaar:</span>
+                              <strong className="text-slate-800 dark:text-white font-mono">
+                                {maskSensitiveData ? maskSensitive2Chars(submittedApp.aadhaarNo, true) : submittedApp.aadhaarNo}
+                              </strong>
+                            </div>
+                          )}
                         </div>
 
                         <div className="p-4 rounded-2xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/60 space-y-2 text-xs">
-                          <p className="font-extrabold text-emerald-700 dark:text-emerald-400 uppercase text-[10px] tracking-wider mb-2">जमा शुल्क विवरण (Paid)</p>
-                          <div className="flex justify-between text-slate-600 dark:text-slate-300">
-                            <span>प्रवेश शुल्क (Admission Charge):</span>
-                            <strong className="text-slate-900 dark:text-white">₹{confirmedAdmission.admissionCharge}</strong>
-                          </div>
-                          <div className="flex justify-between text-slate-600 dark:text-slate-300">
-                            <span>वार्षिक शुल्क (Annual Charge):</span>
-                            <strong className="text-slate-900 dark:text-white">₹{confirmedAdmission.annualCharge}</strong>
-                          </div>
-                          <div className="pt-2 border-t border-emerald-300 dark:border-emerald-800 flex justify-between text-sm font-black text-emerald-700 dark:text-emerald-300">
-                            <span>कुल भुगतान (Total Paid):</span>
-                            <span>₹{confirmedAdmission.totalPayable}</span>
-                          </div>
-                          <div className="mt-2 text-[11px] text-emerald-800 dark:text-emerald-300 font-semibold flex items-center gap-1.5">
-                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                            <span>Payment Screenshot & Push Notification sent to School Admin</span>
+                          <p className="font-extrabold text-emerald-700 dark:text-emerald-400 uppercase text-[10px] tracking-wider mb-2">जमा शुल्क विवरण</p>
+                          <div className="pt-1 flex justify-between text-sm font-black text-emerald-700 dark:text-emerald-300">
+                            <span>कुल देय / जमा राशि:</span>
+                            <span className="tabular-nums">₹{confirmedAdmission.totalPayable}</span>
                           </div>
                         </div>
                       </div>
 
-                      {/* Step 3: Mandatory Student Photo for Face ID Attendance & Instant Account Link */}
-                      {!isAdmin && (
-                        <div className="p-5 rounded-3xl bg-gradient-to-br from-indigo-50 via-blue-50 to-emerald-50 dark:from-indigo-950/50 dark:via-slate-900 dark:to-emerald-950/30 border-2 border-indigo-400 dark:border-indigo-700 space-y-4 shadow-lg">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="flex items-center gap-2.5">
-                              <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow">
-                                <ScanFace className="w-5 h-5" />
-                              </div>
-                              <div>
-                                <span className="px-2 py-0.5 rounded-full bg-indigo-600 text-white text-[10px] font-black uppercase tracking-wider">
-                                  अंतिम चरण • Mandatory for Face ID Attendance
-                                </span>
-                                <h3 className="text-sm sm:text-base font-black text-slate-900 dark:text-white mt-0.5">
-                                  Student Photo Add karein (Face ID Attendance + Account Link)
-                                </h3>
-                              </div>
-                            </div>
-                            {confirmedAdmission.student.photoUrl ? (
-                              <span className="px-3 py-1 rounded-full bg-emerald-600 text-white text-[11px] font-black flex items-center gap-1">
-                                <CheckCircle2 className="w-3.5 h-3.5" /> Photo Ready
-                              </span>
-                            ) : (
-                              <span className="px-3 py-1 rounded-full bg-amber-500 text-slate-950 text-[11px] font-black">
-                                Photo Required
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="flex flex-col sm:flex-row items-center gap-4 bg-white dark:bg-slate-800 p-4 rounded-2xl border border-indigo-200 dark:border-slate-700">
-                            <div className="w-24 h-28 rounded-2xl border-2 border-indigo-500 bg-slate-100 dark:bg-slate-900 overflow-hidden flex items-center justify-center shrink-0 shadow-sm">
-                              {confirmedAdmission.student.photoUrl ? (
-                                <img
-                                  src={confirmedAdmission.student.photoUrl}
-                                  alt={confirmedAdmission.student.name}
-                                  className="w-full h-full object-cover object-top"
-                                />
-                              ) : (
-                                <div className="text-center p-2 text-slate-400">
-                                  <Camera className="w-7 h-7 mx-auto mb-1 text-indigo-400" />
-                                  <span className="text-[10px] font-bold block">No Photo</span>
-                                </div>
-                              )}
-                            </div>
-
-                            <div className="flex-1 space-y-2.5 text-center sm:text-left">
-                              <p className="text-xs font-bold text-slate-700 dark:text-slate-200 leading-relaxed">
-                                पेमेंट पूरा हो चुका है और आपका दाखिला पक्का हो गया है! अब <strong>Face ID Attendance</strong> चालू करने और <strong>Student Account को आपकी User ID से जोड़ने</strong> के लिए छात्र की स्पष्ट फोटो अपलोड करें या कैमरा से लें।
-                              </p>
-                              <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
-                                <button
-                                  type="button"
-                                  disabled={postPayPhotoSaving}
-                                  onClick={() => {
-                                    setCameraTarget("post_pay_photo");
-                                    setShowLiveCameraModal(true);
-                                  }}
-                                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white text-xs font-black flex items-center gap-1.5 shadow cursor-pointer disabled:opacity-50"
-                                >
-                                  <Camera className="w-4 h-4" />
-                                  <span>{confirmedAdmission.student.photoUrl ? "Retake Live Photo" : "📸 Camera se Photo lein"}</span>
-                                </button>
-
-                                <DirectUploadButton
-                                  kind="image"
-                                  compact
-                                  currentUrl={confirmedAdmission.student.photoUrl || ""}
-                                  onUploaded={(url) => {
-                                    void handlePostPayFaceIdPhotoSave(url, true);
-                                  }}
-                                />
-
-                                {confirmedAdmission.student.photoUrl && onStudentEnrolledAndLink && (
-                                  <button
-                                    type="button"
-                                    disabled={postPayPhotoSaving}
-                                    onClick={() => void handlePostPayFaceIdPhotoSave(confirmedAdmission.student.photoUrl!, true)}
-                                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-black flex items-center gap-1.5 shadow-md cursor-pointer disabled:opacity-50"
-                                  >
-                                    <Link2 className="w-4 h-4" />
-                                    <span>
-                                      {postPayPhotoSaving
-                                        ? "Saving & Linking..."
-                                        : accountLinkedDone
-                                        ? "✅ Linked! Open Student Portal"
-                                        : "✅ Save Face ID & Link Student Account"}
-                                    </span>
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Payment Screenshot Preview if submitted */}
-                      {paymentScreenshot && (
-                        <div className="p-3 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-3">
-                            <img src={paymentScreenshot} alt="Payment Proof" className="w-12 h-12 object-cover rounded-xl border border-slate-300 dark:border-slate-600 shrink-0" />
-                            <div className="text-left text-xs">
-                              <p className="font-bold text-slate-800 dark:text-white flex items-center gap-1.5">
-                                <BadgeCheck className="w-4 h-4 text-emerald-600" />
-                                <span>पेमेंट स्क्रीनशॉट संलग्न है</span>
-                              </p>
-                              {transactionRef && <p className="text-[11px] text-slate-500 font-mono">Ref / UTR: {transactionRef}</p>}
-                            </div>
-                          </div>
+                      {!isAdmin && onStudentEnrolledAndLink && (
+                        <div className="text-center">
                           <button
                             type="button"
-                            onClick={() => setViewScreenshotUrl(paymentScreenshot)}
-                            className="px-3 py-1.5 bg-slate-200 dark:bg-slate-700 text-xs font-bold rounded-lg text-slate-800 dark:text-white hover:bg-slate-300 cursor-pointer"
+                            onClick={() => onStudentEnrolledAndLink(confirmedAdmission.student)}
+                            className="px-6 py-3.5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-sm font-black inline-flex items-center gap-2 shadow-lg cursor-pointer"
                           >
-                            देखें
+                            <GraduationCap className="w-5 h-5" />
+                            <span>🎓 Student Portal खोलें (Go to Student Portal) →</span>
                           </button>
                         </div>
                       )}
 
-                      {/* Action Buttons */}
                       <div className="flex flex-wrap justify-center gap-3 pt-2">
                         <button
                           type="button"
@@ -4839,340 +6579,467 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                             setConfirmedAdmission(null);
                             setPaymentScreenshot(null);
                             setTransactionRef("");
+                            setAdmissionStep(1);
+                            setAdminFormStep(1);
                           }}
                           className="px-5 py-3 rounded-2xl bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 text-slate-800 dark:text-white text-xs sm:text-sm font-bold active:scale-95 transition cursor-pointer"
                         >
-                          Submit Another Application
+                          नया आवेदन भरें
                         </button>
-
-                        {!isAdmin && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSubmittedApp(null);
-                              setConfirmedAdmission(null);
-                              setPaymentScreenshot(null);
-                              setTransactionRef("");
-                              setParentView("dashboard");
-                            }}
-                            className="px-5 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-black flex items-center gap-1.5 shadow-lg shadow-indigo-600/30 active:scale-95 transition cursor-pointer"
-                          >
-                            <span>👨‍👩‍👧 मेरे सभी आवेदन देखें (+ Add Admission)</span>
-                          </button>
-                        )}
                       </div>
                     </div>
                   );
                 }
 
-                // If not yet confirmed -> Show Fee Breakdown + UPI QR + Screenshot Upload
+                // CLEAN 3-STEP WIZARD: STEP 2 (Fee Breakdown) & STEP 3 (WhatsApp QR 9835763641 + Screenshot/UTR)
                 return (
-                  <div className="bg-white dark:bg-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl border border-slate-200 dark:border-slate-700 space-y-6">
-                    {/* Header */}
-                    <div className="text-center">
-                      <div className="w-16 h-16 rounded-2xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto mb-3 shadow-inner">
-                        <CheckCircle2 className="w-9 h-9" />
-                      </div>
-                      <span className="px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 text-xs font-black uppercase">
-                        चरण 2: शुल्क भुगतान एवं स्क्रीनशॉट
-                      </span>
-                      <h2 className="text-2xl font-black text-slate-900 dark:text-white mt-2">
-                        प्रवेश आवेदन दर्ज हो गया!
-                      </h2>
-                      <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 mt-1">
-                        Application No:{" "}
-                        <strong className="font-mono text-indigo-600 dark:text-indigo-400 text-sm sm:text-base">
-                          {submittedApp.applicationNo}
-                        </strong>{" "}
-                        • {submittedApp.studentName} ({submittedApp.className})
-                      </p>
+                  <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 sm:p-8 shadow-xl border border-slate-200 dark:border-slate-700 space-y-6">
+                    {/* 3-Step Visual Stepper */}
+                    <div className="grid grid-cols-3 gap-2 p-1.5 rounded-2xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-center text-[11px] font-black">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAdmissionStep(1);
+                        }}
+                        className="py-2 px-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 flex items-center justify-center gap-1 cursor-pointer"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                        <span className="truncate">1. फॉर्म ✓</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAdmissionStep(2)}
+                        className={`py-2 px-2 rounded-xl flex items-center justify-center gap-1 transition cursor-pointer ${
+                          currentStepIdx === 2
+                            ? "bg-indigo-600 text-white shadow-sm"
+                            : "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300"
+                        }`}
+                      >
+                        <span>{currentStepIdx > 2 ? "2. शुल्क सूची ✓" : "2. शुल्क सूची"}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAdmissionStep(3)}
+                        className={`py-2 px-2 rounded-xl flex items-center justify-center gap-1 transition cursor-pointer ${
+                          currentStepIdx === 3
+                            ? "bg-emerald-600 text-white shadow-sm"
+                            : "text-slate-500 dark:text-slate-400"
+                        }`}
+                      >
+                        <span>3. पेमेंट व UTR</span>
+                      </button>
                     </div>
 
-                    {/* Step 1: Fee Charges Breakdown Box (Admission + Annual Charge) - Strictly Fixed & Non-editable */}
-                    <div className="bg-gradient-to-br from-indigo-50/80 via-blue-50/60 to-slate-50 dark:from-indigo-950/40 dark:via-slate-900/50 dark:to-slate-900/80 rounded-2xl p-5 border border-indigo-200/90 dark:border-indigo-800/70 shadow-xs">
-                      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                        <div className="flex items-center gap-2">
-                          <IndianRupee className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-                          <h3 className="font-black text-sm text-slate-900 dark:text-white">
-                            कक्षा {submittedApp.className} का निर्धारित आधिकारिक शुल्क (Fixed Official Charges)
-                          </h3>
-                        </div>
-                        <span className="px-2.5 py-1 rounded-full bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 text-[10px] font-black uppercase flex items-center gap-1 border border-amber-300/80 dark:border-amber-800">
-                          <Lock className="w-3 h-3 text-amber-700 dark:text-amber-400" />
-                          <span>फिक्स शुल्क (Non-Editable)</span>
+                    {/* Header Summary */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-4 border-b border-slate-200 dark:border-slate-700">
+                      <div>
+                        <span className="px-2.5 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 text-[11px] font-black uppercase">
+                          {currentStepIdx === 2 ? "Step 2 / 3 • शुल्क विवरण (Fee Breakdown)" : "Step 3 / 3 • QR पेमेंट व सबमिशन"}
                         </span>
+                        <h2 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white mt-1.5">
+                          {submittedApp.studentName} — {submittedApp.className}
+                        </h2>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 font-mono">
+                          App No: <strong className="text-indigo-600 dark:text-indigo-400">{submittedApp.applicationNo}</strong>
+                          {submittedApp.usesBus ? ` • 🚌 Bus: ${submittedApp.busRoute || "Yes"}` : " • बिना बस सुविधा"}
+                        </p>
                       </div>
-
-                      <div className="space-y-2.5 text-xs">
-                        {fees.enabledHeads.map((headItem) => (
-                          <div
-                            key={headItem.key}
-                            className="flex items-center justify-between p-2.5 bg-white dark:bg-slate-800 rounded-xl border border-slate-200/70 dark:border-slate-700"
-                          >
-                            <div>
-                              <p className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
-                                <span>{headItem.label}</span>
-                                <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300">
-                                  Exact
-                                </span>
-                              </p>
-                              {headItem.hint && <p className="text-[11px] text-slate-500">{headItem.hint}</p>}
-                            </div>
-                            <span className="text-base font-black text-slate-900 dark:text-white font-mono">
-                              ₹{headItem.amount}
+                      <div className="text-left sm:text-right">
+                        <span className="text-[11px] font-bold text-slate-500 block">कुल देय शुल्क</span>
+                        <div className="flex sm:justify-end items-baseline gap-2">
+                          {(fees.offerDiscountTotal > 0 || fees.entranceDiscountTotal > 0) && (
+                            <span className="text-sm font-bold text-slate-400 line-through font-mono tabular-nums">
+                              ₹{fees.grossTotalPayable.toLocaleString("en-IN")}
                             </span>
-                          </div>
-                        ))}
-
-                        <div className="flex items-center justify-between p-3.5 bg-emerald-600 text-white rounded-xl shadow-md">
-                          <div>
-                            <span className="font-black text-sm block">कुल देय राशि (Exact Total Payable Amount):</span>
-                            <span className="text-[10px] text-emerald-100 font-semibold flex items-center gap-1">
-                              <ShieldCheck className="w-3 h-3 text-emerald-200" />
-                              <span>कोई कमी या बदलाव (कम/बेशी) देय नहीं है</span>
-                            </span>
-                          </div>
-                          <span className="text-xl sm:text-2xl font-black font-mono">₹{totalPayable}</span>
+                          )}
+                          <span className="text-2xl font-black text-emerald-700 dark:text-emerald-400 font-mono tabular-nums">
+                            ₹{totalPayable.toLocaleString("en-IN")}
+                          </span>
                         </div>
+                        {fees.offerDiscountTotal > 0 && (
+                          <span className="text-[11px] font-extrabold text-amber-600 dark:text-amber-400 block">
+                            🎉 {fees.offerDiscountPercent}% OFF • Save ₹{fees.offerDiscountTotal.toLocaleString("en-IN")}
+                          </span>
+                        )}
+                        {fees.entranceDiscountTotal > 0 && (
+                          <span className="text-[11px] font-extrabold text-emerald-600 dark:text-emerald-400 block">
+                            🎓 {fees.entranceDiscountBadge || "Entrance Off"} • Save ₹{fees.entranceDiscountTotal.toLocaleString("en-IN")}
+                          </span>
+                        )}
                       </div>
                     </div>
 
-                    {/* Step 1.5: Direct Instant Razorpay Online Payment -> Auto-Accept Admission */}
-                    {!isAdmin && (
-                      <div className="bg-gradient-to-br from-indigo-600 via-blue-700 to-violet-700 text-white rounded-3xl p-6 text-center space-y-3.5 shadow-xl shadow-indigo-600/20">
-                        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/15 border border-white/25 text-[11px] font-black uppercase tracking-wider text-amber-300">
-                          <Sparkles className="w-3.5 h-3.5" />
-                          <span>Instant Online Admission • Razorpay Checkout</span>
-                        </div>
-                        <h3 className="text-lg sm:text-xl font-black">
-                          अभी ऑनलाइन पेमेंट करें और तुरंत एडमिशन पक्का पाएं!
-                        </h3>
-                        <p className="text-xs text-indigo-100 max-w-lg mx-auto leading-relaxed">
-                          Razorpay से ₹{totalPayable} का भुगतान सफल होते ही आपका फॉर्म <strong>Auto-Approve</strong> हो जाएगा, रोल नंबर तुरंत मिल जाएगा और Face ID फोटो जोड़ते ही छात्र अकाउंट आपकी ID से लिंक हो जाएगा।
-                        </p>
+                    {submittedApp.status === "rejected" && (
+                      <div className="p-3 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-xs text-rose-800 dark:text-rose-200">
+                        <strong>Rejection Reason:</strong> {submittedApp.rejectionReason || submittedApp.remarks || "Incomplete payment proof"} — कृपया नया Payment Screenshot और UTR नंबर जोड़कर दोबारा सबमिट करें।
+                      </div>
+                    )}
 
-                        {admissionPayError && (
-                          <div className="p-2.5 rounded-xl bg-rose-950/70 border border-rose-400/50 text-rose-100 text-xs font-bold max-w-md mx-auto">
-                            {admissionPayError}
+                    {/* STEP 2 VIEW: TRANSPARENT ITEMIZED FEE BREAKDOWN LIST + NEXT BUTTON */}
+                    {currentStepIdx === 2 && (
+                      <div className="space-y-5">
+                        {fees.offerDiscountTotal > 0 && (
+                          <div className="rounded-2xl bg-[#070D19] text-white border border-amber-400/50 px-4 py-3.5 flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <span className="text-[11px] font-bold text-amber-300 uppercase tracking-wider block">
+                                {fees.offerBadgeText || `${fees.offerDiscountPercent}% OFF`}
+                              </span>
+                              <p className="text-sm font-black">
+                                {fees.offerTitle || "Special Admission Offer"} — {fees.offerDiscountPercent}% OFF लागू
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <span className="text-[11px] text-slate-400 block">आपकी कुल बचत</span>
+                              <span className="text-base font-black text-emerald-400 font-mono tabular-nums">
+                                -₹{fees.offerDiscountTotal.toLocaleString("en-IN")}
+                              </span>
+                            </div>
                           </div>
                         )}
 
-                        <div className="max-w-md mx-auto pt-1">
+                        {fees.entranceDiscountTotal > 0 && (
+                          <div className="rounded-2xl bg-emerald-950 text-white border border-emerald-400/50 px-4 py-3.5 flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <span className="text-[11px] font-bold text-emerald-300 uppercase tracking-wider block">
+                                🎓 Entrance Exam Merit Scholarship ({submittedApp.entranceTestScorePct}%)
+                              </span>
+                              <p className="text-sm font-black">
+                                {fees.entranceDiscountLabel || "Entrance Merit Fee Off"} ({fees.entranceDiscountBadge})
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <span className="text-[11px] text-emerald-200 block">मेरिट छूट (Fee Off)</span>
+                              <span className="text-base font-black text-amber-300 font-mono tabular-nums">
+                                -₹{fees.entranceDiscountTotal.toLocaleString("en-IN")}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="bg-slate-50 dark:bg-slate-900/70 rounded-2xl p-4 sm:p-5 border border-slate-200 dark:border-slate-700 space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <h3 className="font-black text-sm text-slate-900 dark:text-white flex items-center gap-2">
+                              <ReceiptText className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                              <span>कहाँ कितना पैसा लग रहा है (Fee Breakdown List)</span>
+                            </h3>
+                            <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
+                              {fees.enabledHeads.length} शुल्क मदें
+                            </span>
+                          </div>
+
+                          <div className="divide-y divide-slate-200 dark:divide-slate-700/80 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+                            {fees.enabledHeads.map((headItem, idx) => (
+                              <div
+                                key={headItem.key}
+                                className="flex items-center justify-between gap-3 px-4 py-3 text-xs"
+                              >
+                                <div className="min-w-0">
+                                  <p className="font-bold text-slate-900 dark:text-white">
+                                    {idx + 1}. {headItem.label}
+                                  </p>
+                                  {headItem.hint && (
+                                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">{headItem.hint}</p>
+                                  )}
+                                  {headItem.discountAmount > 0 && (
+                                    <p className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">
+                                      Offer {fees.offerDiscountPercent}% OFF • -₹{headItem.discountAmount.toLocaleString("en-IN")}
+                                    </p>
+                                  )}
+                                </div>
+                                <div className="text-right shrink-0">
+                                  {headItem.discountAmount > 0 && (
+                                    <span className="block text-[11px] text-slate-400 line-through font-mono tabular-nums">
+                                      ₹{headItem.originalAmount.toLocaleString("en-IN")}
+                                    </span>
+                                  )}
+                                  <span className="text-sm sm:text-base font-black text-slate-900 dark:text-white font-mono tabular-nums">
+                                    ₹{headItem.amount.toLocaleString("en-IN")}
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                            {fees.entranceDiscountTotal > 0 && (
+                              <div className="flex items-center justify-between gap-3 px-4 py-3 text-xs bg-emerald-50/70 dark:bg-emerald-950/30">
+                                <div className="min-w-0">
+                                  <p className="font-extrabold text-emerald-800 dark:text-emerald-300">
+                                    🎓 {fees.entranceDiscountLabel || "Entrance Merit Off"} ({submittedApp.entranceTestScorePct}% Score)
+                                  </p>
+                                </div>
+                                <span className="text-sm sm:text-base font-black text-emerald-700 dark:text-emerald-300 font-mono tabular-nums">
+                                  -₹{fees.entranceDiscountTotal.toLocaleString("en-IN")}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex flex-wrap items-center justify-between gap-2 p-4 bg-emerald-600 text-white rounded-xl shadow-md">
+                            <div>
+                              <span className="font-black text-sm block">कुल देय शुल्क (Total Payable Amount)</span>
+                              <span className="text-[11px] text-emerald-100">
+                                {(fees.offerDiscountTotal > 0 || fees.entranceDiscountTotal > 0)
+                                  ? `मूल पैकेज ₹${fees.grossTotalPayable.toLocaleString("en-IN")}${
+                                      fees.offerDiscountTotal > 0
+                                        ? ` − ऑफर छूट ₹${fees.offerDiscountTotal.toLocaleString("en-IN")}`
+                                        : ""
+                                    }${
+                                      fees.entranceDiscountTotal > 0
+                                        ? ` − एंट्रेंस मेरिट छूट ₹${fees.entranceDiscountTotal.toLocaleString("en-IN")}`
+                                        : ""
+                                    }`
+                                  : "फॉर्म सबमिट होने के बाद पारदर्शी शुल्क सूची"}
+                              </span>
+                            </div>
+                            <span className="text-2xl font-black font-mono tabular-nums">₹{totalPayable.toLocaleString("en-IN")}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-1">
                           <button
                             type="button"
-                            disabled={payingAdmissionAppId === submittedApp.id}
-                            onClick={() => handleOnlineAdmissionRazorpayPay(submittedApp)}
-                            className="w-full py-4 px-5 rounded-2xl bg-gradient-to-r from-amber-400 to-yellow-400 hover:from-amber-300 hover:to-yellow-300 disabled:opacity-60 text-slate-950 font-black text-sm sm:text-base flex items-center justify-center gap-2.5 shadow-lg active:scale-95 transition cursor-pointer"
+                            onClick={() => {
+                              // Go back to Step 1 form keeping draft submittedApp id intact so no duplicate is created
+                              setAdmissionStep(1);
+                              const draftApp = submittedApp;
+                              setSubmittedApp(null);
+                              setForm((prev) => ({
+                                ...prev,
+                                studentName: draftApp.studentName || prev.studentName,
+                                classId: draftApp.classId || prev.classId,
+                                fatherName: draftApp.fatherName || prev.fatherName,
+                                motherName: draftApp.motherName || prev.motherName,
+                                phone: draftApp.phone || prev.phone,
+                                usesBus: Boolean(draftApp.usesBus),
+                                busRoute: draftApp.busRoute || prev.busRoute,
+                              }));
+                            }}
+                            className="px-4 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-xs sm:text-sm font-bold cursor-pointer whitespace-nowrap"
                           >
-                            <CreditCard className="w-5 h-5" />
-                            <span>
-                              {payingAdmissionAppId === submittedApp.id
-                                ? "Opening Razorpay Checkout..."
-                                : `💳 Pay ₹${totalPayable} Online Now (Razorpay)`}
-                            </span>
+                            ← फॉर्म सुधारें (Edit Step 1)
                           </button>
-                          <p className="text-[10.5px] text-indigo-100/90 font-semibold mt-2">
-                            UPI (GPay / PhonePe / Paytm), Cards &amp; NetBanking Supported • 100% Verified Auto-Receipt
-                          </p>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAdmissionStep(3);
+                              try {
+                                window.scrollTo({ top: 0, behavior: "smooth" });
+                              } catch {}
+                            }}
+                            className="flex-1 sm:flex-initial px-6 py-3.5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/25 active:scale-[0.99] transition cursor-pointer whitespace-nowrap"
+                          >
+                            <span>Next: पेमेंट करें (Step 3) →</span>
+                          </button>
                         </div>
                       </div>
                     )}
 
-                    {/* Step 2: Pay via Direct WhatsApp to School (Secondary Fallback) */}
-                    <div className="bg-gradient-to-br from-emerald-50 via-teal-50 to-green-50 dark:from-emerald-950/40 dark:via-teal-950/30 dark:to-slate-900 rounded-3xl p-6 border-2 border-emerald-400 dark:border-emerald-700 text-center space-y-4 shadow-lg shadow-emerald-500/10">
-                      <div className="w-14 h-14 rounded-2xl bg-[#25D366] text-white flex items-center justify-center mx-auto shadow-md">
-                        <MessageCircle className="w-8 h-8" />
-                      </div>
-
-                      <div>
-                        <span className="px-3 py-1 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 text-xs font-black uppercase tracking-wider border border-emerald-300 dark:border-emerald-700">
-                          WhatsApp डायरेक्ट पेमेंट (Direct WhatsApp Payment)
-                        </span>
-                        <h3 className="font-black text-base sm:text-lg text-slate-900 dark:text-white mt-2">
-                          WhatsApp पर फीस विवरण भेजें व स्कूल से QR कोड प्राप्त करें
-                        </h3>
-                        <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 max-w-md mx-auto">
-                          नीचे दिए गए बटन पर क्लिक करते ही स्कूल के WhatsApp नंबर (<strong className="font-mono text-emerald-700 dark:text-emerald-400">+{cleanWhatsAppNumber}</strong>) पर छात्र का नाम, कक्षा और कुल ₹{totalPayable} फीस का संदेश तैयार मिलेगा।
-                        </p>
-                      </div>
-
-                      <div className="max-w-md mx-auto">
-                        <a
-                          href={whatsappUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="w-full py-3.5 px-5 rounded-2xl bg-[#25D366] hover:bg-[#20bd5a] text-white font-black text-sm sm:text-base flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-600/30 active:scale-95 transition cursor-pointer"
-                        >
-                          <MessageCircle className="w-5 h-5 text-white" />
-                          <span>WhatsApp पर फीस भेजें और QR कोड प्राप्त करें</span>
-                        </a>
-
-                        <p className="text-[11px] text-emerald-800 dark:text-emerald-300 font-semibold mt-2.5 flex items-center justify-center gap-1.5">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                          <span>WhatsApp पर QR कोड से पेमेंट करने के बाद नीचे स्क्रीनशॉट / UTR अपलोड करें</span>
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Step 3: Upload Screenshot & Send */}
-                    <div className="bg-amber-50/60 dark:bg-amber-950/20 rounded-2xl p-5 border-2 border-dashed border-amber-300 dark:border-amber-700 space-y-4">
-                      <div className="flex items-start gap-2.5">
-                        <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 mt-0.5">
-                          <Upload className="w-4 h-4" />
-                        </div>
-                        <div className="text-left">
-                          <h4 className="font-black text-sm text-slate-900 dark:text-white">
-                            पेमेंट का स्क्रीनशॉट भेजें (Upload Screenshot)
-                          </h4>
-                          <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-0.5">
-                            स्क्रीनशॉट भेजते ही स्कूल एडमिन को <strong>लाइव नोटिफिकेशन</strong> चला जाएगा और छात्र को <strong>कक्षा के छात्रों के बाद का रोल नंबर</strong> तुरंत मिल जाएगा।
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* File input button & preview */}
-                      <input
-                        type="file"
-                        ref={screenshotFileInputRef}
-                        accept="image/*"
-                        onChange={handleScreenshotFileChange}
-                        className="hidden"
-                      />
-
-                      {paymentScreenshot ? (
-                        <div className="p-3 bg-white dark:bg-slate-800 rounded-xl border border-amber-300 dark:border-amber-800 flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-3">
-                            <img
-                              src={paymentScreenshot}
-                              alt="Payment Screenshot Preview"
-                              className="w-16 h-16 object-cover rounded-lg border border-slate-200"
-                            />
-                            <div className="text-left text-xs">
-                              <p className="font-bold text-emerald-600 flex items-center gap-1">
-                                <CheckCircle2 className="w-3.5 h-3.5" />
-                                <span>स्क्रीनशॉट चुना गया</span>
+                    {/* STEP 3 VIEW: WHATSAPP QR REQUEST ON 9835763641 + SCREENSHOT & UTR UPLOAD */}
+                    {currentStepIdx === 3 && (
+                      <div className="space-y-5">
+                        {/* WhatsApp QR Request Card (9835763641) */}
+                        <div className="bg-gradient-to-br from-emerald-50 via-teal-50 to-green-50 dark:from-emerald-950/40 dark:via-teal-950/30 dark:to-slate-900 rounded-2xl p-5 sm:p-6 border-2 border-emerald-400 dark:border-emerald-700 space-y-4">
+                          <div className="flex items-start gap-3">
+                            <div className="w-12 h-12 rounded-2xl bg-[#25D366] text-white flex items-center justify-center shrink-0 shadow-md">
+                              <MessageCircle className="w-6 h-6" />
+                            </div>
+                            <div className="flex-1">
+                              <span className="text-[11px] font-black uppercase tracking-wider text-emerald-800 dark:text-emerald-300 block">
+                                Step 3A • पेमेंट QR कोड प्राप्त करें
+                              </span>
+                              <h3 className="font-black text-base sm:text-lg text-slate-900 dark:text-white mt-0.5">
+                                WhatsApp ({displayWhatsAppNumber}) पर QR कोड मांगें और पेमेंट करें
+                              </h3>
+                              <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
+                                नीचे दिए गए बटन पर क्लिक करते ही WhatsApp नंबर <strong className="font-mono text-emerald-700 dark:text-emerald-400">+91 {displayWhatsAppNumber}</strong> पर ₹{totalPayable} भुगतान का QR कोड मांगने वाला मैसेज तैयार खुलेगा। QR कोड मिलते ही पेमेंट करें।
                               </p>
-                              <p className="text-[11px] text-slate-500">तैयार है भेजने के लिए</p>
                             </div>
                           </div>
+
+                          <div className="p-3 rounded-xl bg-white/90 dark:bg-slate-900/70 border border-emerald-200 dark:border-emerald-800 text-[11px] text-slate-700 dark:text-slate-300 font-medium leading-relaxed">
+                            <span className="font-black text-emerald-800 dark:text-emerald-300 block mb-1">WhatsApp मैसेज प्रीव्यू:</span>
+                            "नमस्ते, मैंने स्कूल पोर्टल पर एडमिशन फॉर्म भर दिया है ({submittedApp.studentName} • {submittedApp.className} • App #{submittedApp.applicationNo})। कृपया <strong>₹{totalPayable}</strong> फीस भुगतान के लिए <strong>QR कोड</strong> भेजें।"
+                          </div>
+
+                          <a
+                            href={whatsappUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="w-full py-3.5 px-5 rounded-2xl bg-[#25D366] hover:bg-[#20bd5a] text-white font-black text-sm sm:text-base flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-600/30 active:scale-95 transition cursor-pointer"
+                          >
+                            <MessageCircle className="w-5 h-5 text-white shrink-0" />
+                            <span>WhatsApp ({displayWhatsAppNumber}) पर QR कोड मांगें →</span>
+                          </a>
+                        </div>
+
+                        {/* Step 3B: Screenshot + UTR Upload */}
+                        <div className="bg-amber-50/60 dark:bg-amber-950/20 rounded-2xl p-5 border-2 border-dashed border-amber-300 dark:border-amber-700 space-y-4">
+                          <div className="flex items-start gap-2.5">
+                            <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 mt-0.5">
+                              <Upload className="w-4 h-4" />
+                            </div>
+                            <div className="text-left">
+                              <span className="text-[11px] font-black uppercase tracking-wider text-amber-800 dark:text-amber-300 block">
+                                Step 3B • भुगतान के बाद प्रूफ सबमिट करें
+                              </span>
+                              <h4 className="font-black text-sm sm:text-base text-slate-900 dark:text-white">
+                                पेमेंट स्क्रीनशॉट व UTR नंबर डालकर सबमिट करें
+                              </h4>
+                              <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-0.5">
+                                सबमिट करते ही <strong>30 मिनट के अंदर</strong> आपका एडमिशन कन्फर्म होगा और अप्रूव होते ही आप सीधे Student Portal पर पहुंच जाएंगे।
+                              </p>
+                            </div>
+                          </div>
+
+                          <input
+                            type="file"
+                            ref={screenshotFileInputRef}
+                            accept="image/*"
+                            onChange={handleScreenshotFileChange}
+                            className="hidden"
+                          />
+
+                          {paymentScreenshot ? (
+                            <div className="p-3 bg-white dark:bg-slate-800 rounded-xl border border-amber-300 dark:border-amber-800 flex items-center justify-between gap-3">
+                              <div className="flex items-center gap-3">
+                                <img
+                                  src={paymentScreenshot}
+                                  alt="Payment Screenshot Preview"
+                                  className="w-16 h-16 object-cover rounded-lg border border-slate-200"
+                                />
+                                <div className="text-left text-xs">
+                                  <p className="font-bold text-emerald-600 flex items-center gap-1">
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    <span>स्क्रीनशॉट संलग्न हो गया</span>
+                                  </p>
+                                  <p className="text-[11px] text-slate-500">UTR डालकर सबमिट करें</p>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setPaymentScreenshot(null)}
+                                className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg text-xs font-bold cursor-pointer"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => screenshotFileInputRef.current?.click()}
+                              className="w-full py-4 border-2 border-dashed border-amber-400 dark:border-amber-600 rounded-xl bg-white dark:bg-slate-800 hover:bg-amber-50 dark:hover:bg-slate-700/60 transition flex flex-col items-center justify-center gap-1 text-slate-700 dark:text-slate-200 cursor-pointer"
+                            >
+                              <Camera className="w-6 h-6 text-amber-600" />
+                              <span className="text-xs font-black">पेमेंट स्क्रीनशॉट अपलोड करें (Upload Screenshot)</span>
+                              <span className="text-[10px] text-slate-400">JPG, PNG या WebP फ़ाइल (अधिकतम 8MB)</span>
+                            </button>
+                          )}
+
+                          <div className="text-left">
+                            <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                              UPI Ref / Transaction UTR No. *
+                            </label>
+                            <input
+                              type="text"
+                              value={transactionRef}
+                              onChange={(e) => setTransactionRef(e.target.value)}
+                              placeholder="e.g. 512398471923 (12-digit UTR Number)"
+                              className="w-full px-3.5 py-2.5 text-xs font-mono font-bold rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
+                            />
+                          </div>
+
+                          {screenshotError && (
+                            <div className="p-2.5 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 text-xs rounded-xl flex items-center gap-1.5 font-bold">
+                              <AlertCircle className="w-4 h-4 shrink-0" />
+                              <span>{screenshotError}</span>
+                            </div>
+                          )}
+
                           <button
                             type="button"
-                            onClick={() => setPaymentScreenshot(null)}
-                            className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg text-xs font-bold cursor-pointer"
+                            onClick={handleSendPaymentScreenshot}
+                            disabled={submittingScreenshot}
+                            className="w-full py-3.5 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30 active:scale-95 transition cursor-pointer"
                           >
-                            <X className="w-4 h-4" />
+                            {submittingScreenshot ? (
+                              <>
+                                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                <span>पेमेंट विवरण सबमिट हो रहा है...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Send className="w-4 h-4" />
+                                <span>पेमेंट स्क्रीनशॉट व UTR सबमिट करें</span>
+                              </>
+                            )}
                           </button>
                         </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => screenshotFileInputRef.current?.click()}
-                          className="w-full py-4 border-2 border-dashed border-amber-400 dark:border-amber-600 rounded-xl bg-white dark:bg-slate-800 hover:bg-amber-50 dark:hover:bg-slate-700/60 transition flex flex-col items-center justify-center gap-1 text-slate-700 dark:text-slate-200 cursor-pointer"
-                        >
-                          <Camera className="w-6 h-6 text-amber-600" />
-                          <span className="text-xs font-black">कैमरा / गैलरी से पेमेंट स्क्रीनशॉट अपलोड करें</span>
-                          <span className="text-[10px] text-slate-400">JPG, PNG या WebP फ़ाइल (अधिकतम 8MB)</span>
-                        </button>
-                      )}
 
-                      {/* Optional UTR / Reference ID */}
-                      <div className="text-left">
-                        <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                          UPI Ref / Transaction UTR No. (वैकल्पिक):
-                        </label>
-                        <input
-                          type="text"
-                          value={transactionRef}
-                          onChange={(e) => setTransactionRef(e.target.value)}
-                          placeholder="e.g. 512398471923 या UTR नंबर"
-                          className="w-full px-3 py-2 text-xs font-semibold rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
-                        />
-                      </div>
-
-                      {screenshotError && (
-                        <div className="p-2.5 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 text-xs rounded-xl flex items-center gap-1.5 font-bold">
-                          <AlertCircle className="w-4 h-4 shrink-0" />
-                          <span>{screenshotError}</span>
-                        </div>
-                      )}
-
-                      {/* Send Button */}
-                      <button
-                        type="button"
-                        onClick={handleSendPaymentScreenshot}
-                        disabled={submittingScreenshot}
-                        className="w-full py-3.5 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30 active:scale-95 transition cursor-pointer"
-                      >
-                        {submittingScreenshot ? (
-                          <>
-                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                            <span>स्क्रीनशॉट भेजा जा रहा है व रोल नंबर आवंटित हो रहा है...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Send className="w-4 h-4" />
-                            <span>स्क्रीनशॉट भेजें और एडमिशन पक्का करें (Get Roll Number)</span>
-                          </>
+                        {/* Optional Instant Razorpay Gateway if School Configured */}
+                        {!isAdmin && razorpayCfg?.enabled && (
+                          <div className="p-4 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div className="text-xs">
+                              <p className="font-black text-indigo-900 dark:text-indigo-200">या तुरंत ऑनलाइन पेमेंट करें (Razorpay)</p>
+                              <p className="text-[11px] text-slate-600 dark:text-slate-400">तुरंत Auto-Approve और Student Portal एक्सेस</p>
+                            </div>
+                            <button
+                              type="button"
+                              disabled={payingAdmissionAppId === submittedApp.id}
+                              onClick={() => handleOnlineAdmissionRazorpayPay(submittedApp)}
+                              className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer shrink-0 whitespace-nowrap"
+                            >
+                              <CreditCard className="w-4 h-4" />
+                              <span>{payingAdmissionAppId === submittedApp.id ? "Opening..." : `Pay ₹${totalPayable} Online`}</span>
+                            </button>
+                          </div>
                         )}
-                      </button>
-                    </div>
 
-                    {/* Secondary Actions */}
-                    <div className="flex flex-wrap justify-center gap-3 pt-2">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setPrintStudioState({
-                            open: true,
-                            application: submittedApp,
-                            className: submittedApp.className,
-                            mode: "form_only",
-                          })
-                        }
-                        className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <Printer className="w-4 h-4" /> फॉर्म प्रिंट करें (A4)
-                      </button>
+                        <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAdmissionStep(2);
+                              try {
+                                window.scrollTo({ top: 0, behavior: "smooth" });
+                              } catch {}
+                            }}
+                            className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-white text-xs font-bold cursor-pointer"
+                          >
+                            ← शुल्क सूची देखें (Step 2)
+                          </button>
 
-                      {isAdmin && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const appToEnroll = submittedApp;
-                            setSubmittedApp(null);
-                            setActiveTab("applications");
-                            openEnrollModal(appToEnroll);
-                          }}
-                          className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-                        >
-                          <Check className="w-4 h-4" /> एडमिन: नकद फीस जमा करें
-                        </button>
-                      )}
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPrintStudioState({
+                                  open: true,
+                                  application: submittedApp,
+                                  className: submittedApp.className,
+                                  mode: "form_only",
+                                })
+                              }
+                              className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <Printer className="w-4 h-4" /> फॉर्म प्रिंट (A4)
+                            </button>
 
-                      {!isAdmin && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSubmittedApp(null);
-                            setParentView("dashboard");
-                          }}
-                          className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black flex items-center gap-1.5 shadow-md shadow-indigo-600/25 active:scale-95 transition cursor-pointer"
-                        >
-                          👨‍👩‍👧 मेरे सभी आवेदन देखें (+ Add Admission)
-                        </button>
-                      )}
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSubmittedApp(null);
-                          if (!isAdmin) setParentView("dashboard");
-                        }}
-                        className="px-4 py-2.5 rounded-xl bg-transparent hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-bold cursor-pointer"
-                      >
-                        {!isAdmin ? "← डैशबोर्ड" : "वापस जाएं"}
-                      </button>
-                    </div>
+                            {!isAdmin && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSubmittedApp(null);
+                                  setAdmissionStep(1);
+                                  setParentView("dashboard");
+                                }}
+                                className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black cursor-pointer"
+                              >
+                                मेरे सभी आवेदन देखें
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })()
@@ -5181,20 +7048,34 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                 onSubmit={handleSubmitForm}
                 className="bg-white dark:bg-slate-800 rounded-3xl p-6 sm:p-8 shadow-lg border border-slate-200 dark:border-slate-700 space-y-6"
               >
+                {/* Clean Step Indicator for Step 1 Admission Form */}
+                <div className="grid grid-cols-3 gap-2 p-1.5 rounded-2xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-center text-[11px] font-black">
+                  <div className={`py-2 px-2 rounded-xl flex items-center justify-center gap-1 ${(!isAdmin || adminFormStep === 1) ? "bg-indigo-600 text-white shadow-sm" : "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300"}`}>
+                    <span>{isAdmin && adminFormStep === 2 ? "1. फॉर्म ✓" : "1. आवेदन फॉर्म"}</span>
+                  </div>
+                  <div className={`py-2 px-2 rounded-xl flex items-center justify-center gap-1 ${isAdmin && adminFormStep === 2 ? "bg-indigo-600 text-white shadow-sm" : "text-slate-500 dark:text-slate-400"}`}>
+                    <span>2. शुल्क विवरण</span>
+                  </div>
+                  <div className="py-2 px-2 rounded-xl text-slate-500 dark:text-slate-400 flex items-center justify-center gap-1">
+                    <span>{isAdmin ? "3. दाखिला व रसीद" : "3. पेमेंट व UTR"}</span>
+                  </div>
+                </div>
+                {(!isAdmin || adminFormStep === 1) && (
+                  <>
                 {/* PARENT QUICK NAVIGATION / LOOKUP BAR */}
                 {!isAdmin && (
-                  <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-blue-900 text-white p-3.5 sm:p-4 rounded-2xl shadow-md border border-indigo-700/50 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+                  <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-sky-50 dark:from-slate-900 dark:via-slate-900 dark:to-indigo-950 text-slate-900 dark:text-white p-3.5 sm:p-4 rounded-2xl shadow-sm border-2 border-blue-700 dark:border-blue-500 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
                     <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-400/40 flex items-center justify-center font-bold shrink-0">
+                      <div className="w-8 h-8 rounded-xl bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-600/50 dark:border-amber-400/40 flex items-center justify-center font-bold shrink-0">
                         👨‍👩‍👧
                       </div>
                       <div>
-                        <p className="font-black text-white text-xs">
+                        <p className="font-black text-slate-900 dark:text-white text-xs">
                           {parentApplications.length > 0
                             ? `पैरेंट आईडी (+91 ${parentPortalPhone}): ${parentApplications.length} आवेदन दर्ज हैं`
                             : "अभिभावक ऑनलाइन प्रवेश (Parent Admission Portal)"}
                         </p>
-                        <p className="text-[11px] text-indigo-200">
+                        <p className="text-[11px] text-blue-800 dark:text-indigo-200 font-semibold">
                           {parentApplications.length > 0
                             ? "एक ही आईडी से आप अपने दूसरे बच्चों का भी नया एडमिशन जोड़ सकते हैं।"
                             : "फॉर्म सबमिट करते ही आपका पैरेंट आईडी व डैशबोर्ड एक्टिव हो जाएगा।"}
@@ -5215,19 +7096,19 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                       ) : (
                         <div className="flex items-center gap-1.5 w-full sm:w-auto">
                           <input
-                            type="tel"
-                            maxLength={10}
+                            type="text"
                             value={parentPhoneInput}
-                            onChange={(e) => setParentPhoneInput(e.target.value.replace(/\D/g, ""))}
-                            placeholder="पूर्व मोबाइल नंबर"
-                            className="px-2.5 py-1.5 rounded-xl border border-indigo-400/50 bg-slate-800 text-xs text-white placeholder:text-slate-400 font-mono w-32"
+                            onChange={(e) => setParentPhoneInput(e.target.value)}
+                            placeholder="Mobile ya App No."
+                            className="px-2.5 py-1.5 rounded-xl border border-indigo-400/50 bg-slate-800 text-xs text-white placeholder:text-slate-400 font-mono w-36"
                           />
                           <button
                             type="button"
                             onClick={() => {
-                              if (parentPhoneInput.length === 10) {
-                                localStorage.setItem("nsta_parent_portal_phone", parentPhoneInput);
-                                setParentPortalPhone(parentPhoneInput);
+                              const val = parentPhoneInput.trim();
+                              if (val.length >= 4) {
+                                localStorage.setItem("nsta_parent_portal_phone", val);
+                                setParentPortalPhone(val);
                                 setParentView("dashboard");
                                 setParentPhoneInput("");
                               }
@@ -5251,69 +7132,65 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                         {school.name} — Admission Form
                       </h2>
                       <p className="text-xs text-slate-500">
-                        Academic Session {activeSession?.name || "2026-27"} • Official Registration
+                        {!isAdmin || viewMode === "admissions_only"
+                          ? `Admission Session ${effectivePublicAdmissionSession} • Official Registration`
+                          : `Academic Session ${activeSession?.name || "2026-27"} • Official Registration`}
                       </p>
                     </div>
                   </div>
 
-                  {/* Photo Upload & Live Camera in Form (Optional) */}
-                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 bg-gradient-to-br from-indigo-50/70 to-slate-50 dark:from-slate-800/80 dark:to-slate-900 p-3 rounded-2xl border border-indigo-100 dark:border-slate-700 shadow-xs">
-                    <div className="relative group w-14 h-16 rounded-xl border-2 border-dashed border-indigo-400/80 dark:border-indigo-500/60 overflow-hidden flex items-center justify-center bg-white dark:bg-slate-800 shrink-0 shadow-xs">
-                      {form.photoUrl ? (
-                        <>
-                          <img src={form.photoUrl} alt="Applicant" className="w-full h-full object-cover" />
-                          <button
-                            type="button"
-                            onClick={() => setForm((p) => ({ ...p, photoUrl: "" }))}
-                            className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white cursor-pointer"
-                            title="Remove Photo"
-                          >
-                            <X className="w-4 h-4 text-rose-300" />
-                          </button>
-                        </>
-                      ) : (
-                        <div className="flex flex-col items-center justify-center text-slate-400">
-                          <Camera className="w-4 h-4 text-indigo-400 mb-0.5" />
-                          <span className="text-[9px] font-black uppercase text-slate-400">Photo</span>
-                        </div>
-                      )}
+                  {/* Compact Photo Upload & Live Camera (Icon-Only, No Link Input) */}
+                  <div className="flex items-center justify-between gap-3 bg-gradient-to-br from-indigo-50/70 to-slate-50 dark:from-slate-800/80 dark:to-slate-900 px-3 py-2 rounded-2xl border border-indigo-100 dark:border-slate-700 shadow-xs">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="relative group w-11 h-12 rounded-xl border-2 border-dashed border-indigo-400/80 dark:border-indigo-500/60 overflow-hidden flex items-center justify-center bg-white dark:bg-slate-800 shrink-0 shadow-xs">
+                        {form.photoUrl ? (
+                          <>
+                            <img src={form.photoUrl} alt="Applicant" className="w-full h-full object-cover" />
+                            <button
+                              type="button"
+                              onClick={() => setForm((p) => ({ ...p, photoUrl: "" }))}
+                              className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white cursor-pointer"
+                              title="Remove Photo"
+                            >
+                              <X className="w-3.5 h-3.5 text-rose-300" />
+                            </button>
+                          </>
+                        ) : (
+                          <Camera className="w-4 h-4 text-indigo-400" />
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-black text-slate-800 dark:text-slate-200 truncate">
+                          Student Photo
+                        </p>
+                        <p className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+                          Optional (ऐच्छिक)
+                        </p>
+                      </div>
                     </div>
 
-                    <div className="space-y-1.5">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-black text-slate-800 dark:text-slate-200">
-                          Student Photo (छात्र की फोटो)
-                        </span>
-                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-                          Optional (ऐच्छिक)
-                        </span>
-                      </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCameraTarget("form");
+                          setShowLiveCameraModal(true);
+                        }}
+                        className="p-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-xs active:scale-95 transition cursor-pointer"
+                        title="Live Camera से फोटो लें"
+                        aria-label="Take photo with Live Camera"
+                      >
+                        <Camera className="w-4 h-4" />
+                      </button>
 
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setCameraTarget("form");
-                            setShowLiveCameraModal(true);
-                          }}
-                          className="px-2.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-black flex items-center gap-1.5 shadow-xs active:scale-95 transition cursor-pointer"
-                          title="Live Camera से तुरंत फोटो खींचें"
-                        >
-                          <Camera className="w-3.5 h-3.5" />
-                          <span>📷 Live Camera (लाइव फोटो लें)</span>
-                        </button>
-
-                        <DirectUploadButton
-                          kind="image"
-                          compact
-                          currentUrl={form.photoUrl}
-                          onUploaded={(url) => setForm((p) => ({ ...p, photoUrl: url }))}
-                          onClear={() => setForm((p) => ({ ...p, photoUrl: "" }))}
-                        />
-                      </div>
-                      <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight">
-                        कैमरे से लाइव फोटो लें या गैलरी से अपलोड करें (यदि उपलब्ध न हो तो बाद में भी जोड़ सकते हैं)।
-                      </p>
+                      <DirectUploadButton
+                        kind="image"
+                        iconOnly
+                        showLinkInput={false}
+                        currentUrl={form.photoUrl}
+                        onUploaded={(url) => setForm((p) => ({ ...p, photoUrl: url }))}
+                        onClear={() => setForm((p) => ({ ...p, photoUrl: "" }))}
+                      />
                     </div>
                   </div>
                 </div>
@@ -5325,245 +7202,472 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                   </div>
                 )}
 
-                {/* Admission Type Toggle */}
-                <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-2xl border border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div>
-                    <span className="text-xs font-black uppercase tracking-wider text-indigo-700 dark:text-indigo-300">
-                      प्रवेश का प्रकार (Admission Type)
-                    </span>
-                    <p className="text-[11px] text-slate-500">क्या यह नया नामांकन है या अगली कक्षा में पुनः प्रवेश?</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setForm({ ...form, admissionType: "NEW" })}
-                      className={`px-4 py-2 rounded-xl text-xs font-black transition cursor-pointer ${
-                        form.admissionType === "NEW"
-                          ? "bg-indigo-600 text-white shadow"
-                          : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700"
-                      }`}
-                    >
-                      ✓ NEW ADMISSION (नया प्रवेश)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setForm({ ...form, admissionType: "READMISSION" })}
-                      className={`px-4 py-2 rounded-xl text-xs font-black transition cursor-pointer ${
-                        form.admissionType === "READMISSION"
-                          ? "bg-indigo-600 text-white shadow"
-                          : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700"
-                      }`}
-                    >
-                      RE-ADMISSION / PROMOTION (पुनः प्रवेश)
-                    </button>
-                  </div>
-                </div>
-
-                {/* ── OPERATOR AUTO-VERIFICATION & ADMISSION CHARGE EDITOR ── */}
-                <div className="space-y-3">
-                  {operatorCheckState === "VERIFYING" ? (
-                    <div className="p-3.5 rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white border border-indigo-500/40 shadow-lg flex items-center justify-between gap-3 animate-pulse">
-                      <div className="flex items-center gap-2.5">
-                        <Sparkles className="w-5 h-5 text-amber-300 animate-spin" />
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-black tracking-wide">
-                              ⚡ स्कूल पहचान सत्यापन (Verifying Operator Identity)...
-                            </span>
-                            <span className="text-[10px] text-indigo-300 font-mono">1–3s Auto Scan</span>
-                          </div>
-                          <p className="text-[11px] text-slate-300">
-                            सिस्टम ऑटो लोड कर रहा है कि प्रवेश कौन ले रहा है: अधिकृत शिक्षक (Teacher) या नवीन अभिभावक (Parent)...
-                          </p>
-                        </div>
-                      </div>
-                      <div className="w-16 h-1.5 rounded-full bg-slate-800 overflow-hidden shrink-0">
-                        <div className="h-full bg-gradient-to-r from-indigo-500 to-emerald-400 animate-pulse w-full" />
-                      </div>
-                    </div>
-                  ) : (
+                {entrancePrefillBanner && (() => {
+                  const hasScore = entrancePrefillBanner.bestScorePct !== undefined;
+                  const evalBanner = hasScore
+                    ? evaluateEntranceScore(
+                        entrancePrefillBanner.bestScorePct,
+                        entrancePrefillBanner.classLabel,
+                        entrancePrefillBanner.classLevel
+                      )
+                    : null;
+                  const selectedBannerCls =
+                    effectiveTargetClasses.find((c) => c.id === form.classId) ||
+                    classesList.find((c) => c.id === form.classId) ||
+                    classes[0];
+                  const previewFees = hasScore
+                    ? getClassFees(selectedBannerCls, {
+                        usesBus: form.usesBus,
+                        offer: school?.websiteConfig?.admissionOffer,
+                        entranceDiscount: {
+                          scorePct: entrancePrefillBanner.bestScorePct,
+                          config: school?.websiteConfig?.entranceDiscountConfig,
+                          cancelled: entrancePrefillDiscountCancelled,
+                        },
+                      })
+                    : null;
+                  const uncancelledCalc = hasScore
+                    ? calculateEntranceScoreDiscount(
+                        entrancePrefillBanner.bestScorePct,
+                        school?.websiteConfig?.entranceDiscountConfig
+                      )
+                    : null;
+                  const isDirectGreen = evalBanner ? evalBanner.isDirectEligible : true;
+                  const displayTargetCls =
+                    entrancePrefillBanner.recommendedClassLabel ||
+                    evalBanner?.recommendedClassLabel ||
+                    entrancePrefillBanner.classLabel;
+                  return (
                     <div
-                      className={`p-3.5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border ${
-                        verifiedOperator.role === "TEACHER"
-                          ? "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-400 dark:border-emerald-700 text-emerald-900 dark:text-emerald-200"
-                          : "bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200"
+                      className={`p-3.5 rounded-xl border text-xs flex items-start sm:items-center justify-between gap-3 ${
+                        isDirectGreen
+                          ? "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-700 text-emerald-900 dark:text-emerald-200"
+                          : "bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-700 text-amber-900 dark:text-amber-200"
                       }`}
                     >
-                      <div className="flex items-center gap-2.5">
-                        <div
-                          className={`w-8 h-8 rounded-xl flex items-center justify-center font-bold text-white shadow-xs shrink-0 ${
-                            verifiedOperator.role === "TEACHER" ? "bg-emerald-600" : "bg-indigo-600"
+                      <div className="flex items-start gap-2.5 min-w-0">
+                        <CheckCircle2
+                          className={`w-4 h-4 shrink-0 mt-0.5 ${
+                            isDirectGreen
+                              ? "text-emerald-600 dark:text-emerald-400"
+                              : "text-amber-600 dark:text-amber-400"
                           }`}
-                        >
-                          {verifiedOperator.role === "TEACHER" ? <UserCheck className="w-4 h-4" /> : <Users className="w-4 h-4" />}
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-xs font-black">
-                              {verifiedOperator.role === "TEACHER"
-                                ? `👨‍🏫 अधिकृत शिक्षक सत्र: ${verifiedOperator.name}`
-                                : `👤 छात्र / अभिभावक ऑनलाइन आवेदन (Parent / Self Application)`}
-                            </span>
-                            <span
-                              className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
-                                verifiedOperator.role === "TEACHER"
-                                  ? "bg-emerald-600 text-white"
-                                  : "bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
-                              }`}
-                            >
-                              {verifiedOperator.role === "TEACHER" ? "✏️ Fee Editable Active" : "🔒 Fee Locked"}
-                            </span>
+                        />
+                        <div className="space-y-0.5 min-w-0">
+                          <div className="font-extrabold">
+                            {evalBanner
+                              ? evalBanner.parentHeadline
+                              : `Entrance Test Pre-filled · ${entrancePrefillBanner.classLabel}`}
                           </div>
-                          <p className="text-[11px] opacity-80">
-                            {verifiedOperator.role === "TEACHER"
-                              ? "शिक्षक द्वारा प्रवेश लेने पर प्रवेश शुल्क व डिस्काउंट संपादन (Edit) योग्य है।"
-                              : "अभिभावक द्वारा आवेदन करने पर निर्धारित आधिकारिक प्रवेश शुल्क लागू रहेगा (Non-Editable)।"}
-                          </p>
+                          <div className="opacity-90 flex flex-wrap items-center gap-x-2 gap-y-1">
+                            <span>
+                              <strong>{entrancePrefillBanner.studentName}</strong> ({entrancePrefillBanner.phone}) · Exam:{" "}
+                              {entrancePrefillBanner.classLabel} → Recommended:{" "}
+                              <strong>{displayTargetCls}</strong>
+                              {hasScore
+                                ? ` · Score: ${entrancePrefillBanner.bestScorePct}%${
+                                    isAdmin && evalBanner ? ` (${evalBanner.adminTag})` : ""
+                                  }`
+                                : ""}
+                            </span>
+                            {uncancelledCalc?.eligible && (
+                              <span
+                                className={`px-2 py-0.5 rounded font-black tabular-nums ${
+                                  entrancePrefillDiscountCancelled
+                                    ? "bg-slate-200 dark:bg-slate-800 text-slate-500 line-through"
+                                    : "bg-emerald-600 text-white"
+                                }`}
+                              >
+                                🎁 Fee Off: {uncancelledCalc.displayBadge}
+                                {previewFees && previewFees.entranceDiscountTotal > 0
+                                  ? ` (-₹${previewFees.entranceDiscountTotal})`
+                                  : ""}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
-
                       <div className="flex items-center gap-2 shrink-0">
+                        {isAdmin && uncancelledCalc?.eligible && (
+                          <button
+                            type="button"
+                            onClick={() => setEntrancePrefillDiscountCancelled((p) => !p)}
+                            className={`px-2.5 py-1 rounded-lg font-bold border cursor-pointer ${
+                              entrancePrefillDiscountCancelled
+                                ? "bg-emerald-600 text-white border-emerald-600"
+                                : "bg-rose-50 text-rose-700 border-rose-300 hover:bg-rose-100"
+                            }`}
+                          >
+                            {entrancePrefillDiscountCancelled ? "Re-apply Off" : "Cancel Off"}
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => {
-                            setOperatorCheckState("VERIFYING");
-                            setTimeout(() => {
-                              setVerifiedOperator((prev) =>
-                                prev.role === "TEACHER"
-                                  ? { role: "PARENT_SELF", name: "अभिभावक ऑनलाइन प्रवेश (Parent / Self)", verifiedMethod: "session_auth" }
-                                  : { role: "TEACHER", name: "अधिकृत शिक्षक (Verified Faculty)", verifiedMethod: "face_auto" }
-                              );
-                              setOperatorCheckState("VERIFIED");
-                            }, 1200);
+                            clearEntranceAdmissionPrefill();
+                            setEntrancePrefillBanner(null);
+                            setEntrancePrefillDiscountCancelled(false);
                           }}
-                          className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-[11px] font-bold hover:bg-slate-100 dark:hover:bg-slate-700 transition cursor-pointer"
+                          className={`font-bold underline shrink-0 cursor-pointer ${
+                            isDirectGreen
+                              ? "text-emerald-700 dark:text-emerald-300"
+                              : "text-amber-800 dark:text-amber-300"
+                          }`}
                         >
-                          🔄 Switch Role
+                          Dismiss
                         </button>
                       </div>
                     </div>
-                  )}
+                  );
+                })()}
 
-                  {/* ── ADMISSION CHARGE: TEACHER EDITABLE vs PARENT FIXED ── */}
-                  {operatorCheckState === "VERIFIED" && (
-                    <>
-                      {verifiedOperator.role === "TEACHER" ? (
-                        /* TEACHER: EDITABLE BOX (Fix wala box teacher ko NA dikhega, editable dikhega) */
-                        <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-50/80 via-teal-50/50 to-white dark:from-emerald-950/40 dark:via-slate-900 dark:to-slate-900 border-2 border-emerald-400 dark:border-emerald-700 space-y-3 animate-in fade-in">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                              <span className="text-xs font-black text-emerald-950 dark:text-emerald-200 uppercase tracking-wider">
-                                प्रवेश शुल्क संपादन (Faculty Admission Charge Editor)
-                              </span>
-                            </div>
-                            <span className="px-2.5 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-black uppercase tracking-wider shadow-xs">
-                              ✏️ Teacher Editable Active
-                            </span>
-                          </div>
+                {/* Admission Type Selector & Re-Admission Cascade */}
+                <div className="bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-200 dark:border-slate-700 p-3 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <span className="text-[11px] font-black uppercase tracking-wider text-indigo-700 dark:text-indigo-300 block">
+                        प्रवेश का प्रकार (Admission Type)
+                      </span>
+                      <span className="text-xs font-bold text-slate-600 dark:text-slate-300">
+                        {form.admissionType === "NEW"
+                          ? "New Admission (नया प्रवेश)"
+                          : "Re-Admission / Promotion (पुनः प्रवेश — पुराना सत्र चुनें)"}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5 bg-white dark:bg-slate-800 p-1 rounded-xl border border-slate-200 dark:border-slate-700">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setForm({ ...form, admissionType: "NEW" });
+                          setShowAdmissionTypeDrawer(false);
+                        }}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                          form.admissionType === "NEW"
+                            ? "bg-indigo-600 text-white shadow"
+                            : "text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700"
+                        }`}
+                      >
+                        <span>New Admission</span>
+                        {form.admissionType === "NEW" && <Check className="w-3.5 h-3.5 shrink-0" />}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setForm({ ...form, admissionType: "READMISSION" });
+                          setShowAdmissionTypeDrawer(false);
+                        }}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                          form.admissionType === "READMISSION"
+                            ? "bg-indigo-600 text-white shadow"
+                            : "text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700"
+                        }`}
+                      >
+                        <History className="w-3.5 h-3.5 shrink-0" />
+                        <span>Re-Admission</span>
+                        {form.admissionType === "READMISSION" && <Check className="w-3.5 h-3.5 shrink-0" />}
+                      </button>
+                    </div>
+                  </div>
 
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                            <div>
-                              <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
-                                प्रवेश शुल्क (Admission Charge) *
-                              </label>
-                              <div className="relative">
-                                <span className="absolute left-3 top-2.5 text-xs font-bold text-slate-400">₹</span>
-                                <input
-                                  type="number"
-                                  value={
-                                    teacherCustomAdmissionFee !== ""
-                                      ? teacherCustomAdmissionFee
-                                      : getClassFees(classes.find((c) => c.id === form.classId) || classes[0]).admissionFee || 0
-                                  }
-                                  onChange={(e) => setTeacherCustomAdmissionFee(e.target.value)}
-                                  className="w-full pl-7 pr-3 py-2 rounded-xl border border-emerald-400 dark:border-emerald-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white font-black text-sm focus:ring-2 focus:ring-emerald-500"
-                                  placeholder="0"
-                                />
-                              </div>
-                              <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold">
-                                शिक्षक द्वारा विशेष छूट / समायोजन हेतु परिवर्तनीय
-                              </span>
-                            </div>
-
-                            <div>
-                              <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
-                                रियायत / विशेष छूट (Concession)
-                              </label>
-                              <div className="relative">
-                                <span className="absolute left-3 top-2.5 text-xs font-bold text-slate-400">₹</span>
-                                <input
-                                  type="number"
-                                  value={teacherCustomConcession}
-                                  onChange={(e) => setTeacherCustomConcession(e.target.value)}
-                                  className="w-full pl-7 pr-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white font-bold text-sm focus:ring-2 focus:ring-emerald-500"
-                                  placeholder="0"
-                                />
-                              </div>
-                              <span className="text-[10px] text-slate-500 font-semibold">छूट या डिस्काउंट राशि</span>
-                            </div>
-
-                            <div>
-                              <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
-                                कुल देय प्रवेश शुल्क (Net Admission Payable)
-                              </label>
-                              <div className="px-3 py-2 rounded-xl bg-emerald-100/90 dark:bg-emerald-950/70 text-emerald-900 dark:text-emerald-100 font-black text-base border border-emerald-300 dark:border-emerald-800 flex items-center justify-between">
-                                <span>
-                                  ₹
-                                  {Math.max(
-                                    0,
-                                    Number(
-                                      teacherCustomAdmissionFee !== ""
-                                        ? teacherCustomAdmissionFee
-                                        : getClassFees(classes.find((c) => c.id === form.classId) || classes[0]).admissionFee || 0
-                                    ) - (Number(teacherCustomConcession) || 0)
-                                  ).toLocaleString("en-IN")}
-                                </span>
-                                <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300">
-                                  (Modified by Teacher)
-                                </span>
-                              </div>
-                            </div>
-                          </div>
+                  {isAdmin && form.admissionType === "READMISSION" && (
+                    <div className="rounded-xl border-2 border-indigo-300 dark:border-indigo-700 bg-indigo-50/70 dark:bg-indigo-950/30 p-3.5 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <h4 className="text-xs sm:text-sm font-black text-indigo-950 dark:text-indigo-200 flex items-center gap-1.5">
+                            <History className="w-4 h-4 text-indigo-600" />
+                            पुराना सत्र व कक्षा चुनें — पूरा फॉर्म व पिछला बकाया अपने आप भर जाएगा
+                          </h4>
+                          <p className="text-[11px] text-indigo-700 dark:text-indigo-300 font-medium">
+                            1. पिछला सत्र → 2. पुरानी कक्षा → 3. छात्र चुनें → 4. नया / अगला सत्र चुनें
+                          </p>
                         </div>
-                      ) : (
-                        /* PARENT: LOCKED FIXED BOX (Editable box parents ko NA dikhega, fix wlaa dikhega) */
-                        <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-50 to-indigo-50/30 dark:from-slate-900 dark:to-slate-900 border border-slate-200 dark:border-slate-700 space-y-2 animate-in fade-in">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <Lock className="w-4 h-4 text-slate-500" />
-                              <span className="text-xs font-black text-slate-800 dark:text-slate-200 uppercase tracking-wider">
-                                निर्धारित विद्यालय प्रवेश शुल्क (Official Admission Charge)
-                              </span>
-                            </div>
-                            <span className="px-2 py-0.5 rounded-full bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[10px] font-black uppercase">
-                              🔒 Fixed / Non-Editable
-                            </span>
+                        {loadingReadmPool && (
+                          <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-300">
+                            डेटा लोड हो रहा है...
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            1. पिछला सत्र (Old Session)
+                          </label>
+                          <select
+                            value={oldSessionId}
+                            onChange={(e) => {
+                              const newOldId = e.target.value;
+                              setOldSessionId(newOldId);
+                              setOldClassFilter("all");
+                              setOldStudentId("");
+                              if (newOldId && targetSessionId === newOldId && availableReadmSessionsList.length > 1) {
+                                const oldIdx = availableReadmSessionsList.findIndex((s) => s.id === newOldId);
+                                const nextAfter =
+                                  oldIdx >= 0 && oldIdx + 1 < availableReadmSessionsList.length
+                                    ? availableReadmSessionsList[oldIdx + 1]
+                                    : undefined;
+                                const other = nextAfter || availableReadmSessionsList.find((s) => s.id !== newOldId);
+                                if (other) setTargetSessionId(other.id);
+                              }
+                            }}
+                            className="w-full px-3 py-2 rounded-xl border border-indigo-200 dark:border-indigo-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-900 dark:text-white"
+                          >
+                            <option value="">-- सभी सत्र --</option>
+                            {readmSessionsPool.map((s) => {
+                              const cnt = readmStudentsPool.filter((st) => st.sessionId === s.id).length;
+                              return (
+                                <option key={s.id} value={s.id}>
+                                  {s.name} ({cnt} छात्र)
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            2. पुरानी कक्षा (Old Class)
+                          </label>
+                          <select
+                            value={oldClassFilter}
+                            onChange={(e) => {
+                              setOldClassFilter(e.target.value);
+                              setOldStudentId("");
+                            }}
+                            className="w-full px-3 py-2 rounded-xl border border-indigo-200 dark:border-indigo-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-900 dark:text-white"
+                          >
+                            <option value="all">
+                              सभी कक्षाएं ({readmStudentsPool.filter((s) => !oldSessionId || s.sessionId === oldSessionId).length})
+                            </option>
+                            {oldClassesForSession.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.name}{c.section ? ` (${c.section})` : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            3. छात्र चुनें (Student Name) *
+                          </label>
+                          <select
+                            value={oldStudentId}
+                            onChange={(e) => {
+                              const st = studentsInOldClass.find((x) => x.id === e.target.value);
+                              if (st) handlePullReadmStudent(st);
+                            }}
+                            className="w-full px-3 py-2 rounded-xl border border-indigo-300 dark:border-indigo-600 bg-white dark:bg-slate-900 text-xs font-black text-slate-900 dark:text-white"
+                          >
+                            <option value="">-- छात्र चुनें ({studentsInOldClass.length}) --</option>
+                            {studentsInOldClass.map((st) => (
+                              <option key={st.id} value={st.id}>
+                                {st.name} · {st.className || "Class"} · पिता: {st.fatherName || "—"} (Adm: {st.admissionNo || "—"})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-emerald-700 dark:text-emerald-300 mb-1">
+                            4. नया / अगला सत्र (Next Session) *
+                          </label>
+                          <select
+                            value={targetSessionId}
+                            onChange={(e) => setTargetSessionId(e.target.value)}
+                            className="w-full px-3 py-2 rounded-xl border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-900 text-xs font-black text-emerald-800 dark:text-emerald-200"
+                          >
+                            {availableReadmSessionsList.length === 0 && (
+                              <option value={activeSession?.id || ""}>
+                                {activeSession?.name || "Active Session"}
+                              </option>
+                            )}
+                            {availableReadmSessionsList.map((s) => (
+                              <option key={s.id} value={s.id}>
+                                {s.name}{s.id === activeSession?.id ? " (Active)" : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Quick search */}
+                      <div className="relative">
+                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={oldStudentSearch}
+                          onChange={(e) => setOldStudentSearch(e.target.value)}
+                          placeholder="या नाम, Adm No, पिता का नाम या मोबाइल लिखकर खोजें..."
+                          className="w-full pl-8 pr-3 py-2 rounded-xl border border-indigo-200 dark:border-indigo-700 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-900 dark:text-slate-100"
+                        />
+                        {matchingReadmStudents.length > 0 && (
+                          <div className="absolute left-0 right-0 top-full mt-1 z-30 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg max-h-48 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+                            {matchingReadmStudents.map((st) => (
+                              <button
+                                key={st.id}
+                                type="button"
+                                onClick={() => handlePullReadmStudent(st)}
+                                className="w-full text-left px-3 py-2 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 text-xs flex items-center justify-between gap-2 cursor-pointer"
+                              >
+                                <span className="font-bold text-slate-900 dark:text-white truncate">
+                                  {st.name} · {st.className || "Class"} (Adm: {st.admissionNo || "—"})
+                                </span>
+                                <span className="text-[11px] text-slate-500 shrink-0">
+                                  पिता: {st.fatherName || "—"}
+                                </span>
+                              </button>
+                            ))}
                           </div>
-                          <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 pt-1">
-                            <div>
-                              <p className="text-2xl font-black text-slate-900 dark:text-white">
-                                ₹
-                                {(
-                                  getClassFees(classes.find((c) => c.id === form.classId) || classes[0]).admissionFee || 0
-                                ).toLocaleString("en-IN")}
-                              </p>
-                              <p className="text-[10px] text-slate-500 font-semibold">
-                                कक्षा के अनुसार निर्धारित आधिकारिक प्रवेश शुल्क (अभिभावक स्तर पर गैर-संपादन योग्य)।
-                              </p>
-                            </div>
-                            <div className="text-left sm:text-right">
-                              <span className="text-xs font-bold text-slate-600 dark:text-slate-400">
-                                Total Applicable Fee: ₹
-                                {getClassFees(classes.find((c) => c.id === form.classId) || classes[0], {
-                                  usesBus: form.usesBus,
-                                }).totalPayable.toLocaleString("en-IN")}
+                        )}
+                      </div>
+
+                      {pulledOldStudent && (
+                        <div className="bg-white dark:bg-slate-900 rounded-xl border border-indigo-200 dark:border-indigo-800 p-3.5 space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="text-xs">
+                              <span className="font-black text-emerald-700 dark:text-emerald-400">
+                                ✓ पूरा फॉर्म भर गया: {pulledOldStudent.name}
+                              </span>
+                              <span className="text-slate-500 dark:text-slate-400 ml-2">
+                                ({selectedOldSessionObj?.name || pulledOldStudent.sessionId} · {pulledOldStudent.className || "—"} · Adm: {pulledOldStudent.admissionNo || "—"})
                               </span>
                             </div>
+                            {pulledBackLedger && (
+                              <button
+                                type="button"
+                                onClick={() => setShowReadmMonthTable((v) => !v)}
+                                className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
+                              >
+                                {showReadmMonthTable ? "माह-वार तालिका छुपाएं" : `माह-वार विवरण देखें (${pulledBackLedger.monthTimeline.length} माह)`}
+                                {showReadmMonthTable ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                              </button>
+                            )}
+                          </div>
+
+                          {pulledBackLedger && (
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono tabular-nums">
+                              <div className="rounded-lg bg-slate-50 dark:bg-slate-800/70 p-2 border border-slate-200 dark:border-slate-700">
+                                <span className="text-[10px] font-sans font-bold text-slate-500 block">पिछला कुल बिल</span>
+                                <span className="text-sm font-black text-slate-900 dark:text-white">
+                                  ₹{pulledBackLedger.totalBilled.toLocaleString("en-IN")}
+                                </span>
+                              </div>
+                              <div className="rounded-lg bg-slate-50 dark:bg-slate-800/70 p-2 border border-slate-200 dark:border-slate-700">
+                                <span className="text-[10px] font-sans font-bold text-emerald-600 block">पिछला जमा</span>
+                                <span className="text-sm font-black text-emerald-600">
+                                  ₹{pulledBackLedger.totalPaid.toLocaleString("en-IN")}
+                                </span>
+                              </div>
+                              <div className="rounded-lg bg-amber-50/70 dark:bg-amber-950/30 p-2 border border-amber-200 dark:border-amber-800">
+                                <span className="text-[10px] font-sans font-bold text-amber-600 block">असंकलित माह Due</span>
+                                <span className="text-sm font-black text-amber-600">
+                                  ₹{pulledBackLedger.ungeneratedMonthsDue.toLocaleString("en-IN")}
+                                </span>
+                              </div>
+                              <div className="rounded-lg bg-rose-50/80 dark:bg-rose-950/30 p-2 border border-rose-200 dark:border-rose-800">
+                                <span className="text-[10px] font-sans font-bold text-rose-600 block">कुल पिछला बकाया (Back Due)</span>
+                                <span className="text-sm font-black text-rose-600">
+                                  ₹{pulledBackLedger.totalBackDue.toLocaleString("en-IN")}
+                                </span>
+                              </div>
+                            </div>
+                          )}
+
+                          {showReadmMonthTable && pulledBackLedger && (
+                            <div className="max-h-40 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                              <table className="w-full text-left text-[11px] font-mono tabular-nums">
+                                <thead className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-sans">
+                                  <tr>
+                                    <th className="py-1.5 px-2.5">माह</th>
+                                    <th className="py-1.5 px-2 text-right">अपेक्षित</th>
+                                    <th className="py-1.5 px-2 text-right">जमा</th>
+                                    <th className="py-1.5 px-2.5 text-right">शेष Due</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                  {pulledBackLedger.monthTimeline.map((row) => (
+                                    <tr key={row.monthCode}>
+                                      <td className="py-1 px-2.5 font-sans font-bold text-slate-800 dark:text-slate-200">{row.label}</td>
+                                      <td className="py-1 px-2 text-right">₹{row.expectedAmount.toLocaleString("en-IN")}</td>
+                                      <td className="py-1 px-2 text-right text-emerald-600">₹{row.paidAmount.toLocaleString("en-IN")}</td>
+                                      <td className="py-1 px-2.5 text-right font-bold text-rose-600">
+                                        {row.dueAmount > 0 ? `₹${row.dueAmount.toLocaleString("en-IN")}` : "₹0"}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+
+                          <div className="flex flex-col gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                                  पिछला बकाया (Back Due ₹):
+                                </span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={carriedBackDueInput}
+                                  onChange={(e) => {
+                                    setCarriedBackDueInput(e.target.value);
+                                    setAdminPaidManual(false);
+                                  }}
+                                  className="w-28 px-2.5 py-1.5 rounded-lg border border-rose-300 dark:border-rose-700 bg-white dark:bg-slate-900 text-xs font-mono font-black text-rose-600"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCarriedBackDueInput("0");
+                                    setAdminPaidManual(false);
+                                  }}
+                                  className="px-2.5 py-1.5 rounded-lg bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 text-[11px] font-bold text-slate-800 dark:text-slate-100 cursor-pointer"
+                                >
+                                  Waive ₹0
+                                </button>
+                                {pulledBackLedger && Number(carriedBackDueInput) !== pulledBackLedger.totalBackDue && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setCarriedBackDueInput(String(pulledBackLedger.totalBackDue));
+                                      setAdminPaidManual(false);
+                                    }}
+                                    className="p-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 cursor-pointer"
+                                    title="ऑटो बकाया वापस लाएं"
+                                  >
+                                    <RotateCcw className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+
+                              {Number(carriedBackDueInput || 0) > 0 && (
+                                <label className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 cursor-pointer select-none">
+                                  <input
+                                    type="checkbox"
+                                    checked={includeBackDueInAdm}
+                                    onChange={(e) => {
+                                      setIncludeBackDueInAdm(e.target.checked);
+                                      setAdminPaidManual(false);
+                                    }}
+                                    className="w-4 h-4 accent-rose-600"
+                                  />
+                                  <span className="text-xs font-bold text-rose-800 dark:text-rose-200">
+                                    Re-Admission बिल में अभी जोड़ें (+₹{Number(carriedBackDueInput || 0).toLocaleString("en-IN")})
+                                  </span>
+                                </label>
+                              )}
+                            </div>
+                            <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                              {includeBackDueInAdm && Number(carriedBackDueInput || 0) > 0
+                                ? "पिछला बकाया Step 2 Re-Admission शुल्क में जुड़ जाएगा (आंशिक भुगतान होने पर केवल शेष राशि अगली माह की फीस में आगे बढ़ेगी)।"
+                                : "यह बकाया अभी बिल में नहीं जुड़ेगा; अगले सत्र की Fee Slip में Previous Session Due के रूप में दिखेगा।"}
+                            </span>
                           </div>
                         </div>
                       )}
-                    </>
+                    </div>
                   )}
                 </div>
 
@@ -5590,7 +7694,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                       <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                         Applying For Class *
                       </label>
-                      {classes.length === 0 ? (
+                      {(effectiveTargetClasses.length > 0 ? effectiveTargetClasses : classes).length === 0 ? (
                         <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-300 text-xs flex items-center gap-2">
                           <AlertCircle className="w-4 h-4 shrink-0 text-amber-600" />
                           <span>इस स्कूल में अभी कोई कक्षा उपलब्ध नहीं है। कृपया स्कूल एडमिन से क्लास जोड़ने को कहें।</span>
@@ -5601,7 +7705,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                           onChange={(e) => setForm({ ...form, classId: e.target.value })}
                           className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         >
-                          {classes.map((c) => (
+                          {(effectiveTargetClasses.length > 0 ? effectiveTargetClasses : classes).map((c) => (
                             <option key={c.id} value={c.id} className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">
                               {formatClassLabel(c)}
                             </option>
@@ -5612,7 +7716,11 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
 
                     {/* Senior Secondary Stream Selection for Class 11 & 12 */}
                     {(() => {
-                      const curCls = classes.find((c) => c.id === form.classId) || classes[0];
+                      const curCls =
+                        effectiveTargetClasses.find((c) => c.id === form.classId) ||
+                        classes.find((c) => c.id === form.classId) ||
+                        readmClassesPool.find((c) => c.id === form.classId) ||
+                        classes[0];
                       if (!curCls || !isSeniorClass(curCls.name)) return null;
                       return (
                         <div className="sm:col-span-2 p-3.5 bg-gradient-to-r from-indigo-50/90 to-purple-50/90 dark:from-indigo-950/40 dark:to-purple-950/30 rounded-2xl border border-indigo-200 dark:border-indigo-800 space-y-2.5">
@@ -5648,123 +7756,6 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                             <span className="font-medium text-slate-600 dark:text-slate-300">
                               {getDefaultSubjectsForClass(curCls.name, form.stream || "Science").join(", ")}
                             </span>
-                          </div>
-                        </div>
-                      );
-                    })()}
-
-                    {/* Official Class Fee Summary (Locked by School Admin; User can ONLY toggle Bus) */}
-                    {(() => {
-                      const curCls = classes.find((c) => c.id === form.classId) || classes[0];
-                      if (!curCls) return null;
-                      const fees = getClassFees(curCls, { usesBus: form.usesBus });
-                      const curClsLabel = formatClassLabel(curCls);
-                      return (
-                        <div className="sm:col-span-2 p-4 bg-gradient-to-r from-emerald-50 via-teal-50 to-indigo-50 dark:from-emerald-950/30 dark:via-teal-950/20 dark:to-slate-900 rounded-2xl border border-emerald-300 dark:border-emerald-800 shadow-xs space-y-3">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="flex items-center gap-1.5 text-xs font-black text-emerald-900 dark:text-emerald-300">
-                              <Lock className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                              <span>
-                                {curClsLabel ? `कक्षा ${curClsLabel}` : "चयनित कक्षा"} का निर्धारित ऑफिशियल शुल्क (Fixed Official Charges)
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              {isAdmin && (
-                                <button
-                                  type="button"
-                                  onClick={() => setActiveTab("fee_setup")}
-                                  className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 hover:bg-emerald-100 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
-                                >
-                                  <Sliders className="w-3 h-3" />
-                                  <span>Admin: Class-Wise शुल्क बदलें</span>
-                                </button>
-                              )}
-                              <span className="text-[11px] font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1">
-                                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                                <span>नॉन-एडिटेबल (Fixed)</span>
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* User-Only Bus Select / Unselect Option (Shown ONLY if Admin enabled Bus for this class) */}
-                          {fees.busAvailable && (
-                            <div className="p-3 bg-white/90 dark:bg-slate-900/80 rounded-xl border border-emerald-200 dark:border-emerald-800/70 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                              <label className="flex items-center gap-2.5 cursor-pointer select-none">
-                                <input
-                                  type="checkbox"
-                                  checked={form.usesBus}
-                                  onChange={(e) => setForm({ ...form, usesBus: e.target.checked })}
-                                  className="w-4 h-4 accent-emerald-600 cursor-pointer"
-                                />
-                                <Bus className="w-4 h-4 text-amber-600 shrink-0" />
-                                <div className="text-xs">
-                                  <span className="font-bold text-slate-900 dark:text-white">
-                                    स्कूल बस / वाहन सुविधा चुनें (Bus Facility)
-                                  </span>
-                                  <span className="ml-1.5 font-mono font-bold tabular-nums text-emerald-700 dark:text-emerald-400">
-                                    {fees.rawBusFee > 0 ? `(+₹${fees.rawBusFee})` : "(₹0)"}
-                                  </span>
-                                </div>
-                              </label>
-                              {form.usesBus && (
-                                <input
-                                  type="text"
-                                  value={form.busRoute}
-                                  onChange={(e) => setForm({ ...form, busRoute: e.target.value })}
-                                  placeholder="बस स्टॉप / रूट लिखें (Nearest Stop)"
-                                  className="px-3 py-1.5 rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-800 text-xs font-semibold text-slate-900 dark:text-white sm:w-60"
-                                />
-                              )}
-                            </div>
-                          )}
-
-                          {/* Itemized Fee Breakdown List */}
-                          <div className="space-y-2 pt-1">
-                            <div className="flex items-center justify-between pb-1 text-xs font-black text-slate-800 dark:text-slate-200">
-                              <span className="flex items-center gap-1.5">
-                                <ReceiptText className="w-3.5 h-3.5 text-emerald-600" />
-                                <span>शुल्क विवरण — किस चीज़ का कितना पैसा लिया जा रहा है (Itemized Fee Breakdown):</span>
-                              </span>
-                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 font-bold">
-                                {fees.enabledHeads.length} शुल्क घटक
-                              </span>
-                            </div>
-
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                              {fees.enabledHeads.map((head) => (
-                                <div
-                                  key={head.key}
-                                  className="p-2.5 bg-white dark:bg-slate-800 rounded-xl border border-emerald-100 dark:border-slate-700 flex items-center justify-between gap-2 shadow-2xs"
-                                >
-                                  <div className="min-w-0 flex-1">
-                                    <p className="font-bold text-slate-900 dark:text-white truncate text-xs" title={head.label}>
-                                      {head.label}
-                                    </p>
-                                    {head.hint && (
-                                      <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
-                                        {head.hint}
-                                      </p>
-                                    )}
-                                  </div>
-                                  <span className="font-mono font-black text-slate-900 dark:text-white tabular-nums px-2 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 shrink-0 text-xs">
-                                    ₹{head.amount}
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-
-                            {/* Prominent Total Bar */}
-                            <div className="p-3 bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-700 text-white rounded-xl shadow-md flex items-center justify-between">
-                              <div>
-                                <p className="text-xs font-black uppercase tracking-wider">कुल देय प्रवेश शुल्क (Total Payable)</p>
-                                <p className="text-[10px] text-emerald-100">
-                                  {form.usesBus ? "बस / वाहन सुविधा सम्मिलित" : "बिना बस सुविधा"}
-                                </p>
-                              </div>
-                              <span className="text-xl sm:text-2xl font-black font-mono tabular-nums bg-white/20 px-3.5 py-1 rounded-xl">
-                                ₹{fees.totalPayable}
-                              </span>
-                            </div>
                           </div>
                         </div>
                       );
@@ -5893,13 +7884,28 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                             <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                               Religion (धर्म)
                             </label>
-                            <input
-                              type="text"
-                              value={form.religion}
-                              onChange={(e) => setForm({ ...form, religion: e.target.value })}
-                              placeholder="e.g. Hindu / Muslim / Sikh"
-                              className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                            />
+                            <select
+                              value={["Hindu", "Muslim", "Sikh", "Christian", "Buddhist", "Jain"].includes(form.religion) ? form.religion : "Other"}
+                              onChange={(e) => setForm({ ...form, religion: e.target.value === "Other" ? "Other" : e.target.value })}
+                              className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            >
+                              <option value="Hindu">Hindu (हिंदू)</option>
+                              <option value="Muslim">Muslim (मुस्लिम)</option>
+                              <option value="Sikh">Sikh (सिख)</option>
+                              <option value="Christian">Christian (ईसाई)</option>
+                              <option value="Buddhist">Buddhist (बौद्ध)</option>
+                              <option value="Jain">Jain (जैन)</option>
+                              <option value="Other">Other (अन्य)</option>
+                            </select>
+                            {!["Hindu", "Muslim", "Sikh", "Christian", "Buddhist", "Jain"].includes(form.religion) && (
+                              <input
+                                type="text"
+                                value={form.religion === "Other" ? "" : form.religion}
+                                onChange={(e) => setForm({ ...form, religion: e.target.value || "Other" })}
+                                placeholder="अन्य धर्म लिखें (Optional)"
+                                className="mt-1.5 w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                              />
+                            )}
                           </div>
                         )}
                         {fieldSettings.showNationality && (
@@ -6572,7 +8578,12 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                   </h3>
 
                   <div className="p-3.5 rounded-2xl bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 space-y-3">
-                    {getClassFees(classes.find((c) => c.id === form.classId) || classes[0]).busAvailable && (
+                    {getClassFees(
+                      effectiveTargetClasses.find((c) => c.id === form.classId) ||
+                        classes.find((c) => c.id === form.classId) ||
+                        readmClassesPool.find((c) => c.id === form.classId) ||
+                        classes[0]
+                    ).busAvailable && (
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                         <label className="flex items-center gap-2 cursor-pointer select-none">
                           <input
@@ -6587,13 +8598,34 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                           </span>
                         </label>
                         {form.usesBus && (
-                          <input
-                            type="text"
-                            value={form.busRoute}
-                            onChange={(e) => setForm({ ...form, busRoute: e.target.value })}
-                            placeholder="Specify Location / Stop (e.g. Main Market Stop)"
-                            className="px-3.5 py-2 rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold sm:w-64 focus:outline-none focus:ring-2 focus:ring-amber-500"
-                          />
+                          <div className="flex flex-wrap items-center gap-2">
+                            {configuredRoutes.length > 0 && (
+                              <select
+                                value={configuredRoutes.some((r) => r.routeName === form.busRoute) ? form.busRoute : "__custom__"}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setForm({ ...form, busRoute: val === "__custom__" ? "" : val });
+                                }}
+                                className="px-3.5 py-2 rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-semibold sm:w-64 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                              >
+                                <option value="__custom__">-- Select Configured Route / Custom --</option>
+                                {configuredRoutes.map((r) => (
+                                  <option key={r.id} value={r.routeName}>
+                                    {r.routeName} {r.busNumber ? `(${r.busNumber})` : ""}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                            {(!configuredRoutes.length || !configuredRoutes.some((r) => r.routeName === form.busRoute)) && (
+                              <input
+                                type="text"
+                                value={form.busRoute}
+                                onChange={(e) => setForm({ ...form, busRoute: e.target.value })}
+                                placeholder="Specify Location / Stop (e.g. Main Market Stop)"
+                                className="px-3.5 py-2 rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-xs font-semibold sm:w-64 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                              />
+                            )}
+                          </div>
                         )}
                       </div>
                     )}
@@ -7015,235 +9047,7 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                     </div>
                   </div>
 
-                  {/* 4. PAYMENT SCREENSHOT & REFERENCE UPLOAD IN FORM */}
-                  <div className="pt-2">
-                    <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-br from-amber-50/80 via-orange-50/50 to-white dark:from-amber-950/40 dark:via-slate-900 dark:to-slate-900 border-2 border-amber-300 dark:border-amber-700 space-y-3.5">
-                      <div className="flex items-center justify-between flex-wrap gap-2">
-                        <div className="flex items-center gap-2.5">
-                          <div className="w-9 h-9 rounded-2xl bg-amber-500 text-white flex items-center justify-center font-bold shadow-sm">
-                            <Upload className="w-5 h-5" />
-                          </div>
-                          <div>
-                            <h4 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-1.5">
-                              <span>4. फीस पेमेंट स्क्रीनशॉट व UTR विवरण (Payment Screenshot)</span>
-                              <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200">
-                                Proof Attached
-                              </span>
-                            </h4>
-                            <p className="text-[11px] text-slate-600 dark:text-slate-300 font-semibold">
-                              ऑनलाइन फीस भुगतान का स्क्रीनशॉट यहाँ अटैच करें ताकि स्कूल एडमिन तुरंत चेक करके दाखिला अप्रूव कर सकें।
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Screenshot selector / preview */}
-                      <input
-                        id="form_screenshot_upload"
-                        type="file"
-                        accept="image/*"
-                        onChange={handleFormScreenshotUpload}
-                        className="hidden"
-                      />
-
-                      {form.paymentScreenshotUrl ? (
-                        <div className="p-3 bg-white dark:bg-slate-800 rounded-2xl border-2 border-emerald-400 dark:border-emerald-700 flex items-center justify-between gap-3 shadow-xs">
-                          <div className="flex items-center gap-3">
-                            <img
-                              src={form.paymentScreenshotUrl}
-                              alt="Payment Proof"
-                              className="w-14 h-14 object-cover rounded-xl border border-slate-200 shrink-0"
-                            />
-                            <div className="text-xs">
-                              <span className="font-black text-emerald-700 dark:text-emerald-300 flex items-center gap-1">
-                                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                                <span>पेमेंट स्क्रीनशॉट संलग्न हो गया</span>
-                              </span>
-                              <p className="text-[11px] text-slate-500">
-                                आवेदन के साथ एडमिन को सीधे भेजा जाएगा।
-                              </p>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => setInspectDocModal({ title: "Payment Screenshot Proof", url: form.paymentScreenshotUrl })}
-                              className="px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold cursor-pointer"
-                            >
-                              देखें
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setForm((p) => ({ ...p, paymentScreenshotUrl: "" }))}
-                              className="p-1.5 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 cursor-pointer"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <label
-                          htmlFor="form_screenshot_upload"
-                          className="w-full py-4 border-2 border-dashed border-amber-400 dark:border-amber-600 rounded-2xl bg-white dark:bg-slate-800 hover:bg-amber-50/60 dark:hover:bg-slate-700/60 transition flex flex-col items-center justify-center gap-1 text-slate-700 dark:text-slate-200 cursor-pointer"
-                        >
-                          <Camera className="w-6 h-6 text-amber-600" />
-                          <span className="text-xs font-black">
-                            📷 कैमरा / गैलरी से पेमेंट स्क्रीनशॉट अटैच करें
-                          </span>
-                          <span className="text-[10px] text-slate-400">
-                            UPI payment receipt, GPay/PhonePe screenshot (JPG, PNG)
-                          </span>
-                        </label>
-                      )}
-
-                      {/* UTR / Ref field */}
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
-                          UPI Ref / Transaction UTR No. (यदि उपलब्ध हो):
-                        </label>
-                        <input
-                          type="text"
-                          value={form.transactionRef}
-                          onChange={(e) => setForm({ ...form, transactionRef: e.target.value })}
-                          placeholder="e.g. 512398471923 या UTR नंबर"
-                          className="w-full px-3.5 py-2 text-xs font-semibold rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
-                        />
-                      </div>
-                    </div>
-                  </div>
                 </div>
-
-                {/* TEACHER / ADMIN OFFLINE COUNTER COLLECTION & DIRECT ENROLLMENT CARD */}
-                {isAdmin && (
-                  <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-br from-emerald-50 via-teal-50 to-white dark:from-emerald-950/40 dark:via-slate-900/60 dark:to-slate-900 border-2 border-emerald-400 dark:border-emerald-700 space-y-4 shadow-sm">
-                    <div className="flex items-center justify-between flex-wrap gap-2 pb-2.5 border-b border-emerald-200 dark:border-emerald-800">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-9 h-9 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-bold shadow-sm">
-                          <Banknote className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <h4 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-1.5">
-                            <span>ऑफलाइन नकद फीस संग्रह व सीधा दाखिला</span>
-                            <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200">
-                              Offline Counter
-                            </span>
-                          </h4>
-                          <p className="text-[11px] text-emerald-800 dark:text-emerald-300 font-semibold">
-                            शिक्षक / काउंटर द्वारा नकद फीस लेकर छात्र तुरंत सक्रिय (Active) हो जाएगा — कोई WhatsApp या अप्रूवल का इंतजार नहीं।
-                          </p>
-                        </div>
-                      </div>
-                      <span className="px-3 py-1 rounded-full bg-emerald-600 text-white text-[10px] font-black uppercase tracking-wider shadow-xs">
-                        ⚡ Instant Roll No &amp; Receipt
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
-                          आवंटित रोल नंबर (Roll No)
-                        </label>
-                        <input
-                          type="text"
-                          value={adminRollNo}
-                          onChange={(e) => setAdminRollNo(e.target.value)}
-                          className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-black text-center text-sm focus:ring-2 focus:ring-emerald-500"
-                          placeholder="Roll No"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
-                          भुगतान माध्यम (Pay Mode)
-                        </label>
-                        <select
-                          value={adminPayMode}
-                          onChange={(e) => setAdminPayMode(e.target.value as any)}
-                          className="w-full px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-bold text-xs"
-                        >
-                          <option value="Cash">💵 Cash (नकद काउंटर)</option>
-                          <option value="UPI">📱 Counter UPI / QR</option>
-                          <option value="Bank">🏦 Bank Transfer / POS</option>
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
-                          कुल देय शुल्क (Total Due)
-                        </label>
-                        <div className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-white font-black text-sm">
-                          ₹{Math.max(0, getClassFees(classes.find((c) => c.id === form.classId) || classes[0], { usesBus: form.usesBus }).totalPayable - (Number(adminConcession) || 0))}
-                        </div>
-                      </div>
-
-                      <div>
-                        <label className="block text-[11px] font-bold text-emerald-800 dark:text-emerald-300 mb-1">
-                          जमा नकद राशि (Paid Cash) *
-                        </label>
-                        <input
-                          type="number"
-                          value={adminPaidAmount}
-                          onChange={(e) => {
-                            setAdminPaidAmount(e.target.value);
-                            setAdminPaidManual(true);
-                          }}
-                          className="w-full px-3 py-2 rounded-xl border border-emerald-400 dark:border-emerald-600 bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 font-black text-sm focus:ring-2 focus:ring-emerald-500"
-                          placeholder="0"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Itemized Counter Breakdown Strip */}
-                    {(() => {
-                      const curCls = classes.find((c) => c.id === form.classId) || classes[0];
-                      const fees = getClassFees(curCls, { usesBus: form.usesBus });
-                      return (
-                        <div className="bg-white/80 dark:bg-slate-900/60 p-3 rounded-2xl border border-emerald-200 dark:border-emerald-800 text-xs space-y-1.5">
-                          <p className="font-bold text-slate-700 dark:text-slate-200 text-[11px]">
-                            काउंटर रसीद मदें (Counter Receipt Items):
-                          </p>
-                          <div className="flex flex-wrap gap-1.5">
-                            {fees.enabledHeads.map((h) => (
-                              <span
-                                key={h.key}
-                                className="px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-[11px] font-bold"
-                              >
-                                {h.label.split("(")[0].trim()}: <strong>₹{h.amount}</strong>
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    })()}
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs pt-1">
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
-                          फीस में रियायत / छूट (Concession / Discount) — यदि लागू हो
-                        </label>
-                        <input
-                          type="number"
-                          value={adminConcession || ""}
-                          onChange={(e) => setAdminConcession(Math.max(0, Number(e.target.value)))}
-                          placeholder="₹ 0"
-                          className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-semibold"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
-                          मासिक ट्यूशन फीस (Monthly Tuition Fee for Next Months)
-                        </label>
-                        <input
-                          type="number"
-                          value={adminMonthlyFee}
-                          onChange={(e) => setAdminMonthlyFee(e.target.value)}
-                          className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-bold"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                )}
 
                 {/* PARENT / GUARDIAN SELF-DECLARATION (अभिभावक घोषणा पत्र) */}
                 {fieldSettings.showParentDeclaration && (
@@ -7270,16 +9074,21 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
 
                 {isAdmin ? (
                   <button
-                    type="submit"
-                    disabled={submitting}
-                    className="w-full py-4 rounded-2xl bg-gradient-to-r from-emerald-600 via-teal-600 to-green-600 hover:from-emerald-700 hover:to-green-700 text-white font-black text-sm shadow-xl shadow-emerald-600/25 flex items-center justify-center gap-2.5 transition cursor-pointer active:scale-[0.99] disabled:opacity-60"
+                    type="button"
+                    onClick={() => {
+                      if (!form.studentName.trim() || !form.fatherName.trim() || !form.phone.trim()) {
+                        setFormError("कृपया छात्र का नाम, पिता का नाम और मोबाइल नंबर अवश्य भरें।");
+                        return;
+                      }
+                      setFormError(null);
+                      setAdminFormStep(2);
+                      try {
+                        window.scrollTo({ top: 0, behavior: "smooth" });
+                      } catch {}
+                    }}
+                    className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white font-black text-sm shadow-lg flex items-center justify-center gap-2 transition cursor-pointer"
                   >
-                    <UserCheck className="w-5 h-5" />
-                    <span>
-                      {submitting
-                        ? "छात्र नामांकित हो रहा है व रसीद बन रही है..."
-                        : "✅ छात्र तुरंत नामांकित करें व नकद फीस जमा करें (Direct Student Enrollment)"}
-                    </span>
+                    <span>Next: शुल्क विवरण व नामांकन देखें (Step 2) →</span>
                   </button>
                 ) : (
                   <button
@@ -7288,8 +9097,322 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                     className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white font-black text-sm shadow-lg flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-60"
                   >
                     <Send className="w-4 h-4" />
-                    <span>{submitting ? "Submitting Application..." : "Submit Admission Application (आवेदन जमा करें)"}</span>
+                    <span>{submitting ? "फॉर्म सबमिट हो रहा है..." : "Next: शुल्क विवरण देखें (Step 2) →"}</span>
                   </button>
+                )}
+                  </>
+                )}
+
+                {/* ADMIN STEP 2: TRANSPARENT FEE BREAKDOWN + OFFLINE COUNTER COLLECTION */}
+                {isAdmin && adminFormStep === 2 && (
+                  <div className="space-y-5">
+                    {(() => {
+                      const curCls =
+                        effectiveTargetClasses.find((c) => c.id === form.classId) ||
+                        classes.find((c) => c.id === form.classId) ||
+                        readmClassesPool.find((c) => c.id === form.classId) ||
+                        classes[0];
+                      const fees = getClassFees(curCls, {
+                        usesBus: form.usesBus,
+                        offer: school?.websiteConfig?.admissionOffer,
+                        entranceDiscount:
+                          entrancePrefillBanner?.bestScorePct !== undefined
+                            ? {
+                                scorePct: entrancePrefillBanner.bestScorePct,
+                                config: school?.websiteConfig?.entranceDiscountConfig,
+                                cancelled: entrancePrefillDiscountCancelled,
+                              }
+                            : undefined,
+                      });
+                      const backDueAmt = form.admissionType === "READMISSION" ? Math.max(0, Number(carriedBackDueInput || 0)) : 0;
+                      const backDueAddedToBill = includeBackDueInAdm && backDueAmt > 0 ? backDueAmt : 0;
+                      const combinedTotalPayable = fees.totalPayable + backDueAddedToBill;
+                      const chosenTargetSess =
+                        availableReadmSessionsList.find((s) => s.id === targetSessionId) || activeSession;
+                      return (
+                        <div className="p-4 sm:p-5 rounded-2xl bg-slate-50 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-700 space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <span className="text-[11px] font-black uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block">
+                                Step 2 • शुल्क विवरण (Fee Breakdown)
+                              </span>
+                              <h3 className="text-base font-black text-slate-900 dark:text-white">
+                                {form.studentName} • {curCls ? formatClassLabel(curCls) : ""}
+                                {form.admissionType === "READMISSION" && chosenTargetSess?.name
+                                  ? ` • सत्र ${chosenTargetSess.name}`
+                                  : ""}
+                              </h3>
+                            </div>
+                            <div className="text-right">
+                              {(fees.offerDiscountTotal > 0 || fees.entranceDiscountTotal > 0) && (
+                                <span className="text-xs font-bold text-slate-400 line-through font-mono mr-2 tabular-nums">
+                                  ₹{(fees.grossTotalPayable + backDueAddedToBill).toLocaleString("en-IN")}
+                                </span>
+                              )}
+                              <span className="text-lg font-black text-emerald-700 dark:text-emerald-400 font-mono tabular-nums">
+                                Total: ₹{combinedTotalPayable.toLocaleString("en-IN")}
+                              </span>
+                              {fees.offerDiscountTotal > 0 && (
+                                <span className="block text-[11px] font-bold text-amber-600 dark:text-amber-400">
+                                  Website Offer {fees.offerDiscountPercent}% OFF (-₹{fees.offerDiscountTotal.toLocaleString("en-IN")})
+                                </span>
+                              )}
+                              {fees.entranceDiscountTotal > 0 && (
+                                <span className="block text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+                                  🎓 Entrance Merit Off ({fees.entranceDiscountBadge}): -₹{fees.entranceDiscountTotal.toLocaleString("en-IN")}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="divide-y divide-slate-200 dark:divide-slate-700 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+                            {fees.enabledHeads.map((h, i) => (
+                              <div key={h.key} className="flex items-center justify-between px-3.5 py-2.5 text-xs">
+                                <div>
+                                  <span className="font-bold text-slate-800 dark:text-slate-100">{i + 1}. {h.label}</span>
+                                  {h.discountAmount > 0 && (
+                                    <span className="ml-2 text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+                                      (-₹{h.discountAmount} Offer)
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-right font-mono tabular-nums">
+                                  {h.discountAmount > 0 && (
+                                    <span className="text-[10px] text-slate-400 line-through mr-1.5">₹{h.originalAmount}</span>
+                                  )}
+                                  <span className="font-black text-slate-900 dark:text-white">₹{h.amount}</span>
+                                </div>
+                              </div>
+                            ))}
+                            {(fees.entranceDiscountTotal > 0 || entrancePrefillDiscountCancelled) &&
+                              entrancePrefillBanner?.bestScorePct !== undefined && (
+                              <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 text-xs bg-emerald-50/70 dark:bg-emerald-950/30">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span
+                                    className={`font-extrabold ${
+                                      entrancePrefillDiscountCancelled
+                                        ? "text-slate-400 line-through"
+                                        : "text-emerald-800 dark:text-emerald-300"
+                                    }`}
+                                  >
+                                    🎓 {fees.entranceDiscountLabel || "Entrance Merit Off"} ({entrancePrefillBanner.bestScorePct}%)
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setEntrancePrefillDiscountCancelled((p) => !p)}
+                                    className={`px-2 py-0.5 rounded text-[10px] font-black border cursor-pointer ${
+                                      entrancePrefillDiscountCancelled
+                                        ? "bg-emerald-600 text-white border-emerald-600"
+                                        : "bg-rose-50 text-rose-700 border-rose-300 hover:bg-rose-100"
+                                    }`}
+                                  >
+                                    {entrancePrefillDiscountCancelled ? "Re-apply Off" : "Cancel Off"}
+                                  </button>
+                                </div>
+                                <span
+                                  className={`font-mono font-black tabular-nums ${
+                                    entrancePrefillDiscountCancelled
+                                      ? "text-slate-400"
+                                      : "text-emerald-700 dark:text-emerald-300"
+                                  }`}
+                                >
+                                  {entrancePrefillDiscountCancelled
+                                    ? "₹0 (Cancelled)"
+                                    : `-₹${fees.entranceDiscountTotal.toLocaleString("en-IN")}`}
+                                </span>
+                              </div>
+                            )}
+                            {backDueAddedToBill > 0 && (
+                              <div className="flex items-center justify-between px-3.5 py-2.5 text-xs bg-rose-50/70 dark:bg-rose-950/30">
+                                <span className="font-bold text-rose-800 dark:text-rose-200">
+                                  {fees.enabledHeads.length + 1}. पिछला सत्र बकाया (Back Session Due{selectedOldSessionObj?.name ? ` · ${selectedOldSessionObj.name}` : ""})
+                                </span>
+                                <span className="font-mono font-black text-rose-700 dark:text-rose-300 tabular-nums">
+                                  +₹{backDueAddedToBill.toLocaleString("en-IN")}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+
+                          {form.admissionType === "READMISSION" && backDueAmt > 0 && (
+                            <div className="rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+                              <span className="font-bold text-rose-800 dark:text-rose-200">
+                                {includeBackDueInAdm
+                                  ? "पिछला सत्र बकाया Re-Admission के साथ कुल देय में जुड़ा है:"
+                                  : "पिछला सत्र बकाया (अगली मासिक फीस स्लिप में जुड़ेगा):"}
+                              </span>
+                              <span className="font-mono font-black text-rose-700 dark:text-rose-300 tabular-nums">
+                                ₹{backDueAmt.toLocaleString("en-IN")}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
+                    {/* Offline Counter Collection */}
+                    <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-br from-emerald-50 via-teal-50 to-white dark:from-emerald-950/40 dark:via-slate-900/60 dark:to-slate-900 border-2 border-emerald-400 dark:border-emerald-700 space-y-4 shadow-sm">
+                      <div className="flex items-center justify-between flex-wrap gap-2 pb-2.5 border-b border-emerald-200 dark:border-emerald-800">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-9 h-9 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-bold shadow-sm">
+                            <Banknote className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-1.5">
+                              <span>ऑफलाइन नकद फीस संग्रह व सीधा दाखिला</span>
+                            </h4>
+                            <p className="text-[11px] text-emerald-800 dark:text-emerald-300 font-semibold">
+                              काउंटर द्वारा नकद / UPI फीस लेकर छात्र को तुरंत नामांकित करें।
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            आवंटित रोल नंबर (Roll No)
+                          </label>
+                          <input
+                            type="text"
+                            value={adminRollNo}
+                            onChange={(e) => setAdminRollNo(e.target.value)}
+                            className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-black text-center text-sm focus:ring-2 focus:ring-emerald-500"
+                            placeholder="Roll No"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            भुगतान माध्यम (Pay Mode)
+                          </label>
+                          <select
+                            value={adminPayMode}
+                            onChange={(e) => setAdminPayMode(e.target.value as any)}
+                            className="w-full px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-bold text-xs"
+                          >
+                            <option value="Cash">💵 Cash (नकद काउंटर)</option>
+                            <option value="UPI">📱 Counter UPI / QR</option>
+                            <option value="Bank">🏦 Bank Transfer / POS</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            कुल देय शुल्क (Total Due)
+                          </label>
+                          <div className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-white font-black text-sm tabular-nums">
+                            {(() => {
+                              const curCls =
+                                effectiveTargetClasses.find((c) => c.id === form.classId) ||
+                                classes.find((c) => c.id === form.classId) ||
+                                readmClassesPool.find((c) => c.id === form.classId) ||
+                                classes[0];
+                              const baseDue = getClassFees(curCls, {
+                                usesBus: form.usesBus,
+                                offer: school?.websiteConfig?.admissionOffer,
+                                entranceDiscount:
+                                  entrancePrefillBanner?.bestScorePct !== undefined
+                                    ? {
+                                        scorePct: entrancePrefillBanner.bestScorePct,
+                                        config: school?.websiteConfig?.entranceDiscountConfig,
+                                        cancelled: entrancePrefillDiscountCancelled,
+                                      }
+                                    : undefined,
+                              }).totalPayable;
+                              const backDueExtra =
+                                form.admissionType === "READMISSION" && includeBackDueInAdm
+                                  ? Math.max(0, Number(carriedBackDueInput || 0))
+                                  : 0;
+                              return `₹${Math.max(0, baseDue + backDueExtra - (Number(adminConcession) || 0)).toLocaleString("en-IN")}`;
+                            })()}
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-emerald-800 dark:text-emerald-300 mb-1">
+                            जमा राशि (Paid Amount) *
+                          </label>
+                          <input
+                            type="number"
+                            value={adminPaidAmount}
+                            onChange={(e) => {
+                              setAdminPaidAmount(e.target.value);
+                              setAdminPaidManual(true);
+                            }}
+                            className="w-full px-3 py-2 rounded-xl border border-emerald-400 dark:border-emerald-600 bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 font-black text-sm focus:ring-2 focus:ring-emerald-500"
+                            placeholder="0"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs pt-1">
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                            फीस में छूट (Concession / Discount)
+                          </label>
+                          <input
+                            type="number"
+                            value={adminConcession || ""}
+                            onChange={(e) => setAdminConcession(Math.max(0, Number(e.target.value)))}
+                            placeholder="₹ 0"
+                            className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-semibold"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                            मासिक ट्यूशन फीस (Monthly Tuition Fee)
+                          </label>
+                          <input
+                            type="number"
+                            value={adminMonthlyFee}
+                            onChange={(e) => setAdminMonthlyFee(e.target.value)}
+                            className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-bold"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2.5">
+                      <button
+                        type="submit"
+                        disabled={submitting}
+                        onClick={() => {
+                          submitAsPendingRequestRef.current = false;
+                        }}
+                        className="w-full py-4 rounded-2xl bg-gradient-to-r from-emerald-600 via-teal-600 to-green-600 hover:from-emerald-700 hover:to-green-700 text-white font-black text-sm shadow-xl shadow-emerald-600/25 flex items-center justify-center gap-2.5 transition cursor-pointer active:scale-[0.99] disabled:opacity-60"
+                      >
+                        <UserCheck className="w-5 h-5" />
+                        <span>
+                          {submitting
+                            ? "छात्र नामांकित हो रहा है व रसीद बन रही है..."
+                            : "✅ छात्र तुरंत नामांकित करें व नकद फीस जमा करें (Direct Enrollment)"}
+                        </span>
+                      </button>
+
+                      <div className="flex flex-col sm:flex-row gap-2.5">
+                        <button
+                          type="button"
+                          onClick={() => setAdminFormStep(1)}
+                          className="px-4 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs cursor-pointer whitespace-nowrap"
+                        >
+                          ← फॉर्म सुधारें (Step 1)
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={submitting}
+                          onClick={() => {
+                            submitAsPendingRequestRef.current = true;
+                          }}
+                          className="flex-1 py-3 rounded-2xl bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:hover:bg-indigo-950/80 text-indigo-800 dark:text-indigo-200 border border-indigo-300 dark:border-indigo-700 font-black text-xs sm:text-sm flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-60"
+                        >
+                          <Send className="w-4 h-4" />
+                          <span>📩 Request ke Roop me Save Karein (Applications Queue)</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 )}
               </form>
             )}
@@ -7373,7 +9496,8 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                     </button>
                     <DirectUploadButton
                       kind="image"
-                      compact
+                      iconOnly
+                      showLinkInput={false}
                       currentUrl={enrollPhotoUrl}
                       onUploaded={(url) => setEnrollPhotoUrl(url)}
                       onClear={() => setEnrollPhotoUrl("")}
@@ -7390,14 +9514,39 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                     onChange={(e) => {
                       const nextId = e.target.value;
                       setEnrollClassId(nextId);
-                      const cls = classes.find((c) => c.id === nextId);
+                      const cls =
+                        classes.find((c) => c.id === nextId) ||
+                        readmClassesPool.find((c) => c.id === nextId);
                       setEnrollMonthlyFee(String(cls?.feeStructure?.tuitionFee ?? cls?.defaultFee ?? 0));
-                      setEnrollFeeItems(buildDefaultFeeItems(cls, enrollUsesBus, Number(cls?.feeStructure?.busFee || 0)));
+                      const nextItems = buildDefaultFeeItems(cls, enrollUsesBus, Number(cls?.feeStructure?.busFee || 0));
+                      const appBack =
+                        enrollingApp?.admissionType === "READMISSION"
+                          ? Math.max(0, Number(enrollingApp.previousSessionDue || 0))
+                          : 0;
+                      if (appBack > 0 && enrollingApp?.includeBackDueInAdm !== false) {
+                        nextItems.push({
+                          id: "readm_back_due",
+                          description: `पिछला सत्र बकाया (Back Session Due${enrollingApp?.previousSessionName ? ` · ${enrollingApp.previousSessionName}` : ""})`,
+                          due: appBack,
+                        });
+                      }
+                      const nextOfferCon = nextItems.reduce((s, r) => s + (Number(r.offerCon) || 0), 0);
+                      const nextEntFees = getClassFees(cls, {
+                        usesBus: enrollUsesBus,
+                        customBusFee: Number(cls?.feeStructure?.busFee || 0),
+                        offer: school?.websiteConfig?.admissionOffer,
+                        entranceDiscount: getAppEntranceDiscountOpt(enrollingApp),
+                      });
+                      setEnrollFeeItems(nextItems);
+                      setEnrollConcession(nextOfferCon + Number(nextEntFees.entranceDiscountTotal || 0));
                       setEnrollPaidManual(false);
                     }}
                     className="w-full px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs font-bold"
                   >
-                    {classes.map((c) => (
+                    {(enrollingApp?.admissionType === "READMISSION" && enrollingApp?.targetSessionId && readmClassesPool.some((c) => c.sessionId === enrollingApp.targetSessionId)
+                      ? sortSchoolClasses(readmClassesPool.filter((c) => c.sessionId === enrollingApp.targetSessionId))
+                      : classes
+                    ).map((c) => (
                       <option key={c.id} value={c.id} className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">
                         {formatClassLabel(c)}
                       </option>
@@ -7618,6 +9767,53 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
                 ))}
               </div>
 
+              {enrollingApp.entranceTestScorePct !== undefined && (() => {
+                const modalCls =
+                  classes.find((c) => c.id === enrollClassId) ||
+                  readmClassesPool.find((c) => c.id === enrollClassId) ||
+                  classes[0];
+                const previewModalEnt = getClassFees(modalCls, {
+                  usesBus: enrollUsesBus,
+                  customBusFee: enrollBusFee,
+                  offer: school?.websiteConfig?.admissionOffer,
+                  entranceDiscount: {
+                    scorePct: enrollingApp.entranceTestScorePct,
+                    config: school?.websiteConfig?.entranceDiscountConfig,
+                    cancelled: false,
+                    fixedAmountOverride: enrollingApp.entranceDiscountAmount,
+                    labelOverride: enrollingApp.entranceDiscountLabel,
+                  },
+                });
+                if (!previewModalEnt.entranceDiscountTotal && !enrollingApp.entranceDiscountCancelled) {
+                  return null;
+                }
+                return (
+                  <div className="rounded-xl bg-white dark:bg-slate-900 border border-emerald-300 dark:border-emerald-700 px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <span
+                      className={`font-bold ${
+                        enrollingApp.entranceDiscountCancelled
+                          ? "text-slate-400 line-through"
+                          : "text-emerald-800 dark:text-emerald-300"
+                      }`}
+                    >
+                      🎓 Entrance Merit Off ({enrollingApp.entranceTestScorePct}%):{" "}
+                      ₹{previewModalEnt.entranceDiscountTotal.toLocaleString("en-IN")}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void handleToggleAppEntranceDiscount(enrollingApp)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-black border cursor-pointer ${
+                        enrollingApp.entranceDiscountCancelled
+                          ? "bg-emerald-600 text-white border-emerald-600"
+                          : "bg-rose-50 text-rose-700 border-rose-300 hover:bg-rose-100"
+                      }`}
+                    >
+                      {enrollingApp.entranceDiscountCancelled ? "Restore Off" : "Cancel Off"}
+                    </button>
+                  </div>
+                );
+              })()}
+
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-2 border-t border-emerald-200 dark:border-emerald-800/60">
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 mb-1">Concession (₹)</label>
@@ -7712,6 +9908,8 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
           sessionName={activeSession?.name || "2026-27"}
           feeRecord={printStudioState.feeRecord || null}
           initialMode={printStudioState.mode}
+          isStudentView={!isAdmin}
+          defaultMasked={maskSensitiveData}
         />
       )}
 
@@ -7729,6 +9927,8 @@ export const OnlineAdmissionManager: React.FC<Props> = ({
             "Class"
           }
           sessionName={activeSession?.name || "2026-27"}
+          isStudentView={!isAdmin}
+          defaultMasked={maskSensitiveData}
         />
       )}
 

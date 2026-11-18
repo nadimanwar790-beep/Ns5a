@@ -22,6 +22,7 @@ interface DirectUploadButtonProps {
   currentUrl?: string;
   label?: string;
   compact?: boolean;
+  iconOnly?: boolean;
   className?: string;
   showLinkInput?: boolean;
   linkPlaceholder?: string;
@@ -60,6 +61,7 @@ export const DirectUploadButton: React.FC<DirectUploadButtonProps> = (props) => 
     currentUrl,
     label,
     compact = false,
+    iconOnly = false,
     className = '',
     showLinkInput = true,
     linkPlaceholder,
@@ -157,7 +159,7 @@ export const DirectUploadButton: React.FC<DirectUploadButtonProps> = (props) => 
   const isDirectVideo = !!(currentUrl && /\.(mp4|webm|mov|m4v|mkv)(\?.*)?$/i.test(currentUrl));
 
   return (
-    <div className={`flex flex-col gap-1.5 w-full ${className}`}>
+    <div className={`flex flex-col gap-1.5 ${iconOnly ? 'w-auto' : 'w-full'} ${className}`}>
       <div className="flex items-center gap-1.5 flex-wrap">
         <input
           ref={fileInputRef}
@@ -171,30 +173,38 @@ export const DirectUploadButton: React.FC<DirectUploadButtonProps> = (props) => 
           type="button"
           disabled={uploading}
           onClick={() => fileInputRef.current?.click()}
-          className={`inline-flex items-center justify-center gap-1.5 font-black rounded-lg border shadow-sm transition-all active:scale-95 disabled:opacity-60 cursor-pointer ${
-            compact ? 'px-2.5 py-1 text-[11px]' : 'px-3 py-1.5 text-xs'
+          title={label || (kind === 'image' ? 'गैलरी से फोटो चुनें (Gallery)' : DEFAULT_LABEL[kind])}
+          aria-label={label || (kind === 'image' ? 'Upload from gallery' : DEFAULT_LABEL[kind])}
+          className={`inline-flex items-center justify-center gap-1.5 font-black border shadow-sm transition-all active:scale-95 disabled:opacity-60 cursor-pointer ${
+            iconOnly
+              ? 'p-2 rounded-xl'
+              : compact
+              ? 'px-2.5 py-1 text-[11px] rounded-lg'
+              : 'px-3 py-1.5 text-xs rounded-lg'
           } ${COLOR_MAP[kind]}`}
         >
           {renderIcon()}
-          <span>
-            {uploading
-              ? `Upload Ho Raha Hai ${progress}%...`
-              : justUploaded
-              ? '✓ Safal Upload Ho Gaya!'
-              : currentUrl
-              ? (label ? label : compact ? '🔄 File Badlein' : '🔄 Nayi File Badlein')
-              : label || DEFAULT_LABEL[kind]}
-          </span>
+          {!iconOnly && (
+            <span>
+              {uploading
+                ? `Upload Ho Raha Hai ${progress}%...`
+                : justUploaded
+                ? '✓ Safal Upload Ho Gaya!'
+                : currentUrl
+                ? (label ? label : compact ? '🔄 File Badlein' : '🔄 Nayi File Badlein')
+                : label || DEFAULT_LABEL[kind]}
+            </span>
+          )}
         </button>
 
-        {isStoredUrl && !uploading && (
+        {!iconOnly && isStoredUrl && !uploading && (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200">
             <Cloud size={10} className="text-emerald-600" />
             <span>Cloud Stored</span>
           </span>
         )}
 
-        {currentUrl && !uploading && (
+        {!iconOnly && currentUrl && !uploading && (
           <>
             <a
               href={testUrl}

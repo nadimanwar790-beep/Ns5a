@@ -235,11 +235,11 @@ export const NoticeBoardManager: React.FC<Props> = ({
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 pb-16">
       {/* Top Navbar */}
-      <div className="bg-gradient-to-r from-indigo-900 via-blue-900 to-slate-900 px-4 py-4 text-white shadow-lg sticky top-0 z-30">
+      <div className="bg-gradient-to-r from-indigo-50 via-blue-50 to-sky-50 dark:from-indigo-900 dark:via-blue-900 dark:to-slate-900 px-4 py-4 text-slate-900 dark:text-white shadow-sm sticky top-0 z-30 border-b-2 border-indigo-700 dark:border-indigo-500/50">
         <div className="max-w-4xl mx-auto flex items-center justify-between">
           <button
             onClick={onBack}
-            className="flex items-center gap-1.5 text-blue-200 hover:text-white text-sm font-bold transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 text-indigo-800 hover:text-indigo-950 dark:text-blue-200 dark:hover:text-white text-sm font-black transition-colors cursor-pointer"
           >
             <ChevronLeft className="w-4 h-4" /> School Dashboard
           </button>

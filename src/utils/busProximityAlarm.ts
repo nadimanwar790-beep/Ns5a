@@ -91,13 +91,30 @@ export function checkAndTriggerBusProximity(
       lastAlarmTimestamps.set(key, Date.now());
       playBusArrivalAlarmChime();
 
-      // Show browser notification if permitted
+      // Show browser notification via Service Worker (with proper transparent monochrome badge for Android status bar)
       if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+        const title = `🚌 स्कूल बस आपके स्टॉप (${stopName}) से 1 KM दूर है!`;
+        const body = `${routeLabel} बस आपके स्टॉप के करीब पहुंच रही है। कृपया बच्चे को लेकर स्टॉप पर पहुंचे।`;
         try {
-          new Notification(`🚌 स्कूल बस आपके स्टॉप (${stopName}) से 1 KM दूर है!`, {
-            body: `${routeLabel} बस आपके स्टॉप के करीब पहुंच रही है। कृपया बच्चे को लेकर स्टॉप पर पहुंचे।`,
-            icon: "/icons/icon-192.png?v=3"
-          });
+          if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+            navigator.serviceWorker.ready
+              .then((reg) =>
+                reg.showNotification(title, {
+                  body,
+                  icon: "/icons/icon-192.png?v=3",
+                  badge: "/icons/badge-monochrome.png?v=4",
+                  tag: `bus-proximity-${stopName}`,
+                  data: { url: "/" },
+                })
+              )
+              .catch(() => {
+                try {
+                  new Notification(title, { body, icon: "/icons/icon-192.png?v=3" });
+                } catch {}
+              });
+          } else {
+            new Notification(title, { body, icon: "/icons/icon-192.png?v=3" });
+          }
         } catch {}
       }
     }

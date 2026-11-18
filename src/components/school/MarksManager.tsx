@@ -1232,13 +1232,13 @@ export const MarksManager: React.FC<Props> = ({
           </div>
 
           {/* Quick Master Sheet Promotion Banner */}
-          <div className="bg-gradient-to-r from-indigo-900 via-indigo-950 to-slate-900 text-white rounded-2xl p-4 shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-3 border border-indigo-500/30">
+          <div className="bg-gradient-to-r from-indigo-50 via-blue-50 to-sky-50 dark:from-slate-900 dark:via-slate-900 dark:to-indigo-950 text-slate-900 dark:text-white rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-2 border-indigo-700 dark:border-indigo-500">
             <div className="space-y-0.5">
               <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-amber-400" />
-                <h4 className="font-black text-sm">Multi-Subject Master Entry Sheet</h4>
+                <Sparkles className="w-4 h-4 text-indigo-700 dark:text-amber-400" />
+                <h4 className="font-black text-sm text-slate-900 dark:text-white">Multi-Subject Master Entry Sheet</h4>
               </div>
-              <p className="text-xs text-indigo-200">
+              <p className="text-xs text-indigo-800 dark:text-indigo-200 font-semibold">
                 Sabhi {subjects.length} books ke marks ek sath table me daalna chahte hain?
               </p>
             </div>

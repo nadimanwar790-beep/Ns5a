@@ -10,6 +10,7 @@ import type { School, SchoolTeacher, StaffEmployee } from "../../school-types";
 import { getSavedSchoolLogo, cleanLogoUrl, formatAcademicSession } from "./feeReceiptUtils";
 import { printElementInIframe } from "./AdmissionFormPrintModal";
 import { safeOpenExternalUrl } from "../../utils/safeBrowserActions";
+import { buildStaffIdCardQrUrl } from "../../utils/qrVerifyUrl";
 
 interface Props {
   isOpen: boolean;
@@ -56,25 +57,19 @@ export const TeacherIdCardModal: React.FC<Props> = ({
       : "Academics");
   const photoUrl = teacher.photoUrl;
 
-  // Generate standardized Teacher Login & Attendance QR Code
-  // Format: NSTA-SCHOOL-STAFF:schoolId:id:rollOrEmp:classOrDept:name:admNo:phone:father:mother:blood:dob:address:fee:title:schoolName
-  const qrVerifyUrl = `NSTA-SCHOOL-STAFF:${[
-    encodeURIComponent(school?.id || ""),
-    encodeURIComponent(teacherId),
-    encodeURIComponent(empId),
-    encodeURIComponent(department),
-    encodeURIComponent(teacherName),
-    encodeURIComponent(""),
-    encodeURIComponent(phone),
-    encodeURIComponent(""),
-    encodeURIComponent(""),
-    encodeURIComponent(""),
-    encodeURIComponent(""),
-    encodeURIComponent(school?.address || ""),
-    encodeURIComponent("0"),
-    encodeURIComponent(designation),
-    encodeURIComponent(schoolName),
-  ].join(":")}`;
+  // Generate standardized Teacher Chrome Verify + Login + Attendance QR Code
+  const qrVerifyUrl = buildStaffIdCardQrUrl({
+    isAdmin: false,
+    schoolId: school?.id || "",
+    staffId: teacherId,
+    empId,
+    department,
+    name: teacherName,
+    phone,
+    address: school?.address || "",
+    designation,
+    schoolName,
+  });
 
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -281,7 +276,7 @@ export const TeacherIdCardModal: React.FC<Props> = ({
                     {/* QR Code */}
                     <div className="flex flex-col items-center justify-center shrink-0 w-[78px]">
                       <div className="p-1 bg-white border border-slate-300 rounded-lg shadow-2xs flex items-center justify-center">
-                        <QRCode value={qrVerifyUrl} size={66} level="M" />
+                        <QRCode value={qrVerifyUrl} size={66} level="L" />
                       </div>
                       <span className="text-[6.5px] font-black text-purple-700 uppercase tracking-tighter mt-0.5">
                         Scan to Login
@@ -359,7 +354,7 @@ export const TeacherIdCardModal: React.FC<Props> = ({
 
                     <div className="flex flex-col items-center justify-center shrink-0 w-[76px]">
                       <div className="p-1 bg-white border border-slate-300 rounded-lg shadow-2xs flex items-center justify-center">
-                        <QRCode value={qrVerifyUrl} size={62} level="M" />
+                        <QRCode value={qrVerifyUrl} size={62} level="L" />
                       </div>
                       <span className="text-[6.5px] text-purple-700 font-black uppercase tracking-tighter mt-0.5">
                         Scan ID

@@ -129,7 +129,7 @@ export const WhatsAppShareModal: React.FC<WhatsAppShareModalProps> = ({
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({
           title: filename,
-          text: `📄 ${studentName} - ${isDueDemand ? "फीस बकाया मांग पर्ची" : "फीस रसीद"}`,
+          text: `📄 ${studentName} - ${title || (isDueDemand ? "फीस बकाया मांग पर्ची" : "फीस रसीद")}`,
           files: [file],
         });
         setShareFeedback("✅ WhatsApp शेयर शीट खुल गई! अभिभावक का चैट चुनकर सेंड करें।");
@@ -254,28 +254,39 @@ export const WhatsAppShareModal: React.FC<WhatsAppShareModalProps> = ({
               </div>
             </div>
 
-            {/* Bill snapshot */}
-            <div className="text-right">
-              {isDueDemand ? (
-                <div>
-                  <span className="text-[10px] uppercase font-bold text-amber-600 dark:text-amber-400 block">
-                    कुल देय बकाया
-                  </span>
-                  <strong className="text-base font-black text-amber-600 dark:text-amber-400">
-                    ₹{Number(balanceDue || totalAmount || 0).toLocaleString("en-IN")}
-                  </strong>
-                </div>
-              ) : (
-                <div>
-                  <span className="text-[10px] uppercase font-bold text-emerald-600 dark:text-emerald-400 block">
-                    जमा रसीद राशि
-                  </span>
-                  <strong className="text-base font-black text-emerald-600 dark:text-emerald-400">
-                    ₹{Number(paidAmount || totalAmount || 0).toLocaleString("en-IN")}
-                  </strong>
-                </div>
-              )}
-            </div>
+            {/* Bill snapshot (or Admission No badge when sharing Admission Form without fee) */}
+            {(isDueDemand || paidAmount !== undefined || totalAmount !== undefined || balanceDue !== undefined) ? (
+              <div className="text-right">
+                {isDueDemand ? (
+                  <div>
+                    <span className="text-[10px] uppercase font-bold text-amber-600 dark:text-amber-400 block">
+                      कुल देय बकाया
+                    </span>
+                    <strong className="text-base font-black text-amber-600 dark:text-amber-400">
+                      ₹{Number(balanceDue || totalAmount || 0).toLocaleString("en-IN")}
+                    </strong>
+                  </div>
+                ) : (
+                  <div>
+                    <span className="text-[10px] uppercase font-bold text-emerald-600 dark:text-emerald-400 block">
+                      जमा रसीद राशि
+                    </span>
+                    <strong className="text-base font-black text-emerald-600 dark:text-emerald-400">
+                      ₹{Number(paidAmount || totalAmount || 0).toLocaleString("en-IN")}
+                    </strong>
+                  </div>
+                )}
+              </div>
+            ) : admissionNo ? (
+              <div className="text-right">
+                <span className="text-[10px] uppercase font-bold text-indigo-600 dark:text-indigo-400 block">
+                  Form / Adm No
+                </span>
+                <strong className="text-xs font-black font-mono text-indigo-700 dark:text-indigo-300">
+                  {admissionNo}
+                </strong>
+              </div>
+            ) : null}
           </div>
 
           {/* Feedback banner if copied/shared */}

@@ -4,13 +4,14 @@ import {
   ArrowLeft, Crown, Shield, Lock, CheckCircle2, XCircle,
   Calendar, AlertTriangle, MessageSquare, ChevronDown, ChevronUp,
   BookOpen, Users, FileText, ClipboardList, IndianRupee, Sparkles,
-  Zap, Copy, Check, ExternalLink, X, Flame, Clock, Camera, QrCode
+  Zap, Copy, Check, ExternalLink, X, Flame, Clock, Camera, QrCode, Globe, Smartphone
 } from "lucide-react";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "../../firebase";
 import { TIER_CONFIG, isSchoolEliteCurriculum, type School, type SubscriptionTier } from "../../school-types";
 import { ADMIN_WHATSAPP_NUMBER, SUPPORT_PHONE } from "../../constants";
 import { safeOpenExternalUrl } from "../../utils/safeBrowserActions";
+import { getVisibleSchoolRegNo } from "./feeReceiptUtils";
 
 interface Props {
   school: School | null;
@@ -21,21 +22,24 @@ interface Props {
 
 // ── Plan feature matrix ───────────────────────────────────────────────────────
 const FEATURES = [
-  { id: "students",       icon: <Users size={14} />, label: "Student Capacity",        basic: "200 Students", standard: "500 Students", pro: "2000 Students" },
-  { id: "teachers",       icon: <Users size={14} />, label: "Staff & Teachers Limit",  basic: "10 Teachers",  standard: "25 Teachers",  pro: "Unlimited Staff" },
-  { id: "subadmins",      icon: <Shield size={14} />, label: "Multi/Sub-Admins",       basic: "1 Admin Only", standard: "Up to 3 Admins", pro: "Unlimited Admins" },
-  { id: "attendance",     icon: <QrCode size={14} />, label: "QR Code Scan Attendance", basic: "⚡ Lite Included", standard: "⚡ Lite + SMS Link", pro: "⚡ Lite + Summary" },
-  { id: "faceattendance", icon: <Camera size={14} />, label: "🤖 AI Face Attendance (0.2s Kiosk & Face ID)", basic: "👑 Elite Only", standard: "👑 Elite Only", pro: "👑 Elite Only" },
-  { id: "notesmanager",   icon: <Sparkles size={14} />, label: "Class 1–12 Notes & Media (Elite)", basic: "👑 Elite Only", standard: "👑 Elite Only", pro: "👑 Elite Only" },
-  { id: "fees",           icon: <IndianRupee size={14} />, label: "Fee & Due Register", basic: "Basic Register", standard: "Monthly Dues + Slip", pro: "Advance Analytics + Export" },
-  { id: "whatsapp",       icon: <MessageSquare size={14} />, label: "WhatsApp Alerts", basic: "Manual Share", standard: "1-Click Due/Receipt", pro: "Bulk Alerts & Templates" },
-  { id: "admissions",     icon: <BookOpen size={14} />, label: "Online Admissions",    basic: "Basic Form", standard: "Form + Approval", pro: "Portal + Auto Roll/Class" },
-  { id: "idcards",        icon: <FileText size={14} />, label: "Live QR ID Cards & Admit", basic: false, standard: "QR Student Cards + Admit", pro: "Student + Staff Smart IDs" },
-  { id: "hrm",            icon: <Users size={14} />, label: "Staff HRM & Payroll",      basic: false, standard: "Salary Register", pro: "Full Payroll + Salary Slips" },
-  { id: "website",        icon: <BookOpen size={14} />, label: "School Public Website", basic: "Single Page", standard: "Website + Gallery", pro: "Premium Domain / Branding" },
-  { id: "referral",       icon: <Sparkles size={14} />, label: "Sibling Auto-Discount", basic: false, standard: true, pro: true },
-  { id: "certificates",   icon: <FileText size={14} />, label: "Certificates (TC/Bonafide)", basic: false, standard: "TC Generator", pro: "Unlimited TC, Character & Bonafide" },
-  { id: "support",        icon: <Shield size={14} />, label: "Support & Cloud Backup", basic: "Standard Support", standard: "Priority WhatsApp (12h)", pro: "Dedicated VIP + Cloud Backup" },
+  { id: "students",       icon: <Users size={14} />, label: "Student Capacity",        basic: "200 Students", standard: "500 Students", pro: "2000 Students", whitelabel: "5,000+ Students" },
+  { id: "teachers",       icon: <Users size={14} />, label: "Staff & Teachers Limit",  basic: "10 Teachers",  standard: "25 Teachers",  pro: "Unlimited Staff", whitelabel: "Unlimited Staff" },
+  { id: "subadmins",      icon: <Shield size={14} />, label: "Multi/Sub-Admins",       basic: "1 Admin Only", standard: "Up to 3 Admins", pro: "Unlimited Admins", whitelabel: "Unlimited Branch Admins" },
+  { id: "attendance",     icon: <QrCode size={14} />, label: "QR Code Scan Attendance", basic: "⚡ Lite Included", standard: "⚡ Lite + SMS Link", pro: "⚡ Lite + Summary", whitelabel: "✅ Included" },
+  { id: "faceattendance", icon: <Camera size={14} />, label: "🤖 AI Face Attendance (0.2s Kiosk & Face ID)", basic: "👑 Elite Only", standard: "👑 Elite Only", pro: "👑 Elite Only", whitelabel: "✅ Kiosk + On-Site Setup" },
+  { id: "notesmanager",   icon: <Sparkles size={14} />, label: "Class 1–12 Notes & Media (Elite)", basic: "👑 Elite Only", standard: "👑 Elite Only", pro: "👑 Elite Only", whitelabel: "✅ Full Suite Included" },
+  { id: "fees",           icon: <IndianRupee size={14} />, label: "Fee & Due Register", basic: "Basic Register", standard: "Monthly Dues + Slip", pro: "Advance Analytics + Export", whitelabel: "Multi-Branch Ledger + Dues Migration" },
+  { id: "whatsapp",       icon: <MessageSquare size={14} />, label: "WhatsApp Alerts", basic: "Manual Share", standard: "1-Click Due/Receipt", pro: "Bulk Alerts & Templates", whitelabel: "Branded Alerts + Priority" },
+  { id: "admissions",     icon: <BookOpen size={14} />, label: "Online Admissions (2027-28)",    basic: "Website Form", standard: "Form + Approval", pro: "Portal + Auto Roll/Class", whitelabel: "Custom Domain Portal" },
+  { id: "website",        icon: <Globe size={14} />, label: "School Public Website", basic: "Default Website (No Custom Edit)", standard: "Default (Lite) / Custom CMS (Elite)", pro: "Default (Lite) / Custom CMS (Elite)", whitelabel: "www.schoolname.com + Full CMS" },
+  { id: "customwebsite",  icon: <Camera size={14} />, label: "🎨 Custom Website CMS, Photos & Memories Gallery", basic: "👑 Elite Only (Lite: Default Only)", standard: "👑 Elite Only (Lite: Default Only)", pro: "👑 Elite Only (Lite: Default Only)", whitelabel: "✅ Full Custom CMS + Domain" },
+  { id: "playstoreapp",   icon: <Smartphone size={14} />, label: "📱 Play Store Branded App (Own Name & Logo)", basic: false, standard: false, pro: false, whitelabel: "White-Label APK/AAB" },
+  { id: "onsitetraining", icon: <Users size={14} />, label: "🏫 On-Site Training & 100% Data Migration", basic: false, standard: false, pro: false, whitelabel: "Campus Training + Excel Migration" },
+  { id: "idcards",        icon: <FileText size={14} />, label: "Live QR ID Cards & Admit", basic: false, standard: "QR Student Cards + Admit", pro: "Student + Staff Smart IDs", whitelabel: "Custom Branded Smart IDs" },
+  { id: "hrm",            icon: <Users size={14} />, label: "Staff HRM & Payroll",      basic: false, standard: "Salary Register", pro: "Full Payroll + Salary Slips", whitelabel: "Multi-Staff Payroll + Biometric" },
+  { id: "referral",       icon: <Sparkles size={14} />, label: "Sibling Auto-Discount", basic: false, standard: true, pro: true, whitelabel: true },
+  { id: "certificates",   icon: <FileText size={14} />, label: "Certificates (TC/Bonafide)", basic: false, standard: "TC Generator", pro: "Unlimited TC, Character & Bonafide", whitelabel: "Custom Marksheet & Certificate Design" },
+  { id: "support",        icon: <Shield size={14} />, label: "Support & Cloud Backup", basic: "Standard Support", standard: "Priority WhatsApp (12h)", pro: "Dedicated VIP + Cloud Backup", whitelabel: "Dedicated Relationship Manager" },
 ];
 
 const daysRemaining = (isoDate?: string): number => {
@@ -72,6 +76,7 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
     starter_200: { isElite: false, duration: "monthly", key: "lite_monthly" },
     growth_500: { isElite: false, duration: "monthly", key: "lite_monthly" },
     enterprise_2000: { isElite: true, duration: "monthly", key: "elite_monthly" },
+    whitelabel_5000: { isElite: true, duration: "1_year", key: "elite_yearly" },
   });
 
   const [buyingPlan, setBuyingPlan] = useState<{
@@ -90,8 +95,9 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
   const isActive       = sub?.status === "active";
   const tier           = sub?.tier;
   const isSchoolElite  = isSchoolEliteCurriculum(school);
-  const planLevel: "none" | "basic" | "standard" | "pro" =
+  const planLevel: "none" | "basic" | "standard" | "pro" | "whitelabel" =
     !isActive ? "none" :
+    tier === "whitelabel_5000" ? "whitelabel" :
     tier === "starter_200" || tier === "lite" ? "basic" :
     tier === "growth_500" ? "standard" : "pro";
 
@@ -116,8 +122,8 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
       bg:    isSchoolElite ? "bg-amber-50/50 dark:bg-amber-950/20 border-amber-300 dark:border-amber-800" : "bg-blue-50/50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800",
       icon:  isSchoolElite ? <Crown size={20} className="text-amber-500" /> : <Shield size={20} className="text-blue-500" />,
       desc:  isSchoolElite
-        ? "200 Students · 👑 AI Face Attendance (Kiosk + Face ID) + QR Scan + Class 1–12 Notes Active"
-        : "200 Students · 📷 QR Code Scan Attendance · Fee Register · WhatsApp Alerts (Face Attendance: Elite Only)",
+        ? "200 Students · 👑 Custom Website CMS (फ़ोटो व गैलरी) + AI Face Attendance + Class 1–12 Notes Active"
+        : "200 Students · ⚡ Default Website (बिना कस्टम फ़ोटो एडिट) · QR Scan Attendance · Fee Register",
     },
     standard: {
       label: isSchoolElite ? "Standard Elite (500 Students)" : "Standard Lite (500 Students)",
@@ -126,8 +132,8 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
       bg:    isSchoolElite ? "bg-amber-50/50 dark:bg-amber-950/20 border-amber-300 dark:border-amber-800" : "bg-indigo-50/50 dark:bg-indigo-950/20 border-indigo-200 dark:border-indigo-800",
       icon:  isSchoolElite ? <Crown size={20} className="text-amber-500" /> : <Users size={20} className="text-indigo-500" />,
       desc:  isSchoolElite
-        ? "500 Students · 👑 AI Face Attendance (Kiosk + Face ID) + QR ID Cards + Class 1–12 Notes Active"
-        : "500 Students · 📷 QR Code Scan Attendance · Sub-Admins · QR ID Cards (Face Attendance: Elite Only)",
+        ? "500 Students · 👑 Custom Website CMS (फ़ोटो व गैलरी) + AI Face Attendance + QR ID Cards + Notes Active"
+        : "500 Students · ⚡ Default Website (बिना कस्टम फ़ोटो एडिट) · QR Scan Attendance · Sub-Admins",
     },
     pro: {
       label: isSchoolElite ? "Pro Elite (2000 Students)" : "Pro Lite (2000 Students)",
@@ -136,8 +142,16 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
       bg:    "bg-amber-50/50 dark:bg-amber-950/20 border-amber-300 dark:border-amber-800",
       icon:  <Crown size={20} className="text-amber-500" />,
       desc:  isSchoolElite
-        ? "2000 Students · 👑 AI Face Attendance (Kiosk + Face ID) + Payroll HRM + Class 1–12 Notes Active"
-        : "2000 Students · 📷 QR Code Scan Attendance · Payroll HRM · School Website (Face Attendance: Elite Only)",
+        ? "2000 Students · 👑 Custom Website CMS (फ़ोटो व गैलरी) + AI Face Attendance + Payroll HRM + Notes Active"
+        : "2000 Students · ⚡ Default Website (सिर्फ़ डिफ़ॉल्ट डेटा) · QR Scan Attendance · Payroll HRM",
+    },
+    whitelabel: {
+      label: "Enterprise White-Label (5000+ Students)",
+      badge: "👑 WHITE-LABEL",
+      color: "from-rose-500 via-amber-500 to-orange-500",
+      bg:    "bg-gradient-to-r from-amber-50/80 to-rose-50/60 dark:from-amber-950/30 dark:to-rose-950/20 border-amber-400 dark:border-amber-700",
+      icon:  <Crown size={20} className="text-amber-500" />,
+      desc:  "5000+ Students · 👑 Play Store Branded App + Custom .com/.in Website CMS + On-Site Training + Full Data Migration + All Elite Powers Active",
     },
   }[planLevel];
 
@@ -170,17 +184,18 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
     setCheckoutSubmitting(true);
     try {
       const id = `${schoolId}_${Date.now()}`;
+      const visibleReg = getVisibleSchoolRegNo(school);
       await setDoc(doc(db, "schoolPlanRequests", id), {
         schoolId,
         schoolName: school?.name || "",
-        schoolCode: school?.code || "",
+        schoolCode: visibleReg,
         adminUid,
         targetTier: buyingPlan.tier,
         isElite: buyingPlan.isElite,
         duration: buyingPlan.duration,
         amount: buyingPlan.amount,
         planTitle: buyingPlan.title,
-        message: `School: ${school?.name} (${school?.code || 'N/A'}) ne ${buyingPlan.title} (${buyingPlan.duration === '1_year' ? 'Annual Session' : 'Monthly'}) ₹${buyingPlan.amount.toLocaleString('en-IN')} select kiya hai.`,
+        message: `School: ${school?.name}${visibleReg ? ` (${visibleReg})` : ""} ne ${buyingPlan.title} (${buyingPlan.duration === '1_year' ? 'Annual Session' : 'Monthly'}) ₹${buyingPlan.amount.toLocaleString('en-IN')} select kiya hai.`,
         requestedAt: serverTimestamp(),
         status: "pending",
       });
@@ -195,13 +210,16 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
   const openWhatsAppCheckout = () => {
     if (!buyingPlan) return;
     const durLabel = buyingPlan.duration === "1_year" ? "1st Year Annual Session (10+2 Mo Free)" : "Monthly Subscription";
-    const eliteText = buyingPlan.isElite
-      ? "👑 Elite Edition (AI Face Attendance + QR Scan + Class 1-12 Notes, MCQ, Video & PDF Included)"
-      : "⚡ Lite ERP Edition (QR Code Scan Attendance Included)";
+    const eliteText = buyingPlan.tier === "whitelabel_5000"
+      ? "👑 Enterprise White-Label (Play Store Branded App, On-Site Training, Data Migration, Custom .com Website CMS + All Elite Features)"
+      : buyingPlan.isElite
+      ? "👑 Elite Edition (Custom Website CMS + Photos/Gallery, AI Face Attendance, QR Scan & Class 1-12 Notes)"
+      : "⚡ Lite ERP Edition (Default Website Only — No Custom Photos + QR Code Scan Attendance)";
+    const visibleReg = getVisibleSchoolRegNo(school);
     const text = encodeURIComponent(
       `*School Plan Purchase Request*\n\n` +
       `🏫 *School:* ${school?.name || "School"}\n` +
-      `🔑 *School Code:* ${school?.code || "N/A"}\n` +
+      (visibleReg ? `🔑 *Reg. No:* ${visibleReg}\n` : "") +
       `📦 *Selected Plan:* ${buyingPlan.title}\n` +
       `⚡ *Edition:* ${eliteText}\n` +
       `🗓️ *Duration:* ${durLabel}\n` +
@@ -234,7 +252,7 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
     setSending(false);
   };
 
-  const TIERS_LIST: SubscriptionTier[] = ["starter_200", "growth_500", "enterprise_2000"];
+  const TIERS_LIST: SubscriptionTier[] = ["starter_200", "growth_500", "enterprise_2000", "whitelabel_5000"];
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 pb-16 text-slate-800 dark:text-slate-100">
@@ -252,9 +270,9 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
             <div className="min-w-0">
               <h1 className="text-xs font-black text-white tracking-wide truncate flex items-center gap-1.5">
                 <span>School Plan & Store</span>
-                {school?.code && (
+                {getVisibleSchoolRegNo(school) && (
                   <span className="text-[10px] px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 font-mono font-bold border border-indigo-500/30">
-                    {school.code}
+                    {getVisibleSchoolRegNo(school)}
                   </span>
                 )}
               </h1>
@@ -399,32 +417,32 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
             </div>
           </div>
 
-          {/* ── ATTENDANCE PLAN COMPARISON HIGHLIGHT (LITE = QR SCAN, ELITE = AI FACE ATTENDANCE) ── */}
+          {/* ── LITE VS ELITE HIGHLIGHT (ATTENDANCE + WEBSITE ACCESS) ── */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <div className="rounded-xl border border-blue-200 dark:border-blue-800/70 bg-blue-50/70 dark:bg-blue-950/25 p-2.5 flex items-start gap-2">
               <div className="w-7 h-7 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0">
-                <QrCode size={14} />
+                <Globe size={14} />
               </div>
               <div className="min-w-0">
                 <p className="text-[11px] font-black text-blue-900 dark:text-blue-200 flex items-center gap-1">
-                  <span>⚡ Lite Plan: QR Code Scan Attendance</span>
+                  <span>⚡ Lite: QR Attendance + Default Website</span>
                 </p>
                 <p className="text-[10px] text-blue-700/90 dark:text-blue-300/80 leading-snug mt-0.5">
-                  Lite subscription mein 📷 QR Code Scanner &amp; Class QR Attendance full access milega.
+                  Lite में 📷 QR Scan + Default School Website मिलेगा (सिर्फ़ स्कूल का डिफ़ॉल्ट डेटा दिखेगा — फोटो/CMS एडिट नहीं कर सकते)।
                 </p>
               </div>
             </div>
 
             <div className="rounded-xl border border-amber-300 dark:border-amber-700/80 bg-gradient-to-r from-amber-50 to-orange-50/70 dark:from-amber-950/35 dark:to-orange-950/25 p-2.5 flex items-start gap-2">
               <div className="w-7 h-7 rounded-lg bg-amber-500 text-slate-950 flex items-center justify-center shrink-0 shadow-2xs">
-                <Camera size={14} />
+                <Crown size={14} />
               </div>
               <div className="min-w-0">
                 <p className="text-[11px] font-black text-amber-950 dark:text-amber-200 flex items-center gap-1">
-                  <span>👑 Elite Plan: AI Face Attendance</span>
+                  <span>👑 Elite: Face Attendance + Custom Website</span>
                 </p>
                 <p className="text-[10px] text-amber-800 dark:text-amber-300/90 leading-snug mt-0.5">
-                  Sirf Elite walon ko 🤖 0.2s Face Attendance Kiosk, Live Face ID Studio + QR Scan + Class 1–12 Notes milenge!
+                  Elite में 🤖 AI Face Attendance + 🎨 Custom Website CMS (कस्टम बैनर, प्रिंसिपल/टीचर फोटो व मेमोरीज़ गैलरी) + Class 1–12 Notes मिलेंगे!
                 </p>
               </div>
             </div>
@@ -433,21 +451,149 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
           {/* ── TIER CARDS WITH 4 COMPACT BUTTONS ── */}
           {/* Order in each card: 1. Lite Monthly -> 2. Elite Monthly -> 3. Lite Yearly -> 4. Elite Yearly */}
           <div className="space-y-2.5">
-            {TIERS_LIST.map((tKey) => {
+            {TIERS_LIST.filter((tKey) => !(activeTabFilter === "lite" && tKey === "whitelabel_5000")).map((tKey) => {
               const cfg = TIER_CONFIG[tKey];
-              const sel = tierOptions[tKey] || { isElite: false, duration: "monthly", key: "lite_monthly" };
+              const isWhiteLabel = tKey === "whitelabel_5000";
+              const sel = tierOptions[tKey] || (isWhiteLabel
+                ? { isElite: true, duration: "1_year", key: "elite_yearly" as PlanOptionKey }
+                : { isElite: false, duration: "monthly", key: "lite_monthly" as PlanOptionKey });
               const isCurrentTier = isActive && (tier === tKey || (tKey === "enterprise_2000" && tier === "full") || (tKey === "starter_200" && tier === "lite"));
 
-              // Calculate active price based on current selection
-              const activePrice = sel.isElite
-                ? (sel.duration === "1_year" ? cfg.eliteSessionPrice : cfg.eliteMonthlyPrice)
-                : (sel.duration === "1_year" ? cfg.sessionPrice : cfg.monthlyPrice);
+              // If user switched global Lite/Elite tab filter, adapt display gracefully for standard 3 tiers
+              const effectiveSel: TierPlanSelection = isWhiteLabel
+                ? { isElite: true, duration: sel.duration, key: sel.duration === "1_year" ? "elite_yearly" : "elite_monthly" }
+                : activeTabFilter === "elite" && !sel.isElite
+                ? { isElite: true, duration: sel.duration, key: sel.duration === "1_year" ? "elite_yearly" : "elite_monthly" }
+                : activeTabFilter === "lite" && sel.isElite
+                ? { isElite: false, duration: sel.duration, key: sel.duration === "1_year" ? "lite_yearly" : "lite_monthly" }
+                : sel;
+
+              const activePrice = effectiveSel.isElite
+                ? (effectiveSel.duration === "1_year" ? cfg.eliteSessionPrice : cfg.eliteMonthlyPrice)
+                : (effectiveSel.duration === "1_year" ? cfg.sessionPrice : cfg.monthlyPrice);
+
+              if (isWhiteLabel) {
+                return (
+                  <div
+                    key={tKey}
+                    className="rounded-2xl border-2 border-amber-400/90 dark:border-amber-600/80 bg-gradient-to-br from-slate-950 via-slate-900 to-amber-950/80 text-white p-4 space-y-3 shadow-lg relative overflow-hidden"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded bg-amber-400 text-slate-950">
+                            Tier 4 · Exclusive
+                          </span>
+                          {isCurrentTier && (
+                            <span className="text-[9px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 px-1.5 py-0.2 rounded">
+                              Current Tier
+                            </span>
+                          )}
+                        </div>
+                        <h3 className="text-sm font-black text-white mt-1 flex items-center gap-1.5">
+                          <Crown size={15} className="text-amber-400 shrink-0" />
+                          <span>Enterprise White-Label Plan</span>
+                        </h3>
+                        <p className="text-[10px] text-amber-200/90 font-semibold mt-0.5">
+                          5,000+ Students &amp; Unlimited Staff · बड़े CBSE/ICSE स्कूलों व ग्रुप ऑफ इंस्टीट्यूशंस के लिए संपूर्ण व्हाइट-लेबल समाधान
+                        </p>
+                      </div>
+
+                      <div className="text-right shrink-0">
+                        <div className="text-base font-black text-amber-300 tabular-nums">
+                          ₹{activePrice.toLocaleString("en-IN")}
+                        </div>
+                        <div className="text-[10px] text-slate-300 font-semibold">
+                          {effectiveSel.duration === "1_year" ? "/ Year" : "/ Month"}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[10px] text-slate-200 bg-white/5 rounded-xl p-2.5 border border-white/10">
+                      <div className="flex items-start gap-1.5">
+                        <CheckCircle2 size={12} className="text-amber-400 shrink-0 mt-0.5" />
+                        <span><strong>Play Store App:</strong> स्कूल के नाम व लोगो का अपना White-Label App</span>
+                      </div>
+                      <div className="flex items-start gap-1.5">
+                        <CheckCircle2 size={12} className="text-amber-400 shrink-0 mt-0.5" />
+                        <span><strong>On-Site Training:</strong> कैंपस जाकर स्टाफ ट्रेनिंग व ArcFace कियोस्क सेटअप</span>
+                      </div>
+                      <div className="flex items-start gap-1.5">
+                        <CheckCircle2 size={12} className="text-amber-400 shrink-0 mt-0.5" />
+                        <span><strong>100% Data Migration:</strong> पुराने Excel/रजिस्टर डेटा व बकाया का पूरा अपलोड</span>
+                      </div>
+                      <div className="flex items-start gap-1.5">
+                        <CheckCircle2 size={12} className="text-amber-400 shrink-0 mt-0.5" />
+                        <span><strong>Custom Domain Website:</strong> www.schoolname.com + Full Website CMS</span>
+                      </div>
+                      <div className="flex items-start gap-1.5 sm:col-span-2">
+                        <CheckCircle2 size={12} className="text-amber-400 shrink-0 mt-0.5" />
+                        <span><strong>Dedicated Relationship Manager:</strong> परीक्षा व एडमिशन के समय तुरंत फोन/वीडियो सपोर्ट व कस्टम मार्कशीट डिज़ाइन</span>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setTierOptions(prev => ({
+                          ...prev,
+                          [tKey]: { isElite: true, duration: "1_year", key: "elite_yearly" }
+                        }))}
+                        className={`p-2 rounded-xl border text-left transition cursor-pointer flex items-center justify-between ${
+                          effectiveSel.duration === "1_year"
+                            ? "bg-amber-400 text-slate-950 border-amber-300 font-black"
+                            : "bg-white/5 hover:bg-white/10 text-slate-200 border-white/15"
+                        }`}
+                      >
+                        <div>
+                          <div className="text-[10px] font-black">👑 Annual White-Label</div>
+                          <div className="text-xs font-black tabular-nums">₹1,99,999 / yr</div>
+                        </div>
+                        {effectiveSel.duration === "1_year" && <Check size={13} />}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setTierOptions(prev => ({
+                          ...prev,
+                          [tKey]: { isElite: true, duration: "monthly", key: "elite_monthly" }
+                        }))}
+                        className={`p-2 rounded-xl border text-left transition cursor-pointer flex items-center justify-between ${
+                          effectiveSel.duration === "monthly"
+                            ? "bg-amber-400 text-slate-950 border-amber-300 font-black"
+                            : "bg-white/5 hover:bg-white/10 text-slate-200 border-white/15"
+                        }`}
+                      >
+                        <div>
+                          <div className="text-[10px] font-black">👑 Monthly Enterprise</div>
+                          <div className="text-xs font-black tabular-nums">₹19,999 / mo</div>
+                        </div>
+                        {effectiveSel.duration === "monthly" && <Check size={13} />}
+                      </button>
+                    </div>
+
+                    <div className="pt-1 flex items-center justify-between gap-2">
+                      <span className="text-[10px] text-amber-200 font-semibold">
+                        All Elite Powers + Full White-Label Branding
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleInitiateBuy(tKey, effectiveSel)}
+                        className="py-1.5 px-3.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black transition cursor-pointer flex items-center gap-1 shrink-0"
+                      >
+                        <Crown size={13} />
+                        <span>{isCurrentTier ? "Renew White-Label" : "Book White-Label"}</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              }
 
               return (
                 <div
                   key={tKey}
                   className={`rounded-xl border p-3 transition-all relative ${
-                    sel.isElite
+                    effectiveSel.isElite
                       ? "border-amber-300/80 dark:border-amber-700/60 bg-gradient-to-r from-amber-50/30 via-white to-amber-50/10 dark:from-slate-900 dark:to-slate-900"
                       : "border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900"
                   } hover:border-slate-300 dark:hover:border-slate-700`}
@@ -473,7 +619,7 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
                         ₹{activePrice.toLocaleString("en-IN")}
                       </span>
                       <span className="text-[10px] text-slate-400 font-semibold ml-0.5">
-                        {sel.duration === "1_year" ? "/yr" : "/mo"}
+                        {effectiveSel.duration === "1_year" ? "/yr" : "/mo"}
                       </span>
                     </div>
                   </div>
@@ -481,13 +627,13 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
                   {/* Feature Subtext */}
                   <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight mb-2.5">
                     {cfg.desc}
-                    {sel.isElite ? (
+                    {effectiveSel.isElite ? (
                       <span className="text-amber-600 dark:text-amber-400 font-bold ml-1">
-                        · 👑 AI Face Attendance (Kiosk &amp; Face ID) + Class 1–12 Notes, MCQs &amp; Videos Included!
+                        · 👑 Custom Website CMS (फ़ोटो व गैलरी) + AI Face Attendance + Class 1–12 Notes Included!
                       </span>
                     ) : (
                       <span className="text-blue-600 dark:text-blue-400 font-bold ml-1">
-                        · ⚡ QR Code Scan Attendance Included (Face Attendance ke liye Elite chunein)
+                        · ⚡ Default Website (सिर्फ़ डिफ़ॉल्ट डेटा, बिना कस्टम फ़ोटो एडिट) + QR Scan Attendance
                       </span>
                     )}
                   </p>
@@ -508,7 +654,7 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
                         [tKey]: { isElite: false, duration: "monthly", key: "lite_monthly" }
                       }))}
                       className={`p-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between active:scale-97 ${
-                        sel.key === "lite_monthly"
+                        effectiveSel.key === "lite_monthly"
                           ? "bg-blue-600 text-white border-blue-600 shadow-2xs font-bold"
                           : "bg-slate-50 hover:bg-slate-100 dark:bg-slate-800/80 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700"
                       }`}
@@ -516,9 +662,9 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
                     >
                       <div className="flex items-center justify-between gap-1">
                         <span className="text-[10px] font-black truncate">⚡ Lite Monthly</span>
-                        {sel.key === "lite_monthly" && <Check size={11} className="shrink-0" />}
+                        {effectiveSel.key === "lite_monthly" && <Check size={11} className="shrink-0" />}
                       </div>
-                      <span className={`text-[11px] font-black tabular-nums mt-0.5 ${sel.key === "lite_monthly" ? "text-white" : "text-slate-900 dark:text-white"}`}>
+                      <span className={`text-[11px] font-black tabular-nums mt-0.5 ${effectiveSel.key === "lite_monthly" ? "text-white" : "text-slate-900 dark:text-white"}`}>
                         ₹{cfg.monthlyPrice.toLocaleString("en-IN")}<span className="text-[9px] font-normal opacity-80">/mo</span>
                       </span>
                     </button>
@@ -531,19 +677,19 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
                         [tKey]: { isElite: true, duration: "monthly", key: "elite_monthly" }
                       }))}
                       className={`p-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between active:scale-97 ${
-                        sel.key === "elite_monthly"
+                        effectiveSel.key === "elite_monthly"
                           ? "bg-amber-500 text-slate-950 border-amber-400 shadow-2xs font-black"
                           : "bg-amber-500/10 hover:bg-amber-500/15 dark:bg-amber-950/20 text-amber-900 dark:text-amber-200 border-amber-200 dark:border-amber-800/70"
                       }`}
-                      title="Elite Monthly Plan with Class 1-12 Notes"
+                      title="Elite Monthly Plan with Custom Website CMS & Face Attendance"
                     >
                       <div className="flex items-center justify-between gap-1">
                         <span className="text-[10px] font-black truncate flex items-center gap-0.5">
                           <Crown size={10} className="shrink-0 text-amber-600 dark:text-amber-400" /> Elite Monthly
                         </span>
-                        {sel.key === "elite_monthly" && <Check size={11} className="shrink-0" />}
+                        {effectiveSel.key === "elite_monthly" && <Check size={11} className="shrink-0" />}
                       </div>
-                      <span className={`text-[11px] font-black tabular-nums mt-0.5 ${sel.key === "elite_monthly" ? "text-slate-950 font-black" : "text-amber-700 dark:text-amber-300 font-bold"}`}>
+                      <span className={`text-[11px] font-black tabular-nums mt-0.5 ${effectiveSel.key === "elite_monthly" ? "text-slate-950 font-black" : "text-amber-700 dark:text-amber-300 font-bold"}`}>
                         ₹{cfg.eliteMonthlyPrice.toLocaleString("en-IN")}<span className="text-[9px] font-normal opacity-80">/mo</span>
                       </span>
                     </button>
@@ -556,7 +702,7 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
                         [tKey]: { isElite: false, duration: "1_year", key: "lite_yearly" }
                       }))}
                       className={`p-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between active:scale-97 ${
-                        sel.key === "lite_yearly"
+                        effectiveSel.key === "lite_yearly"
                           ? "bg-indigo-600 text-white border-indigo-600 shadow-2xs font-bold"
                           : "bg-slate-50 hover:bg-slate-100 dark:bg-slate-800/80 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700"
                       }`}
@@ -566,7 +712,7 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
                         <span className="text-[10px] font-black truncate">⚡ Lite Yearly</span>
                         <span className="text-[8px] font-black bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 px-1 rounded">10+2</span>
                       </div>
-                      <span className={`text-[11px] font-black tabular-nums mt-0.5 ${sel.key === "lite_yearly" ? "text-white" : "text-slate-900 dark:text-white"}`}>
+                      <span className={`text-[11px] font-black tabular-nums mt-0.5 ${effectiveSel.key === "lite_yearly" ? "text-white" : "text-slate-900 dark:text-white"}`}>
                         ₹{cfg.sessionPrice.toLocaleString("en-IN")}<span className="text-[9px] font-normal opacity-80">/yr</span>
                       </span>
                     </button>
@@ -579,11 +725,11 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
                         [tKey]: { isElite: true, duration: "1_year", key: "elite_yearly" }
                       }))}
                       className={`p-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between active:scale-97 ${
-                        sel.key === "elite_yearly"
+                        effectiveSel.key === "elite_yearly"
                           ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white border-amber-400 shadow-2xs font-black"
                           : "bg-amber-500/10 hover:bg-amber-500/15 dark:bg-amber-950/20 text-amber-900 dark:text-amber-200 border-amber-200 dark:border-amber-800/70"
                       }`}
-                      title="Elite Annual Session Plan with Class 1-12 Notes"
+                      title="Elite Annual Session Plan with Custom Website CMS & Face Attendance"
                     >
                       <div className="flex items-center justify-between gap-1">
                         <span className="text-[10px] font-black truncate flex items-center gap-0.5">
@@ -591,7 +737,7 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
                         </span>
                         <span className="text-[8px] font-black bg-emerald-500 text-white px-1 rounded">Free</span>
                       </div>
-                      <span className={`text-[11px] font-black tabular-nums mt-0.5 ${sel.key === "elite_yearly" ? "text-white" : "text-amber-700 dark:text-amber-300 font-bold"}`}>
+                      <span className={`text-[11px] font-black tabular-nums mt-0.5 ${effectiveSel.key === "elite_yearly" ? "text-white" : "text-amber-700 dark:text-amber-300 font-bold"}`}>
                         ₹{cfg.eliteSessionPrice.toLocaleString("en-IN")}<span className="text-[9px] font-normal opacity-80">/yr</span>
                       </span>
                     </button>
@@ -602,15 +748,15 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
                     <div className="text-[10px] text-slate-500 dark:text-slate-400 flex items-center gap-1 truncate">
                       <span>Selected:</span>
                       <strong className="text-slate-800 dark:text-slate-200 font-bold truncate">
-                        {sel.isElite ? "👑 Elite" : "⚡ Lite"} · {sel.duration === "1_year" ? "Annual" : "Monthly"}
+                        {effectiveSel.isElite ? "👑 Elite (Custom Website)" : "⚡ Lite (Default Website)"} · {effectiveSel.duration === "1_year" ? "Annual" : "Monthly"}
                       </strong>
                     </div>
 
                     <button
                       type="button"
-                      onClick={() => handleInitiateBuy(tKey, sel)}
+                      onClick={() => handleInitiateBuy(tKey, effectiveSel)}
                       className={`py-1.5 px-3 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-1 shadow-2xs active:scale-95 shrink-0 ${
-                        sel.isElite
+                        effectiveSel.isElite
                           ? "bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-amber-500/20"
                           : "bg-blue-600 hover:bg-blue-700 text-white shadow-blue-600/20"
                       }`}
@@ -638,7 +784,7 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
                   Kyu hai 👑 Elite Plan Schools ki Pehli Pasand?
                 </p>
                 <p className="text-[10px] text-amber-800/80 dark:text-amber-300/80 leading-snug">
-                  🤖 AI Face Attendance (0.2s Kiosk + Live Face ID Studio) + QR Scan + Class 1–12 Notes, MCQs aur Video Lectures shamil hain.
+                  👑 Custom School Website CMS (अपनी फ़ोटो, बैनर, टीचर व गैलरी जोड़ें) + 🤖 AI Face Attendance + Class 1–12 Notes &amp; Videos shamil hain.
                 </p>
               </div>
             </div>
@@ -693,14 +839,14 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
           </div>
         )}
 
-        {/* ── PLAN COMPARISON ACCORDION (Compact) ── */}
+        {/* ── PLAN COMPARISON ACCORDION (4-TIER COMPARISON) ── */}
         <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200/80 dark:border-slate-800 overflow-hidden shadow-xs">
           <button
             onClick={() => setShowCompare(v => !v)}
             className="w-full flex items-center justify-between px-3.5 py-2.5 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40 transition"
           >
             <p className="text-xs font-black text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-              <span>Full Comparison: Basic (200) vs Standard (500) vs Pro (2000)</span>
+              <span>Full 4-Tier Comparison: Basic vs Standard vs Pro vs White-Label (5000+)</span>
             </p>
             {showCompare
               ? <ChevronUp size={15} className="text-slate-400" />
@@ -710,35 +856,39 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
 
           {showCompare && (
             <div className="border-t border-slate-100 dark:border-slate-800 overflow-x-auto">
-              <table className="w-full text-[11px] border-collapse">
+              <table className="w-full text-[11px] border-collapse min-w-[540px]">
                 <thead>
                   <tr className="bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800">
                     <th className="p-2 text-left font-black">Plan Rate / Feature</th>
                     <th className="p-1.5 text-center font-black text-blue-600">Basic (200)</th>
                     <th className="p-1.5 text-center font-black text-purple-600">Standard (500)</th>
                     <th className="p-1.5 text-center font-black text-amber-600">Pro (2000)</th>
+                    <th className="p-1.5 text-center font-black text-rose-600">White-Label (5000+)</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
                   <tr className="bg-slate-50/50 dark:bg-slate-800/30">
-                    <td className="p-2 font-bold text-slate-700 dark:text-slate-300">⚡ Lite Monthly</td>
+                    <td className="p-2 font-bold text-slate-700 dark:text-slate-300">⚡ Lite Monthly (Default Website)</td>
                     <td className="p-1.5 text-center font-black text-slate-700 dark:text-slate-200 tabular-nums">₹999</td>
                     <td className="p-1.5 text-center font-black text-slate-700 dark:text-slate-200 tabular-nums">₹1,999</td>
                     <td className="p-1.5 text-center font-black text-slate-700 dark:text-slate-200 tabular-nums">₹3,999</td>
+                    <td className="p-1.5 text-center font-bold text-slate-400">—</td>
                   </tr>
                   <tr className="bg-amber-50/40 dark:bg-amber-950/20">
                     <td className="p-2 font-black text-amber-900 dark:text-amber-200 flex items-center gap-1">
-                      <Crown size={11} className="text-amber-500" /> 👑 Elite Monthly
+                      <Crown size={11} className="text-amber-500" /> 👑 Elite Monthly (Custom Website)
                     </td>
                     <td className="p-1.5 text-center font-black text-amber-600 dark:text-amber-400 tabular-nums">₹1,999</td>
                     <td className="p-1.5 text-center font-black text-amber-600 dark:text-amber-400 tabular-nums">₹3,999</td>
                     <td className="p-1.5 text-center font-black text-amber-600 dark:text-amber-400 tabular-nums">₹7,999</td>
+                    <td className="p-1.5 text-center font-black text-rose-600 dark:text-rose-400 tabular-nums">₹19,999</td>
                   </tr>
                   <tr className="bg-slate-50/50 dark:bg-slate-800/30">
                     <td className="p-2 font-bold text-slate-700 dark:text-slate-300">⚡ Lite Yearly (10+2)</td>
                     <td className="p-1.5 text-center font-black text-blue-600 dark:text-blue-400 tabular-nums">₹9,999</td>
                     <td className="p-1.5 text-center font-black text-purple-600 dark:text-purple-400 tabular-nums">₹19,999</td>
                     <td className="p-1.5 text-center font-black text-amber-600 dark:text-amber-400 tabular-nums">₹39,999</td>
+                    <td className="p-1.5 text-center font-bold text-slate-400">—</td>
                   </tr>
                   <tr className="bg-amber-50/40 dark:bg-amber-950/20">
                     <td className="p-2 font-black text-amber-900 dark:text-amber-200 flex items-center gap-1">
@@ -747,6 +897,7 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
                     <td className="p-1.5 text-center font-black text-amber-600 dark:text-amber-400 tabular-nums">₹19,999</td>
                     <td className="p-1.5 text-center font-black text-amber-600 dark:text-amber-400 tabular-nums">₹39,999</td>
                     <td className="p-1.5 text-center font-black text-amber-600 dark:text-amber-400 tabular-nums">₹79,999</td>
+                    <td className="p-1.5 text-center font-black text-rose-600 dark:text-rose-400 tabular-nums">₹1,99,999</td>
                   </tr>
                   {FEATURES.map(f => (
                     <tr key={f.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
@@ -775,6 +926,15 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
                         {typeof f.pro === "string" ? (
                           <span className="font-bold text-slate-700 dark:text-slate-300">{f.pro}</span>
                         ) : f.pro ? (
+                          <CheckCircle2 size={13} className="text-emerald-500 mx-auto" />
+                        ) : (
+                          <XCircle size={13} className="text-slate-300 dark:text-slate-600 mx-auto" />
+                        )}
+                      </td>
+                      <td className="p-1.5 text-center bg-amber-50/20 dark:bg-amber-950/10">
+                        {typeof f.whitelabel === "string" ? (
+                          <span className="font-black text-amber-800 dark:text-amber-300">{f.whitelabel}</span>
+                        ) : f.whitelabel ? (
                           <CheckCircle2 size={13} className="text-emerald-500 mx-auto" />
                         ) : (
                           <XCircle size={13} className="text-slate-300 dark:text-slate-600 mx-auto" />
@@ -896,7 +1056,11 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
                     <div className="flex justify-between items-center">
                       <span className="text-slate-500 dark:text-slate-400 font-medium text-[11px]">Edition:</span>
                       <span className={`font-black text-[11px] ${buyingPlan.isElite ? "text-amber-600 dark:text-amber-400" : "text-blue-600 dark:text-blue-400"}`}>
-                        {buyingPlan.isElite ? "👑 Elite (AI Face Attendance + Notes)" : "⚡ Lite ERP (QR Scan Attendance)"}
+                        {buyingPlan.tier === "whitelabel_5000"
+                          ? "👑 Enterprise White-Label (Play Store App + Custom Web)"
+                          : buyingPlan.isElite
+                          ? "👑 Elite (Custom Website CMS + Face ID + Notes)"
+                          : "⚡ Lite ERP (Default Website + QR Scan)"}
                       </span>
                     </div>
                     <div className="flex justify-between items-center">
@@ -917,9 +1081,15 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
                     <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 rounded-lg p-2.5 text-[11px] text-amber-900 dark:text-amber-200 flex items-start gap-1.5">
                       <Sparkles size={14} className="text-amber-600 shrink-0 mt-0.5" />
                       <div>
-                        <p className="font-black">👑 Elite Face Attendance &amp; Curriculum Unlocked:</p>
+                        <p className="font-black">
+                          {buyingPlan.tier === "whitelabel_5000"
+                            ? "👑 Enterprise White-Label Suite Unlocked:"
+                            : "👑 Elite Custom Website CMS & Face ID Unlocked:"}
+                        </p>
                         <p className="text-[10px] mt-0.5 text-amber-800 dark:text-amber-300 font-medium">
-                          🤖 AI Face Attendance (0.2s Kiosk + Live Face ID Studio), QR Scan aur Class 1–12 Notes/MCQs/Videos activate honge.
+                          {buyingPlan.tier === "whitelabel_5000"
+                            ? "Play Store Branded App, Custom .com Website CMS, On-Site Staff Training, Data Migration, AI Face Attendance & Class 1–12 Notes activate honge."
+                            : "🌐 Custom School Website CMS (अपनी फ़ोटो, बैनर, टीचर व गैलरी जोड़ें), 🤖 AI Face Attendance (0.2s Kiosk + Live Face ID), QR Scan aur Class 1–12 Notes activate honge."}
                         </p>
                       </div>
                     </div>
@@ -927,9 +1097,9 @@ export const SchoolPlanView: React.FC<Props> = ({ school, schoolId, adminUid, on
                     <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-2.5 text-[11px] text-blue-900 dark:text-blue-200 flex items-start gap-1.5">
                       <QrCode size={14} className="text-blue-600 shrink-0 mt-0.5" />
                       <div>
-                        <p className="font-black">⚡ Lite Plan — QR Code Scan Attendance:</p>
+                        <p className="font-black">⚡ Lite Plan — Default Website &amp; QR Scan:</p>
                         <p className="text-[10px] mt-0.5 text-blue-800 dark:text-blue-300 font-medium">
-                          📷 QR Code Scan Attendance shamil hai. 🤖 AI Face Attendance ke liye 👑 Elite Plan chunein.
+                          🌐 Default School Website (केवल डिफ़ॉल्ट डेटा, कस्टम फ़ोटो एडिट बंद) + 📷 QR Code Scan Attendance. Custom Website CMS व AI Face ID ke liye 👑 Elite chunein.
                         </p>
                       </div>
                     </div>

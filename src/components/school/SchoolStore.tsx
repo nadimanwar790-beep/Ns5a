@@ -88,7 +88,7 @@ const STORE_TIERS: TierPlanConfig[] = [
       { text: "Online Admission Form + Approval Workflow", included: true },
       { text: "Staff Salary Register (Basic)", included: true },
       { text: "Sibling Auto-Discount & Teacher Referral", included: true },
-      { text: "Standard School Website with Photo Gallery", included: true },
+      { text: "Standard School Website (Lite: Default Data Only)", included: true },
       { text: "Full Payroll with Deductions & Slips (Pro Only)", included: false },
     ],
   },
@@ -117,10 +117,35 @@ const STORE_TIERS: TierPlanConfig[] = [
       { text: "QR Code Scan Attendance + Monthly Summary & Leave Register", included: true },
       { text: "Online Admission Portal + Direct Roll/Class Auto-Assign", included: true },
       { text: "Full Payroll + Salary Slip + Attendance Deductions", included: true },
-      { text: "Premium School Website with Custom Domain / Branding", included: true },
+      { text: "Default Website (Lite) / Full Custom Website CMS (Elite)", included: true },
       { text: "Student + Teacher Smart QR ID Cards & Admit Cards", included: true },
       { text: "Official Certificates (TC, Character, Bonafide) with School Seal", included: true },
       { text: "Dedicated VIP Super Admin Support & Auto Cloud Backup", included: true },
+    ],
+  },
+  {
+    key: "whitelabel_5000",
+    name: "Enterprise White-Label",
+    badge: "5000+ Students",
+    studentCapText: "5000+ Students • Unlimited Staff & Multi-Branch",
+    theme: {
+      border: "border-rose-500 dark:border-rose-400",
+      badgeBg: "bg-gradient-to-r from-rose-600 via-amber-500 to-orange-500 text-white",
+      btnBg: "bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-700 hover:to-amber-700",
+      iconBg: "bg-gradient-to-br from-rose-600 to-amber-500",
+      glow: "bg-gradient-to-r from-rose-50 via-amber-50/70 to-orange-50 dark:from-rose-950/30 dark:to-amber-950/20",
+    },
+    prices: {
+      "1_year": { price: 199999, mrp: 239988, save: 39989 },
+      monthly: { price: 19999 },
+    },
+    features: [
+      { text: "5000+ Students & Unlimited Staff & Multi-Branch ERP", included: true },
+      { text: "📱 Play Store पर स्कूल के अपने नाम व लोगो वाला App (APK/AAB)", included: true },
+      { text: "🏫 स्कूल कैंपस में On-Site Staff Training & Kiosk Setup", included: true },
+      { text: "📂 100% Old Excel/Register Data Migration हमारी टीम द्वारा", included: true },
+      { text: "🌐 Custom .com/.in Domain + Full Custom Website CMS & Gallery", included: true },
+      { text: "👑 Dedicated Relationship Manager + All Elite AI Face ID & Notes Included", included: true },
     ],
   },
 ];
@@ -140,22 +165,27 @@ export const SchoolStore: React.FC<Props> = ({ school, onBack }) => {
     starter_200: "1_year",
     growth_500: "1_year",
     enterprise_2000: "1_year",
+    whitelabel_5000: "1_year",
   });
   const [eliteMap, setEliteMap] = useState<Record<string, boolean>>({
     starter_200: false,
     growth_500: false,
     enterprise_2000: false,
+    whitelabel_5000: true,
   });
 
   const sendWhatsApp = (tier: TierPlanConfig, dur: Duration) => {
-    const isElite = eliteMap[tier.key] || false;
+    const isWhiteLabel = tier.key === "whitelabel_5000";
+    const isElite = isWhiteLabel ? true : (eliteMap[tier.key] || false);
     const durName = durationLabel[dur];
     const basePrice = dur === "1_year" ? tier.prices["1_year"].price : tier.prices.monthly.price;
-    const priceVal = isElite ? basePrice * 2 : basePrice;
+    const priceVal = isWhiteLabel ? basePrice : (isElite ? basePrice * 2 : basePrice);
     const priceStr = `₹${priceVal.toLocaleString("en-IN")}`;
-    const editionText = isElite
-      ? "👑 Elite Plan (2× Price — AI Face Attendance + QR Scan + Class 1 to 12 Notes, MCQ, PDF & Video Included)"
-      : "⚡ Lite / Standard Plan (QR Code Scan Attendance Included)";
+    const editionText = isWhiteLabel
+      ? "👑 Enterprise White-Label (Play Store Branded App, On-Site Training, Data Migration, Custom .com Website CMS + All Elite Features)"
+      : isElite
+      ? "👑 Elite Plan (2× Price — Custom Website CMS + Photos/Gallery, AI Face Attendance & Class 1 to 12 Notes)"
+      : "⚡ Lite Plan (Default Website Only — No Custom Photos + QR Code Scan Attendance)";
     const msg = encodeURIComponent(
       `Namaste! 🙏\n\nMain *${school.name}* ka School Admin hoon.\n\nMujhe *IIC School ${tier.name} (${tier.badge}) — ${editionText} — ${durName} (${priceStr})* subscription chahiye.\n\n📋 School Details:\n• School: ${school.name}\n• School Code: ${school.code}\n• Admin Email: ${school.adminEmail}\n\nKripya subscription activate karein. Dhanyawad!`
     );
@@ -163,7 +193,7 @@ export const SchoolStore: React.FC<Props> = ({ school, onBack }) => {
   };
 
   const currentTier = school.subscription?.tier;
-  const isEliteActive = Boolean(school.isElite || school.subscription?.isElite);
+  const isEliteActive = Boolean(school.isElite || school.subscription?.isElite || currentTier === "whitelabel_5000");
   const isActive = school.subscription?.status === "active";
   const expiresAt = school.subscription?.expiresAt;
 
@@ -172,22 +202,23 @@ export const SchoolStore: React.FC<Props> = ({ school, onBack }) => {
     if (tierKey === "starter_200") return currentTier === "starter_200" || currentTier === "lite";
     if (tierKey === "growth_500") return currentTier === "growth_500";
     if (tierKey === "enterprise_2000") return currentTier === "enterprise_2000" || currentTier === "full";
+    if (tierKey === "whitelabel_5000") return currentTier === "whitelabel_5000";
     return false;
   };
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 pb-12">
       {/* Header */}
-      <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-purple-900 px-4 py-5 shadow-md">
+      <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 dark:from-blue-900 dark:via-indigo-900 dark:to-purple-900 px-4 py-5 shadow-sm border-b-2 border-indigo-700 dark:border-indigo-500/50">
         <button
           onClick={onBack}
-          className="flex items-center gap-1.5 text-blue-300 hover:text-white text-sm font-bold mb-3 transition-colors cursor-pointer"
+          className="flex items-center gap-1.5 text-indigo-800 hover:text-indigo-950 dark:text-blue-300 dark:hover:text-white text-sm font-black mb-3 transition-colors cursor-pointer"
         >
           <ArrowLeft className="w-4 h-4" /> Back to Dashboard
         </button>
-        <p className="text-blue-300 text-xs font-black uppercase tracking-wider mb-1">Official School Store</p>
-        <h1 className="text-2xl font-black text-white tracking-tight">School Subscription Plans</h1>
-        <p className="text-blue-200 text-sm mt-1">Super Admin द्वारा निर्धारित छात्र क्षमता व आधिकारिक शुल्क</p>
+        <p className="text-indigo-700 dark:text-blue-300 text-xs font-black uppercase tracking-wider mb-1">Official School Store</p>
+        <h1 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">School Subscription Plans</h1>
+        <p className="text-slate-700 dark:text-blue-200 text-sm font-medium mt-1">Super Admin द्वारा निर्धारित 4-Tier छात्र क्षमता व आधिकारिक शुल्क</p>
       </div>
 
       <div className="p-4 max-w-xl mx-auto space-y-5">
@@ -197,11 +228,14 @@ export const SchoolStore: React.FC<Props> = ({ school, onBack }) => {
             <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
             <div>
               <p className="text-sm font-black text-emerald-800 dark:text-emerald-200">
-                {currentTier === "starter_200" || currentTier === "lite"
+                {currentTier === "whitelabel_5000"
+                  ? "👑 Enterprise White-Label (5000+ Students) Active ✓"
+                  : currentTier === "starter_200" || currentTier === "lite"
                   ? "Basic Plan (200 Students) Active ✓"
                   : currentTier === "growth_500"
                   ? "Standard Plan (500 Students) Active ✓"
                   : "Pro Plan (2000 Students) Active ✓"}
+                {isEliteActive && currentTier !== "whitelabel_5000" ? " · 👑 Elite" : ""}
               </p>
               <p className="text-xs text-emerald-700 dark:text-emerald-400 font-semibold mt-0.5">
                 {expiresAt
@@ -224,16 +258,16 @@ export const SchoolStore: React.FC<Props> = ({ school, onBack }) => {
           </div>
         )}
 
-        {/* Attendance Comparison Banner: Lite (QR Scan) vs Elite (AI Face Attendance) */}
+        {/* Website & Attendance Comparison Banner: Lite (Default Website + QR Scan) vs Elite (Custom Website CMS + AI Face Attendance) */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-2xl p-3.5 flex items-start gap-2.5">
             <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0">
               <QrCode className="w-4 h-4" />
             </div>
             <div>
-              <p className="text-xs font-black text-blue-900 dark:text-blue-200">⚡ Lite Plan: QR Code Scan</p>
+              <p className="text-xs font-black text-blue-900 dark:text-blue-200">⚡ Lite: Default Website + QR Scan</p>
               <p className="text-[11px] text-blue-700 dark:text-blue-300 mt-0.5 leading-snug">
-                Lite &amp; Standard plans mein 📷 QR Code Scan Attendance shamil hai.
+                Lite mein sirf <strong>Default Website</strong> milta hai (school khud photo/banner nahi jod sakta) + QR Code Scan Attendance.
               </p>
             </div>
           </div>
@@ -242,32 +276,40 @@ export const SchoolStore: React.FC<Props> = ({ school, onBack }) => {
               <Camera className="w-4 h-4" />
             </div>
             <div>
-              <p className="text-xs font-black text-amber-950 dark:text-amber-200">👑 Elite Plan: AI Face Attendance</p>
+              <p className="text-xs font-black text-amber-950 dark:text-amber-200">👑 Elite: Custom Website + AI Face ID</p>
               <p className="text-[11px] text-amber-800 dark:text-amber-300 mt-0.5 leading-snug">
-                Sirf Elite subscription mein 🤖 0.2s Face Kiosk + Face ID Studio + Class 1–12 Notes milta hai!
+                Elite mein <strong>Full Custom Website CMS</strong> (apni photo, banner, teacher &amp; gallery) + 🤖 0.2s Face Kiosk + Class 1–12 Notes milta hai!
               </p>
             </div>
           </div>
         </div>
 
-        {/* ── 3 TIERS: BASIC (200), STANDARD (500), PRO (2000) ────────────────── */}
+        {/* ── 4 TIERS: BASIC (200), STANDARD (500), PRO (2000), ENTERPRISE WHITE-LABEL (5000+) ── */}
         {STORE_TIERS.map((tier) => {
           const selectedDur = durations[tier.key] || "1_year";
           const activeThis = isCurrent(tier.key);
           const priceObj = tier.prices[selectedDur];
+          const isWhiteLabel = tier.key === "whitelabel_5000";
           const isPro = tier.key === "enterprise_2000";
           const isStandard = tier.key === "growth_500";
+          const effectiveElite = isWhiteLabel ? true : Boolean(eliteMap[tier.key]);
+          const finalPrice = isWhiteLabel ? priceObj.price : (effectiveElite ? priceObj.price * 2 : priceObj.price);
 
           return (
             <div
               key={tier.key}
               className={`bg-white dark:bg-slate-800 rounded-2xl shadow-sm overflow-hidden border-2 transition-all ${
-                activeThis
+                activeThis || isWhiteLabel
                   ? `${tier.theme.border} shadow-md ring-2 ring-indigo-400/20`
                   : "border-slate-200 dark:border-slate-700"
               }`}
             >
-              {/* Optional Top Badge for Standard & Pro */}
+              {/* Top Badges */}
+              {isWhiteLabel && (
+                <div className="bg-gradient-to-r from-rose-600 via-amber-500 to-orange-500 text-white text-center text-xs font-black py-1.5 tracking-wide uppercase">
+                  👑 FLAGSHIP 4TH TIER — PLAY STORE APP + CUSTOM .COM WEBSITE
+                </div>
+              )}
               {isPro && (
                 <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white text-center text-xs font-black py-1.5 tracking-wide uppercase">
                   👑 VIP UNLIMITED — COMPLETE SCHOOL SUITE
@@ -284,10 +326,10 @@ export const SchoolStore: React.FC<Props> = ({ school, onBack }) => {
                 <div className="flex items-center justify-between mb-1.5">
                   <div className="flex items-center gap-2.5">
                     <div className={`w-10 h-10 rounded-xl ${tier.theme.iconBg} flex items-center justify-center text-white shrink-0 shadow-sm`}>
-                      {isPro ? <Crown className="w-5 h-5" /> : isStandard ? <Users className="w-5 h-5" /> : <Shield className="w-5 h-5" />}
+                      {isWhiteLabel || isPro ? <Crown className="w-5 h-5" /> : isStandard ? <Users className="w-5 h-5" /> : <Shield className="w-5 h-5" />}
                     </div>
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <h2 className="font-black text-slate-800 dark:text-white text-lg leading-tight">
                           {tier.name}
                         </h2>
@@ -345,37 +387,44 @@ export const SchoolStore: React.FC<Props> = ({ school, onBack }) => {
                   </button>
                 </div>
 
-                {/* Standard vs Elite Edition Switch */}
-                <div className="mt-3.5 bg-slate-100 dark:bg-slate-700/60 p-1 rounded-xl flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setEliteMap(prev => ({ ...prev, [tier.key]: false }))}
-                    className={`flex-1 py-1.5 rounded-lg text-[11px] font-black transition-all cursor-pointer ${
-                      !eliteMap[tier.key]
-                        ? "bg-white dark:bg-slate-800 text-slate-800 dark:text-white shadow-xs"
-                        : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-200"
-                    }`}
-                  >
-                    Standard Plan
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setEliteMap(prev => ({ ...prev, [tier.key]: true }))}
-                    className={`flex-1 py-1.5 rounded-lg text-[11px] font-black transition-all cursor-pointer flex items-center justify-center gap-1 ${
-                      eliteMap[tier.key]
-                        ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-xs"
-                        : "text-amber-600 dark:text-amber-400 hover:text-amber-700"
-                    }`}
-                  >
-                    👑 Elite Plan (2×)
-                  </button>
-                </div>
+                {/* Standard vs Elite Edition Switch (White-Label includes Elite) */}
+                {!isWhiteLabel ? (
+                  <div className="mt-3.5 bg-slate-100 dark:bg-slate-700/60 p-1 rounded-xl flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setEliteMap(prev => ({ ...prev, [tier.key]: false }))}
+                      className={`flex-1 py-1.5 rounded-lg text-[11px] font-black transition-all cursor-pointer ${
+                        !eliteMap[tier.key]
+                          ? "bg-white dark:bg-slate-800 text-slate-800 dark:text-white shadow-xs"
+                          : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-200"
+                      }`}
+                    >
+                      ⚡ Lite (Default Web)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEliteMap(prev => ({ ...prev, [tier.key]: true }))}
+                      className={`flex-1 py-1.5 rounded-lg text-[11px] font-black transition-all cursor-pointer flex items-center justify-center gap-1 ${
+                        eliteMap[tier.key]
+                          ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-xs"
+                          : "text-amber-600 dark:text-amber-400 hover:text-amber-700"
+                      }`}
+                    >
+                      👑 Elite (2× · Custom Web)
+                    </button>
+                  </div>
+                ) : (
+                  <div className="mt-3.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-xl p-2.5 text-[11px] text-amber-900 dark:text-amber-200 font-bold flex items-center gap-2">
+                    <Crown size={14} className="text-amber-600 shrink-0" />
+                    <span>All Elite Features + Play Store Branded App + Custom Website CMS Included!</span>
+                  </div>
+                )}
 
-                {eliteMap[tier.key] && (
+                {effectiveElite && !isWhiteLabel && (
                   <div className="mt-2.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-xl p-2.5 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2">
                     <Sparkles size={15} className="text-amber-600 shrink-0 mt-0.5" />
                     <p className="text-[11px] font-bold leading-snug">
-                      <strong>👑 Elite Edition Features:</strong> 🤖 AI Face Attendance (0.2s Kiosk + Live Face ID Studio), QR Scan aur Class 1 se 12 tak ke Notes, MCQs, Videos &amp; PDFs unlock honge.
+                      <strong>👑 Elite Features:</strong> 🌐 Custom School Website CMS (अपनी फ़ोटो, बैनर, टीचर व गैलरी), 🤖 AI Face Attendance aur Class 1–12 Notes unlock honge.
                     </p>
                   </div>
                 )}
@@ -383,17 +432,17 @@ export const SchoolStore: React.FC<Props> = ({ school, onBack }) => {
                 {/* Price Display */}
                 <div className="mt-3.5 flex items-baseline gap-2 flex-wrap">
                   <span className="text-3xl font-black text-slate-900 dark:text-white">
-                    ₹{(eliteMap[tier.key] ? priceObj.price * 2 : priceObj.price).toLocaleString("en-IN")}
+                    ₹{finalPrice.toLocaleString("en-IN")}
                   </span>
                   <span className="text-sm font-bold text-slate-500">
                     /{selectedDur === "1_year" ? "session (365 din)" : "month"}
                   </span>
-                  {eliteMap[tier.key] && (
+                  {effectiveElite && !isWhiteLabel && (
                     <span className="text-xs bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 px-2 py-0.5 rounded-full font-black">
                       2× Elite Rate
                     </span>
                   )}
-                  {!eliteMap[tier.key] && selectedDur === "1_year" && tier.prices["1_year"].mrp && (
+                  {(!effectiveElite || isWhiteLabel) && selectedDur === "1_year" && tier.prices["1_year"].mrp && (
                     <>
                       <span className="text-xs line-through text-slate-400">
                         ₹{tier.prices["1_year"].mrp.toLocaleString("en-IN")}
@@ -418,22 +467,28 @@ export const SchoolStore: React.FC<Props> = ({ school, onBack }) => {
                     </span>
                   </div>
                 ))}
-                {eliteMap[tier.key] ? (
+                {effectiveElite ? (
                   <>
                     <div className="flex items-center gap-2 text-amber-700 dark:text-amber-300 font-black text-xs bg-amber-50 dark:bg-amber-950/30 p-2 rounded-lg border border-amber-300 dark:border-amber-800">
-                      <Camera size={14} className="shrink-0 text-amber-600" />
-                      <span>👑 AI Face Attendance (0.2s Face Kiosk &amp; Live Face ID Studio) Included ✓</span>
+                      <Sparkles size={14} className="shrink-0 text-amber-600" />
+                      <span>🌐 Full Custom Website CMS (Banner, Principal, Teachers &amp; Gallery Photos) Included ✓</span>
                     </div>
-                    <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 font-bold text-xs bg-amber-50 dark:bg-amber-950/20 p-1.5 rounded-lg border border-amber-200 dark:border-amber-900">
-                      <Sparkles size={14} className="shrink-0" />
-                      <span>Class 1 to 12 Notes, MCQ, PDF &amp; Video Manager Included ✓</span>
+                    <div className="flex items-center gap-2 text-amber-700 dark:text-amber-300 font-black text-xs bg-amber-50 dark:bg-amber-950/30 p-2 rounded-lg border border-amber-300 dark:border-amber-800">
+                      <Camera size={14} className="shrink-0 text-amber-600" />
+                      <span>👑 AI Face Attendance (0.2s Face Kiosk &amp; Live Face ID Studio) + Class 1–12 Notes Included ✓</span>
                     </div>
                   </>
                 ) : (
-                  <div className="flex items-center gap-2 text-slate-400 dark:text-slate-500 font-semibold text-xs bg-slate-50 dark:bg-slate-900/40 p-2 rounded-lg border border-slate-200 dark:border-slate-700">
-                    <Lock size={13} className="shrink-0 text-amber-500" />
-                    <span>🤖 AI Face Attendance (Face Kiosk &amp; Face ID) — 👑 Elite Plan Only</span>
-                  </div>
+                  <>
+                    <div className="flex items-center gap-2 text-blue-700 dark:text-blue-300 font-semibold text-xs bg-blue-50 dark:bg-blue-950/20 p-2 rounded-lg border border-blue-200 dark:border-blue-800">
+                      <Shield size={13} className="shrink-0 text-blue-600" />
+                      <span>🌐 Default School Website Included (सिर्फ़ डिफ़ॉल्ट डेटा, कस्टम फ़ोटो नहीं)</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-slate-400 dark:text-slate-500 font-semibold text-xs bg-slate-50 dark:bg-slate-900/40 p-2 rounded-lg border border-slate-200 dark:border-slate-700">
+                      <Lock size={13} className="shrink-0 text-amber-500" />
+                      <span>👑 Custom Website CMS व 🤖 AI Face Attendance — Elite Plan Only</span>
+                    </div>
+                  </>
                 )}
               </div>
 
@@ -445,7 +500,7 @@ export const SchoolStore: React.FC<Props> = ({ school, onBack }) => {
                   className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white rounded-xl font-black flex items-center justify-center gap-2 transition-colors shadow-sm cursor-pointer text-sm"
                 >
                   <MessageCircle className="w-5 h-5" />
-                  WhatsApp Buy: {tier.name} {eliteMap[tier.key] ? "(Elite 2×)" : ""} — ₹{(eliteMap[tier.key] ? priceObj.price * 2 : priceObj.price).toLocaleString("en-IN")}
+                  WhatsApp Buy: {tier.name} {isWhiteLabel ? "" : effectiveElite ? "(Elite 2×)" : "(Lite)"} — ₹{finalPrice.toLocaleString("en-IN")}
                 </button>
               </div>
             </div>
@@ -454,12 +509,12 @@ export const SchoolStore: React.FC<Props> = ({ school, onBack }) => {
 
         {/* Informative Terms Box */}
         <div className="bg-blue-50 dark:bg-blue-900/20 rounded-xl px-4 py-4 space-y-2 border border-blue-200 dark:border-blue-800">
-          <p className="text-sm font-black text-blue-900 dark:text-blue-200">📋 Official Subscription Terms & Rates:</p>
+          <p className="text-sm font-black text-blue-900 dark:text-blue-200">📋 Official Subscription Terms &amp; 4-Tier Rates:</p>
           <div className="space-y-1.5 text-xs text-blue-800 dark:text-blue-300">
-            <p>• <strong>Basic Plan (200 Students):</strong> ₹999/माह या ₹9,999/सत्र (10 शिक्षक, उपस्थिति, फ़ीस व परीक्षा)।</p>
-            <p>• <strong>Standard Plan (500 Students):</strong> ₹1,999/माह या ₹19,999/सत्र (25 शिक्षक, सब-एडमिन, QR आईडी कार्ड व एडमिट कार्ड)।</p>
-            <p>• <strong>Pro Plan (2000 Students):</strong> ₹3,999/माह या ₹39,999/सत्र (असीमित स्टाफ, मल्टी-एडमिन, एडवांस एकाउंट्स, HRM सैलरी स्लिप व स्कूल वेबसाइट)।</p>
-            <p>• <strong>एक्टिवेशन:</strong> WhatsApp पर संदेश भेजते ही सुपर एडमिन द्वारा तुरंत प्लान एक्टिवेट कर दिया जाता है।</p>
+            <p>• <strong>Basic Plan (200 Students):</strong> Lite ₹999/माह या ₹9,999/सत्र (Default Website) • Elite ₹1,999/माह या ₹19,999/सत्र (Custom Website CMS + Face ID)।</p>
+            <p>• <strong>Standard Plan (500 Students):</strong> Lite ₹1,999/माह या ₹19,999/सत्र (Default Website) • Elite ₹3,999/माह या ₹39,999/सत्र (Custom Website CMS + Face ID)।</p>
+            <p>• <strong>Pro Plan (2000 Students):</strong> Lite ₹3,999/माह या ₹39,999/सत्र (Default Website) • Elite ₹7,999/माह या ₹79,999/सत्र (Custom Website CMS + Face ID)।</p>
+            <p>• <strong>👑 Enterprise White-Label (5000+ Students):</strong> ₹19,999/माह या ₹1,99,999/सत्र — Play Store Branded App, Custom .com Domain + CMS, On-Site Training व Data Migration।</p>
           </div>
         </div>
       </div>

@@ -103,20 +103,33 @@ export const UniversalFaceIdStudioModal: React.FC<Props> = ({
     if (teachers && teachers.length > 0) {
       setLocalTeachersList(teachers);
       fetchedTeachersSchoolRef.current = schoolId;
+    } else if (teachers && teachers.length === 0 && fetchedTeachersSchoolRef.current === schoolId) {
+      setLocalTeachersList([]);
     } else if (schoolId && fetchedTeachersSchoolRef.current !== schoolId) {
       fetchedTeachersSchoolRef.current = schoolId;
       const local = getLocalTeachers(schoolId);
-      if (local && local.length > 0) {
-        setLocalTeachersList(local);
-      } else {
-        getTeachers(schoolId).then((list) => {
-          if (list && list.length > 0) {
-            setLocalTeachersList(list);
-          }
-        }).catch(() => {});
-      }
+      setLocalTeachersList(local || []);
+      getTeachers(schoolId).then((list) => {
+        setLocalTeachersList(Array.isArray(list) ? list : []);
+      }).catch(() => {});
     }
   }, [teachersPropSig, schoolId]);
+
+  useEffect(() => {
+    const handleRemoved = (e: any) => {
+      if (e?.detail?.schoolId && e.detail.schoolId !== schoolId) return;
+      const rid = e?.detail?.teacherId || e?.detail?.staffId;
+      if (rid) {
+        setLocalTeachersList((prev) => prev.filter((t) => t?.id !== rid));
+      }
+    };
+    window.addEventListener("teacher-deleted", handleRemoved);
+    window.addEventListener("staff-deleted", handleRemoved);
+    return () => {
+      window.removeEventListener("teacher-deleted", handleRemoved);
+      window.removeEventListener("staff-deleted", handleRemoved);
+    };
+  }, [schoolId]);
 
   useEffect(() => {
     if (initialTab) {

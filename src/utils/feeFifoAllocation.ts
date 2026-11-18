@@ -64,6 +64,10 @@ export interface FifoPaymentResult {
 }
 
 export function formatMonthLabel(monthStr: string): string {
+  if (!monthStr) return "";
+  if (monthStr === "0000-BACK-DUE") return "Back Session Due (पिछला सत्र बकाया)";
+  if (monthStr === "0001-ADM-DUE") return "Admission Arrears (एडमिशन बकाया)";
+  if (!/^\d{4}-\d{2}/.test(monthStr)) return monthStr;
   try {
     const [y, m] = monthStr.split("-").map(Number);
     const d = new Date(y, (m || 1) - 1, 1);

@@ -182,6 +182,7 @@ export const UniversalAttendanceScannerModal: React.FC<Props> = ({
     if (
       rawText.includes("ADMIN-01") ||
       rawText.includes("SCHOOL_ADMIN") ||
+      rawText.includes("role=admin") ||
       rawText.toLowerCase().includes("principal") ||
       (school.principalName && rawText.includes(encodeURIComponent(school.principalName)))
     ) {
@@ -190,14 +191,19 @@ export const UniversalAttendanceScannerModal: React.FC<Props> = ({
       matchedName = school.principalName || "School Admin";
       matchedPhoto = school.logoUrl || "";
     }
-    // Case 2: NSTA-SCHOOL-STAFF:schoolId:id:empId:dept:name...
-    else if (rawText.startsWith("NSTA-SCHOOL-STAFF:") || rawText.includes("NSTA-SCHOOL-STAFF:")) {
-      const parts = rawText.replace("NSTA-SCHOOL-STAFF:", "").split(":");
-      const empOrId = decodeURIComponent(parts[1] || "");
-      const teacherName = decodeURIComponent(parts[4] || "");
-      const designation = decodeURIComponent(parts[13] || "");
+    // Case 2: NSTA-SCHOOL-STAFF:schoolId:id:empId:dept:name... (raw OR inside Chrome URL #hash)
+    else if (rawText.includes("NSTA-SCHOOL-STAFF:")) {
+      const tokenBody = (rawText.split("NSTA-SCHOOL-STAFF:")[1] || "").split(/[\r\n]/)[0];
+      const parts = tokenBody.split(":");
+      const safeDec = (v?: string) => {
+        try { return decodeURIComponent(v || ""); } catch { return v || ""; }
+      };
+      const empOrId = safeDec(parts[1]);
+      const empCode = safeDec(parts[2]);
+      const teacherName = safeDec(parts[4]);
+      const designation = safeDec(parts[13]);
 
-      if (designation === "SCHOOL_ADMIN" || empOrId === "ADMIN-01") {
+      if (designation === "SCHOOL_ADMIN" || empOrId === "ADMIN-01" || empCode === "ADMIN-01") {
         matchedRole = "ADMIN";
         matchedId = "ADMIN-01";
         matchedName = teacherName || school.principalName || "School Admin";
@@ -206,8 +212,9 @@ export const UniversalAttendanceScannerModal: React.FC<Props> = ({
         // Teacher
         const foundT = teachers.find(
           (t) =>
-            t.id === empOrId ||
-            t.employeeId === empOrId ||
+            (empOrId && t.id === empOrId) ||
+            (empCode && (t.employeeId === empCode || t.id === empCode)) ||
+            (empOrId && t.employeeId === empOrId) ||
             (teacherName && t.name.toLowerCase() === teacherName.toLowerCase())
         );
         matchedRole = "TEACHER";
@@ -217,17 +224,28 @@ export const UniversalAttendanceScannerModal: React.FC<Props> = ({
       }
     }
     // Case 3: NSTA-SCHOOL Student Token or URL parameter
-    else if (rawText.includes("NSTA-SCHOOL:") || rawText.includes("?u=") || rawText.includes("studentId=")) {
+    else if (rawText.includes("NSTA-SCHOOL:") || rawText.includes("?u=") || rawText.includes("&u=") || rawText.includes("studentId=")) {
       // Find student in entire school student directory
       let foundSt: SchoolStudent | undefined;
 
       if (rawText.includes("NSTA-SCHOOL:")) {
-        const parts = rawText.split("NSTA-SCHOOL:")[1].split(":");
-        const stId = decodeURIComponent(parts[1] || "");
-        const roll = decodeURIComponent(parts[2] || "");
-        const clsId = decodeURIComponent(parts[3] || "");
-        foundSt = students.find((s) => s.id === stId || (clsId && s.classId === clsId && s.rollNo === roll));
-      } else {
+        const tokenBody = (rawText.split("NSTA-SCHOOL:")[1] || "").split(/[\r\n]/)[0];
+        const parts = tokenBody.split(":");
+        const safeDec = (v?: string) => {
+          try { return decodeURIComponent(v || ""); } catch { return v || ""; }
+        };
+        const stId = safeDec(parts[1]);
+        const roll = safeDec(parts[2]);
+        const clsId = safeDec(parts[3]);
+        const adm = safeDec(parts[5]);
+        foundSt = students.find(
+          (s) =>
+            (stId && s.id === stId) ||
+            (adm && s.admissionNo && s.admissionNo.toLowerCase() === adm.toLowerCase()) ||
+            (clsId && s.classId === clsId && roll && s.rollNo === roll)
+        );
+      }
+      if (!foundSt) {
         try {
           const url = new URL(rawText.startsWith("http") ? rawText : `https://nsta.app/${rawText}`);
           const u = url.searchParams.get("u") || url.searchParams.get("studentId");
@@ -327,6 +345,7 @@ export const UniversalAttendanceScannerModal: React.FC<Props> = ({
         role: "TEACHER",
         date: today,
         scanMode,
+        cutoffTime: inCutoffTime,
         outStartTime,
       });
       if (staffRes.alreadyMarked || !staffRes.success) {
@@ -335,6 +354,9 @@ export const UniversalAttendanceScannerModal: React.FC<Props> = ({
       }
       finalAction = staffRes.action;
       stayDuration = staffRes.stayDuration;
+      if (staffRes.isLate && finalAction === "in") {
+        matchedClassName = `${matchedClassName} • Late Entry`;
+      }
     } else if (matchedRole === "STUDENT") {
       const res = await markStudentQrAttendance({
         schoolId: school.id,

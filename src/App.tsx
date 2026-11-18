@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState, useEffect, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useMemo, lazy, Suspense } from 'react';
 import {
   GraduationCap,
   School,
@@ -7,8 +7,10 @@ import {
   Loader2,
   Sparkles,
   ArrowRight,
+  ArrowLeft,
   LogOut,
-  User as UserIcon
+  User as UserIcon,
+  Globe
 } from 'lucide-react';
 import { PwaInstallPrompt } from './components/PwaInstallPrompt';
 import { NotificationPrompt } from './components/NotificationPrompt';
@@ -30,6 +32,18 @@ import {
 } from './services/sessionManager';
 import { performDailyMasterSync, isDailySyncNeeded } from './services/dailySyncManager';
 import { AppLoadingScreen } from './components/AppLoadingScreen';
+import {
+  getAllSchools,
+  getLocalSchools,
+  getClasses,
+  getLocalClasses,
+  getSessions,
+  isDemoRecord,
+  shouldUseDemoForSchool,
+} from './school-firebase';
+import { getDemoSchoolDataset } from './components/school/demoDataStore';
+import type { School as SchoolEntity, SchoolClass, SchoolSession } from './school-types';
+import { getUpcomingAdmissionSessionLabel } from './utils/safeBrowserActions';
 
 // Resilient dynamic import helper that retries transient network or dev-server warm-up blips
 function lazyWithRetry<T extends React.ComponentType<any>>(
@@ -119,7 +133,35 @@ const DriverTripConsole = lazyWithRetry(
   'Driver GPS Dashboard'
 );
 
+const PublicSchoolWebsite = lazyWithRetry(
+  () => import('./components/school/PublicSchoolWebsite').then(m => ({ default: m.PublicSchoolWebsite || (m as any).default })),
+  'School Website'
+);
+
+const OnlineAdmissionManager = lazyWithRetry(
+  () => import('./components/school/OnlineAdmissionManager').then(m => ({ default: m.OnlineAdmissionManager || (m as any).default })),
+  'Online Admission 2027-28'
+);
+
 export type AppViewMode = 'STUDENT' | 'ADMIN' | 'SCHOOL_ERP' | 'DRIVER';
+export type PublicRoutePath = '/' | '/admission' | '/login' | '/verify';
+
+const normalizeRoutePath = (pathname?: string): PublicRoutePath => {
+  const clean = (pathname || '/').trim().toLowerCase();
+  if (clean.startsWith('/admission')) return '/admission';
+  if (clean.startsWith('/login')) return '/login';
+  if (clean.startsWith('/verify')) return '/verify';
+  return '/';
+};
+
+const getSchoolParamFromUrl = (): string => {
+  try {
+    const p = new URLSearchParams(window.location.search);
+    return (p.get('school') || p.get('schoolId') || p.get('s') || '').trim();
+  } catch {
+    return '';
+  }
+};
 
 export const isSuperAdminEmail = (emailStr?: string | null): boolean => {
   if (!emailStr) return false;
@@ -202,6 +244,41 @@ export const isAdminUser = (u?: any): boolean => {
   ) return true;
   if (u.id === 'super_admin_nadim' || u.uid === 'super_admin_nadim') return true;
   return false;
+};
+
+export const isSchoolPortalUser = (u?: any): boolean => {
+  if (!u) return false;
+  if (isSuperAdminEmail(u.email) || u.id === 'super_admin_nadim' || u.uid === 'super_admin_nadim') return false;
+  if (isSchoolAdminRole(u)) return true;
+  const r = (u.role || '').toString().trim().toUpperCase();
+  const sr = (u.schoolRole || '').toString().trim().toUpperCase();
+  const ut = (u.userType || '').toString().trim().toUpperCase();
+  const prov = (u.provider || '').toString().trim().toLowerCase();
+  const emailLower = (u.email || '').toString().trim().toLowerCase();
+  if (r === 'DRIVER' || isAdminUser(u)) return false;
+  return Boolean(
+    ut === 'SCHOOL_STUDENT' ||
+    r === 'SCHOOL_STUDENT' ||
+    r === 'TEACHER' ||
+    r === 'ACCOUNTANT' ||
+    sr === 'TEACHER' ||
+    sr === 'ACCOUNTANT' ||
+    sr === 'STUDENT' ||
+    Boolean(u.schoolRole) ||
+    Boolean(u.admissionNo) ||
+    Boolean(u.studentId) ||
+    Boolean(u.teacherId) ||
+    emailLower.endsWith('.edu.in') ||
+    emailLower.includes('@student.') ||
+    emailLower.includes('@teacher.') ||
+    prov === 'qr_student_id' ||
+    prov === 'qr_teacher_id' ||
+    prov === 'face_recognition_login' ||
+    prov === 'student_record' ||
+    prov === 'teacher_record' ||
+    prov === 'accountant_record' ||
+    (Boolean(u.schoolId) && String(u.schoolId).trim() !== '')
+  );
 };
 
 export const DEFAULT_SUPERADMIN_USER = {
@@ -292,17 +369,7 @@ export function App() {
         if ((u?.role || '').toString().trim().toUpperCase() === 'DRIVER') return 'DRIVER';
         if (isSchoolAdminRole(u)) return 'SCHOOL_ERP';
         if (isAdminUser(u)) return 'ADMIN';
-        const r = (u?.role || '').toString().trim().toUpperCase();
-        const isSchoolAccount = Boolean(
-          u?.schoolId ||
-          u?.userType === 'SCHOOL_STUDENT' ||
-          u?.admissionNo ||
-          r === 'TEACHER' ||
-          r === 'ACCOUNTANT' ||
-          (u?.email && u.email.toLowerCase().endsWith('.edu.in')) ||
-          localStorage.getItem('nst_active_school_id')
-        );
-        if (isSchoolAccount) {
+        if (isSchoolPortalUser(u) || localStorage.getItem('nst_active_school_id')) {
           return 'SCHOOL_ERP';
         }
       }
@@ -333,6 +400,18 @@ export function App() {
       return;
     }
 
+    // School students, teachers, accountants, and school admins stay strictly inside their School Portal (never NSTA Main StudentDashboard)
+    if (newView === 'STUDENT' && isSchoolPortalUser(user)) {
+      setView('SCHOOL_ERP');
+      try {
+        localStorage.setItem('nst_app_view_mode', 'SCHOOL_ERP');
+      } catch {}
+      return;
+    }
+
+    if (newView === 'STUDENT' && view !== 'STUDENT') {
+      setShowBootSplash(true);
+    }
     setView(newView);
     try {
       localStorage.setItem('nst_app_view_mode', newView);
@@ -341,12 +420,243 @@ export function App() {
   const [settings, setSettings] = useState<any>(getInitialSettings);
   const [studentTab, setStudentTab] = useState<any>('HOME');
   const [dailyStudySeconds, setDailyStudySeconds] = useState<number>(180);
-  const [isDarkMode, setIsDarkMode] = useState<boolean>(false);
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('nst_dark_mode') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [erpTheme, setErpTheme] = useState<'white' | 'black' | 'current'>(() => {
+    try {
+      const t = localStorage.getItem('nst_app_theme') || localStorage.getItem('nst_student_theme');
+      if (t === 'white' || t === 'black' || t === 'current') return t;
+    } catch {}
+    return 'current';
+  });
   const [isFullScreen, setIsFullScreen] = useState<boolean>(false);
   const [gmpQuotaExceeded, setGmpQuotaExceeded] = useState<boolean>(false);
+  const [routePath, setRoutePath] = useState<PublicRoutePath>(() => {
+    try {
+      return normalizeRoutePath(window.location.pathname);
+    } catch {
+      return '/';
+    }
+  });
+  const [urlSchoolParam, setUrlSchoolParam] = useState<string>(() => getSchoolParamFromUrl());
+  const [showPublicWebsite, setShowPublicWebsite] = useState<boolean>(() => {
+    try {
+      const path = normalizeRoutePath(window.location.pathname);
+      const p = new URLSearchParams(window.location.search);
+      if (p.get('studyRoom') || path === '/login') return false;
+      return true;
+    } catch {
+      return true;
+    }
+  });
+  const [publicSchools, setPublicSchools] = useState<SchoolEntity[]>(() => {
+    try {
+      const local = getLocalSchools();
+      return Array.isArray(local) ? local : [];
+    } catch {
+      return [];
+    }
+  });
+  const [selectedPublicSchoolId, setSelectedPublicSchoolId] = useState<string>(() => {
+    try {
+      return getSchoolParamFromUrl() || localStorage.getItem('selectedPublicSchoolId') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [publicAdmClasses, setPublicAdmClasses] = useState<SchoolClass[]>([]);
+  const [publicAdmSessions, setPublicAdmSessions] = useState<SchoolSession[]>([]);
+
+  const navigateToPath = (
+    targetPath: PublicRoutePath,
+    options?: { searchParams?: Record<string, string>; clearSearch?: boolean }
+  ) => {
+    try {
+      const url = new URL(window.location.href);
+      url.pathname = targetPath;
+      if (options?.clearSearch) {
+        url.search = '';
+        url.hash = '';
+      }
+      if (options?.searchParams) {
+        Object.entries(options.searchParams).forEach(([k, v]) => {
+          if (v) url.searchParams.set(k, v);
+          else url.searchParams.delete(k);
+        });
+      }
+      const nextRelative = `${url.pathname}${url.search}${url.hash}`;
+      if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== nextRelative) {
+        window.history.pushState({ routePath: targetPath }, '', nextRelative);
+      }
+      setUrlSchoolParam(url.searchParams.get('school') || url.searchParams.get('schoolId') || url.searchParams.get('s') || '');
+    } catch {}
+    setRoutePath(targetPath);
+    try {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch {}
+  };
+
+  useEffect(() => {
+    const onPopState = () => {
+      const nextRoute = normalizeRoutePath(window.location.pathname);
+      setRoutePath(nextRoute);
+      setUrlSchoolParam(getSchoolParamFromUrl());
+      if (nextRoute === '/login') {
+        setShowPublicWebsite(false);
+        setShowBootSplash(true);
+      } else if (nextRoute === '/admission') {
+        setShowBootSplash(false);
+        setShowPublicWebsite(true);
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const loadSchools = async () => {
+      try {
+        const list = await getAllSchools();
+        if (active && Array.isArray(list) && list.length > 0) {
+          setPublicSchools(list);
+        }
+      } catch {}
+    };
+    loadSchools();
+    const onSchoolListRefresh = () => {
+      loadSchools();
+    };
+    window.addEventListener('nst_school_identity_updated', onSchoolListRefresh);
+    return () => {
+      active = false;
+      window.removeEventListener('nst_school_identity_updated', onSchoolListRefresh);
+    };
+  }, []);
+
+  const visiblePublicSchools = useMemo(() => {
+    const activeList = (publicSchools || []).filter(
+      (s: any) => s && s.status !== 'ARCHIVED' && s.status !== 'DELETED'
+    );
+    const nonDemo = activeList.filter((s: any) => !isDemoRecord(s) && s.id !== 'dps_gurgaon_sector45');
+    if (nonDemo.length > 0) return nonDemo;
+    if (activeList.length > 0) return activeList;
+    const demoSchool = getDemoSchoolDataset()?.school;
+    return demoSchool
+      ? [demoSchool as SchoolEntity]
+      : [
+          {
+            id: 'dps_gurgaon_sector45',
+            name: 'Life Maker Public School',
+            code: 'LMPS',
+            address: 'Institutional Academic Campus, Educational Zone',
+            tagline: 'Knowledge & Excellence',
+            createdAt: new Date().toISOString(),
+            status: 'ACTIVE',
+          } as SchoolEntity,
+        ];
+  }, [publicSchools]);
+
+  const activePublicSchool: SchoolEntity = useMemo(() => {
+    const matchSchool = (query?: string) => {
+      const q = (query || '').trim().toLowerCase();
+      if (!q) return undefined;
+      return visiblePublicSchools.find(
+        (s) =>
+          (s.id || '').toLowerCase() === q ||
+          (s.code || '').toLowerCase() === q ||
+          (s.websiteConfig?.customSlug || '').toLowerCase() === q
+      );
+    };
+
+    // Priority: URL ?school= > localStorage/selectedPublicSchoolId > isDefaultPublicWebsite > Life Maker Public School > first active school
+    if (urlSchoolParam) {
+      const fromUrl = matchSchool(urlSchoolParam);
+      if (fromUrl) return fromUrl;
+    }
+    const fromSelected = matchSchool(selectedPublicSchoolId);
+    if (fromSelected) return fromSelected;
+
+    try {
+      const storedId = localStorage.getItem('selectedPublicSchoolId');
+      if (storedId && storedId.toLowerCase() !== 'nstz') {
+        const fromStorage = matchSchool(storedId);
+        if (fromStorage) return fromStorage;
+      }
+    } catch {}
+
+    const explicitDefault = visiblePublicSchools.find((s) => s.isDefaultPublicWebsite === true);
+    if (explicitDefault) return explicitDefault;
+
+    const lifeMakerDefault = visiblePublicSchools.find(
+      (s) =>
+        (s.name || '').toLowerCase().includes('life maker') ||
+        (s.code || '').toUpperCase() === 'LMPS'
+    );
+    if (lifeMakerDefault) return lifeMakerDefault;
+
+    return visiblePublicSchools[0];
+  }, [visiblePublicSchools, urlSchoolParam, selectedPublicSchoolId]);
+
+  const handleSelectPublicSchool = (schoolId: string) => {
+    setSelectedPublicSchoolId(schoolId);
+    try {
+      localStorage.setItem('selectedPublicSchoolId', schoolId);
+      const url = new URL(window.location.href);
+      if (url.searchParams.has('school') || url.searchParams.has('schoolId') || url.searchParams.has('s')) {
+        url.searchParams.set('school', schoolId);
+        url.searchParams.delete('schoolId');
+        url.searchParams.delete('s');
+        window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+        setUrlSchoolParam(schoolId);
+      }
+    } catch {}
+  };
+
+  useEffect(() => {
+    if (!activePublicSchool?.id) return;
+    let active = true;
+    const sid = activePublicSchool.id;
+    const localCls = getLocalClasses(sid).filter((c: any) => !isDemoRecord(c));
+    setPublicAdmClasses(localCls);
+    getClasses(sid)
+      .then((cls) => {
+        if (!active) return;
+        const real = (cls || []).filter((c: any) => !isDemoRecord(c));
+        if (real.length > 0) {
+          setPublicAdmClasses(real);
+        } else if (shouldUseDemoForSchool(sid)) {
+          setPublicAdmClasses(getDemoSchoolDataset()?.classes || []);
+        } else {
+          setPublicAdmClasses([]);
+        }
+      })
+      .catch(() => {});
+    getSessions(sid)
+      .then((sess) => {
+        if (!active) return;
+        if (Array.isArray(sess) && sess.length > 0) {
+          setPublicAdmSessions(sess);
+        } else {
+          setPublicAdmSessions(getDemoSchoolDataset()?.sessions || []);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [activePublicSchool?.id]);
+
   const [showBootSplash, setShowBootSplash] = useState<boolean>(() => {
     try {
+      const path = normalizeRoutePath(window.location.pathname);
       const p = new URLSearchParams(window.location.search);
+      const docTypeParam = p.get('type') || '';
       const isPublicVerify = Boolean(
         p.get('verify') ||
         p.get('verify-certificate') ||
@@ -354,14 +664,13 @@ export function App() {
         p.get('certNo') ||
         p.get('dispatchNo') ||
         p.get('v') === 'id' ||
-        p.get('type') === 'certificate' ||
-        p.get('type') === 'marksheet' ||
-        window.location.pathname.startsWith('/verify')
+        ['certificate', 'marksheet', 'idcard', 'driver_id', 'fee_receipt', 'admit_card', 'admission', 'gate_pass'].includes(docTypeParam) ||
+        path === '/verify'
       );
       const isStandaloneDriver = p.get('driverConsole') === '1' || p.get('driver') === '1';
-      return !isPublicVerify && !isStandaloneDriver;
+      return path === '/login' && !getInitialUser() && !isPublicVerify && !isStandaloneDriver;
     } catch {
-      return true;
+      return false;
     }
   });
 
@@ -374,6 +683,10 @@ export function App() {
   // Listen for direct navigation events to Main Student Dashboard
   useEffect(() => {
     const handleOpenStudent = (e?: any) => {
+      if (isSchoolPortalUser(user)) {
+        handleSetView('SCHOOL_ERP');
+        return;
+      }
       if (e?.detail?.tab) {
         setStudentTab(e.detail.tab);
       }
@@ -388,7 +701,7 @@ export function App() {
     };
     window.addEventListener('nst_open_student_dashboard', handleOpenStudent);
     return () => window.removeEventListener('nst_open_student_dashboard', handleOpenStudent);
-  }, []);
+  }, [user]);
 
   // Real-time synchronization when school notes or settings are updated
   useEffect(() => {
@@ -506,7 +819,17 @@ export function App() {
     } catch (e) {}
   };
 
-  const handleLogin = (newUser: any) => {
+  const handleLogin = (newUser: any, options?: { keepWebsiteOpen?: boolean }) => {
+    if (!options?.keepWebsiteOpen) {
+      setShowPublicWebsite(false);
+      setShowBootSplash(false);
+      try {
+        const curPath = normalizeRoutePath(window.location.pathname);
+        if (curPath === '/login' || curPath === '/admission') {
+          navigateToPath('/', { clearSearch: true });
+        }
+      } catch {}
+    }
     // 0. Bus Driver: DIRECT TO DEDICATED DRIVER GPS DASHBOARD!
     if (newUser && (newUser.role || '').toString().trim().toUpperCase() === 'DRIVER') {
       newUser.role = 'DRIVER';
@@ -570,23 +893,15 @@ export function App() {
       return;
     }
 
-    // 4. Other School Roles (Teacher, Student, Accountant): direct to School ERP
-    const r = (newUser?.role || '').toString().trim().toUpperCase();
-    const isSchoolAccount = Boolean(
-      newUser?.userType === 'SCHOOL_STUDENT' ||
-      newUser?.schoolRole ||
-      newUser?.admissionNo ||
-      r === 'TEACHER' ||
-      r === 'ACCOUNTANT' ||
-      (newUser?.email && newUser.email.toLowerCase().endsWith('.edu.in')) ||
-      (newUser?.schoolId && newUser.schoolId !== '' && (newUser.userType === 'SCHOOL_STUDENT' || r === 'TEACHER' || r === 'ACCOUNTANT'))
-    );
-
-    if (isSchoolAccount) {
+    // 4. Other School Roles (School Student, Teacher, Accountant): direct to School ERP Portal
+    if (isSchoolPortalUser(newUser)) {
       try {
         localStorage.removeItem('nst_logged_out');
         localStorage.setItem('nst_current_user', JSON.stringify(newUser));
         localStorage.setItem('nst_app_view_mode', 'SCHOOL_ERP');
+        if (newUser?.schoolId) {
+          localStorage.setItem('nst_active_school_id', newUser.schoolId);
+        }
       } catch (e) {}
       setUser(newUser);
       setView('SCHOOL_ERP');
@@ -614,20 +929,80 @@ export function App() {
       localStorage.removeItem('nsta_cached_user');
       localStorage.removeItem('nst_is_guest');
       localStorage.setItem('nst_logged_out', 'true');
+      document.documentElement.classList.remove(
+        'student-theme-white', 'student-theme-black', 'student-theme-current',
+        'admin-theme-white', 'admin-theme-black', 'admin-theme-current',
+        'teacher-theme-white', 'teacher-theme-black', 'teacher-theme-current',
+        'app-theme-white', 'app-theme-black', 'app-theme-current',
+        'dark-mode-black', 'dark-mode-blue'
+      );
+      delete document.documentElement.dataset.nstErpTheme;
     } catch (e) {}
     setUser(null);
+    setShowBootSplash(false);
+    setShowPublicWebsite(true);
+    navigateToPath('/', { clearSearch: true });
   };
 
   const logActivity = (action: string, details: string) => {
     console.log(`[Activity Log] ${action}:`, details);
   };
 
-  // Dynamic theme classes based on isDarkMode
-  const appBgClass = isDarkMode
+  useEffect(() => {
+    const syncThemeFromStorage = () => {
+      try {
+        const t = localStorage.getItem('nst_app_theme') || localStorage.getItem('nst_student_theme');
+        if (t === 'white' || t === 'black' || t === 'current') {
+          setErpTheme(t);
+        }
+        const dm = localStorage.getItem('nst_dark_mode');
+        if (dm === 'true' || dm === 'false') {
+          setIsDarkMode(dm === 'true');
+        }
+      } catch {}
+    };
+    window.addEventListener('nst-dark-theme-change', syncThemeFromStorage);
+    window.addEventListener('storage', syncThemeFromStorage);
+    return () => {
+      window.removeEventListener('nst-dark-theme-change', syncThemeFromStorage);
+      window.removeEventListener('storage', syncThemeFromStorage);
+    };
+  }, []);
+
+  const isSchoolErpActive = Boolean(
+    user &&
+      (view === 'SCHOOL_ERP' ||
+        (view === 'ADMIN' &&
+          (user?.role === 'SCHOOL_ADMIN' ||
+            user?.role === 'SCHOOLADMIN' ||
+            user?.role === 'PRINCIPAL' ||
+            isSchoolAdminEmail(user?.email) ||
+            user?.email?.toLowerCase()?.endsWith('.edu.in'))))
+  );
+
+  // Dynamic theme classes synced with active view (ERP 3-theme vs Main App Light/Dark)
+  const appBgClass = isSchoolErpActive
+    ? erpTheme === 'white'
+      ? 'bg-[#eef2f7] text-slate-900'
+      : erpTheme === 'black'
+      ? 'bg-black text-white dark dark-mode'
+      : 'bg-[#08142c] text-slate-100 dark dark-mode'
+    : isDarkMode
     ? 'bg-slate-950 text-slate-100 dark dark-mode'
     : 'bg-slate-50 text-slate-900';
 
   useEffect(() => {
+    if (isSchoolErpActive) {
+      return;
+    }
+    document.documentElement.classList.remove(
+      'student-theme-white', 'student-theme-black', 'student-theme-current',
+      'admin-theme-white', 'admin-theme-black', 'admin-theme-current',
+      'teacher-theme-white', 'teacher-theme-black', 'teacher-theme-current',
+      'app-theme-white', 'app-theme-black', 'app-theme-current',
+      'dark-mode-black', 'dark-mode-blue'
+    );
+    try { delete document.documentElement.dataset.nstErpTheme; } catch {}
     if (isDarkMode) {
       document.documentElement.classList.add('dark');
       document.body.classList.add('dark-mode');
@@ -640,7 +1015,7 @@ export function App() {
     try {
       localStorage.setItem('nst_dark_mode', String(isDarkMode));
     } catch {}
-  }, [isDarkMode]);
+  }, [isDarkMode, isSchoolErpActive]);
 
   const [conflictModalOpen, setConflictModalOpen] = useState(false);
   const [remoteDeviceName, setRemoteDeviceName] = useState('Dusra Mobile / Device');
@@ -654,8 +1029,9 @@ export function App() {
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser && !firebaseUser.isAnonymous) {
-        // If explicitly logged out recently, don't auto re-login unless newly authenticated
-        if (localStorage.getItem('nst_logged_out') === 'true' && !firebaseUser.metadata?.lastSignInTime) {
+        // If explicitly logged out recently, don't auto re-login unless actively on /login
+        const isLoginRoute = normalizeRoutePath(window.location.pathname) === '/login';
+        if (localStorage.getItem('nst_logged_out') === 'true' && !isLoginRoute) {
           return;
         }
 
@@ -706,7 +1082,7 @@ export function App() {
             subscriptionTier: 'PRO',
             provider: isSuperAdm ? 'superadmin_login' : 'firebase_admin_login'
           };
-          handleLogin(adminUser);
+          handleLogin(adminUser, { keepWebsiteOpen: !isLoginRoute });
           return;
         }
 
@@ -714,7 +1090,7 @@ export function App() {
           if (isSchoolAdminEmail(parsedCached.email)) {
             parsedCached.role = 'SCHOOL_ADMIN';
           }
-          handleLogin(parsedCached);
+          handleLogin(parsedCached, { keepWebsiteOpen: !isLoginRoute });
         } else {
           const isSuperAdm = isSuperAdminEmail(cleanEmail);
           const isSchoolAdm = !isSuperAdm && isSchoolAdminEmail(cleanEmail);
@@ -740,7 +1116,7 @@ export function App() {
             subscriptionTier: isSuperAdm ? 'PRO' : isSchoolAdm ? 'PRO' : (fresh?.subscriptionTier || 'FREE'),
             studyMode: fresh?.studyMode || 'CREDIT'
           };
-          handleLogin(resolvedUser);
+          handleLogin(resolvedUser, { keepWebsiteOpen: !isLoginRoute });
         }
       }
     });
@@ -883,6 +1259,7 @@ export function App() {
   const isPublicDocVerify = (() => {
     try {
       const p = new URLSearchParams(window.location.search);
+      const docTypeParam = p.get('type') || '';
       return Boolean(
         p.get('verify') ||
         p.get('verify-certificate') ||
@@ -890,8 +1267,8 @@ export function App() {
         p.get('certNo') ||
         p.get('dispatchNo') ||
         (p.get('v') === 'id') ||
-        (p.get('type') === 'certificate') ||
-        (p.get('type') === 'marksheet') ||
+        ['certificate', 'marksheet', 'idcard', 'driver_id', 'fee_receipt', 'admit_card', 'admission', 'gate_pass'].includes(docTypeParam) ||
+        routePath === '/verify' ||
         window.location.pathname.startsWith('/verify')
       );
     } catch {
@@ -911,9 +1288,7 @@ export function App() {
       >
         <DocumentVerificationView
           onBack={() => {
-            try {
-              window.location.href = window.location.origin;
-            } catch {}
+            navigateToPath('/', { clearSearch: true });
           }}
         />
       </Suspense>
@@ -1007,58 +1382,304 @@ export function App() {
       />
     ) : null;
 
-  // If user is logged out, render the authentication screen
-  if (!user) {
+  const handleVisitWebsiteFromPortal = (targetSchoolId?: string) => {
+    if (targetSchoolId) {
+      handleSelectPublicSchool(targetSchoolId);
+    }
+    setShowBootSplash(false);
+    setShowPublicWebsite(true);
+    navigateToPath('/');
+  };
+
+  const handleOpenAccountSection = () => {
+    setShowPublicWebsite(false);
+    setShowBootSplash(true);
+    navigateToPath('/login');
+  };
+
+  const renderPublicAdmissionShell = (loggedInMode: boolean) => {
+    const portalBtnLabel =
+      user && (isSchoolAdminRole(user) || isAdminUser(user) || ['TEACHER', 'ACCOUNTANT'].includes((user.role || '').toString().toUpperCase()))
+        ? 'Switch to ERP Portal'
+        : 'Switch to Student Portal';
+    const activeAdmSessObj = publicAdmSessions.find((s: any) => s?.active) || publicAdmSessions[0] || null;
+    const rawCurrentSess = activeAdmSessObj?.name || '';
+    const nextYearNum = getUpcomingAdmissionSessionLabel(rawCurrentSess, publicAdmSessions);
     return (
-      <>
-        <div className={`min-h-screen min-h-[100dvh] w-full flex flex-col ${appBgClass}`}>
-          {gmpQuotaExceeded && (
-            <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2.5 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm">
-              <span>
-                Google Maps Platform quota reached. If you are the app owner, visit{' '}
-                <a
-                  href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline font-semibold text-amber-950 hover:text-amber-800"
-                >
-                  maps developer site
-                </a>{' '}
-                for instructions to update your account.
-              </span>
+      <div className="min-h-screen min-h-[100dvh] bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col">
+        <header className="sticky top-0 z-40 bg-white/95 dark:bg-slate-950/95 backdrop-blur-md border-b border-slate-200/90 dark:border-slate-800 shadow-xs">
+          <div className="h-0.5 w-full bg-gradient-to-r from-indigo-600 via-blue-600 to-emerald-500" />
+          <div className="max-w-6xl mx-auto px-3 sm:px-6 py-2.5 flex items-center justify-between gap-2 sm:gap-3">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+              <button
+                type="button"
+                onClick={() => navigateToPath('/')}
+                className="inline-flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-900 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[11px] sm:text-xs font-bold text-slate-700 dark:text-slate-200 transition cursor-pointer shrink-0 whitespace-nowrap"
+                title="Back to School Website"
+              >
+                <ArrowLeft className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden xs:inline sm:inline">Website</span>
+              </button>
+
+              {activePublicSchool?.logoUrl ? (
+                <img
+                  src={activePublicSchool.logoUrl}
+                  alt={activePublicSchool?.name || 'School Logo'}
+                  className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl object-contain bg-white border border-slate-200 dark:border-slate-700 p-0.5 shrink-0 shadow-2xs"
+                />
+              ) : (
+                <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <GraduationCap className="w-4 h-4 sm:w-5 sm:h-5" />
+                </div>
+              )}
+
+              <div className="min-w-0 flex-1">
+                <p className="text-xs sm:text-sm font-black text-slate-900 dark:text-white truncate leading-tight">
+                  {activePublicSchool?.name || 'School Campus'}
+                </p>
+                <p className="text-[10.5px] sm:text-[11px] font-bold text-indigo-700 dark:text-indigo-300 truncate leading-tight mt-0.5">
+                  अभिभावक ऑनलाइन प्रवेश पोर्टल • Session {nextYearNum}
+                </p>
+              </div>
             </div>
-          )}
+
+            <div className="flex items-center gap-2 shrink-0">
+              {visiblePublicSchools.length > 1 && (
+                <select
+                  value={activePublicSchool?.id || ''}
+                  onChange={(e) => handleSelectPublicSchool(e.target.value)}
+                  aria-label="Select School for Admission"
+                  className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-800 dark:text-slate-200 max-w-[130px] sm:max-w-[180px] truncate cursor-pointer"
+                >
+                  {visiblePublicSchools.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {loggedInMode ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const isErpRole = Boolean(
+                      user && (isSchoolAdminRole(user) || isAdminUser(user) || ['TEACHER', 'ACCOUNTANT'].includes((user.role || '').toString().toUpperCase()))
+                    );
+                    setShowPublicWebsite(false);
+                    if (!isErpRole) {
+                      setShowBootSplash(true);
+                    }
+                    navigateToPath('/');
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] sm:text-xs font-extrabold shadow-xs transition cursor-pointer whitespace-nowrap"
+                >
+                  {portalBtnLabel}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleOpenAccountSection}
+                  className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] sm:text-xs font-extrabold flex items-center gap-1.5 shadow-xs transition cursor-pointer whitespace-nowrap"
+                >
+                  <UserIcon className="w-3.5 h-3.5 shrink-0" />
+                  <span>Account</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </header>
+        <div className="flex-1">
           <Suspense
             fallback={
-              <div className="flex-1 flex flex-col items-center justify-center p-8 text-center min-h-[60vh]">
-                <div className="w-12 h-12 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 flex items-center justify-center mb-4">
-                  <Loader2 className={`w-6 h-6 animate-spin ${isDarkMode ? 'text-indigo-400' : 'text-indigo-600'}`} />
-                </div>
-                <h3 className={`text-base font-bold mb-1 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Loading Login Portal...</h3>
-                <p className={`text-xs ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Please wait a moment</p>
+              <div className="min-h-[60vh] flex flex-col items-center justify-center p-8 text-center">
+                <Loader2 className="w-8 h-8 animate-spin text-indigo-500 mb-3" />
+                <p className="text-sm font-bold text-slate-700 dark:text-white">Loading Online Admission {nextYearNum}...</p>
               </div>
             }
           >
-            <Auth
-              onLogin={handleLogin}
-              appSettings={settings}
-              logActivity={logActivity}
-              onOpenGuestStudyRoom={() => setShowGuestStudyJoin(true)}
+            <OnlineAdmissionManager
+              key={activePublicSchool?.id || 'public-adm'}
+              school={activePublicSchool}
+              classes={publicAdmClasses}
+              sessions={publicAdmSessions}
+              activeSession={activeAdmSessObj}
+              admissionSessionLabel={nextYearNum}
+              isAdmin={false}
+              viewMode="admissions_only"
+              hideTopNavbar={true}
+              onBack={() => navigateToPath('/')}
             />
           </Suspense>
-
-          <GuestRoomJoinModal
-            isOpen={showGuestStudyJoin}
-            onClose={() => setShowGuestStudyJoin(false)}
-            roomCode={studyRoomCodeFromUrl || undefined}
-            onSubmitName={handleGuestJoinStudyRoom}
-            appName={settings?.appName || 'NSTA'}
-          />
-
-          <NotificationPermissionGate userId="" />
         </div>
-        {renderBootSplash()}
-      </>
+      </div>
+    );
+  };
+
+  // If user is logged out, render Website-First Public Experience (/ , /admission , /login)
+  if (!user) {
+    if (routePath === '/login') {
+      return (
+        <>
+          <div className={`min-h-screen min-h-[100dvh] w-full flex flex-col ${appBgClass}`}>
+            {gmpQuotaExceeded && (
+              <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2.5 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm">
+                <span>
+                  Google Maps Platform quota reached. If you are the app owner, visit{' '}
+                  <a
+                    href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline font-semibold text-amber-950 hover:text-amber-800"
+                  >
+                    maps developer site
+                  </a>{' '}
+                  for instructions to update your account.
+                </span>
+              </div>
+            )}
+            <Suspense
+              fallback={
+                <div className="flex-1 flex flex-col items-center justify-center p-8 text-center min-h-[60vh]">
+                  <div className="w-12 h-12 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 flex items-center justify-center mb-4">
+                    <Loader2 className={`w-6 h-6 animate-spin ${isDarkMode ? 'text-indigo-400' : 'text-indigo-600'}`} />
+                  </div>
+                  <h3 className={`text-base font-bold mb-1 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Loading Account Portal...</h3>
+                  <p className={`text-xs ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Please wait a moment</p>
+                </div>
+              }
+            >
+              <Auth
+                onLogin={handleLogin}
+                appSettings={settings}
+                logActivity={logActivity}
+                onOpenGuestStudyRoom={() => setShowGuestStudyJoin(true)}
+                onBackToWebsite={() => {
+                  setShowBootSplash(false);
+                  setShowPublicWebsite(true);
+                  navigateToPath('/');
+                }}
+              />
+            </Suspense>
+
+            <GuestRoomJoinModal
+              isOpen={showGuestStudyJoin}
+              onClose={() => setShowGuestStudyJoin(false)}
+              roomCode={studyRoomCodeFromUrl || undefined}
+              onSubmitName={handleGuestJoinStudyRoom}
+              appName={settings?.appName || 'NSTA'}
+            />
+
+            <NotificationPermissionGate userId="" />
+          </div>
+          {renderBootSplash()}
+        </>
+      );
+    }
+
+    if (routePath === '/admission') {
+      return renderPublicAdmissionShell(false);
+    }
+
+    return (
+      <div className="min-h-screen min-h-[100dvh] w-full flex flex-col bg-[#F8F9FB]">
+        <Suspense
+          fallback={
+            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center min-h-[70vh] bg-slate-950 text-white">
+              <Loader2 className="w-8 h-8 animate-spin text-emerald-400 mb-3" />
+              <p className="text-sm font-bold">Loading School Website...</p>
+            </div>
+          }
+        >
+          <PublicSchoolWebsite
+            school={activePublicSchool}
+            schools={visiblePublicSchools}
+            selectedSchoolId={activePublicSchool?.id}
+            onSelectSchool={handleSelectPublicSchool}
+            classes={publicAdmClasses}
+            sessions={publicAdmSessions}
+            isAuthenticated={false}
+            onOpenAccount={handleOpenAccountSection}
+            onOpenAdmission={() => {
+              setShowBootSplash(false);
+              setShowPublicWebsite(true);
+              navigateToPath('/admission');
+            }}
+            onOpenVerification={(type, data) => {
+              navigateToPath('/verify', {
+                searchParams: {
+                  ...(type ? { type } : {}),
+                  ...(data ? { data } : {}),
+                  ...(activePublicSchool?.id ? { school: activePublicSchool.id } : {}),
+                },
+              });
+            }}
+          />
+        </Suspense>
+      </div>
+    );
+  }
+
+  // Logged-in user browsing Public School Website or Online Admission (/admission)
+  if (showPublicWebsite || routePath === '/admission') {
+    if (routePath === '/admission') {
+      return renderPublicAdmissionShell(true);
+    }
+    const portalLabel =
+      isSchoolAdminRole(user) || isAdminUser(user) || ['TEACHER', 'ACCOUNTANT'].includes((user.role || '').toString().toUpperCase())
+        ? 'Switch to ERP Portal'
+        : 'Switch to Student Portal';
+    return (
+      <div className="min-h-screen min-h-[100dvh] w-full flex flex-col bg-[#F8F9FB]">
+        <Suspense
+          fallback={
+            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center min-h-[70vh] bg-slate-950 text-white">
+              <Loader2 className="w-8 h-8 animate-spin text-emerald-400 mb-3" />
+              <p className="text-sm font-bold">Loading School Website...</p>
+            </div>
+          }
+        >
+          <PublicSchoolWebsite
+            school={activePublicSchool}
+            schools={visiblePublicSchools}
+            selectedSchoolId={activePublicSchool?.id}
+            onSelectSchool={handleSelectPublicSchool}
+            classes={publicAdmClasses}
+            sessions={publicAdmSessions}
+            isAuthenticated={true}
+            portalButtonLabel={portalLabel}
+            onSwitchToPortal={() => {
+              const isErpRole = Boolean(
+                isSchoolAdminRole(user) || isAdminUser(user) || ['TEACHER', 'ACCOUNTANT'].includes((user.role || '').toString().toUpperCase())
+              );
+              if (isSchoolPortalUser(user)) {
+                setView('SCHOOL_ERP');
+                try {
+                  localStorage.setItem('nst_app_view_mode', 'SCHOOL_ERP');
+                } catch {}
+              }
+              setShowPublicWebsite(false);
+              if (!isErpRole) {
+                setShowBootSplash(true);
+              }
+              navigateToPath('/');
+            }}
+            onOpenAdmission={() => {
+              setShowBootSplash(false);
+              setShowPublicWebsite(true);
+              navigateToPath('/admission');
+            }}
+            onOpenVerification={(type, data) => {
+              navigateToPath('/verify', {
+                searchParams: {
+                  ...(type ? { type } : {}),
+                  ...(data ? { data } : {}),
+                  ...(activePublicSchool?.id ? { school: activePublicSchool.id } : {}),
+                },
+              });
+            }}
+          />
+        </Suspense>
+      </div>
     );
   }
 
@@ -1094,7 +1715,7 @@ export function App() {
             </div>
           }
         >
-          {view === 'STUDENT' && (
+          {view === 'STUDENT' && !isSchoolPortalUser(user) && (
             <StudentDashboard
               user={user}
               dailyStudySeconds={dailyStudySeconds}
@@ -1111,6 +1732,7 @@ export function App() {
               }}
               onLogout={handleLogout}
               onOpenSchool={() => handleSetView('SCHOOL_ERP')}
+              onVisitWebsite={() => handleVisitWebsiteFromPortal(user?.schoolId)}
               onOpenCoaching={() => console.log('Open coaching')}
               isDarkMode={isDarkMode}
               onToggleDarkMode={setIsDarkMode}
@@ -1144,7 +1766,7 @@ export function App() {
             />
           )}
 
-          {view === 'SCHOOL_ERP' && (
+          {(view === 'SCHOOL_ERP' || (view === 'STUDENT' && isSchoolPortalUser(user))) && (
             <SchoolEcosystem
               uid={user.uid || user.id || 'admin_uid'}
               email={user.email || ''}
@@ -1154,20 +1776,30 @@ export function App() {
               user={user}
               defaultSchoolId={user.schoolId || ''}
               forceAdminView={isSchoolAdminEmail(user.email) || user.role === 'SCHOOL_ADMIN' || user.role === 'ADMIN' || user.role === 'SUPERADMIN' || user.role === 'PRINCIPAL'}
-              onBack={isSuperAdminEmail(user.email) || user.role === 'SUPERADMIN' ? () => handleSetView('ADMIN') : () => handleSetView('STUDENT')}
+              onBack={isSuperAdminEmail(user.email) || user.role === 'SUPERADMIN' ? () => handleSetView('ADMIN') : undefined}
               onOpenAdminDashboard={isSuperAdminEmail(user.email) || user.role === 'SUPERADMIN' ? () => handleSetView('ADMIN') : undefined}
-              onOpenPlatformContent={(targetClass?: string) => {
-                if (targetClass) {
-                  try {
-                    localStorage.setItem('nst_active_session_class', targetClass);
-                    localStorage.setItem('nst_academic_selected_class', targetClass);
-                    localStorage.setItem('nst_syllabus_mode', targetClass === 'COMPETITION' ? 'COMPETITION' : 'SCHOOL');
-                  } catch {}
-                }
-                setStudentTab('COURSES');
-                handleSetView('STUDENT');
+              onOpenPlatformContent={
+                isSuperAdminEmail(user.email) || user.role === 'SUPERADMIN'
+                  ? (targetClass?: string) => {
+                      if (targetClass) {
+                        try {
+                          localStorage.setItem('nst_active_session_class', targetClass);
+                          localStorage.setItem('nst_academic_selected_class', targetClass);
+                          localStorage.setItem('nst_syllabus_mode', targetClass === 'COMPETITION' ? 'COMPETITION' : 'SCHOOL');
+                        } catch {}
+                      }
+                      setStudentTab('COURSES');
+                      handleSetView('STUDENT');
+                    }
+                  : undefined
+              }
+              onVisitWebsite={handleVisitWebsiteFromPortal}
+              onOpenPublicAdmission={(sid) => {
+                if (sid) handleSelectPublicSchool(sid);
+                setShowBootSplash(false);
+                setShowPublicWebsite(true);
+                navigateToPath('/admission');
               }}
-              onOpenStudentDashboard={() => handleSetView('STUDENT')}
               onLogout={handleLogout}
             />
           )}
@@ -1183,8 +1815,13 @@ export function App() {
                 user={user}
                 defaultSchoolId={user.schoolId || ''}
                 forceAdminView={true}
-                onOpenPlatformContent={() => handleSetView('STUDENT')}
-                onOpenStudentDashboard={() => handleSetView('STUDENT')}
+                onVisitWebsite={handleVisitWebsiteFromPortal}
+                onOpenPublicAdmission={(sid) => {
+                  if (sid) handleSelectPublicSchool(sid);
+                  setShowBootSplash(false);
+                  setShowPublicWebsite(true);
+                  navigateToPath('/admission');
+                }}
                 onLogout={handleLogout}
               />
             ) : (

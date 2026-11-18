@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   X,
   UserPlus,
@@ -14,9 +14,15 @@ import {
   Loader2,
   FileCheck2,
   AlertCircle,
+  History,
+  ChevronDown,
+  ChevronUp,
+  RotateCcw,
+  Search,
 } from "lucide-react";
 import { DirectUploadButton } from "../DirectUploadButton";
 import { getDynamicAcademicSessionLabel } from "../../utils/safeBrowserActions";
+import { getLocalRoutes } from "../../utils/schoolTransportStore";
 import {
   saveStudent,
   updateStudent,
@@ -29,9 +35,17 @@ import {
   isStudentInClass,
   getTeachers,
   getStaffEmployees,
+  getAccountants,
+  getSessions,
+  getClasses,
+  getStudents,
+  getStudentFees,
+  getSchoolFeeHistory,
+  isDemoRecord,
   getSchoolReferralSettings,
   saveSchoolReferralSettings,
 } from "../../school-firebase";
+import { computeCompleteBackLedger, type BackLedgerSummary } from "../../utils/reAdmissionUtils";
 import { saveUserToLive } from "../../firebase";
 import { enrollStudentFromPhotoUrl } from "../../utils/faceRecognitionEngine";
 import type {
@@ -43,6 +57,7 @@ import type {
   ReferralCommissionScope,
   ReferralCommissionDuration,
   SeniorStream,
+  SchoolAccountant,
 } from "../../school-types";
 import {
   detectFamilySiblings,
@@ -67,6 +82,7 @@ import {
   sortSchoolClasses,
   getDefaultSubjectsForClass,
 } from "../../school-types";
+import { getGroupNetItems, getMonthlyFeeFromStructure } from "../../utils/feeStructureUtils";
 
 interface FeeLineDraft {
   id: string;
@@ -79,6 +95,7 @@ interface Props {
   onClose: () => void;
   school: School;
   classes: SchoolClass[];
+  sessions?: SchoolSession[];
   activeSession: SchoolSession | null;
   defaultClassId?: string;
   existingStudents?: SchoolStudent[];
@@ -115,6 +132,7 @@ export const DirectAdmissionModal: React.FC<Props> = ({
   onClose,
   school,
   classes,
+  sessions: sessionsProp = [],
   activeSession,
   defaultClassId,
   existingStudents = [],
@@ -157,6 +175,22 @@ export const DirectAdmissionModal: React.FC<Props> = ({
 
   // Address, Previous School & Statutory Compliance Fields
   const [admissionType, setAdmissionType] = useState<"NEW" | "READMISSION">("NEW");
+  const [allSessionsPool, setAllSessionsPool] = useState<SchoolSession[]>([]);
+  const [allClassesPool, setAllClassesPool] = useState<SchoolClass[]>([]);
+  const [selectedOldSessionId, setSelectedOldSessionId] = useState<string>("");
+  const [selectedTargetSessionId, setSelectedTargetSessionId] = useState<string>(() => activeSession?.id || sessionsProp[0]?.id || "");
+  const [includeBackDueInBill, setIncludeBackDueInBill] = useState<boolean>(true);
+  const [selectedOldClassFilter, setSelectedOldClassFilter] = useState<string>("all");
+  const [selectedOldStudentId, setSelectedOldStudentId] = useState<string>("");
+  const [oldStudentQuery, setOldStudentQuery] = useState<string>("");
+  const [oldStudentsPool, setOldStudentsPool] = useState<SchoolStudent[]>([]);
+  const [oldFeesPool, setOldFeesPool] = useState<MonthlyFee[]>([]);
+  const [loadingOldPool, setLoadingOldPool] = useState<boolean>(false);
+  const [pulledSourceStudent, setPulledSourceStudent] = useState<SchoolStudent | null>(null);
+  const [pulledLedger, setPulledLedger] = useState<BackLedgerSummary | null>(null);
+  const [showPulledLedgerMonths, setShowPulledLedgerMonths] = useState<boolean>(false);
+  const [carriedPrevSessionDue, setCarriedPrevSessionDue] = useState<string>("0");
+  const pulledStudentApplyRef = useRef<boolean>(false);
   const [religion, setReligion] = useState<string>("Hindu");
   const [nationality, setNationality] = useState<string>("Indian");
   const [annualIncome, setAnnualIncome] = useState<string>("");
@@ -178,6 +212,11 @@ export const DirectAdmissionModal: React.FC<Props> = ({
   const [usesBus, setUsesBus] = useState<boolean>(false);
   const [busRoute, setBusRoute] = useState<string>("");
   const [busFee, setBusFee] = useState<number>(0);
+  const configuredRoutes = useMemo(() => (school?.id ? getLocalRoutes(school.id) : []), [school?.id, isOpen]);
+  const selectedRouteObj = useMemo(
+    () => configuredRoutes.find((r) => r.routeName === busRoute || busRoute.startsWith(r.routeName)),
+    [configuredRoutes, busRoute]
+  );
 
   // Sibling / Same Family Discount & Teacher 10% Referral
   const [referrers, setReferrers] = useState<ReferrerOption[]>([]);
@@ -205,6 +244,9 @@ export const DirectAdmissionModal: React.FC<Props> = ({
   const [offlinePaidInput, setOfflinePaidInput] = useState<string>("");
   const [paidManuallyEdited, setPaidManuallyEdited] = useState<boolean>(false);
   const [payRefNo, setPayRefNo] = useState<string>("");
+  const [admAccountants, setAdmAccountants] = useState<SchoolAccountant[]>([]);
+  const [admCollectorRole, setAdmCollectorRole] = useState<"accountant" | "manager">("accountant");
+  const [admCollectorName, setAdmCollectorName] = useState<string>("");
 
   // Multi-Admission Batch (2-3 Admissions together)
   const [batchQueue, setBatchQueue] = useState<BatchStudentDraft[]>([]);
@@ -214,9 +256,260 @@ export const DirectAdmissionModal: React.FC<Props> = ({
   const [saving, setSaving] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!isOpen || admissionType !== "READMISSION" || !school?.id) return;
+    let cancelled = false;
+    setLoadingOldPool(true);
+    Promise.all([
+      getSessions(school.id).catch(() => []),
+      getClasses(school.id).catch(() => []),
+      getStudents(school.id).catch(() => []),
+      getSchoolFeeHistory(school.id).catch(() => []),
+    ])
+      .then(([remoteSess, remoteCls, remoteSt, remoteFees]) => {
+        if (cancelled) return;
+        const sessMap = new Map<string, SchoolSession>();
+        [...(sessionsProp || []), ...(remoteSess || [])].forEach((s) => {
+          if (s && s.id && !isDemoRecord(s)) sessMap.set(s.id, s);
+        });
+        const mergedSessions = Array.from(sessMap.values());
+        setAllSessionsPool(mergedSessions);
+
+        const clsMap = new Map<string, SchoolClass>();
+        [...(classes || []), ...(remoteCls || [])].forEach((c) => {
+          if (c && c.id && !isDemoRecord(c)) clsMap.set(c.id, c);
+        });
+        setAllClassesPool(Array.from(clsMap.values()));
+
+        const stMap = new Map<string, SchoolStudent>();
+        [...getLocalStudents(school.id), ...existingStudents, ...(remoteSt || [])].forEach((s) => {
+          if (s && s.id && !isDemoRecord(s)) stMap.set(s.id, s);
+        });
+        const mergedStudents = Array.from(stMap.values());
+        setOldStudentsPool(mergedStudents);
+        setOldFeesPool((remoteFees || []).filter((f) => f && !isDemoRecord(f)));
+
+        let resolvedOldId = selectedOldSessionId;
+        if (!resolvedOldId && mergedSessions.length > 0) {
+          const prevWithStudents = mergedSessions.find(
+            (s) => s.id !== activeSession?.id && mergedStudents.some((st) => st.sessionId === s.id)
+          );
+          const anyPrev = mergedSessions.find((s) => s.id !== activeSession?.id);
+          resolvedOldId = prevWithStudents?.id || anyPrev?.id || mergedSessions[0].id;
+          setSelectedOldSessionId(resolvedOldId);
+        }
+
+        if (mergedSessions.length > 0) {
+          const sortedAsc = [...mergedSessions].sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+          const curTargetValid = mergedSessions.some((s) => s.id === selectedTargetSessionId);
+          if (!selectedTargetSessionId || !curTargetValid || (mergedSessions.length > 1 && selectedTargetSessionId === resolvedOldId)) {
+            const activeValid = activeSession?.id && activeSession.id !== resolvedOldId && mergedSessions.some((s) => s.id === activeSession.id);
+            const oldIdx = sortedAsc.findIndex((s) => s.id === resolvedOldId);
+            const nextAfterOld = oldIdx >= 0 && oldIdx + 1 < sortedAsc.length ? sortedAsc[oldIdx + 1] : undefined;
+            const otherSess = nextAfterOld || sortedAsc.find((s) => s.id !== resolvedOldId) || mergedSessions[0];
+            setSelectedTargetSessionId(activeValid ? (activeSession?.id || otherSess.id) : otherSess.id);
+          }
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingOldPool(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, admissionType, school?.id]);
+
+  const availableSessionsList = useMemo(() => {
+    const map = new Map<string, SchoolSession>();
+    [...(sessionsProp || []), ...allSessionsPool].forEach((s) => {
+      if (s && s.id && !isDemoRecord(s)) map.set(s.id, s);
+    });
+    return Array.from(map.values()).sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  }, [sessionsProp, allSessionsPool]);
+
+  const effectiveTargetClasses = useMemo(() => {
+    if (admissionType === "READMISSION" && selectedTargetSessionId) {
+      const targetCls = allClassesPool.filter((c) => c.sessionId === selectedTargetSessionId);
+      if (targetCls.length > 0) return sortSchoolClasses(targetCls);
+    }
+    return sortedClasses;
+  }, [admissionType, selectedTargetSessionId, allClassesPool, sortedClasses]);
+
+  const selectedOldSessionObj = useMemo(
+    () => allSessionsPool.find((s) => s.id === selectedOldSessionId) || null,
+    [allSessionsPool, selectedOldSessionId]
+  );
+
+  const oldClassesForSelectedSession = useMemo(() => {
+    const filtered = allClassesPool.filter(
+      (c) => !selectedOldSessionId || c.sessionId === selectedOldSessionId
+    );
+    if (filtered.length > 0) return sortSchoolClasses(filtered);
+    // Fallback: derive class options directly from students in that session
+    const seen = new Map<string, SchoolClass>();
+    oldStudentsPool
+      .filter((st) => !selectedOldSessionId || st.sessionId === selectedOldSessionId)
+      .forEach((st) => {
+        if (st.classId && !seen.has(st.classId)) {
+          seen.set(st.classId, {
+            id: st.classId,
+            schoolId: school.id,
+            sessionId: st.sessionId,
+            name: st.className || "Class",
+            defaultFee: Number(st.monthlyFee || 0),
+          } as SchoolClass);
+        }
+      });
+    return sortSchoolClasses(Array.from(seen.values()));
+  }, [allClassesPool, oldStudentsPool, selectedOldSessionId, school.id]);
+
+  const studentsInOldSelection = useMemo(() => {
+    if (admissionType !== "READMISSION") return [];
+    const targetClsObj = oldClassesForSelectedSession.find((c) => c.id === selectedOldClassFilter);
+    return oldStudentsPool
+      .filter((s) => !selectedOldSessionId || s.sessionId === selectedOldSessionId)
+      .filter((s) => {
+        if (selectedOldClassFilter === "all") return true;
+        return (
+          s.classId === selectedOldClassFilter ||
+          (targetClsObj?.name &&
+            (s.className || "").trim().toLowerCase() === targetClsObj.name.trim().toLowerCase())
+        );
+      })
+      .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  }, [admissionType, oldStudentsPool, selectedOldSessionId, selectedOldClassFilter, oldClassesForSelectedSession]);
+
+  const matchingOldStudents = useMemo(() => {
+    if (admissionType !== "READMISSION") return [];
+    const q = oldStudentQuery.trim().toLowerCase();
+    if (!q) return [];
+    return studentsInOldSelection
+      .filter(
+        (s) =>
+          (s.name || "").toLowerCase().includes(q) ||
+          (s.fatherName || "").toLowerCase().includes(q) ||
+          (s.admissionNo || "").toLowerCase().includes(q) ||
+          (s.phone || "").includes(q) ||
+          (s.rollNo || "").toLowerCase().includes(q)
+      )
+      .slice(0, 10);
+  }, [oldStudentQuery, admissionType, studentsInOldSelection]);
+
+  const handlePullOldStudent = (src: SchoolStudent) => {
+    setPulledSourceStudent(src);
+    setSelectedOldStudentId(src.id);
+    setOldStudentQuery("");
+    if (src.name) setName(src.name);
+    if (src.admissionNo) setAdmissionNo(src.admissionNo);
+    if (src.gender) setGender(src.gender);
+    if (src.dateOfBirth) setDateOfBirth(src.dateOfBirth);
+    if (src.bloodGroup) setBloodGroup(src.bloodGroup);
+    if (src.category) setCategory(src.category);
+    if (src.religion) setReligion(src.religion);
+    if (src.nationality) setNationality(src.nationality);
+    if (src.apaarId) setApaarId(src.apaarId);
+    if (src.aadhaarNo) setAadhaarNo(src.aadhaarNo);
+    if (src.photoUrl) setPhotoUrl(src.photoUrl);
+    if (src.fatherName) setFatherName(src.fatherName);
+    if (src.fatherOccupation) setFatherOccupation(src.fatherOccupation);
+    if (src.fatherAadhaar) setFatherAadhaar(src.fatherAadhaar);
+    if (src.fatherPhone) setFatherPhone(src.fatherPhone);
+    if (src.fatherWhatsapp) setFatherWhatsapp(src.fatherWhatsapp);
+    if (src.motherName) setMotherName(src.motherName);
+    if (src.motherOccupation) setMotherOccupation(src.motherOccupation);
+    if (src.motherAadhaar) setMotherAadhaar(src.motherAadhaar);
+    if (src.motherPhone) setMotherPhone(src.motherPhone);
+    if (src.motherWhatsapp) setMotherWhatsapp(src.motherWhatsapp);
+    if (src.phone) setPhone(src.phone);
+    if (src.whatsappNo) setWhatsappNo(src.whatsappNo);
+    if (src.email) setEmail(src.email);
+    if (src.address) setAddress(src.address);
+    if (src.city) setCity(src.city);
+    if (src.pincode) setPincode(src.pincode);
+    if (src.annualIncome) setAnnualIncome(src.annualIncome);
+    if (src.identificationMark) setIdentificationMark(src.identificationMark);
+    if (src.medicalHistory) setMedicalHistory(src.medicalHistory);
+    if (src.emergencyContact) setEmergencyContact(src.emergencyContact);
+    if (src.emergencyPhone) setEmergencyPhone(src.emergencyPhone);
+    if (src.emergencyRelation) setEmergencyRelation(src.emergencyRelation);
+    if (src.emergencyWhatsapp) setEmergencyWhatsapp(src.emergencyWhatsapp);
+    if (src.stream === "Science" || src.stream === "Commerce" || src.stream === "Arts") {
+      setStream(src.stream);
+    }
+    if (Array.isArray(src.submittedDocs) && src.submittedDocs.length > 0) {
+      setSubmittedDocs(src.submittedDocs);
+    }
+
+    const hadBus = Boolean(src.usesBus);
+    setUsesBus(hadBus);
+    setBusRoute(src.busRoute || "");
+    setBusFee(hadBus ? Number(src.busFee || 0) : 0);
+    setPreviousSchool(school?.name || "");
+    setPreviousMarks(src.className ? `${src.className} (Promoted)` : "Promoted");
+
+    // Auto-suggest next promoted class in selected target session without wiping bus settings
+    const tgtList = effectiveTargetClasses.length > 0 ? effectiveTargetClasses : sortedClasses;
+    if (tgtList.length > 0) {
+      const oldIdx = oldClassesForSelectedSession.findIndex(
+        (c) =>
+          c.id === src.classId ||
+          (c.name || "").trim().toLowerCase() === (src.className || "").trim().toLowerCase()
+      );
+      const targetMatchIdx = tgtList.findIndex(
+        (c) => (c.name || "").trim().toLowerCase() === (src.className || "").trim().toLowerCase()
+      );
+      let promotedTarget: SchoolClass | undefined;
+      if (targetMatchIdx >= 0 && targetMatchIdx + 1 < tgtList.length) {
+        promotedTarget = tgtList[targetMatchIdx + 1];
+      } else if (oldIdx >= 0 && oldIdx + 1 < oldClassesForSelectedSession.length) {
+        const nextOldName = (oldClassesForSelectedSession[oldIdx + 1].name || "").trim().toLowerCase();
+        promotedTarget = tgtList.find((c) => (c.name || "").trim().toLowerCase() === nextOldName);
+      }
+      if (promotedTarget && promotedTarget.id !== classId) {
+        pulledStudentApplyRef.current = true;
+        setClassId(promotedTarget.id);
+      }
+    }
+
+    const srcSess = allSessionsPool.find((s) => s.id === (src.sessionId || selectedOldSessionId)) || selectedOldSessionObj;
+    const initialFees = oldFeesPool.filter((f) => f.studentId === src.id);
+    const ledger = computeCompleteBackLedger(
+      src,
+      initialFees,
+      srcSess,
+      oldClassesForSelectedSession.length > 0 ? oldClassesForSelectedSession : sortedClasses
+    );
+    setPulledLedger(ledger);
+    setCarriedPrevSessionDue(String(ledger.totalBackDue));
+
+    // Fetch live per-student fee ledger to catch any uncached receipts/months
+    getStudentFees(school.id, src.id)
+      .then((freshFees) => {
+        if (!Array.isArray(freshFees) || freshFees.length === 0) return;
+        const mergedMap = new Map<string, MonthlyFee>();
+        [...initialFees, ...freshFees].forEach((f, idx) => {
+          if (f && !isDemoRecord(f)) {
+            mergedMap.set(`${f.month}_${f.receiptNo || idx}`, f);
+          }
+        });
+        const refinedLedger = computeCompleteBackLedger(
+          src,
+          Array.from(mergedMap.values()),
+          srcSess,
+          oldClassesForSelectedSession.length > 0 ? oldClassesForSelectedSession : sortedClasses
+        );
+        setPulledLedger(refinedLedger);
+        setCarriedPrevSessionDue(String(refinedLedger.totalBackDue));
+      })
+      .catch(() => {});
+  };
+
   const selectedClass = useMemo(
-    () => classes.find((c) => c.id === classId) || null,
-    [classes, classId]
+    () =>
+      effectiveTargetClasses.find((c) => c.id === classId) ||
+      classes.find((c) => c.id === classId) ||
+      null,
+    [effectiveTargetClasses, classes, classId]
   );
 
   useEffect(() => {
@@ -230,6 +523,50 @@ export const DirectAdmissionModal: React.FC<Props> = ({
   const buildDefaultFeeLinesForClass = (cls: SchoolClass | null, includeBus: boolean, customBusAmt?: number): FeeLineDraft[] => {
     const fs = cls?.feeStructure;
     const lines: FeeLineDraft[] = [];
+    if (fs?.feeGroups && Array.isArray(fs.feeGroups) && fs.feeGroups.length > 0) {
+      const clsSec = cls?.section;
+      fs.feeGroups.forEach((grp) => {
+        if (grp.enabled === false) return;
+        if (grp.targetSection && grp.targetSection !== "ALL" && clsSec && grp.targetSection.toLowerCase() !== clsSec.toLowerCase()) {
+          return;
+        }
+        const { summary: grpSummary, itemsWithNet } = getGroupNetItems(grp);
+        const offSuffix =
+          grpSummary.discount > 0
+            ? ` • ${grp.discountLabel ? `${grp.discountLabel} ` : ""}${grpSummary.badgeText}`
+            : "";
+        itemsWithNet.forEach(({ item: it, netAmount, itemDiscount }) => {
+          if (it.enabled === false) return;
+          if (it.targetSection && it.targetSection !== "ALL" && clsSec && it.targetSection.toLowerCase() !== clsSec.toLowerCase()) {
+            return;
+          }
+          const isBus = Boolean(it.isUserOptional || it.legacyKey === "busFee");
+          if (isBus) {
+            if (includeBus) {
+              const bAmt = customBusAmt !== undefined ? customBusAmt : netAmount;
+              if (bAmt > 0) {
+                lines.push({
+                  id: `fs_bus_${it.id}`,
+                  description: itemDiscount > 0 ? `${it.name} (${grpSummary.badgeText})` : it.name,
+                  due: bAmt,
+                });
+              }
+            }
+            return;
+          }
+          if (netAmount > 0 || (Number(it.amount || 0) > 0 && itemDiscount > 0)) {
+            const grpName = grp.title ? grp.title.split("(")[0].trim() : "";
+            const metaText = [grpName, itemDiscount > 0 ? offSuffix.replace(/^ • /, "") : ""].filter(Boolean).join(" • ");
+            lines.push({
+              id: `fs_grp_${it.id}`,
+              description: metaText ? `${it.name} (${metaText})` : it.name,
+              due: netAmount,
+            });
+          }
+        });
+      });
+      return lines;
+    }
     if (fs) {
       const toggles = fs.enabledHeads;
       const admEnabled = typeof toggles?.admissionFee === "boolean" ? toggles.admissionFee : Number(fs.admissionFee) > 0;
@@ -315,13 +652,21 @@ export const DirectAdmissionModal: React.FC<Props> = ({
     setSiblingDiscountPct(0);
     setApplyMonthlySiblingDiscount(false);
     setConcession(0);
+    setPulledSourceStudent(null);
+    setPulledLedger(null);
+    setSelectedOldStudentId("");
+    setShowPulledLedgerMonths(false);
+    setSelectedTargetSessionId(activeSession?.id || sessionsProp[0]?.id || "");
+    setIncludeBackDueInBill(true);
 
     Promise.all([
       getTeachers(school.id).catch(() => []),
       getStaffEmployees(school.id).catch(() => []),
+      getAccountants(school.id).catch(() => []),
       getSchoolReferralSettings(school.id).catch(() => null),
-    ]).then(([tList, sList, refSettings]) => {
+    ]).then(([tList, sList, accList, refSettings]) => {
       setReferrers(mergeSchoolReferrerList(tList, sList));
+      setAdmAccountants(Array.isArray(accList) ? accList : []);
       if (refSettings) {
         setCommissionPct(Number(refSettings.defaultCommissionPct ?? 10));
         setCommissionScope(refSettings.commissionScope || "all_fees");
@@ -330,10 +675,26 @@ export const DirectAdmissionModal: React.FC<Props> = ({
     });
   }, [isOpen, school.id]);
 
+  // Keep classId valid inside effectiveTargetClasses when switching Target Session
+  useEffect(() => {
+    if (!isOpen || effectiveTargetClasses.length === 0) return;
+    if (!effectiveTargetClasses.some((c) => c.id === classId)) {
+      const curName = (selectedClass?.name || "").trim().toLowerCase();
+      const matchedByName = curName
+        ? effectiveTargetClasses.find((c) => (c.name || "").trim().toLowerCase() === curName)
+        : undefined;
+      pulledStudentApplyRef.current = Boolean(pulledSourceStudent);
+      setClassId((matchedByName || effectiveTargetClasses[0]).id);
+    }
+  }, [isOpen, effectiveTargetClasses]);
+
   // Update class-linked defaults (next roll no, monthly tuition, bus fee, admission fee heads)
   useEffect(() => {
     if (!isOpen) return;
-    const cls = classes.find((c) => c.id === classId) || null;
+    const cls =
+      effectiveTargetClasses.find((c) => c.id === classId) ||
+      classes.find((c) => c.id === classId) ||
+      null;
     const classStudents = existingStudents.filter((s) => isStudentInClass(s, classId, cls?.name));
     const maxRoll = classStudents.reduce((max, s) => {
       const num = parseInt(String(s.rollNo || "").replace(/\D/g, ""), 10);
@@ -341,14 +702,31 @@ export const DirectAdmissionModal: React.FC<Props> = ({
     }, 0);
     setRollNo(String(maxRoll + 1));
 
-    const nextMonthly = Number(cls?.feeStructure?.tuitionFee ?? cls?.defaultFee ?? 0);
+    const nextMonthly = getMonthlyFeeFromStructure(cls?.feeStructure, Number(cls?.defaultFee ?? 0), cls?.section);
     setBaseMonthlyFee(nextMonthly);
     setMonthlyFee(nextMonthly);
 
-    const nextBus = Number(cls?.feeStructure?.busFee ?? 0);
-    setBusFee(nextBus);
+    const preservePulledBus = pulledStudentApplyRef.current;
+    pulledStudentApplyRef.current = false;
 
-    setFeeLines(buildDefaultFeeLinesForClass(cls, usesBus, nextBus));
+    const nextBus = preservePulledBus && usesBus && Number(busFee) > 0
+      ? Number(busFee)
+      : Number(cls?.feeStructure?.busFee ?? 0);
+    if (!preservePulledBus) {
+      setBusFee(nextBus);
+    }
+
+    const baseLines = buildDefaultFeeLinesForClass(cls, usesBus, nextBus);
+    const backAmt = admissionType === "READMISSION" ? Math.max(0, Number(carriedPrevSessionDue || 0)) : 0;
+    if (admissionType === "READMISSION" && includeBackDueInBill && backAmt > 0) {
+      const oldLbl = selectedOldSessionObj?.name || "";
+      baseLines.push({
+        id: "readm_back_due",
+        description: `पिछला सत्र बकाया (Back Session Due${oldLbl ? ` · ${oldLbl}` : ""})`,
+        due: backAmt,
+      });
+    }
+    setFeeLines(baseLines);
     setPaidManuallyEdited(false);
   }, [classId, isOpen]);
 
@@ -362,6 +740,25 @@ export const DirectAdmissionModal: React.FC<Props> = ({
       return withoutBus;
     });
   }, [usesBus, busFee, busRoute]);
+
+  // Sync Re-Admission Back Due line inside feeLines whenever toggled or amount changes
+  useEffect(() => {
+    const backAmt = admissionType === "READMISSION" ? Math.max(0, Number(carriedPrevSessionDue || 0)) : 0;
+    const shouldInclude = admissionType === "READMISSION" && includeBackDueInBill && backAmt > 0;
+    const oldLbl = selectedOldSessionObj?.name || "";
+    setFeeLines((prev) => {
+      const withoutBack = prev.filter((l) => l.id !== "readm_back_due");
+      if (!shouldInclude) return withoutBack;
+      return [
+        ...withoutBack,
+        {
+          id: "readm_back_due",
+          description: `पिछला सत्र बकाया (Back Session Due${oldLbl ? ` · ${oldLbl}` : ""})`,
+          due: backAmt,
+        },
+      ];
+    });
+  }, [admissionType, includeBackDueInBill, carriedPrevSessionDue, selectedOldSessionObj?.name]);
 
   const studentPoolForFamilyCheck = useMemo(() => {
     const locals = getLocalStudents(school.id);
@@ -627,11 +1024,39 @@ export const DirectAdmissionModal: React.FC<Props> = ({
         const sPaidTotal = draft.allocatedPaidOnline + draft.allocatedPaidOffline;
         const sBalanceDue = Math.max(0, sNetPayable - sPaidTotal);
         const sReceiptNo = collectFeeNow && draft.grossTotal > 0 ? `ADM-${Math.floor(10000 + Math.random() * 90000)}` : undefined;
+        const effectiveSessionId =
+          admissionType === "READMISSION" && selectedTargetSessionId
+            ? selectedTargetSessionId
+            : activeSession?.id || sessionsProp[0]?.id || "";
+
+        // Zero-double-counting Back Due vs Admission Due split (FIFO: Back Due first)
+        const carriedInitialAmt =
+          admissionType === "READMISSION" && draft.isPrimaryForm
+            ? Math.max(0, Number(carriedPrevSessionDue || 0))
+            : 0;
+        const backLineInBill =
+          collectFeeNow && draft.isPrimaryForm
+            ? draft.feeLines.find((l) => l.id === "readm_back_due" && Number(l.due) > 0)
+            : undefined;
+        const backDueInBillAmt = backLineInBill ? Math.max(0, Number(backLineInBill.due) || 0) : 0;
+        let remainingBackDueToSave = carriedInitialAmt;
+        let remainingAdmDueToSave = collectFeeNow && sBalanceDue > 0 ? sBalanceDue : 0;
+        if (backDueInBillAmt > 0 && collectFeeNow) {
+          const admHeadsGross = Math.max(0, draft.grossTotal - backDueInBillAmt);
+          const conOnAdm = Math.min(admHeadsGross, draft.concessionAmt);
+          const conOnBack = Math.max(0, draft.concessionAmt - conOnAdm);
+          const backNet = Math.max(0, backDueInBillAmt - conOnBack);
+          const admNet = Math.max(0, admHeadsGross - conOnAdm);
+          const paidTowardBack = Math.min(backNet, Math.max(0, sPaidTotal));
+          remainingBackDueToSave = Math.max(0, backNet - paidTowardBack);
+          const paidTowardAdm = Math.max(0, sPaidTotal - paidTowardBack);
+          remainingAdmDueToSave = Math.max(0, admNet - paidTowardAdm);
+        }
 
         const sObj: SchoolStudent = {
           id: sId,
           schoolId: school.id,
-          sessionId: activeSession?.id || "",
+          sessionId: effectiveSessionId,
           classId: draft.classId,
           className: draft.className,
           stream: draft.isPrimaryForm ? chosenStream : undefined,
@@ -672,15 +1097,31 @@ export const DirectAdmissionModal: React.FC<Props> = ({
           emergencyRelation: emergencyRelation.trim() || undefined,
           emergencyWhatsapp: emergencyWhatsapp.trim() || undefined,
           admissionType,
+          ...(admissionType === "READMISSION"
+            ? {
+                previousStudentId: pulledSourceStudent?.id,
+                previousSessionId: pulledSourceStudent?.sessionId || selectedOldSessionId || undefined,
+                previousSessionName:
+                  allSessionsPool.find((s) => s.id === (pulledSourceStudent?.sessionId || selectedOldSessionId))?.name ||
+                  "पिछला सत्र",
+                previousClassName: pulledSourceStudent?.className || "",
+                previousSessionDue: remainingBackDueToSave,
+                previousSessionDueInitial: carriedInitialAmt,
+                reAdmissionDate: admissionDate || new Date().toISOString().slice(0, 10),
+              }
+            : {}),
           photoUrl: draft.isPrimaryForm ? (photoUrl || undefined) : undefined,
           usesBus: draft.usesBus,
           busRoute: draft.usesBus ? draft.busRoute : undefined,
           busFee: draft.usesBus ? draft.busFee : 0,
+          busNumber: draft.usesBus ? selectedRouteObj?.busNumber : undefined,
+          driverName: draft.usesBus ? selectedRouteObj?.driverName : undefined,
+          driverPhone: draft.usesBus ? selectedRouteObj?.driverPhone : undefined,
           submittedDocs,
           admissionReceiptNo: sReceiptNo,
           admissionTotalAmount: collectFeeNow ? sNetPayable : 0,
           admissionPaidAmount: collectFeeNow ? sPaidTotal : 0,
-          admissionDueBalance: collectFeeNow && sBalanceDue > 0 ? sBalanceDue : 0,
+          admissionDueBalance: remainingAdmDueToSave,
           advanceMonthlyFeePaid: false,
           advanceMonthlyFeeDue: draft.monthlyFee,
           advanceMonthlyFeeMonth: (admissionDate || new Date().toISOString()).slice(0, 7),
@@ -720,7 +1161,7 @@ export const DirectAdmissionModal: React.FC<Props> = ({
             email: studentEmail,
             studentRef: saved.id,
             classId: draft.classId,
-            sessionId: activeSession?.id || "2026-27",
+            sessionId: effectiveSessionId || "2026-27",
           }).catch(() => {});
 
           saveUserToLive(
@@ -769,16 +1210,51 @@ export const DirectAdmissionModal: React.FC<Props> = ({
 
         let savedFeeRec: MonthlyFee | null = null;
         if (collectFeeNow && draft.grossTotal > 0 && sReceiptNo) {
-          const validItems = draft.feeLines
-            .filter((l) => l.description.trim() && Number(l.due) >= 0)
-            .map((l, idx) => ({
-              id: l.id,
-              slNo: idx + 1,
-              description: l.description.trim(),
-              due: Number(l.due) || 0,
-              con: idx === 0 ? Math.min(Number(l.due) || 0, draft.concessionAmt) : 0,
-              paid: Number(l.due) || 0,
-            }));
+          const filteredLines = draft.feeLines.filter((l) => l.description.trim() && Number(l.due) >= 0);
+          let remConAlloc = draft.concessionAmt;
+          const nonBackCons = new Map<string, number>();
+          filteredLines.forEach((l) => {
+            if (l.id !== "readm_back_due") {
+              const cVal = Math.min(Number(l.due) || 0, Math.max(0, remConAlloc));
+              nonBackCons.set(l.id, cVal);
+              remConAlloc = Math.max(0, remConAlloc - cVal);
+            }
+          });
+          filteredLines.forEach((l) => {
+            if (l.id === "readm_back_due") {
+              const cVal = Math.min(Number(l.due) || 0, Math.max(0, remConAlloc));
+              nonBackCons.set(l.id, cVal);
+              remConAlloc = Math.max(0, remConAlloc - cVal);
+            }
+          });
+
+          let remPaidAlloc = sPaidTotal;
+          const paidById = new Map<string, number>();
+          filteredLines.forEach((l) => {
+            if (l.id === "readm_back_due") {
+              const netLine = Math.max(0, (Number(l.due) || 0) - (nonBackCons.get(l.id) || 0));
+              const pVal = Math.min(netLine, Math.max(0, remPaidAlloc));
+              paidById.set(l.id, pVal);
+              remPaidAlloc = Math.max(0, remPaidAlloc - pVal);
+            }
+          });
+          filteredLines.forEach((l) => {
+            if (l.id !== "readm_back_due") {
+              const netLine = Math.max(0, (Number(l.due) || 0) - (nonBackCons.get(l.id) || 0));
+              const pVal = Math.min(netLine, Math.max(0, remPaidAlloc));
+              paidById.set(l.id, pVal);
+              remPaidAlloc = Math.max(0, remPaidAlloc - pVal);
+            }
+          });
+
+          const validItems = filteredLines.map((l, idx) => ({
+            id: l.id,
+            slNo: idx + 1,
+            description: l.description.trim(),
+            due: Number(l.due) || 0,
+            con: nonBackCons.get(l.id) || 0,
+            paid: paidById.get(l.id) || 0,
+          }));
 
           const sPayMode = buildSplitPayModeInfo({
             onlineAmount: draft.allocatedPaidOnline,
@@ -787,9 +1263,22 @@ export const DirectAdmissionModal: React.FC<Props> = ({
             number: payRefNo.trim() || "-",
           });
 
+          const activeAdmAcc =
+            admAccountants.find(a => a.id === adminUid || (actorName && a.name?.toLowerCase() === actorName.toLowerCase())) ||
+            admAccountants.find(a => a.active !== false) ||
+            admAccountants[0];
+          const resolvedCollectorName =
+            admCollectorRole === "manager"
+              ? (admCollectorName.trim() || school?.managerName || "Manager")
+              : (admCollectorName.trim() || activeAdmAcc?.name || school?.accountantName || (actorName && actorName !== "School Admin" ? actorName : "Accountant"));
+          const resolvedCollectorSig =
+            admCollectorRole === "manager"
+              ? (school?.managerSignatureUrl || "")
+              : (activeAdmAcc?.signatureUrl || school?.accountantSignatureUrl || "");
+
           savedFeeRec = {
             schoolId: school.id,
-            sessionId: activeSession?.id || "2026-27",
+            sessionId: effectiveSessionId || "2026-27",
             studentId: saved.id,
             studentName: saved.name,
             rollNo: saved.rollNo,
@@ -800,6 +1289,10 @@ export const DirectAdmissionModal: React.FC<Props> = ({
             paid: sPaidTotal >= sNetPayable,
             paidDate: new Date().toISOString(),
             paidBy: adminUid,
+            collectedBy: resolvedCollectorName,
+            collectedByRole: admCollectorRole,
+            collectedByName: resolvedCollectorName,
+            collectorSignatureUrl: resolvedCollectorSig,
             receiptNo: sReceiptNo,
             paidAmount: sPaidTotal,
             balanceDue: sBalanceDue,
@@ -958,16 +1451,16 @@ export const DirectAdmissionModal: React.FC<Props> = ({
     <div className="fixed inset-0 z-[9995] flex items-center justify-center p-2 sm:p-4 bg-slate-950/75 backdrop-blur-xs animate-in fade-in duration-150">
       <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-3xl max-h-[94vh] flex flex-col shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
         {/* Header */}
-        <div className="bg-gradient-to-r from-blue-950 via-indigo-950 to-slate-900 text-white px-5 py-4 flex items-center justify-between gap-3">
+        <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-sky-50 dark:from-slate-900 dark:via-indigo-950 dark:to-slate-900 text-slate-900 dark:text-white border-b-2 border-blue-700 dark:border-blue-500 px-5 py-4 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-blue-500/25 border border-blue-400/40 flex items-center justify-center text-blue-300">
+            <div className="w-10 h-10 rounded-xl bg-blue-100 dark:bg-blue-500/25 border-2 border-blue-700 dark:border-blue-400/40 flex items-center justify-center text-blue-700 dark:text-blue-300">
               <UserPlus className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base sm:text-lg font-black leading-tight">
+              <h2 className="text-base sm:text-lg font-black leading-tight text-slate-900 dark:text-white">
                 नया छात्र नामांकन (New Student Admission)
               </h2>
-              <p className="text-xs text-blue-200/80">
+              <p className="text-xs text-slate-600 dark:text-blue-200/80 font-medium">
                 {school.name} • {activeSession?.name || `Session ${getDynamicAcademicSessionLabel()}`}
               </p>
             </div>
@@ -975,13 +1468,13 @@ export const DirectAdmissionModal: React.FC<Props> = ({
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white cursor-pointer"
+            className="p-2 rounded-xl bg-white dark:bg-white/10 hover:bg-blue-100 dark:hover:bg-white/20 text-slate-700 dark:text-white border border-blue-300 dark:border-white/10 cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* 2-Mode Switcher */}
+        {/* 2-Mode Switcher + New/Re-Admission Toggle */}
         <div className="px-5 py-3 bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
           <div className="grid grid-cols-2 gap-2 w-full sm:w-auto flex-1 max-w-md">
             <button
@@ -1009,9 +1502,32 @@ export const DirectAdmissionModal: React.FC<Props> = ({
               <span>📋 Full Admission + Receipt</span>
             </button>
           </div>
-          <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-            Save होते ही Form + Receipt प्रिंट खुलेगा
-          </span>
+
+          <div className="flex items-center gap-1 bg-white dark:bg-slate-900 p-1 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-black">
+            <button
+              type="button"
+              onClick={() => setAdmissionType("NEW")}
+              className={`px-3 py-1.5 rounded-lg transition cursor-pointer ${
+                admissionType === "NEW"
+                  ? "bg-blue-600 text-white shadow-xs"
+                  : "text-slate-600 dark:text-slate-300 hover:text-slate-900"
+              }`}
+            >
+              New Admission
+            </button>
+            <button
+              type="button"
+              onClick={() => setAdmissionType("READMISSION")}
+              className={`px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+                admissionType === "READMISSION"
+                  ? "bg-indigo-600 text-white shadow-xs"
+                  : "text-slate-600 dark:text-slate-300 hover:text-slate-900"
+              }`}
+            >
+              <History className="w-3.5 h-3.5" />
+              Re-Admission (पुनः प्रवेश)
+            </button>
+          </div>
         </div>
 
         {/* Form Body */}
@@ -1020,6 +1536,292 @@ export const DirectAdmissionModal: React.FC<Props> = ({
             <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs font-bold flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
               <span>{error}</span>
+            </div>
+          )}
+
+          {/* RE-ADMISSION CASCADING SELECTOR (Old Session -> Old Class -> Student -> Auto-Fill & Due) */}
+          {admissionType === "READMISSION" && (
+            <div className="rounded-2xl border-2 border-indigo-300 dark:border-indigo-700 bg-indigo-50/60 dark:bg-indigo-950/30 p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h4 className="text-xs sm:text-sm font-black text-indigo-950 dark:text-indigo-200 flex items-center gap-1.5">
+                    <History className="w-4 h-4 text-indigo-600" />
+                    पुराने सत्र से छात्र चुनें — पूरा फॉर्म व पिछला बकाया अपने आप भर जाएगा
+                  </h4>
+                  <p className="text-[11px] text-indigo-700 dark:text-indigo-300 font-medium">
+                    1. पिछला सत्र चुनें → 2. पुरानी कक्षा → 3. छात्र का नाम → 4. नया / अगला सत्र चुनें
+                  </p>
+                </div>
+                {loadingOldPool && (
+                  <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-300">
+                    डेटा लोड हो रहा है...
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    1. पिछला सत्र (Old Session)
+                  </label>
+                  <select
+                    value={selectedOldSessionId}
+                    onChange={(e) => {
+                      const newOldId = e.target.value;
+                      setSelectedOldSessionId(newOldId);
+                      setSelectedOldClassFilter("all");
+                      setSelectedOldStudentId("");
+                      if (newOldId && selectedTargetSessionId === newOldId && availableSessionsList.length > 1) {
+                        const oldIdx = availableSessionsList.findIndex((s) => s.id === newOldId);
+                        const nextAfter = oldIdx >= 0 && oldIdx + 1 < availableSessionsList.length ? availableSessionsList[oldIdx + 1] : undefined;
+                        const other = nextAfter || availableSessionsList.find((s) => s.id !== newOldId);
+                        if (other) setSelectedTargetSessionId(other.id);
+                      }
+                    }}
+                    className="w-full px-3 py-2 rounded-xl border border-indigo-200 dark:border-indigo-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-900 dark:text-white"
+                  >
+                    <option value="">-- सभी सत्र --</option>
+                    {allSessionsPool.map((s) => {
+                      const cnt = oldStudentsPool.filter((st) => st.sessionId === s.id).length;
+                      return (
+                        <option key={s.id} value={s.id}>
+                          {s.name} ({cnt} छात्र)
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    2. पुरानी कक्षा (Old Class)
+                  </label>
+                  <select
+                    value={selectedOldClassFilter}
+                    onChange={(e) => {
+                      setSelectedOldClassFilter(e.target.value);
+                      setSelectedOldStudentId("");
+                    }}
+                    className="w-full px-3 py-2 rounded-xl border border-indigo-200 dark:border-indigo-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-900 dark:text-white"
+                  >
+                    <option value="all">सभी कक्षाएं ({oldStudentsPool.filter((s) => !selectedOldSessionId || s.sessionId === selectedOldSessionId).length})</option>
+                    {oldClassesForSelectedSession.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}{c.section ? ` (${c.section})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    3. छात्र का नाम (Select Student) *
+                  </label>
+                  <select
+                    value={selectedOldStudentId}
+                    onChange={(e) => {
+                      const st = studentsInOldSelection.find((x) => x.id === e.target.value);
+                      if (st) handlePullOldStudent(st);
+                    }}
+                    className="w-full px-3 py-2 rounded-xl border border-indigo-300 dark:border-indigo-600 bg-white dark:bg-slate-900 text-xs font-black text-slate-900 dark:text-white"
+                  >
+                    <option value="">-- छात्र चुनें ({studentsInOldSelection.length}) --</option>
+                    {studentsInOldSelection.map((st) => (
+                      <option key={st.id} value={st.id}>
+                        {st.name} · {st.className || "Class"} · पिता: {st.fatherName || "—"} (Adm: {st.admissionNo || "—"})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-emerald-700 dark:text-emerald-300 mb-1">
+                    4. नया / अगला सत्र (Next Session) *
+                  </label>
+                  <select
+                    value={selectedTargetSessionId}
+                    onChange={(e) => setSelectedTargetSessionId(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-900 text-xs font-black text-emerald-800 dark:text-emerald-200"
+                  >
+                    {availableSessionsList.length === 0 && (
+                      <option value={activeSession?.id || ""}>
+                        {activeSession?.name || "Active Session"}
+                      </option>
+                    )}
+                    {availableSessionsList.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}{s.id === activeSession?.id ? " (Active)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Quick search helper */}
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={oldStudentQuery}
+                  onChange={(e) => setOldStudentQuery(e.target.value)}
+                  placeholder="या नाम, Adm No, पिता का नाम या मोबाइल से तुरंत खोजें..."
+                  className="w-full pl-8 pr-3 py-2 rounded-xl border border-indigo-200 dark:border-indigo-700 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-900 dark:text-slate-100"
+                />
+                {matchingOldStudents.length > 0 && (
+                  <div className="absolute left-0 right-0 top-full mt-1 z-30 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg max-h-48 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+                    {matchingOldStudents.map((st) => (
+                      <button
+                        key={st.id}
+                        type="button"
+                        onClick={() => handlePullOldStudent(st)}
+                        className="w-full text-left px-3 py-2 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 text-xs flex items-center justify-between gap-2 cursor-pointer"
+                      >
+                        <span className="font-bold text-slate-900 dark:text-white truncate">
+                          {st.name} · {st.className || "Class"} (Adm: {st.admissionNo || "—"})
+                        </span>
+                        <span className="text-[11px] text-slate-500 shrink-0">
+                          पिता: {st.fatherName || "—"}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Auto-Filled Student & Back-Session Due Display */}
+              {pulledSourceStudent && (
+                <div className="bg-white dark:bg-slate-900 rounded-xl border border-indigo-200 dark:border-indigo-800 p-3.5 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-xs">
+                      <span className="font-black text-emerald-700 dark:text-emerald-400">
+                        ✓ पूरा फॉर्म भर गया: {pulledSourceStudent.name}
+                      </span>
+                      <span className="text-slate-500 dark:text-slate-400 ml-2">
+                        ({selectedOldSessionObj?.name || pulledSourceStudent.sessionId} · {pulledSourceStudent.className || "—"} · Adm: {pulledSourceStudent.admissionNo || "—"})
+                      </span>
+                    </div>
+                    {pulledLedger && (
+                      <button
+                        type="button"
+                        onClick={() => setShowPulledLedgerMonths((v) => !v)}
+                        className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        {showPulledLedgerMonths ? "माह-वार विवरण छुपाएं" : `माह-वार विवरण देखें (${pulledLedger.monthTimeline.length} माह)`}
+                        {showPulledLedgerMonths ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                      </button>
+                    )}
+                  </div>
+
+                  {pulledLedger && (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono tabular-nums">
+                      <div className="rounded-lg bg-slate-50 dark:bg-slate-800/70 p-2 border border-slate-200 dark:border-slate-700">
+                        <span className="text-[10px] font-sans font-bold text-slate-500 block">पिछला कुल बिल</span>
+                        <span className="text-sm font-black text-slate-900 dark:text-white">
+                          ₹{pulledLedger.totalBilled.toLocaleString("en-IN")}
+                        </span>
+                      </div>
+                      <div className="rounded-lg bg-slate-50 dark:bg-slate-800/70 p-2 border border-slate-200 dark:border-slate-700">
+                        <span className="text-[10px] font-sans font-bold text-emerald-600 block">पिछला जमा</span>
+                        <span className="text-sm font-black text-emerald-600">
+                          ₹{pulledLedger.totalPaid.toLocaleString("en-IN")}
+                        </span>
+                      </div>
+                      <div className="rounded-lg bg-amber-50/70 dark:bg-amber-950/30 p-2 border border-amber-200 dark:border-amber-800">
+                        <span className="text-[10px] font-sans font-bold text-amber-600 block">असंकलित माह Due</span>
+                        <span className="text-sm font-black text-amber-600">
+                          ₹{pulledLedger.ungeneratedMonthsDue.toLocaleString("en-IN")}
+                        </span>
+                      </div>
+                      <div className="rounded-lg bg-rose-50/80 dark:bg-rose-950/30 p-2 border border-rose-200 dark:border-rose-800">
+                        <span className="text-[10px] font-sans font-bold text-rose-600 block">कुल पिछला बकाया (Back Due)</span>
+                        <span className="text-sm font-black text-rose-600">
+                          ₹{pulledLedger.totalBackDue.toLocaleString("en-IN")}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {showPulledLedgerMonths && pulledLedger && (
+                    <div className="max-h-40 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                      <table className="w-full text-left text-[11px] font-mono tabular-nums">
+                        <thead className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-sans">
+                          <tr>
+                            <th className="py-1.5 px-2.5">माह</th>
+                            <th className="py-1.5 px-2 text-right">अपेक्षित</th>
+                            <th className="py-1.5 px-2 text-right">जमा</th>
+                            <th className="py-1.5 px-2.5 text-right">शेष Due</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                          {pulledLedger.monthTimeline.map((row) => (
+                            <tr key={row.monthCode}>
+                              <td className="py-1 px-2.5 font-sans font-bold text-slate-800 dark:text-slate-200">{row.label}</td>
+                              <td className="py-1 px-2 text-right">₹{row.expectedAmount.toLocaleString("en-IN")}</td>
+                              <td className="py-1 px-2 text-right text-emerald-600">₹{row.paidAmount.toLocaleString("en-IN")}</td>
+                              <td className="py-1 px-2.5 text-right font-bold text-rose-600">
+                                {row.dueAmount > 0 ? `₹${row.dueAmount.toLocaleString("en-IN")}` : "₹0"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  <div className="flex flex-col gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                          पिछला बकाया (Back Due ₹):
+                        </span>
+                        <input
+                          type="number"
+                          min="0"
+                          value={carriedPrevSessionDue}
+                          onChange={(e) => setCarriedPrevSessionDue(e.target.value)}
+                          className="w-28 px-2.5 py-1.5 rounded-lg border border-rose-300 dark:border-rose-700 bg-white dark:bg-slate-900 text-xs font-mono font-black text-rose-600"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setCarriedPrevSessionDue("0")}
+                          className="px-2.5 py-1.5 rounded-lg bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 text-[11px] font-bold text-slate-800 dark:text-slate-100 cursor-pointer"
+                        >
+                          Waive ₹0
+                        </button>
+                        {pulledLedger && Number(carriedPrevSessionDue) !== pulledLedger.totalBackDue && (
+                          <button
+                            type="button"
+                            onClick={() => setCarriedPrevSessionDue(String(pulledLedger.totalBackDue))}
+                            className="p-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 cursor-pointer"
+                            title="ऑटो बकाया वापस लाएं"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      {Number(carriedPrevSessionDue || 0) > 0 && (
+                        <label className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={includeBackDueInBill}
+                            onChange={(e) => setIncludeBackDueInBill(e.target.checked)}
+                            className="w-4 h-4 accent-rose-600"
+                          />
+                          <span className="text-xs font-bold text-rose-800 dark:text-rose-200">
+                            Re-Admission बिल में अभी जोड़ें (+₹{Number(carriedPrevSessionDue || 0).toLocaleString("en-IN")})
+                          </span>
+                        </label>
+                      )}
+                    </div>
+                    <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                      {includeBackDueInBill && Number(carriedPrevSessionDue || 0) > 0
+                        ? "पिछला बकाया नीचे Re-Admission फीस बिल में जुड़ गया है (यदि आंशिक भुगतान होगा, तो केवल शेष बकाया अगली मासिक फीस में आगे बढ़ेगा)।"
+                        : "यह बकाया अभी बिल में नहीं जुड़ेगा; अगली माह की Fee Slip में Previous Session Due के रूप में दिखेगा।"}
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1073,7 +1875,7 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                   required
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm font-bold text-slate-800 dark:text-white"
                 >
-                  {sortedClasses.map((cls) => (
+                  {effectiveTargetClasses.map((cls) => (
                     <option key={cls.id} value={cls.id}>
                       {cls.name} {cls.section ? `(${cls.section})` : ""}
                     </option>
@@ -1089,7 +1891,7 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                   type="text"
                   value={admissionNo}
                   onChange={(e) => setAdmissionNo(e.target.value)}
-                  placeholder="e.g. NSTZ-2026-001"
+                  placeholder="e.g. LMPS-2026-001"
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm font-mono font-bold text-blue-700 dark:text-blue-300"
                 />
               </div>
@@ -1384,30 +2186,9 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                   <h4 className="text-xs font-black uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
                     UDISE+ / Aadhaar / Statutory &amp; Address Details (प्रवेश विवरण)
                   </h4>
-                  <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-300 dark:border-slate-700 text-[11px] font-bold">
-                    <button
-                      type="button"
-                      onClick={() => setAdmissionType("NEW")}
-                      className={`px-2.5 py-1 rounded-lg transition cursor-pointer ${
-                        admissionType === "NEW"
-                          ? "bg-indigo-600 text-white shadow-xs"
-                          : "text-slate-600 dark:text-slate-300"
-                      }`}
-                    >
-                      New Admission
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setAdmissionType("READMISSION")}
-                      className={`px-2.5 py-1 rounded-lg transition cursor-pointer ${
-                        admissionType === "READMISSION"
-                          ? "bg-indigo-600 text-white shadow-xs"
-                          : "text-slate-600 dark:text-slate-300"
-                      }`}
-                    >
-                      Re-Admission
-                    </button>
-                  </div>
+                  <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
+                    {admissionType === "READMISSION" ? "Re-Admission Mode" : "New Admission Mode"}
+                  </span>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1619,13 +2400,28 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label className="text-[11px] font-bold text-slate-500 block mb-1">Religion (धर्म)</label>
-                    <input
-                      type="text"
-                      value={religion}
-                      onChange={(e) => setReligion(e.target.value)}
-                      placeholder="Hindu / Muslim / Sikh"
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
-                    />
+                    <select
+                      value={["Hindu", "Muslim", "Sikh", "Christian", "Buddhist", "Jain"].includes(religion) ? religion : "Other"}
+                      onChange={(e) => setReligion(e.target.value === "Other" ? "Other" : e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-900 dark:text-slate-100"
+                    >
+                      <option value="Hindu">Hindu (हिंदू)</option>
+                      <option value="Muslim">Muslim (मुस्लिम)</option>
+                      <option value="Sikh">Sikh (सिख)</option>
+                      <option value="Christian">Christian (ईसाई)</option>
+                      <option value="Buddhist">Buddhist (बौद्ध)</option>
+                      <option value="Jain">Jain (जैन)</option>
+                      <option value="Other">Other (अन्य)</option>
+                    </select>
+                    {!["Hindu", "Muslim", "Sikh", "Christian", "Buddhist", "Jain"].includes(religion) && (
+                      <input
+                        type="text"
+                        value={religion === "Other" ? "" : religion}
+                        onChange={(e) => setReligion(e.target.value || "Other")}
+                        placeholder="अन्य धर्म लिखें (Optional)"
+                        className="mt-1.5 w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100"
+                      />
+                    )}
                   </div>
                   <div>
                     <label className="text-[11px] font-bold text-slate-500 block mb-1">Nationality</label>
@@ -1767,13 +2563,38 @@ export const DirectAdmissionModal: React.FC<Props> = ({
 
                   {usesBus && (
                     <div className="flex items-center gap-2 flex-wrap">
-                      <input
-                        type="text"
-                        value={busRoute}
-                        onChange={(e) => setBusRoute(e.target.value)}
-                        placeholder="Stop / Route Name"
-                        className="px-3 py-1.5 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50/40 dark:bg-slate-900 text-xs font-semibold text-slate-800 dark:text-white w-44"
-                      />
+                      {configuredRoutes.length > 0 ? (
+                        <select
+                          value={configuredRoutes.some((r) => r.routeName === busRoute) ? busRoute : "__custom__"}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (val === "__custom__") {
+                              if (configuredRoutes.some((r) => r.routeName === busRoute)) setBusRoute("");
+                              return;
+                            }
+                            const found = configuredRoutes.find((r) => r.routeName === val);
+                            setBusRoute(val);
+                            if (found && Number(found.monthlyFee) > 0) setBusFee(Number(found.monthlyFee));
+                          }}
+                          className="px-3 py-1.5 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50/40 dark:bg-slate-900 text-xs font-semibold text-slate-800 dark:text-white max-w-[240px]"
+                        >
+                          <option value="__custom__">-- Route चुनें / Custom --</option>
+                          {configuredRoutes.map((r) => (
+                            <option key={r.id} value={r.routeName}>
+                              {r.routeName} {r.busNumber ? `(${r.busNumber})` : ""} · ₹{r.monthlyFee || 0}
+                            </option>
+                          ))}
+                        </select>
+                      ) : null}
+                      {(!configuredRoutes.length || !configuredRoutes.some((r) => r.routeName === busRoute)) && (
+                        <input
+                          type="text"
+                          value={busRoute}
+                          onChange={(e) => setBusRoute(e.target.value)}
+                          placeholder="Stop / Route Name"
+                          className="px-3 py-1.5 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50/40 dark:bg-slate-900 text-xs font-semibold text-slate-800 dark:text-white w-44"
+                        />
+                      )}
                       <div className="flex items-center gap-1">
                         <span className="text-xs font-bold text-slate-500">Bus ₹:</span>
                         <input
@@ -1993,6 +2814,43 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                   </div>
                 )}
 
+                <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                  <span className="font-black text-slate-700 dark:text-slate-200">
+                    कौन फीस जमा कर रहा है? (Receipt Signature):
+                  </span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setAdmCollectorRole("accountant")}
+                      className={`px-2.5 py-1 rounded-lg font-black border cursor-pointer ${
+                        admCollectorRole === "accountant"
+                          ? "bg-emerald-600 text-white border-emerald-600"
+                          : "bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-600"
+                      }`}
+                    >
+                      🧾 Accountant ({school?.accountantName || admAccountants[0]?.name || "Default"}){(admAccountants[0]?.signatureUrl || school?.accountantSignatureUrl) ? " ✓Sign" : ""}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAdmCollectorRole("manager")}
+                      className={`px-2.5 py-1 rounded-lg font-black border cursor-pointer ${
+                        admCollectorRole === "manager"
+                          ? "bg-amber-600 text-white border-amber-600"
+                          : "bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-600"
+                      }`}
+                    >
+                      🛡️ Manager ({school?.managerName || "Manager"}){school?.managerSignatureUrl ? " ✓Sign" : ""}
+                    </button>
+                    <input
+                      type="text"
+                      value={admCollectorName}
+                      onChange={(e) => setAdmCollectorName(e.target.value)}
+                      placeholder={admCollectorRole === "manager" ? (school?.managerName || "Manager नाम") : (school?.accountantName || "Accountant नाम")}
+                      className="px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white text-[11px] font-semibold w-36"
+                    />
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-2 border-t border-emerald-200/80 dark:border-emerald-800/60">
                   {canGiveDiscount && (
                     <div>
@@ -2105,6 +2963,11 @@ export const DirectAdmissionModal: React.FC<Props> = ({
                     <span className={`font-black ${balanceDue > 0 ? "text-rose-600" : "text-slate-500"}`}>
                       Balance Due: ₹{balanceDue.toLocaleString("en-IN")}
                     </span>
+                    {admissionType === "READMISSION" && Number(carriedPrevSessionDue || 0) > 0 && (
+                      <span className="text-rose-700 dark:text-rose-300 font-black font-mono tabular-nums">
+                        + Back Session Due: ₹{Number(carriedPrevSessionDue).toLocaleString("en-IN")}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>

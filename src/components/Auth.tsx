@@ -50,7 +50,9 @@ import {
   ChevronDown,
   ChevronUp,
   X,
-  ScanFace
+  ScanFace,
+  ArrowLeft,
+  Globe
 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import jsQR from 'jsqr';
@@ -86,6 +88,7 @@ interface Props {
   logActivity?: (action: string, details: string, user?: User) => void;
   appSettings?: SystemSettings;
   onOpenGuestStudyRoom?: () => void;
+  onBackToWebsite?: () => void;
 }
 
 type AuthView = 'LOGIN' | 'SIGNUP' | 'RECOVERY' | 'SUCCESS_ID';
@@ -105,7 +108,7 @@ const DEFAULT_QUESTIONS = [
 // Persistent session
 setPersistence(auth, browserLocalPersistence).catch(() => {});
 
-export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpenGuestStudyRoom }) => {
+export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpenGuestStudyRoom, onBackToWebsite }) => {
   const [view, setView] = useState<AuthView>('LOGIN');
   const [generatedId, setGeneratedId] = useState<string>('');
 
@@ -315,36 +318,61 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
       if (match) return match;
     } catch {}
 
-    // 2. Check localStorage school staff and faculty teachers pools
+    // 2. Check localStorage school faculty teachers, accountants, and staff pools
     try {
+      let matchedTeacherRec: any = null;
+      let matchedAccountantRec: any = null;
+      let matchedStaffRec: any = null;
+
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
-        if (
-          k &&
-          (k.startsWith('nst_school_staff_') ||
-           k.startsWith('nst_staff_') ||
-           k.startsWith('nst_school_teachers_') ||
-           k.startsWith('nst_teachers_'))
-        ) {
-          const val = localStorage.getItem(k);
-          if (val) {
-            const list: any[] = JSON.parse(val);
-            if (Array.isArray(list)) {
-              const match = list.find(st => {
-                if (!st) return false;
-                const stPhone = (st.phone || '').replace(/\D/g, '');
-                return (
-                  (st.id && st.id.toLowerCase() === q) ||
-                  (st.employeeId && st.employeeId.toLowerCase() === q) ||
-                  (st.name && st.name.trim().toLowerCase() === q) ||
-                  (st.email && st.email.toLowerCase() === q) ||
-                  (cleanDigits.length >= 10 && stPhone && (stPhone === cleanDigits || stPhone.endsWith(cleanDigits.slice(-10))))
-                );
-              });
-              if (match) return match;
-            }
-          }
+        if (!k) continue;
+        const isTeacherKey = k.startsWith('nst_school_teachers_') || k.startsWith('nst_teachers_');
+        const isAccKey = k.startsWith('nst_school_accountants_');
+        const isStaffKey = k.startsWith('nst_school_staff_') || k.startsWith('nst_staff_');
+        if (!isTeacherKey && !isAccKey && !isStaffKey) continue;
+
+        const val = localStorage.getItem(k);
+        if (!val) continue;
+        const list: any[] = JSON.parse(val);
+        if (!Array.isArray(list)) continue;
+
+        const match = list.find(st => {
+          if (!st || st.active === false || st.isDeleted === true) return false;
+          const stPhone = (st.phone || '').replace(/\D/g, '');
+          return (
+            (st.id && st.id.toLowerCase() === q) ||
+            (st.employeeId && st.employeeId.toLowerCase() === q) ||
+            (st.name && st.name.trim().toLowerCase() === q) ||
+            (st.email && st.email.toLowerCase() === q) ||
+            (cleanDigits.length >= 10 && stPhone && (stPhone === cleanDigits || stPhone.endsWith(cleanDigits.slice(-10))))
+          );
+        });
+        if (match) {
+          if (isTeacherKey && !matchedTeacherRec) matchedTeacherRec = match;
+          else if (isAccKey && !matchedAccountantRec) matchedAccountantRec = match;
+          else if (isStaffKey && !matchedStaffRec) matchedStaffRec = match;
         }
+      }
+
+      if (matchedTeacherRec) {
+        return {
+          ...matchedTeacherRec,
+          _resolvedRole: 'TEACHER',
+          _hasAccountantAccess: Boolean(matchedAccountantRec),
+        };
+      }
+      if (matchedAccountantRec) {
+        return {
+          ...matchedAccountantRec,
+          _resolvedRole: 'ACCOUNTANT',
+        };
+      }
+      if (matchedStaffRec) {
+        return {
+          ...matchedStaffRec,
+          _resolvedRole: 'TEACHER',
+        };
       }
     } catch {}
 
@@ -357,7 +385,7 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
         designation: 'PRT PRIMARY TEACHER',
         department: 'Primary',
         phone: '9871234005',
-        schoolId: schoolId || 'nstz'
+        schoolId: schoolId || 'dps_gurgaon_sector45'
       };
     }
 
@@ -504,8 +532,8 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
           const realPhone = embeddedPhone || foundStaff?.phone || (realTeacherName.toLowerCase().includes('anjali') ? '9871234005' : '9811023460');
           const realDesignation = embeddedTitle || foundStaff?.designation || (realTeacherName.toLowerCase().includes('anjali') ? 'PRT PRIMARY TEACHER' : 'Teacher');
           const realDept = cleanClassOrDept || foundStaff?.department || (realTeacherName.toLowerCase().includes('anjali') ? 'Primary' : 'Academic');
-          const realSchoolName = embeddedSchoolName || foundStaff?.schoolName || 'Nstz';
-          const realEmail = foundStaff?.email || `${realTeacherName.toLowerCase().replace(/[^a-z0-9]/g, '')}@teacher.nstz.edu.in`;
+          const realSchoolName = embeddedSchoolName || foundStaff?.schoolName || 'Life Maker Public School';
+          const realEmail = foundStaff?.email || `${realTeacherName.toLowerCase().replace(/[^a-z0-9]/g, '')}@teacher.lifemaker.edu.in`;
 
           matchedTeacherUser = {
             id: realTeacherId,
@@ -607,8 +635,8 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
           const realFee = (found?.monthlyFee !== undefined && found.monthlyFee > 0)
             ? found.monthlyFee
             : ((resolvedFee !== undefined && resolvedFee > 0) ? resolvedFee : 1800);
-          const realSchoolName = embeddedSchoolName || found?.schoolName || 'Nstz';
-          const realEmail = found?.email || (realAdmissionNo ? `${realAdmissionNo.toLowerCase().replace(/[^a-z0-9]/g, '')}@student.nstz.edu.in` : `student_${realStudentId.slice(-6)}@nstz.app`);
+          const realSchoolName = embeddedSchoolName || found?.schoolName || 'Life Maker Public School';
+          const realEmail = found?.email || (realAdmissionNo ? `${realAdmissionNo.toLowerCase().replace(/[^a-z0-9]/g, '')}@student.lifemaker.edu.in` : `student_${realStudentId.slice(-6)}@lifemaker.edu.in`);
 
           // Check if an existing account already exists with this student's ID, admission no, or phone
           let existingLinkedUser: any = null;
@@ -678,6 +706,8 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
               email: realEmail,
               mobile: realPhone,
               role: 'STUDENT',
+              userType: 'SCHOOL_STUDENT',
+              schoolRole: 'STUDENT',
               schoolId: cleanSchoolId,
               schoolName: realSchoolName,
               classLevel: realClassName || realClass,
@@ -778,6 +808,8 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
           email: realEmail,
           mobile: realPhone,
           role: 'STUDENT',
+          userType: 'SCHOOL_STUDENT',
+          schoolRole: 'STUDENT',
           schoolId: schoolId,
           classLevel: realClass,
           stream: 'General',
@@ -834,6 +866,8 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
           email: realEmail,
           mobile: realPhone,
           role: 'STUDENT',
+          userType: 'SCHOOL_STUDENT',
+          schoolRole: 'STUDENT',
           schoolId: schoolId,
           classLevel: realClass,
           stream: 'General',
@@ -875,7 +909,7 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
           mobile: foundStaff?.phone || '9811023460',
           role: 'TEACHER',
           schoolId: schoolId,
-          schoolName: foundStaff?.schoolName || 'Nstz',
+          schoolName: foundStaff?.schoolName || 'Life Maker Public School',
           department: foundStaff?.department || 'Primary',
           designation: foundStaff?.designation || 'Teacher',
           credits: 500,
@@ -921,9 +955,9 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
               isQrLogin: true,
             };
           } else {
-            const qStudent = urlObj.searchParams.get('student') || urlObj.searchParams.get('studentId') || urlObj.searchParams.get('id');
-            const qRoll = urlObj.searchParams.get('roll') || urlObj.searchParams.get('rollNo');
-            const qName = urlObj.searchParams.get('name');
+            const qStudent = urlObj.searchParams.get('student') || urlObj.searchParams.get('studentId') || urlObj.searchParams.get('u') || urlObj.searchParams.get('uid') || urlObj.searchParams.get('id');
+            const qRoll = urlObj.searchParams.get('roll') || urlObj.searchParams.get('rollNo') || urlObj.searchParams.get('r');
+            const qName = urlObj.searchParams.get('name') || urlObj.searchParams.get('n');
             const qAdm = urlObj.searchParams.get('adm') || urlObj.searchParams.get('admissionNo');
 
             if (qStudent || qRoll || qName || qAdm) {
@@ -938,6 +972,8 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
                 email: found?.email || `${realId}@student.dps.edu.in`,
                 mobile: found?.phone || '9876543210',
                 role: 'STUDENT',
+                userType: 'SCHOOL_STUDENT',
+                schoolRole: 'STUDENT',
                 schoolId: qSchool,
                 classLevel: found?.classGrade || found?.classId || '10',
                 stream: 'General',
@@ -990,6 +1026,8 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
               email: parsed.email || `${cleanId}@student.dps.edu.in`,
               mobile: parsed.mobile || parsed.phone || '9876543210',
               role: 'STUDENT',
+              userType: 'SCHOOL_STUDENT',
+              schoolRole: 'STUDENT',
               schoolId: parsed.schoolId || 'dps_gurgaon_sector45',
               classLevel: parsed.classGrade || parsed.classId || '10',
               credits: 100,
@@ -1074,6 +1112,8 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
             email: found.email || `${found.admissionNo.toLowerCase().replace(/[^a-z0-9]/g, '')}@student.dps.edu.in`,
             mobile: found.phone || '',
             role: 'STUDENT',
+            userType: 'SCHOOL_STUDENT',
+            schoolRole: 'STUDENT',
             schoolId: found.schoolId || 'dps_gurgaon_sector45',
             classLevel: found.classGrade || found.classId || '10',
             credits: 100,
@@ -1339,14 +1379,19 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
       (userToLogin?.email && isSchoolAdminEmailClean(userToLogin.email))
     );
 
+    const rawRoleUpper = (userToLogin?.role || '').toString().trim().toUpperCase();
     const isSchoolAccount = Boolean(
       isSchoolAdmin ||
       userToLogin?.userType === 'SCHOOL_STUDENT' ||
+      rawRoleUpper === 'SCHOOL_STUDENT' ||
       userToLogin?.schoolRole ||
       userToLogin?.admissionNo ||
-      (userToLogin?.email && userToLogin.email.toLowerCase().endsWith('.edu.in')) ||
-      userToLogin?.role === 'TEACHER' ||
-      userToLogin?.role === 'ACCOUNTANT'
+      userToLogin?.studentId ||
+      userToLogin?.teacherId ||
+      (userToLogin?.email && (userToLogin.email.toLowerCase().endsWith('.edu.in') || userToLogin.email.toLowerCase().includes('@student.'))) ||
+      rawRoleUpper === 'TEACHER' ||
+      rawRoleUpper === 'ACCOUNTANT' ||
+      (Boolean(userToLogin?.schoolId) && String(userToLogin.schoolId).trim() !== '' && rawRoleUpper !== 'SUPERADMIN' && rawRoleUpper !== 'ADMIN')
     );
 
     if (userToLogin?.role === 'DRIVER') {
@@ -1585,6 +1630,8 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
       email: 'aarav.sharma@dps.edu.in',
       mobile: '9876543210',
       role: 'STUDENT',
+      userType: 'SCHOOL_STUDENT',
+      schoolRole: 'STUDENT',
       schoolId: 'dps_gurgaon_sector45',
       classLevel: '10',
       stream: 'Science',
@@ -1958,26 +2005,27 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
         } catch {}
       }
 
-      // 4. Staff / Teacher records lookup
+      // 4. Staff / Teacher / Accountant records lookup
       if (!matchedUser) {
         const foundTeacher = resolveTeacherOrStaff(cleanId);
         if (foundTeacher) {
+          const resolvedRole = foundTeacher._resolvedRole === 'ACCOUNTANT' ? 'ACCOUNTANT' : 'TEACHER';
           matchedUser = {
             id: foundTeacher.id || `tea_${Date.now()}`,
             uid: foundTeacher.id || `tea_${Date.now()}`,
-            displayId: foundTeacher.employeeId ? `EMP-${foundTeacher.employeeId}` : `TEA-${(foundTeacher.id || '').slice(0, 6).toUpperCase()}`,
+            displayId: foundTeacher.employeeId ? `EMP-${foundTeacher.employeeId}` : `${resolvedRole === 'ACCOUNTANT' ? 'ACC' : 'TEA'}-${(foundTeacher.id || '').slice(0, 6).toUpperCase()}`,
             name: foundTeacher.name,
-            email: foundTeacher.email || `${foundTeacher.name.toLowerCase().replace(/[^a-z0-9]/g, '')}@teacher.nstz.edu.in`,
+            email: foundTeacher.email || `${foundTeacher.name.toLowerCase().replace(/[^a-z0-9]/g, '')}@${resolvedRole === 'ACCOUNTANT' ? 'accountant' : 'teacher'}.lifemaker.edu.in`,
             mobile: foundTeacher.phone || cleanId,
-            role: 'TEACHER',
+            role: resolvedRole,
             schoolId: foundTeacher.schoolId || 'dps_gurgaon_sector45',
-            department: foundTeacher.department || 'Academic',
-            designation: foundTeacher.designation || 'Teacher',
+            department: foundTeacher.department || (resolvedRole === 'ACCOUNTANT' ? 'Accounts' : 'Academic'),
+            designation: foundTeacher.designation || (resolvedRole === 'ACCOUNTANT' ? 'Accountant' : 'Teacher'),
             credits: 500,
             streak: 1,
             profileCompleted: true,
             subscriptionTier: 'PRO',
-            provider: 'teacher_record'
+            provider: resolvedRole === 'ACCOUNTANT' ? 'accountant_record' : 'teacher_record'
           };
         }
       }
@@ -2287,7 +2335,7 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
   const isFlipped = view === 'SIGNUP';
 
   return (
-    <div className="min-h-screen min-h-[100dvh] w-full flex flex-col justify-between bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans relative overflow-x-hidden select-none">
+    <div className="nst-auth-shell min-h-screen min-h-[100dvh] w-full flex flex-col justify-between bg-[#F8F9FB] dark:bg-[#070b14] text-slate-900 dark:text-slate-100 font-sans relative overflow-x-hidden select-none px-5 py-6 sm:py-8">
       <CustomAlert
         isOpen={alertConfig.isOpen}
         message={alertConfig.message}
@@ -2299,67 +2347,91 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
 
       {showGuide && <LoginGuide onClose={() => setShowGuide(false)} />}
 
-      {/* ── TOP HEADER: NATURAL SCHOOL BRANDING ── */}
-      <header className="w-full max-w-md mx-auto flex items-center justify-between px-5 pt-3 pb-2 z-20 shrink-0">
-        <div className="flex items-center gap-2.5 text-left">
-          {/* Logo */}
-          <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex items-center justify-center shadow-md shadow-indigo-950/20 p-1 border border-indigo-500/20 ring-1 ring-indigo-500/10">
-            {settings?.appLogo ? (
-              <img src={settings.appLogo} alt="Logo" className="w-full h-full object-contain rounded-xl" />
-            ) : (
-              <span className="text-xs font-black text-amber-400">{settings?.appShortName || 'NSTA'}</span>
-            )}
+      {/* ── MAIN OPEN AUTH LAYOUT (Original Design with Light & Dark Color Fix) ── */}
+      <div className="w-full max-w-md mx-auto flex-1 flex flex-col justify-center z-10">
+        {/* Top Back to Website Bar */}
+        {onBackToWebsite && (
+          <div className="mb-4 flex items-center justify-between">
+            <button
+              type="button"
+              onClick={onBackToWebsite}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition cursor-pointer shadow-2xs"
+            >
+              <ArrowLeft size={14} />
+              <Globe size={13} className="text-emerald-600 dark:text-emerald-400" />
+              <span>Back to School Website</span>
+            </button>
+          </div>
+        )}
+
+        {/* Top Branding Bar */}
+        <header className="flex items-center justify-between mb-7">
+          <div className="flex items-center gap-3 text-left min-w-0">
+            <div className="w-11 h-11 rounded-full bg-slate-950 dark:bg-slate-900 flex items-center justify-center shadow-sm p-1 border border-slate-300/60 dark:border-slate-700 shrink-0">
+              {settings?.appLogo ? (
+                <img src={settings.appLogo} alt="Logo" className="w-full h-full object-contain rounded-full" />
+              ) : (
+                <span className="text-[11px] font-black text-amber-400 tracking-tight">{settings?.appShortName || 'NSTA'}</span>
+              )}
+            </div>
+            <div className="min-w-0">
+              <h1 className="text-base sm:text-lg font-black tracking-tight text-slate-900 dark:text-white leading-tight truncate">
+                {settings?.appName || 'NSTA'}
+              </h1>
+              <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                Digital Smart Campus
+              </p>
+            </div>
           </div>
 
-          <div>
-            <h1 className="text-base sm:text-lg font-black tracking-tight text-slate-900 dark:text-white leading-tight">
-              {settings?.appName || 'NSTA'}
-            </h1>
-            <p className="text-[11px] font-semibold text-slate-400 dark:text-slate-500 tracking-normal">
-              Digital Smart Campus
-            </p>
+          <button
+            type="button"
+            onClick={() => setShowGuide(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition cursor-pointer shadow-2xs shrink-0"
+            title="Login Help Guide"
+          >
+            <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+            <span>Live Portal</span>
+          </button>
+        </header>
+
+        {/* ── ERROR NOTICE ── */}
+        {error && (
+          <div className="mb-4 px-3.5 py-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/70 border border-rose-200 dark:border-rose-800/80 text-rose-700 dark:text-rose-200 text-xs font-bold flex items-center justify-between gap-2 animate-in fade-in">
+            <div className="flex items-center gap-2 min-w-0">
+              <XCircle size={15} className="shrink-0 text-rose-500 dark:text-rose-400" />
+              <span className="break-words">{error}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setError(null)}
+              className="text-rose-500 dark:text-rose-300 hover:text-rose-700 dark:hover:text-white font-bold ml-1 shrink-0 cursor-pointer"
+              aria-label="Dismiss error"
+            >
+              ✕
+            </button>
           </div>
-        </div>
+        )}
 
-        {/* Discreet Status Badge */}
-        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-200/60 dark:bg-slate-800/60 border border-slate-300/40 dark:border-slate-700/50 text-[11px] font-bold text-slate-600 dark:text-slate-300">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-          <span>Live Portal</span>
-        </div>
-      </header>
-
-      {/* ── ERROR NOTICE ── */}
-      {error && (
-        <div className="w-full max-w-md mx-auto my-1.5 px-3.5 py-2 rounded-xl bg-rose-50 border border-rose-200 text-rose-600 text-xs font-bold flex items-center justify-between gap-2 animate-in fade-in z-20">
-          <div className="flex items-center gap-2">
-            <XCircle size={15} className="shrink-0 text-rose-500" />
-            <span>{error}</span>
-          </div>
-          <button onClick={() => setError(null)} className="text-rose-500 hover:text-rose-700 font-bold ml-2">✕</button>
-        </div>
-      )}
-
-      {/* ── MAIN CONTENT AREA: FULL PAGE SEAMLESS EXPERIENCE ── */}
-      <main className="flex-1 w-full max-w-md mx-auto px-5 py-4 flex flex-col justify-center z-10">
         {/* ── SUB-VIEW: RECOVERY ── */}
         {view === 'RECOVERY' && (
           <div className="w-full space-y-4 animate-in fade-in duration-200">
-            <div className="text-center">
-              <div className="w-12 h-12 rounded-2xl bg-rose-100 dark:bg-rose-950/40 text-rose-600 flex items-center justify-center mx-auto mb-2 border border-rose-200 dark:border-rose-900/50">
-                <KeyRound size={22} />
+            <div className="mb-2">
+              <div className="w-11 h-11 rounded-2xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center mb-3 border border-rose-200 dark:border-rose-900/60">
+                <KeyRound size={20} />
               </div>
               <h2 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">
                 Instant Recovery
               </h2>
-              <p className="text-xs text-slate-500 mt-1">
+              <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
                 {recoveryStep === 1 ? 'Apna account search karein' : 'Sahi answer se instant login'}
               </p>
             </div>
 
             {recoveryStep === 1 && (
-              <form onSubmit={handleFindRecoveryAccount} className="space-y-3.5">
-                <div className="relative flex items-center rounded-xl">
-                  <UserIcon size={17} className="absolute left-3.5 text-slate-400" />
+              <form onSubmit={handleFindRecoveryAccount} className="space-y-4">
+                <div className="relative flex items-center">
+                  <UserIcon size={17} className="absolute left-3.5 text-slate-400 dark:text-slate-500" />
                   <input
                     name="id"
                     type="text"
@@ -2367,14 +2439,14 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
                     placeholder="Mobile / Email / Student ID"
                     value={formData.id}
                     onChange={handleChange}
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-300/80 dark:border-slate-800 rounded-xl pl-10 pr-3.5 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 outline-none transition font-medium"
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 focus:border-slate-900 dark:focus:border-indigo-400 rounded-xl pl-10 pr-3.5 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 outline-none transition font-medium"
                   />
                 </div>
 
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full py-3.5 rounded-xl text-sm font-black tracking-wider text-white bg-slate-900 hover:bg-black dark:bg-indigo-600 dark:hover:bg-indigo-500 shadow-md transition flex items-center justify-center gap-2 uppercase cursor-pointer"
+                  className="w-full py-3.5 rounded-xl text-sm font-black tracking-wide text-white bg-slate-950 hover:bg-slate-900 dark:bg-indigo-600 dark:hover:bg-indigo-500 shadow-md transition flex items-center justify-center gap-2 uppercase cursor-pointer"
                 >
                   {loading ? <Loader2 size={16} className="animate-spin text-white" /> : <span>FIND ACCOUNT</span>}
                   <ArrowRight size={16} />
@@ -2383,31 +2455,31 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
             )}
 
             {recoveryStep === 2 && (
-              <div className="space-y-3.5">
-                <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 text-left">
-                  <span className="text-[10px] font-bold text-amber-700 dark:text-amber-400 uppercase tracking-wider block">SECURITY QUESTION:</span>
-                  <p className="text-sm font-bold text-slate-800 dark:text-slate-200 mt-1">
+              <div className="space-y-4">
+                <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 text-left">
+                  <span className="text-[10px] font-bold text-amber-700 dark:text-amber-300 uppercase tracking-wider block">SECURITY QUESTION</span>
+                  <p className="text-sm font-bold text-slate-800 dark:text-slate-100 mt-1">
                     {recoveryUserObj?.securityQuestion || "Aapka favorite subject kaunsa hai?"}
                   </p>
                 </div>
 
-                <form onSubmit={handleVerifyAnswerSubmit} className="space-y-3.5">
-                  <div className="relative flex items-center rounded-xl">
-                    <ShieldQuestion size={17} className="absolute left-3.5 text-slate-400" />
+                <form onSubmit={handleVerifyAnswerSubmit} className="space-y-4">
+                  <div className="relative flex items-center">
+                    <ShieldQuestion size={17} className="absolute left-3.5 text-slate-400 dark:text-slate-500" />
                     <input
                       type="text"
                       required
                       placeholder="Enter Security Answer"
                       value={userEnteredAnswer}
                       onChange={(e) => { setUserEnteredAnswer(e.target.value); setError(null); }}
-                      className="w-full bg-white dark:bg-slate-900 border border-slate-300/80 dark:border-slate-800 rounded-xl pl-10 pr-3.5 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 outline-none transition font-medium"
+                      className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 focus:border-emerald-600 dark:focus:border-emerald-400 rounded-xl pl-10 pr-3.5 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 outline-none transition font-medium"
                     />
                   </div>
 
                   <button
                     type="submit"
                     disabled={loading}
-                    className="w-full py-3.5 rounded-xl text-sm font-black tracking-wider text-white bg-slate-900 hover:bg-black dark:bg-emerald-600 dark:hover:bg-emerald-500 shadow-md transition flex items-center justify-center gap-2 uppercase cursor-pointer"
+                    className="w-full py-3.5 rounded-xl text-sm font-black tracking-wide text-white bg-emerald-600 hover:bg-emerald-700 shadow-md transition flex items-center justify-center gap-2 uppercase cursor-pointer"
                   >
                     {loading ? <Loader2 size={16} className="animate-spin text-white" /> : <span>VERIFY &amp; LOGIN</span>}
                     <CheckCircle2 size={16} />
@@ -2416,12 +2488,12 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
               </div>
             )}
 
-            <p className="text-xs text-slate-500 text-center pt-2">
+            <p className="text-xs text-slate-500 dark:text-slate-400 text-center pt-2">
               Wapas login par jaane ke liye:{' '}
               <button
                 type="button"
                 onClick={() => { setView('LOGIN'); setError(null); }}
-                className="font-black text-slate-900 dark:text-white hover:underline cursor-pointer"
+                className="font-black text-slate-900 dark:text-indigo-400 hover:underline cursor-pointer"
               >
                 Login karein
               </button>
@@ -2429,25 +2501,25 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
           </div>
         )}
 
-        {/* ── SUB-VIEW: LOGIN FULL PAGE ── */}
+        {/* ── SUB-VIEW: LOGIN ── */}
         {view === 'LOGIN' && (
-          <div className="w-full space-y-4 animate-in fade-in duration-200">
+          <div className="w-full space-y-5 animate-in fade-in duration-200">
             <div>
               <h2 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white tracking-tight leading-tight">
                 Welcome Back
               </h2>
-              <p className="text-xs sm:text-sm text-slate-500 mt-1">
+              <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
                 Sign in to access your classes &amp; school portal
               </p>
             </div>
 
-            <form onSubmit={handleLoginSubmit} className="w-full space-y-3.5">
-              <div className="space-y-1">
-                <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400">
+            <form onSubmit={handleLoginSubmit} className="w-full space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
                   Mobile / Email / Student ID
                 </label>
-                <div className="relative flex items-center rounded-xl">
-                  <UserIcon size={17} className="absolute left-3.5 text-slate-400" />
+                <div className="relative flex items-center">
+                  <UserIcon size={17} className="absolute left-3.5 text-slate-400 dark:text-slate-500" />
                   <input
                     name="id"
                     type="text"
@@ -2455,18 +2527,18 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
                     placeholder="Mobile, Email ya Student ID"
                     value={formData.id}
                     onChange={handleChange}
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-300/80 dark:border-slate-800 focus:border-slate-900 dark:focus:border-indigo-500 rounded-xl pl-10 pr-3.5 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 font-medium outline-none transition shadow-2xs"
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 focus:border-slate-900 dark:focus:border-indigo-400 rounded-xl pl-10 pr-3.5 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 font-medium outline-none transition shadow-2xs"
                     autoCapitalize="none"
                   />
                 </div>
               </div>
 
-              <div className="space-y-1">
-                <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400">
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
                   Password
                 </label>
-                <div className="relative flex items-center rounded-xl">
-                  <Lock size={17} className="absolute left-3.5 text-slate-400" />
+                <div className="relative flex items-center">
+                  <Lock size={17} className="absolute left-3.5 text-slate-400 dark:text-slate-500" />
                   <input
                     name="password"
                     type={showPassword ? "text" : "password"}
@@ -2476,32 +2548,33 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
                     onChange={handleChange}
                     onFocus={() => setIsPasswordFocused(true)}
                     onBlur={() => setIsPasswordFocused(false)}
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-300/80 dark:border-slate-800 focus:border-slate-900 dark:focus:border-indigo-500 rounded-xl pl-10 pr-10 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 font-medium outline-none transition shadow-2xs"
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 focus:border-slate-900 dark:focus:border-indigo-400 rounded-xl pl-10 pr-10 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 font-medium outline-none transition shadow-2xs"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                    className="absolute right-3.5 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
                   >
-                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                    {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
                   </button>
                 </div>
               </div>
 
               <div className="flex items-center justify-between text-xs pt-0.5">
-                <label className="flex items-center gap-1.5 text-slate-500 cursor-pointer select-none">
+                <label className="flex items-center gap-2 text-slate-600 dark:text-slate-400 cursor-pointer select-none font-medium">
                   <input
                     type="checkbox"
                     checked={rememberMe}
                     onChange={(e) => setRememberMe(e.target.checked)}
-                    className="rounded border-slate-300 text-slate-900 focus:ring-slate-900"
+                    className="w-4 h-4 rounded border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-indigo-500 focus:ring-indigo-500"
                   />
                   <span>Remember me</span>
                 </label>
                 <button
                   type="button"
                   onClick={() => { setView('RECOVERY'); setError(null); }}
-                  className="font-bold text-slate-700 dark:text-indigo-400 hover:underline cursor-pointer"
+                  className="font-black text-slate-900 dark:text-indigo-400 hover:underline cursor-pointer"
                 >
                   Forgot Password?
                 </button>
@@ -2510,61 +2583,58 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full py-3.5 rounded-xl text-sm font-black tracking-wider text-white bg-black hover:bg-neutral-900 border border-neutral-800 shadow-md shadow-black/40 transition-all flex items-center justify-center gap-2 uppercase cursor-pointer active:scale-[0.99]"
+                className="w-full py-3.5 rounded-xl text-sm font-black tracking-wider text-white bg-slate-950 hover:bg-slate-900 dark:bg-indigo-600 dark:hover:bg-indigo-500 shadow-md shadow-slate-900/10 dark:shadow-indigo-950/40 transition-all flex items-center justify-center gap-2 uppercase cursor-pointer active:scale-[0.99]"
               >
                 {loading ? <Loader2 size={16} className="animate-spin text-white" /> : <span>LOGIN</span>}
                 <ArrowRight size={16} />
               </button>
 
-              {/* ── 1-TAP FACE ID LOGIN BUTTON (LIGHT GRAY THEME) ── */}
-              <button
-                type="button"
-                onClick={() => {
-                  setError(null);
-                  setShowFaceLoginModal(true);
-                }}
-                disabled={loading}
-                className="w-full py-3 px-4 rounded-xl text-sm font-bold tracking-wide text-zinc-800 dark:text-zinc-200 bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800/80 dark:hover:bg-zinc-800 border border-zinc-300/80 dark:border-zinc-700 shadow-xs transition-all flex items-center justify-between gap-2.5 cursor-pointer active:scale-[0.99]"
-              >
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="w-8 h-8 rounded-lg bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 flex items-center justify-center shrink-0 border border-zinc-200 dark:border-zinc-700 shadow-2xs">
-                    <ScanFace size={18} />
-                  </div>
-                  <p className="text-xs sm:text-sm font-bold tracking-wide text-zinc-800 dark:text-zinc-200 leading-tight flex items-center gap-1.5 truncate">
-                    <span>Face ID Login (फेस से लॉगिन)</span>
-                    <span className="px-1.5 py-0.5 rounded text-[9px] bg-zinc-200/90 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300 border border-zinc-300 dark:border-zinc-600 font-bold uppercase tracking-wide">
-                      AI Instant
+              {/* ── STACKED BIOMETRIC & QR BUTTONS (Original Layout) ── */}
+              <div className="space-y-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setError(null);
+                    setShowFaceLoginModal(true);
+                  }}
+                  disabled={loading}
+                  className="w-full py-2.5 px-3.5 rounded-xl text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-100 bg-white hover:bg-slate-50 dark:bg-slate-900 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 transition flex items-center justify-between gap-2 cursor-pointer shadow-2xs active:scale-[0.99]"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700 flex items-center justify-center shrink-0">
+                      <ScanFace size={17} className="text-slate-700 dark:text-indigo-400" />
+                    </div>
+                    <span className="truncate">Face ID Login (फेस से लॉगिन)</span>
+                    <span className="px-1.5 py-0.5 rounded-md text-[10px] font-black uppercase bg-slate-100 dark:bg-indigo-500/20 text-slate-600 dark:text-indigo-300 border border-slate-200 dark:border-indigo-500/30 shrink-0">
+                      AI INSTANT
                     </span>
-                  </p>
-                </div>
-                <ArrowRight size={16} className="text-zinc-500 dark:text-zinc-400 shrink-0" />
-              </button>
-
-              {/* ── 1-TAP QR CODE LOGIN BUTTON (LIGHT GRAY THEME) ── */}
-              <button
-                type="button"
-                onClick={() => {
-                  setError(null);
-                  setShowQrModal(true);
-                }}
-                disabled={loading}
-                className="w-full py-3 px-4 rounded-xl text-sm font-bold tracking-wide text-zinc-800 dark:text-zinc-200 bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800/80 dark:hover:bg-zinc-800 border border-zinc-300/80 dark:border-zinc-700 shadow-xs transition-all flex items-center justify-between gap-2.5 cursor-pointer active:scale-[0.99]"
-              >
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="w-8 h-8 rounded-lg bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 flex items-center justify-center shrink-0 border border-zinc-200 dark:border-zinc-700 shadow-2xs">
-                    <QrCode size={18} />
                   </div>
-                  <p className="text-xs sm:text-sm font-bold tracking-wide text-zinc-800 dark:text-zinc-200 leading-tight truncate">
-                    Login with ID Card QR Code
-                  </p>
-                </div>
-                <ArrowRight size={16} className="text-zinc-500 dark:text-zinc-400 shrink-0" />
-              </button>
+                  <ArrowRight size={16} className="text-slate-400 dark:text-slate-500 shrink-0" />
+                </button>
 
-              {/* ── HIGHLIGHTED DIVIDER ABOVE GOOGLE BUTTON ── */}
-              <div className="relative my-4 flex items-center justify-center">
-                <div className="w-full border-t-2 border-slate-400 dark:border-slate-600 shadow-xs" />
-                <span className="bg-slate-100 dark:bg-slate-900 border-2 border-slate-400 dark:border-slate-600 px-3.5 py-0.5 rounded-full text-[11px] font-extrabold text-slate-800 dark:text-slate-200 uppercase tracking-wider shadow-sm absolute">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setError(null);
+                    setShowQrModal(true);
+                  }}
+                  disabled={loading}
+                  className="w-full py-2.5 px-3.5 rounded-xl text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-100 bg-white hover:bg-slate-50 dark:bg-slate-900 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 transition flex items-center justify-between gap-2 cursor-pointer shadow-2xs active:scale-[0.99]"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700 flex items-center justify-center shrink-0">
+                      <QrCode size={17} className="text-slate-700 dark:text-emerald-400" />
+                    </div>
+                    <span className="truncate">Login with ID Card QR Code</span>
+                  </div>
+                  <ArrowRight size={16} className="text-slate-400 dark:text-slate-500 shrink-0" />
+                </button>
+              </div>
+
+              {/* ── OR DIVIDER (Original Centered Badge) ── */}
+              <div className="relative flex items-center justify-center my-2 py-1">
+                <div className="w-full h-px bg-slate-200 dark:bg-slate-800" />
+                <span className="absolute px-3 py-0.5 rounded-full bg-[#F8F9FB] dark:bg-[#070b14] border border-slate-200 dark:border-slate-800 text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                   OR
                 </span>
               </div>
@@ -2573,9 +2643,9 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
                 type="button"
                 onClick={handleGoogleSignIn}
                 disabled={loading}
-                className="w-full py-3 rounded-xl bg-white hover:bg-slate-100 dark:bg-slate-900 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-sm font-bold flex items-center justify-center gap-2 border border-slate-300/80 dark:border-slate-800 transition cursor-pointer shadow-2xs active:scale-[0.99]"
+                className="w-full py-3 rounded-xl bg-white hover:bg-slate-50 dark:bg-slate-900 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm font-bold flex items-center justify-center gap-2.5 border border-slate-200 dark:border-slate-800 transition cursor-pointer shadow-2xs active:scale-[0.99]"
               >
-                <svg className="w-4 h-4" viewBox="0 0 24 24">
+                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
                   <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
                   <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
                   <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
@@ -2586,7 +2656,7 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
             </form>
 
             <div className="pt-2 text-center">
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-slate-500 dark:text-slate-400">
                 Naya student account banana hai?{' '}
                 <button
                   type="button"
@@ -2600,23 +2670,23 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
           </div>
         )}
 
-        {/* ── SUB-VIEW: CREATE ACCOUNT FULL PAGE ── */}
+        {/* ── SUB-VIEW: CREATE ACCOUNT ── */}
         {view === 'SIGNUP' && (
-          <div className="w-full space-y-3.5 animate-in fade-in duration-200">
+          <div className="w-full space-y-4 animate-in fade-in duration-200">
             <div>
               <h2 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white tracking-tight leading-tight">
                 Create Account
               </h2>
-              <p className="text-xs sm:text-sm text-slate-500 mt-1">
+              <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
                 New student permanent ID generate karein
               </p>
             </div>
 
-            <form onSubmit={handleSignupSubmit} className="w-full space-y-3">
+            <form onSubmit={handleSignupSubmit} className="w-full space-y-3.5">
               <div className="space-y-1">
-                <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400">Full Name</label>
-                <div className="relative flex items-center rounded-xl">
-                  <UserIcon size={17} className="absolute left-3.5 text-slate-400" />
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300">Full Name</label>
+                <div className="relative flex items-center">
+                  <UserIcon size={16} className="absolute left-3.5 text-slate-400 dark:text-slate-500" />
                   <input
                     name="name"
                     type="text"
@@ -2624,15 +2694,15 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
                     placeholder="Poora Naam (Full Name)"
                     value={formData.name}
                     onChange={handleChange}
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-300/80 dark:border-slate-800 rounded-xl pl-10 pr-3.5 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 font-medium outline-none transition"
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 focus:border-slate-900 dark:focus:border-indigo-400 rounded-xl pl-10 pr-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 font-medium outline-none transition"
                   />
                 </div>
               </div>
 
               <div className="space-y-1">
-                <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400">Mobile Number</label>
-                <div className="relative flex items-center rounded-xl">
-                  <Phone size={17} className="absolute left-3.5 text-slate-400" />
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300">Mobile Number</label>
+                <div className="relative flex items-center">
+                  <Phone size={16} className="absolute left-3.5 text-slate-400 dark:text-slate-500" />
                   <input
                     name="mobile"
                     type="tel"
@@ -2640,30 +2710,30 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
                     placeholder="10-digit Mobile Number"
                     value={formData.mobile}
                     onChange={handleChange}
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-300/80 dark:border-slate-800 rounded-xl pl-10 pr-3.5 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 font-medium outline-none transition"
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 focus:border-slate-900 dark:focus:border-indigo-400 rounded-xl pl-10 pr-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 font-medium outline-none transition"
                   />
                 </div>
               </div>
 
               <div className="space-y-1">
-                <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400">Email Address (Optional)</label>
-                <div className="relative flex items-center rounded-xl">
-                  <Mail size={17} className="absolute left-3.5 text-slate-400" />
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300">Email Address (Optional)</label>
+                <div className="relative flex items-center">
+                  <Mail size={16} className="absolute left-3.5 text-slate-400 dark:text-slate-500" />
                   <input
                     name="email"
                     type="email"
                     placeholder="Email ID (e.g. name@gmail.com)"
                     value={formData.email}
                     onChange={handleChange}
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-300/80 dark:border-slate-800 rounded-xl pl-10 pr-3.5 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 font-medium outline-none transition"
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 focus:border-slate-900 dark:focus:border-indigo-400 rounded-xl pl-10 pr-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 font-medium outline-none transition"
                   />
                 </div>
               </div>
 
               <div className="space-y-1">
-                <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400">Create Password</label>
-                <div className="relative flex items-center rounded-xl">
-                  <Lock size={17} className="absolute left-3.5 text-slate-400" />
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300">Create Password</label>
+                <div className="relative flex items-center">
+                  <Lock size={16} className="absolute left-3.5 text-slate-400 dark:text-slate-500" />
                   <input
                     name="password"
                     type={showPassword ? "text" : "password"}
@@ -2671,25 +2741,26 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
                     placeholder="Password banayein"
                     value={formData.password}
                     onChange={handleChange}
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-300/80 dark:border-slate-800 rounded-xl pl-10 pr-10 py-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 font-medium outline-none transition"
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 focus:border-slate-900 dark:focus:border-indigo-400 rounded-xl pl-10 pr-10 py-2.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 font-medium outline-none transition"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                    className="absolute right-3.5 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
                   >
                     {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                   </button>
                 </div>
               </div>
 
-              <div className="space-y-1.5 pt-1">
-                <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400 block">Security Question (ID recovery ke liye)</label>
+              <div className="space-y-1.5 pt-0.5">
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block">Security Question (ID recovery ke liye)</label>
                 <select
                   name="securityQuestion"
                   value={formData.securityQuestion}
                   onChange={handleChange}
-                  className="w-full px-3 py-2.5 bg-white dark:bg-slate-900 border border-slate-300/80 dark:border-slate-800 rounded-xl text-xs sm:text-sm text-slate-700 dark:text-slate-300 outline-none"
+                  className="w-full px-3 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs sm:text-sm text-slate-800 dark:text-slate-200 outline-none"
                 >
                   {DEFAULT_QUESTIONS.map(q => (
                     <option key={q} value={q}>{q}</option>
@@ -2702,23 +2773,22 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
                   placeholder="Aapka answer yahan likhein"
                   value={formData.securityAnswer}
                   onChange={handleChange}
-                  className="w-full px-3.5 py-2.5 bg-white dark:bg-slate-900 border border-slate-300/80 dark:border-slate-800 rounded-xl text-xs sm:text-sm text-slate-900 dark:text-white outline-none"
+                  className="w-full px-3.5 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 outline-none"
                 />
               </div>
 
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full py-3.5 rounded-xl text-sm font-black tracking-wider text-white bg-emerald-600 hover:bg-emerald-500 shadow-md transition-all flex items-center justify-center gap-2 uppercase cursor-pointer active:scale-[0.99] mt-2"
+                className="w-full py-3.5 rounded-xl text-sm font-black tracking-wide text-white bg-emerald-600 hover:bg-emerald-700 shadow-md transition-all flex items-center justify-center gap-2 uppercase cursor-pointer active:scale-[0.99] mt-1"
               >
                 {loading ? <Loader2 size={16} className="animate-spin text-white" /> : <span>CREATE ACCOUNT</span>}
                 <CheckCircle2 size={16} />
               </button>
 
-              {/* ── HIGHLIGHTED DIVIDER ABOVE GOOGLE BUTTON ── */}
-              <div className="relative my-4 flex items-center justify-center">
-                <div className="w-full border-t-2 border-slate-300 dark:border-slate-700 shadow-xs" />
-                <span className="bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 px-3.5 py-0.5 rounded-full text-[11px] font-extrabold text-slate-700 dark:text-slate-200 uppercase tracking-wider shadow-sm absolute">
+              <div className="relative flex items-center justify-center my-2 py-1">
+                <div className="w-full h-px bg-slate-200 dark:bg-slate-800" />
+                <span className="absolute px-3 py-0.5 rounded-full bg-[#F8F9FB] dark:bg-[#070b14] border border-slate-200 dark:border-slate-800 text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                   OR
                 </span>
               </div>
@@ -2727,9 +2797,9 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
                 type="button"
                 onClick={handleGoogleSignIn}
                 disabled={loading}
-                className="w-full py-3 rounded-xl bg-white hover:bg-slate-100 dark:bg-slate-900 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-sm font-bold flex items-center justify-center gap-2 border border-slate-300/80 dark:border-slate-800 transition cursor-pointer shadow-2xs active:scale-[0.99]"
+                className="w-full py-3 rounded-xl bg-white hover:bg-slate-50 dark:bg-slate-900 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm font-bold flex items-center justify-center gap-2.5 border border-slate-200 dark:border-slate-800 transition cursor-pointer shadow-2xs active:scale-[0.99]"
               >
-                <svg className="w-4 h-4" viewBox="0 0 24 24">
+                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
                   <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
                   <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
                   <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
@@ -2740,7 +2810,7 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
             </form>
 
             <div className="pt-2 text-center">
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-slate-500 dark:text-slate-400">
                 Pehle se account hai?{' '}
                 <button
                   type="button"
@@ -2757,20 +2827,20 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
         {/* ── SUB-VIEW: SUCCESS ID ── */}
         {view === 'SUCCESS_ID' && (
           <div className="w-full text-center space-y-4 animate-in fade-in duration-200">
-            <div className="w-14 h-14 rounded-full bg-emerald-500/20 text-emerald-500 flex items-center justify-center mx-auto border border-emerald-500/30">
-              <CheckCircle2 size={28} />
+            <div className="w-12 h-12 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto border border-emerald-500/30">
+              <CheckCircle2 size={24} />
             </div>
             <div>
               <h3 className="text-xl font-black text-slate-900 dark:text-white">Account Ban Gaya!</h3>
-              <p className="text-xs text-slate-500 mt-1">Yeh aapki permanent NSTA Student ID hai:</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Yeh aapki permanent NSTA Student ID hai:</p>
             </div>
 
-            <div className="p-4 bg-white dark:bg-slate-900 border border-slate-300/80 dark:border-slate-800 rounded-2xl flex items-center justify-between shadow-xs">
-              <span className="font-mono text-lg font-black text-amber-500">{generatedId}</span>
+            <div className="p-3.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl flex items-center justify-between shadow-2xs">
+              <span className="font-mono text-base sm:text-lg font-black text-amber-600 dark:text-amber-400">{generatedId}</span>
               <button
                 type="button"
                 onClick={handleCopyId}
-                className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                className="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-800 dark:text-slate-100 flex items-center gap-1.5 transition cursor-pointer"
               >
                 {copied ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
                 <span>{copied ? 'Copied!' : 'Copy'}</span>
@@ -2782,16 +2852,16 @@ export const Auth: React.FC<Props> = ({ onLogin, logActivity, appSettings, onOpe
               onClick={() => {
                 if (pendingLoginUser) onLogin(pendingLoginUser);
               }}
-              className="w-full py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs uppercase tracking-wider shadow-lg transition cursor-pointer active:scale-[0.99]"
+              className="w-full py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs uppercase tracking-wider shadow-md transition cursor-pointer active:scale-[0.99]"
             >
               Start Learning Now
             </button>
           </div>
         )}
-      </main>
+      </div>
 
       {/* FOOTER */}
-      <footer className="w-full max-w-md mx-auto text-center py-3 z-10 text-[11px] text-slate-400 shrink-0">
+      <footer className="w-full max-w-md mx-auto text-center pt-5 z-10 text-[11px] text-slate-400 dark:text-slate-500 shrink-0">
         <p>NSTA • Powered School ERP &amp; Smart Learning</p>
       </footer>
 

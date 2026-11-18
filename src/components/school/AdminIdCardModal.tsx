@@ -11,6 +11,7 @@ import type { School } from "../../school-types";
 import { getSavedSchoolLogo, cleanLogoUrl, formatAcademicSession } from "./feeReceiptUtils";
 import { printElementInIframe } from "./AdmissionFormPrintModal";
 import { safeOpenExternalUrl, getDynamicAcademicSessionLabel } from "../../utils/safeBrowserActions";
+import { buildStaffIdCardQrUrl } from "../../utils/qrVerifyUrl";
 
 interface Props {
   isOpen: boolean;
@@ -52,25 +53,23 @@ export const AdminIdCardModal: React.FC<Props> = ({
   const bloodGroup = (school as any)?.principalBloodGroup || "—";
   const address = school?.address || "Main Campus";
 
-  // Standardized Admin Login & Attendance QR Code
-  // Format: NSTA-SCHOOL-STAFF:schoolId:id:rollOrEmp:classOrDept:name:admNo:phone:father:mother:blood:dob:address:fee:title:schoolName
-  const qrVerifyUrl = `NSTA-SCHOOL-STAFF:${[
-    encodeURIComponent(school?.id || "school"),
-    encodeURIComponent("ADMIN-01"),
-    encodeURIComponent("ADMIN-01"),
-    encodeURIComponent("Administration & Head"),
-    encodeURIComponent(principalName),
-    encodeURIComponent("ADM-001"),
-    encodeURIComponent(phone),
-    encodeURIComponent("Executive Committee"),
-    encodeURIComponent("Management Board"),
-    encodeURIComponent(bloodGroup),
-    encodeURIComponent(""),
-    encodeURIComponent(address),
-    encodeURIComponent("0"),
-    encodeURIComponent("SCHOOL_ADMIN"),
-    encodeURIComponent(schoolName),
-  ].join(":")}`;
+  // Standardized Admin Chrome Verify + Login + Attendance QR Code
+  const qrVerifyUrl = buildStaffIdCardQrUrl({
+    isAdmin: true,
+    schoolId: school?.id || "school",
+    staffId: "ADMIN-01",
+    empId: "ADMIN-01",
+    department: "Administration & Head",
+    name: principalName,
+    admNo: "ADM-001",
+    phone,
+    fatherName: "Executive Committee",
+    motherName: "Management Board",
+    bloodGroup,
+    address,
+    designation: "SCHOOL_ADMIN",
+    schoolName,
+  });
 
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -306,7 +305,7 @@ export const AdminIdCardModal: React.FC<Props> = ({
                   {/* Right Column: Attendance QR Code & Barcode */}
                   <div className="col-span-3 flex flex-col items-center justify-center text-center">
                     <div className="p-1.5 bg-white rounded-xl shadow-inner border border-amber-400/40">
-                      <QRCode value={qrVerifyUrl} size={64} level="M" />
+                      <QRCode value={qrVerifyUrl} size={64} level="L" />
                     </div>
                     <span className="text-[8px] font-mono text-amber-200 mt-1 uppercase tracking-tight">
                       Scan To Punch
@@ -400,7 +399,7 @@ export const AdminIdCardModal: React.FC<Props> = ({
                 {/* Footer with QR Code & Sign */}
                 <div className="bg-slate-900/90 border-t border-amber-400/30 p-2.5 flex items-center justify-between gap-2">
                   <div className="p-1 bg-white rounded-lg shadow-sm shrink-0">
-                    <QRCode value={qrVerifyUrl} size={46} level="M" />
+                    <QRCode value={qrVerifyUrl} size={46} level="L" />
                   </div>
                   <div className="flex-1 text-right min-w-0">
                     {signatureUrl ? (

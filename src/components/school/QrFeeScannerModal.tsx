@@ -47,10 +47,12 @@ export function parseIdCardQr(rawText: string) {
     }
   };
 
-  // Case 1: NSTA-SCHOOL format (Standard generated ID Card QR)
-  if (text.startsWith("NSTA-SCHOOL:") || text.startsWith("NSTA-SCHOOL-STAFF:")) {
-    const rawParts = text.replace(/^NSTA-SCHOOL(-STAFF)?:/, "").split(":");
-    const parts = rawParts.map(decodePart);
+  // Case 1: NSTA-SCHOOL format (raw or inside Chrome verification URL #hash)
+  if (text.includes("NSTA-SCHOOL:") || text.includes("NSTA-SCHOOL-STAFF:")) {
+    const tokenBody = text.includes("NSTA-SCHOOL-STAFF:")
+      ? (text.split("NSTA-SCHOOL-STAFF:")[1] || "").split(/[\r\n]/)[0]
+      : (text.split("NSTA-SCHOOL:")[1] || "").split(/[\r\n]/)[0];
+    const parts = tokenBody.split(":").map(decodePart);
     if (parts.length >= 2) {
       studentId = parts[1] || "";
       rollNo = parts[2] || "";

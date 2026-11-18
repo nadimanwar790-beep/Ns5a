@@ -154,21 +154,21 @@ export const SchoolClassChannelView: React.FC<Props> = ({
   return (
     <div className="flex flex-col h-full bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
       {/* Channel Header (WhatsApp-style Broadcast Header) */}
-      <div className="p-3.5 sm:p-4 bg-gradient-to-r from-indigo-900 via-indigo-950 to-slate-950 text-white flex items-center justify-between shadow-md shrink-0 border-b border-indigo-800/40">
+      <div className="p-3.5 sm:p-4 bg-gradient-to-r from-indigo-50 via-blue-50 to-sky-50 dark:from-indigo-900 dark:via-indigo-950 dark:to-slate-950 text-slate-900 dark:text-white flex items-center justify-between shadow-sm shrink-0 border-b-2 border-indigo-700 dark:border-indigo-800/40">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-indigo-600/30 border border-indigo-400/40 flex items-center justify-center text-indigo-300 shrink-0 shadow-sm">
+          <div className="w-10 h-10 rounded-2xl bg-indigo-100 dark:bg-indigo-600/30 border-2 border-indigo-700/50 dark:border-indigo-400/40 flex items-center justify-center text-indigo-700 dark:text-indigo-300 shrink-0 shadow-xs">
             <Bell className="w-5 h-5" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm sm:text-base font-black text-white leading-tight">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="text-sm sm:text-base font-black text-slate-900 dark:text-white leading-tight">
                 {studentClass} Official Channel
               </h3>
-              <span className="px-2 py-0.2 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+              <span className="px-2 py-0.2 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-100 dark:bg-emerald-500/20 text-emerald-900 dark:text-emerald-300 border border-emerald-700/50 dark:border-emerald-500/30">
                 1-Way Broadcast
               </span>
             </div>
-            <p className="text-[11px] text-indigo-200 font-medium mt-0.5">
+            <p className="text-[11px] text-slate-700 dark:text-indigo-200 font-semibold mt-0.5">
               {school?.name || "DPS School"} • Lock-Screen Alerts & A6 Fee Slips
             </p>
           </div>

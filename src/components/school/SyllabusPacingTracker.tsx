@@ -303,10 +303,10 @@ export const SyllabusPacingTracker: React.FC<Props> = ({
                 <div
                   key={p.id}
                   onClick={() => setSelectedPacingId(p.id)}
-                  className={`p-3.5 rounded-2xl border transition-all cursor-pointer relative ${
+                  className={`p-3.5 rounded-2xl border-2 transition-all cursor-pointer relative ${
                     isSelected
-                      ? "bg-gradient-to-r from-indigo-950/80 to-slate-900 border-indigo-400 shadow-xl shadow-indigo-500/20 ring-2 ring-indigo-400/40"
-                      : "bg-slate-950/60 border-slate-800 hover:border-slate-700"
+                      ? "bg-gradient-to-r from-indigo-50 to-blue-50 dark:from-indigo-950/80 dark:to-slate-900 border-indigo-700 dark:border-indigo-400 shadow-lg ring-2 ring-indigo-500/20"
+                      : "bg-white dark:bg-slate-950/60 border-slate-300 dark:border-slate-800 hover:border-indigo-600 dark:hover:border-slate-700"
                   }`}
                 >
                   <div className="flex items-start justify-between gap-2 mb-1.5">
@@ -363,17 +363,17 @@ export const SyllabusPacingTracker: React.FC<Props> = ({
           {activePacing && (
             <div className="space-y-4">
               {/* Detailed Progress Card */}
-              <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-slate-950 to-indigo-950/60 border border-indigo-500/30 space-y-4 print:bg-none print:bg-white print:border-slate-300 print:text-slate-900">
+              <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-indigo-50 to-blue-50 dark:from-slate-950 dark:to-indigo-950/60 border-2 border-indigo-700 dark:border-indigo-500/30 space-y-4 print:bg-none print:bg-white print:border-slate-300 print:text-slate-900">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
-                    <span className="px-2.5 py-0.5 rounded-md text-[10px] font-black bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 print:bg-slate-100 print:text-slate-800 print:border-slate-300">
+                    <span className="px-2.5 py-0.5 rounded-md text-[10px] font-black bg-indigo-100 dark:bg-indigo-500/20 text-indigo-900 dark:text-indigo-300 border border-indigo-700/50 dark:border-indigo-500/30 print:bg-slate-100 print:text-slate-800 print:border-slate-300">
                       {activePacing.className}
                     </span>
-                    <h3 className="text-lg sm:text-xl font-black text-white mt-1 print:text-slate-900">
+                    <h3 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white mt-1 print:text-slate-900">
                       {activePacing.subject}
                     </h3>
-                    <p className="text-xs text-slate-300 mt-0.5 print:text-slate-700">
-                      Teacher Incharge: <b className="text-amber-400 print:text-slate-900">{activePacing.teacherName}</b> &bull; Target Finish: <b className="text-white print:text-slate-900">{activePacing.targetCompletionDate}</b>
+                    <p className="text-xs text-slate-700 dark:text-slate-300 font-medium mt-0.5 print:text-slate-700">
+                      Teacher Incharge: <b className="text-amber-800 dark:text-amber-400 print:text-slate-900">{activePacing.teacherName}</b> &bull; Target Finish: <b className="text-slate-900 dark:text-white print:text-slate-900">{activePacing.targetCompletionDate}</b>
                     </p>
                   </div>
 

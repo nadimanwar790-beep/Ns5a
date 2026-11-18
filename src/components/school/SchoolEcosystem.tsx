@@ -6,6 +6,11 @@ import {
   getStudents,
   setLocalStudents,
   getTeachers,
+  getAccountants,
+  getLocalAccountants,
+  getDeletedTeacherIds,
+  isActiveSchoolTeacherRecord,
+  isActiveStaffRecord,
   saveUserLinkedStudents,
   getUserLinkedStudents,
   getLocalUserLinkedStudents,
@@ -51,6 +56,7 @@ import {
   Building2,
   Briefcase,
   LogOut,
+  Globe,
 } from "lucide-react";
 
 // Resilient dynamic import helper with automatic retry & fallback
@@ -187,6 +193,8 @@ interface Props {
   onOpenStudentDashboard?: () => void;
   onLogout?: () => void;
   onOpenAdminDashboard?: () => void;
+  onVisitWebsite?: (schoolId?: string) => void;
+  onOpenPublicAdmission?: (schoolId?: string) => void;
 }
 
 const isSuperAdminEmail = (emailStr?: string | null): boolean => {
@@ -247,7 +255,9 @@ export const SchoolEcosystem: React.FC<Props> = ({
   onOpenPlatformContent,
   onOpenStudentDashboard,
   onLogout,
-  onOpenAdminDashboard
+  onOpenAdminDashboard,
+  onVisitWebsite,
+  onOpenPublicAdmission,
 }) => {
   const [profile, setProfile] = useState<SchoolUserProfile | null | undefined>(undefined);
   const [loading, setLoading] = useState(true);
@@ -263,6 +273,37 @@ export const SchoolEcosystem: React.FC<Props> = ({
   });
   const [selectedAdminSchoolId, setSelectedAdminSchoolId] = useState<string>("");
   const [showSuperAdminHub, setShowSuperAdminHub] = useState<boolean>(false);
+  const [erpTheme, setErpTheme] = useState<"current" | "white" | "black">(() => {
+    try {
+      const saved = (localStorage.getItem("nst_app_theme") || localStorage.getItem("nst_student_theme")) as any;
+      if (saved === "white" || saved === "black" || saved === "current") return saved;
+    } catch {}
+    return "current";
+  });
+
+  useEffect(() => {
+    const syncTheme = () => {
+      try {
+        const saved = (localStorage.getItem("nst_app_theme") || localStorage.getItem("nst_student_theme")) as any;
+        if (saved === "white" || saved === "black" || saved === "current") {
+          setErpTheme(saved);
+        }
+      } catch {}
+    };
+    window.addEventListener("nst-dark-theme-change", syncTheme);
+    window.addEventListener("storage", syncTheme);
+    return () => {
+      window.removeEventListener("nst-dark-theme-change", syncTheme);
+      window.removeEventListener("storage", syncTheme);
+    };
+  }, []);
+
+  const shellThemeClass =
+    erpTheme === "white"
+      ? "bg-[#eef2f7] text-slate-900"
+      : erpTheme === "black"
+      ? "dark bg-black text-white"
+      : "dark bg-[#08142c] text-slate-100";
 
   // Keep demo toggle state in sync across components
   useEffect(() => {
@@ -350,7 +391,10 @@ export const SchoolEcosystem: React.FC<Props> = ({
 
   // 3. PERSISTENT MULTI-STUDENT LINKED LIST + TEACHER ENTITY
   const isDirectStudentLoginProvider =
-    user?.provider === "qr_student_id" || user?.provider === "face_recognition_login";
+    user?.provider === "qr_student_id" ||
+    user?.provider === "face_recognition_login" ||
+    user?.provider === "student_record" ||
+    (user?.userType === "SCHOOL_STUDENT" && Boolean(user?.admissionNo || user?.studentId));
 
   const [linkedStudents, setLinkedStudents] = useState<any[]>(() => {
     if (isDirectStudentLoginProvider) {
@@ -749,6 +793,75 @@ export const SchoolEcosystem: React.FC<Props> = ({
       ? selectedAdminSchoolId
       : (linkedEntity?.schoolId || profile?.schoolId || user?.schoolId || defaultSchoolId || (allSchools[0]?.id || ""));
 
+  const [dualPortalChoice, setDualPortalChoice] = useState<"AUTO" | "TEACHER" | "ACCOUNTANT">("AUTO");
+  const [dualRoleMatch, setDualRoleMatch] = useState<{
+    hasTeacher: boolean;
+    hasAccountant: boolean;
+    teacherRec?: any;
+    accountantRec?: any;
+  }>({ hasTeacher: false, hasAccountant: false });
+
+  useEffect(() => {
+    if (!effectiveSchoolId || isExplicitAdmin || (!isRealTeacher && !isAccountantRole)) {
+      setDualRoleMatch({ hasTeacher: false, hasAccountant: false });
+      return;
+    }
+    let cancelled = false;
+    const normPhone = (p?: string) => String(p || "").replace(/[^0-9]/g, "").slice(-10);
+    const normName = (n?: string) => String(n || "").trim().toLowerCase();
+    const myId = linkedEntity?.id || profile?.teacherRef || uid || "";
+    const myPhone = normPhone(user?.mobile || user?.phone || linkedEntity?.phone || "");
+    const myName = normName(linkedEntity?.name || profile?.name || user?.name || displayName || "");
+
+    const evaluateDual = (teacherPool: any[], accPool: any[]) => {
+      if (cancelled) return;
+      const tMatch = (teacherPool || []).find(
+        (t) =>
+          t &&
+          isActiveSchoolTeacherRecord(t) &&
+          (t.id === myId ||
+            (myPhone.length >= 8 && normPhone(t.phone) === myPhone) ||
+            (myName && normName(t.name) === myName))
+      );
+      const aMatch = (accPool || []).find(
+        (a) =>
+          a &&
+          a.active !== false &&
+          (a.id === myId ||
+            a.teacherRef === myId ||
+            (tMatch && (a.teacherRef === tMatch.id || a.id === tMatch.id)) ||
+            (myPhone.length >= 8 && normPhone(a.phone) === myPhone) ||
+            (myName && normName(a.name) === myName))
+      );
+      setDualRoleMatch({
+        hasTeacher: Boolean(tMatch || isRealTeacher),
+        hasAccountant: Boolean(aMatch || isAccountantRole),
+        teacherRec: tMatch,
+        accountantRec: aMatch,
+      });
+    };
+
+    try {
+      const delSet = getDeletedTeacherIds(effectiveSchoolId);
+      const localTeachers: any[] = JSON.parse(
+        localStorage.getItem(`nst_school_teachers_${effectiveSchoolId}`) || "[]"
+      ).filter((t: any) => isActiveSchoolTeacherRecord(t) && !delSet.has(t.id));
+      const localAccs = getLocalAccountants(effectiveSchoolId);
+      evaluateDual(localTeachers, localAccs);
+    } catch {}
+
+    Promise.all([
+      getTeachers(effectiveSchoolId).catch(() => []),
+      getAccountants(effectiveSchoolId).catch(() => []),
+    ])
+      .then(([ts, accs]) => evaluateDual(ts || [], accs || []))
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveSchoolId, isExplicitAdmin, isRealTeacher, isAccountantRole, uid, linkedEntity?.id]);
+
   // ── QR SCAN & MANUAL INPUT HANDLER ──────────────────────────────────────────
   const handleLinkSuccess = (decodedRaw: string, targetType: "AUTO" | "STUDENT" | "TEACHER" = "AUTO") => {
     setLinkError(null);
@@ -779,8 +892,11 @@ export const SchoolEcosystem: React.FC<Props> = ({
         const qClean = raw.toLowerCase().trim();
         const cleanDigits = qClean.replace(/\D/g, "");
         try {
-          const cachedT: any[] = JSON.parse(localStorage.getItem(`nst_school_teachers_${effectiveSchoolId}`) || "[]");
-          const cachedS: any[] = JSON.parse(localStorage.getItem(`nst_school_staff_${effectiveSchoolId}`) || "[]");
+          const delSet = getDeletedTeacherIds(effectiveSchoolId);
+          const cachedT: any[] = JSON.parse(localStorage.getItem(`nst_school_teachers_${effectiveSchoolId}`) || "[]")
+            .filter((t: any) => isActiveSchoolTeacherRecord(t) && !delSet.has(t.id));
+          const cachedS: any[] = JSON.parse(localStorage.getItem(`nst_school_staff_${effectiveSchoolId}`) || "[]")
+            .filter((s: any) => isActiveStaffRecord(s) && !delSet.has(s.id));
           const pool = [...cachedT, ...cachedS];
           matchedTeacher = pool.find((t: any) => {
             if (!t) return false;
@@ -823,8 +939,11 @@ export const SchoolEcosystem: React.FC<Props> = ({
           const qClean = raw.toLowerCase().trim();
           const cleanDigits = qClean.replace(/\D/g, "");
           try {
-            const cachedT: any[] = JSON.parse(localStorage.getItem(`nst_school_teachers_${schId}`) || "[]");
-            const cachedS: any[] = JSON.parse(localStorage.getItem(`nst_school_staff_${schId}`) || "[]");
+            const delSet = getDeletedTeacherIds(schId);
+            const cachedT: any[] = JSON.parse(localStorage.getItem(`nst_school_teachers_${schId}`) || "[]")
+              .filter((t: any) => isActiveSchoolTeacherRecord(t) && !delSet.has(t.id));
+            const cachedS: any[] = JSON.parse(localStorage.getItem(`nst_school_staff_${schId}`) || "[]")
+              .filter((s: any) => isActiveStaffRecord(s) && !delSet.has(s.id));
             const pool = [...cachedT, ...cachedS];
             const found = pool.find((t: any) => {
               if (!t) return false;
@@ -1122,10 +1241,14 @@ export const SchoolEcosystem: React.FC<Props> = ({
   if (isRealSchoolAdmin) {
     if (adminPreviewRole === "STUDENT") {
       return (
-        <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100">
-          <div className="sticky top-0 z-50 px-4 py-2 bg-indigo-950/90 border-b border-indigo-700/50 backdrop-blur-md flex items-center justify-between">
-            <div className="flex items-center gap-2 text-xs font-bold text-indigo-300">
-              <GraduationCap className="w-4 h-4 text-indigo-400" />
+        <div className={`min-h-screen flex flex-col ${shellThemeClass}`}>
+          <div className={`sticky top-0 z-50 px-4 py-2 border-b backdrop-blur-md flex items-center justify-between ${
+            erpTheme === "white"
+              ? "bg-indigo-50/95 border-indigo-200 text-indigo-900"
+              : "bg-indigo-950/90 border-indigo-700/50 text-indigo-200"
+          }`}>
+            <div className="flex items-center gap-2 text-xs font-bold">
+              <GraduationCap className={`w-4 h-4 ${erpTheme === "white" ? "text-indigo-700" : "text-indigo-400"}`} />
               <span>Admin Preview Mode: Student View</span>
             </div>
             <button
@@ -1145,6 +1268,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
                 classId={profile?.classId || user?.classLevel || "cls_10"}
                 sessionId={profile?.sessionId || "2026-27"}
                 onOpenPlatformContent={onOpenPlatformContent}
+                onVisitWebsite={onVisitWebsite ? () => onVisitWebsite(effectiveSchoolId) : undefined}
                 onBack={() => setAdminPreviewRole("ADMIN")}
               />
             </Suspense>
@@ -1155,10 +1279,14 @@ export const SchoolEcosystem: React.FC<Props> = ({
 
     if (adminPreviewRole === "TEACHER") {
       return (
-        <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100">
-          <div className="sticky top-0 z-50 px-4 py-2 bg-purple-950/90 border-b border-purple-700/50 backdrop-blur-md flex items-center justify-between">
-            <div className="flex items-center gap-2 text-xs font-bold text-purple-300">
-              <UserCheck className="w-4 h-4 text-purple-400" />
+        <div className={`min-h-screen flex flex-col ${shellThemeClass}`}>
+          <div className={`sticky top-0 z-50 px-4 py-2 border-b backdrop-blur-md flex items-center justify-between ${
+            erpTheme === "white"
+              ? "bg-purple-50/95 border-purple-200 text-purple-900"
+              : "bg-purple-950/90 border-purple-700/50 text-purple-200"
+          }`}>
+            <div className="flex items-center gap-2 text-xs font-bold">
+              <UserCheck className={`w-4 h-4 ${erpTheme === "white" ? "text-purple-700" : "text-purple-400"}`} />
               <span>Admin Preview Mode: Teacher View</span>
             </div>
             <button
@@ -1186,10 +1314,14 @@ export const SchoolEcosystem: React.FC<Props> = ({
 
     if (adminPreviewRole === "ACCOUNTANT") {
       return (
-        <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100">
-          <div className="sticky top-0 z-50 px-4 py-2 bg-amber-950/90 border-b border-amber-700/50 backdrop-blur-md flex items-center justify-between">
-            <div className="flex items-center gap-2 text-xs font-bold text-amber-300">
-              <Briefcase className="w-4 h-4 text-amber-400" />
+        <div className={`min-h-screen flex flex-col ${shellThemeClass}`}>
+          <div className={`sticky top-0 z-50 px-4 py-2 border-b backdrop-blur-md flex items-center justify-between ${
+            erpTheme === "white"
+              ? "bg-amber-50/95 border-amber-200 text-amber-900"
+              : "bg-amber-950/90 border-amber-700/50 text-amber-200"
+          }`}>
+            <div className="flex items-center gap-2 text-xs font-bold">
+              <Briefcase className={`w-4 h-4 ${erpTheme === "white" ? "text-amber-700" : "text-amber-400"}`} />
               <span>Admin Preview Mode: Accountant View (Accounts & Cash Desk)</span>
             </div>
             <button
@@ -1230,7 +1362,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
     // If Super Admin has opened the hub, or no school is selected, or no schools exist:
     if (isSuperAdmin && (showSuperAdminHub || !effectiveSchoolId || allSchools.length === 0)) {
       return (
-        <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100">
+        <div className={`min-h-screen flex flex-col ${shellThemeClass}`}>
           <SuperAdminPanel
             adminUid={uid}
             onBack={() => {
@@ -1250,17 +1382,27 @@ export const SchoolEcosystem: React.FC<Props> = ({
 
     // Default: Render SchoolAdminPanel with multi-school switcher & preview switchers
     return (
-      <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100">
+      <div className={`min-h-screen flex flex-col ${shellThemeClass}`}>
         {/* Top Multi-School Switcher Bar - only shown if multi-schools available */}
         {canManageMultiSchools && (
-          <div className="px-4 py-2 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between text-xs flex-wrap gap-2">
-            <div className="flex items-center gap-2 text-emerald-400 font-semibold flex-wrap">
+          <div className={`px-4 py-2 border-b flex items-center justify-between text-xs flex-wrap gap-2 ${
+            erpTheme === "white"
+              ? "bg-white border-slate-200 text-slate-900"
+              : erpTheme === "black"
+              ? "bg-[#050505] border-neutral-800 text-slate-100"
+              : "bg-[#0a1935] border-[#1b3564] text-slate-100"
+          }`}>
+            <div className={`flex items-center gap-2 font-semibold flex-wrap ${erpTheme === "white" ? "text-emerald-700" : "text-emerald-400"}`}>
               <ShieldCheck className="w-4 h-4 shrink-0" />
               <span>Multi-School Hub</span>
               <div className="flex items-center gap-1.5 ml-1">
                 {allSchools.length > 0 && (
-                  <div className="inline-flex items-center gap-1 bg-slate-950 border border-emerald-600/40 rounded-lg px-2 py-1">
-                    <Building2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <div className={`inline-flex items-center gap-1 border rounded-lg px-2 py-1 ${
+                    erpTheme === "white"
+                      ? "bg-emerald-50 border-emerald-300"
+                      : "bg-slate-950 border-emerald-600/40"
+                  }`}>
+                    <Building2 className={`w-3.5 h-3.5 shrink-0 ${erpTheme === "white" ? "text-emerald-700" : "text-emerald-400"}`} />
                     <select
                       value={effectiveSchoolId}
                       onChange={(e) => {
@@ -1271,14 +1413,16 @@ export const SchoolEcosystem: React.FC<Props> = ({
                           setShowSuperAdminHub(false);
                         }
                       }}
-                      className="bg-transparent text-emerald-200 font-bold text-[11px] focus:outline-none cursor-pointer max-w-[190px] truncate"
+                      className={`bg-transparent font-bold text-[11px] focus:outline-none cursor-pointer max-w-[190px] truncate ${
+                        erpTheme === "white" ? "text-emerald-900" : "text-emerald-200"
+                      }`}
                       title="Active School badlein (Multi-School Switcher)"
                     >
-                      <option value="" className="bg-slate-900 text-amber-300 font-bold">
+                      <option value="" className={erpTheme === "white" ? "bg-white text-amber-700 font-bold" : "bg-slate-900 text-amber-300 font-bold"}>
                         🏢 All Schools / Hub Overview
                       </option>
                       {allSchools.map((sch) => (
-                        <option key={sch.id} value={sch.id} className="bg-slate-900 text-white">
+                        <option key={sch.id} value={sch.id} className={erpTheme === "white" ? "bg-white text-slate-900" : "bg-slate-900 text-white"}>
                           {sch.name} {sch.code ? `(${sch.code})` : ""}
                         </option>
                       ))}
@@ -1288,19 +1432,27 @@ export const SchoolEcosystem: React.FC<Props> = ({
                 <button
                   type="button"
                   onClick={() => setShowSuperAdminHub(true)}
-                  className="px-2.5 py-1 rounded-lg bg-blue-600/30 hover:bg-blue-600/50 border border-blue-500/50 text-blue-200 hover:text-white text-[11px] font-bold flex items-center gap-1 transition cursor-pointer"
+                  className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition cursor-pointer ${
+                    erpTheme === "white"
+                      ? "bg-blue-50 hover:bg-blue-100 border-blue-300 text-blue-800"
+                      : "bg-blue-600/30 hover:bg-blue-600/50 border-blue-500/50 text-blue-200 hover:text-white"
+                  }`}
                   title="Naya School add karein ya sabhi schools manage karein"
                 >
-                  <Plus className="w-3.5 h-3.5 text-blue-300" />
+                  <Plus className={`w-3.5 h-3.5 ${erpTheme === "white" ? "text-blue-700" : "text-blue-300"}`} />
                   <span>Add / All Schools ({Math.max(1, allSchools.length)})</span>
                 </button>
                 <button
                   type="button"
                   onClick={handleLeaveSchoolForAdmin}
-                  className="px-2.5 py-1 rounded-lg bg-red-600/25 hover:bg-red-600/40 border border-red-500/40 text-red-200 hover:text-white text-[11px] font-bold flex items-center gap-1 transition cursor-pointer"
+                  className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition cursor-pointer ${
+                    erpTheme === "white"
+                      ? "bg-rose-50 hover:bg-rose-100 border-rose-300 text-rose-800"
+                      : "bg-red-600/25 hover:bg-red-600/40 border-red-500/40 text-red-200 hover:text-white"
+                  }`}
                   title="School se alag ho (Leave School / Detach)"
                 >
-                  <LogOut className="w-3.5 h-3.5 text-red-400" />
+                  <LogOut className={`w-3.5 h-3.5 ${erpTheme === "white" ? "text-rose-700" : "text-red-400"}`} />
                   <span>Leave School</span>
                 </button>
               </div>
@@ -1312,7 +1464,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
                 className="px-3 py-1 bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white rounded-lg font-bold text-[11px] transition-all shadow-md shadow-indigo-900/40 flex items-center gap-1.5 cursor-pointer border border-indigo-400/40 hover:scale-105 active:scale-95 ml-1"
                 title="NSTA Main App Admin Dashboard (Notes, MCQs, Books, Users, System Settings) par jayein"
               >
-                <Sparkles className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
+                <Sparkles className="w-3.5 h-3.5 text-amber-300" />
                 <span>NSTA App Admin</span>
               </button>
             )}
@@ -1357,7 +1509,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
       : (shouldUseDemoForSchool(currentSchool.id) ? (schoolClasses.length > 0 ? schoolClasses : (demoData?.classes || [])) : []);
 
     return (
-      <div className="min-h-screen bg-slate-950 text-white flex flex-col">
+      <div className={`min-h-screen flex flex-col ${shellThemeClass}`}>
         <Suspense fallback={<PanelLoadingFallback title="Online Admission Form" />}>
           <OnlineAdmissionManager
             school={currentSchool as any}
@@ -1437,54 +1589,94 @@ export const SchoolEcosystem: React.FC<Props> = ({
   // ── 3. IF NON-ADMIN USER HAS NOT LINKED AN ID CARD YET: SHOW SCAN/CONNECT GATEWAY ──
   if (!linkedEntity) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
+      <div className={`min-h-screen flex flex-col ${shellThemeClass}`}>
         {/* Header */}
-        <div className="px-5 py-4 border-b border-slate-800 bg-slate-900/80 backdrop-blur-md flex items-center justify-between">
-          <button
-            onClick={() => {
-              if (onOpenStudentDashboard) onOpenStudentDashboard();
-              else if (onOpenPlatformContent) onOpenPlatformContent();
-              else if (onBack) onBack();
-            }}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800/90 hover:bg-slate-800 border border-slate-700/70 text-slate-200 hover:text-white text-xs font-bold transition-all shadow-sm active:scale-95 cursor-pointer"
-          >
-            <ArrowLeft className="w-4 h-4 text-emerald-400" />
-            <span>Back to App</span>
-          </button>
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center">
-              <SchoolIcon className="w-4 h-4 text-emerald-400" />
-            </div>
-            <span className="font-bold text-sm text-slate-200">School ERP Portal</span>
-          </div>
-          {onLogout ? (
+        <div className={`px-5 py-4 border-b backdrop-blur-md flex items-center justify-between ${
+          erpTheme === "white"
+            ? "bg-white/95 border-slate-200 text-slate-900"
+            : "bg-slate-900/80 border-slate-800 text-slate-100"
+        }`}>
+          {(onOpenStudentDashboard || onOpenPlatformContent || onBack) ? (
             <button
-              onClick={onLogout}
-              className="text-xs text-rose-400 hover:text-rose-300 font-semibold cursor-pointer"
+              onClick={() => {
+                if (onOpenStudentDashboard) onOpenStudentDashboard();
+                else if (onOpenPlatformContent) onOpenPlatformContent();
+                else if (onBack) onBack();
+              }}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all shadow-sm active:scale-95 cursor-pointer ${
+                erpTheme === "white"
+                  ? "bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-800"
+                  : "bg-slate-800/90 hover:bg-slate-800 border-slate-700/70 text-slate-200 hover:text-white"
+              }`}
             >
-              Logout
+              <ArrowLeft className={`w-4 h-4 ${erpTheme === "white" ? "text-emerald-600" : "text-emerald-400"}`} />
+              <span>Back to App</span>
             </button>
-          ) : <div className="w-10" />}
+          ) : (
+            <div className="w-1" />
+          )}
+          <div className="flex items-center gap-2">
+            <div className={`w-7 h-7 rounded-xl border flex items-center justify-center ${
+              erpTheme === "white"
+                ? "bg-emerald-50 border-emerald-300"
+                : "bg-emerald-500/10 border-emerald-500/30"
+            }`}>
+              <SchoolIcon className={`w-4 h-4 ${erpTheme === "white" ? "text-emerald-600" : "text-emerald-400"}`} />
+            </div>
+            <span className={`font-bold text-sm ${erpTheme === "white" ? "text-slate-900" : "text-slate-200"}`}>School ERP Portal</span>
+          </div>
+          <div className="flex items-center gap-2">
+            {onVisitWebsite && (
+              <button
+                type="button"
+                onClick={() => onVisitWebsite(effectiveSchoolId)}
+                className={`px-2.5 py-1 rounded-lg border text-xs font-bold flex items-center gap-1.5 cursor-pointer transition ${
+                  erpTheme === "white"
+                    ? "bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-800"
+                    : "bg-emerald-600/20 hover:bg-emerald-600/35 border-emerald-400/50 text-emerald-200 hover:text-white"
+                }`}
+              >
+                <Globe className="w-3.5 h-3.5" />
+                <span>Visit Our Website</span>
+              </button>
+            )}
+            {onLogout ? (
+              <button
+                onClick={onLogout}
+                className={`text-xs font-semibold cursor-pointer ${erpTheme === "white" ? "text-rose-600 hover:text-rose-800" : "text-rose-400 hover:text-rose-300"}`}
+              >
+                Logout
+              </button>
+            ) : null}
+          </div>
         </div>
 
         {/* Content Container */}
         <div className="flex-1 max-w-lg w-full mx-auto p-5 flex flex-col justify-center space-y-6 animate-in fade-in">
           {/* Hero */}
           <div className="text-center space-y-2">
-            <div className="w-16 h-16 mx-auto rounded-3xl bg-gradient-to-tr from-emerald-500/20 via-indigo-500/20 to-violet-500/20 border border-emerald-500/30 flex items-center justify-center shadow-lg shadow-emerald-500/10">
-              <QrCode className="w-8 h-8 text-emerald-400" />
+            <div className={`w-16 h-16 mx-auto rounded-3xl border flex items-center justify-center shadow-lg ${
+              erpTheme === "white"
+                ? "bg-gradient-to-tr from-emerald-100 via-indigo-100 to-violet-100 border-emerald-300 shadow-emerald-200/50"
+                : "bg-gradient-to-tr from-emerald-500/20 via-indigo-500/20 to-violet-500/20 border-emerald-500/30 shadow-emerald-500/10"
+            }`}>
+              <QrCode className={`w-8 h-8 ${erpTheme === "white" ? "text-emerald-600" : "text-emerald-400"}`} />
             </div>
-            <h1 className="text-xl font-black text-white tracking-tight">
+            <h1 className={`text-xl font-black tracking-tight ${erpTheme === "white" ? "text-slate-900" : "text-white"}`}>
               School ID Card से जुड़ें
             </h1>
-            <p className="text-xs text-slate-400 max-w-xs mx-auto leading-relaxed">
+            <p className={`text-xs max-w-xs mx-auto leading-relaxed ${erpTheme === "white" ? "text-slate-600" : "text-slate-400"}`}>
               अपना Live Student या Teacher Dashboard देखने के लिए अपना ID Card या फीस रसीद QR कोड स्कैन करें।
             </p>
           </div>
 
           {linkError && (
-            <div className="p-3 rounded-2xl bg-rose-950/60 border border-rose-800/80 text-rose-300 text-xs flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+            <div className={`p-3 rounded-2xl border text-xs flex items-center gap-2 ${
+              erpTheme === "white"
+                ? "bg-rose-50 border-rose-300 text-rose-800"
+                : "bg-rose-950/60 border-rose-800/80 text-rose-300"
+            }`}>
+              <AlertCircle className={`w-4 h-4 shrink-0 ${erpTheme === "white" ? "text-rose-600" : "text-rose-400"}`} />
               <span>{linkError}</span>
             </div>
           )}
@@ -1497,49 +1689,74 @@ export const SchoolEcosystem: React.FC<Props> = ({
                 setQrScanMode("AUTO");
                 setIsQrModalOpen(true);
               }}
-              className="w-full p-4 rounded-2xl bg-gradient-to-r from-emerald-950/50 via-slate-900 to-indigo-950/40 border border-emerald-500/50 hover:border-emerald-400 hover:bg-slate-900/90 transition-all text-left flex items-center justify-between group shadow-xl cursor-pointer active:scale-[0.99]"
+              className={`w-full p-4 rounded-2xl border transition-all text-left flex items-center justify-between group shadow-md cursor-pointer active:scale-[0.99] ${
+                erpTheme === "white"
+                  ? "bg-white hover:bg-emerald-50/70 border-emerald-300 hover:border-emerald-500"
+                  : "bg-gradient-to-r from-emerald-950/50 via-slate-900 to-indigo-950/40 border-emerald-500/50 hover:border-emerald-400 hover:bg-slate-900/90"
+              }`}
             >
               <div className="flex items-center gap-3.5">
-                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-500/25 to-indigo-500/25 border border-emerald-400/40 flex items-center justify-center group-hover:scale-105 transition-transform shadow-inner">
-                  <QrCode className="w-6 h-6 text-emerald-400" />
+                <div className={`w-12 h-12 rounded-2xl border flex items-center justify-center group-hover:scale-105 transition-transform shadow-inner ${
+                  erpTheme === "white"
+                    ? "bg-emerald-50 border-emerald-200"
+                    : "bg-gradient-to-br from-emerald-500/25 to-indigo-500/25 border-emerald-400/40"
+                }`}>
+                  <QrCode className={`w-6 h-6 ${erpTheme === "white" ? "text-emerald-600" : "text-emerald-400"}`} />
                 </div>
                 <div>
-                  <h3 className="font-bold text-sm text-white flex items-center gap-1.5">
+                  <h3 className={`font-bold text-sm flex items-center gap-1.5 ${erpTheme === "white" ? "text-slate-900" : "text-white"}`}>
                     Scan Student / Teacher ID Card
-                    <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+                    <Sparkles className="w-3.5 h-3.5 text-amber-500" />
                   </h3>
-                  <p className="text-[11px] text-slate-400">
+                  <p className={`text-[11px] ${erpTheme === "white" ? "text-slate-600" : "text-slate-400"}`}>
                     ID Card, फीस रसीद या Teacher Card का QR कोड कैमरा से स्कैन करें
                   </p>
                 </div>
               </div>
-              <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-emerald-400 group-hover:translate-x-1 transition-all shrink-0 ml-2" />
+              <ChevronRight className={`w-5 h-5 group-hover:translate-x-1 transition-all shrink-0 ml-2 ${
+                erpTheme === "white" ? "text-slate-500 group-hover:text-emerald-600" : "text-slate-400 group-hover:text-emerald-400"
+              }`} />
             </button>
 
-            {/* 2. Apply for Online Admission */}
-            <button
-              type="button"
-              onClick={() => setShowOnlineAdmission(true)}
-              className="w-full p-4 rounded-2xl bg-gradient-to-r from-amber-950/40 via-slate-900 to-orange-950/30 border border-amber-600/40 hover:border-amber-400 hover:bg-slate-900/90 transition-all text-left flex items-center justify-between group shadow-lg cursor-pointer active:scale-[0.99]"
-            >
-              <div className="flex items-center gap-3.5">
-                <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center group-hover:scale-105 transition-transform text-amber-400">
-                  <UserPlus className="w-6 h-6 text-amber-400" />
+            {/* 2. Visit School Website / Online Admission (Always routed via Website) */}
+            {(onVisitWebsite || onOpenPublicAdmission) && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (onVisitWebsite) {
+                    onVisitWebsite(effectiveSchoolId);
+                  } else if (onOpenPublicAdmission) {
+                    onOpenPublicAdmission(effectiveSchoolId);
+                  }
+                }}
+                className={`w-full p-4 rounded-2xl border transition-all text-left flex items-center justify-between group shadow-md cursor-pointer active:scale-[0.99] ${
+                  erpTheme === "white"
+                    ? "bg-white hover:bg-emerald-50/70 border-emerald-300 hover:border-emerald-500"
+                    : "bg-gradient-to-r from-emerald-950/40 via-slate-900 to-cyan-950/30 border-emerald-600/40 hover:border-emerald-400 hover:bg-slate-900/90"
+                }`}
+              >
+                <div className="flex items-center gap-3.5">
+                  <div className={`w-12 h-12 rounded-2xl border flex items-center justify-center group-hover:scale-105 transition-transform ${
+                    erpTheme === "white"
+                      ? "bg-emerald-50 border-emerald-200 text-emerald-600"
+                      : "bg-emerald-500/20 border-emerald-500/30 text-emerald-400"
+                  }`}>
+                    <Globe className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className={`font-bold text-sm flex items-center gap-1.5 ${erpTheme === "white" ? "text-slate-900" : "text-white"}`}>
+                      Visit School Website
+                    </h3>
+                    <p className={`text-[11px] ${erpTheme === "white" ? "text-slate-600" : "text-slate-400"}`}>
+                      स्कूल की वेबसाइट, मेमोरीज़ गैलरी व ऑनलाइन एडमिशन 2027-28 देखें
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="font-bold text-sm text-white flex items-center gap-1.5">
-                    Apply for Online Admission
-                    <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-amber-500 text-slate-950">
-                      New
-                    </span>
-                  </h3>
-                  <p className="text-[11px] text-slate-400">
-                    नया दाखिला / ऑनलाइन एडमिशन फॉर्म भरें व रसीद पाएं
-                  </p>
-                </div>
-              </div>
-              <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-amber-400 group-hover:translate-x-1 transition-all shrink-0 ml-2" />
-            </button>
+                <ChevronRight className={`w-5 h-5 group-hover:translate-x-1 transition-all shrink-0 ml-2 ${
+                  erpTheme === "white" ? "text-slate-500 group-hover:text-emerald-600" : "text-slate-400 group-hover:text-emerald-400"
+                }`} />
+              </button>
+            )}
           </div>
         </div>
 
@@ -1564,41 +1781,94 @@ export const SchoolEcosystem: React.FC<Props> = ({
     );
   }
 
-  // ── 4. TEACHER PANEL (FOR LINKED TEACHERS) ──
-  if (isRealTeacher) {
+  // ── 4 & 4.5. TEACHER & ACCOUNTANT PORTALS (WITH DUAL-ROLE SWITCHER) ──
+  const canSwitchDualPortal = dualRoleMatch.hasTeacher && dualRoleMatch.hasAccountant;
+  const activeDualDesk: "TEACHER" | "ACCOUNTANT" =
+    dualPortalChoice !== "AUTO"
+      ? dualPortalChoice
+      : isAccountantRole
+      ? "ACCOUNTANT"
+      : "TEACHER";
+
+  const renderDualPortalSwitcherBar = () => {
+    if (!canSwitchDualPortal) return null;
+    return (
+      <div
+        className={`sticky top-0 z-50 px-3 sm:px-4 py-1.5 border-b backdrop-blur-md flex items-center justify-between gap-2 ${
+          erpTheme === "white"
+            ? "bg-slate-50/95 border-slate-200 text-slate-800"
+            : "bg-slate-900/95 border-slate-700/70 text-slate-100"
+        }`}
+      >
+        <div className="flex items-center gap-1.5 text-[11px] font-bold truncate">
+          <RefreshCw className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+          <span className="truncate">Dual Role Active (Teacher + Accountant)</span>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setDualPortalChoice("TEACHER")}
+            className={`px-2.5 py-1 rounded-lg text-[11px] font-black transition cursor-pointer flex items-center gap-1 ${
+              activeDualDesk === "TEACHER"
+                ? "bg-indigo-600 text-white shadow-xs"
+                : "bg-slate-200/70 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-indigo-100"
+            }`}
+          >
+            <GraduationCap className="w-3 h-3" />
+            <span>Teacher Desk</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setDualPortalChoice("ACCOUNTANT")}
+            className={`px-2.5 py-1 rounded-lg text-[11px] font-black transition cursor-pointer flex items-center gap-1 ${
+              activeDualDesk === "ACCOUNTANT"
+                ? "bg-amber-500 text-slate-950 shadow-xs"
+                : "bg-slate-200/70 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-amber-100"
+            }`}
+          >
+            <Briefcase className="w-3 h-3" />
+            <span>Accountant Desk</span>
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  if (isRealTeacher || isAccountantRole) {
     const handleTeacherExit = () => {
       handleUnlinkTeacher();
       if (onLogout) onLogout();
       else if (onBack) onBack();
     };
 
+    if (activeDualDesk === "ACCOUNTANT" && (isAccountantRole || dualRoleMatch.hasAccountant)) {
+      return (
+        <div className={`min-h-screen flex flex-col ${shellThemeClass}`}>
+          {renderDualPortalSwitcherBar()}
+          <PanelErrorBoundary fallbackTitle="Accountant Portal">
+            <Suspense fallback={<PanelLoadingFallback title="Accountant Portal" />}>
+              <AccountantPanel
+                schoolId={effectiveSchoolId}
+                accountantId={dualRoleMatch.accountantRec?.id || uid}
+                onLogout={onLogout || onBack}
+                onOpenPlatformContent={onOpenPlatformContent}
+              />
+            </Suspense>
+          </PanelErrorBoundary>
+        </div>
+      );
+    }
+
     return (
-      <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100">
+      <div className={`min-h-screen flex flex-col ${shellThemeClass}`}>
+        {renderDualPortalSwitcherBar()}
         <PanelErrorBoundary fallbackTitle="Teacher Portal">
           <Suspense fallback={<PanelLoadingFallback title="Teacher Portal" />}>
             <TeacherPanel
               schoolId={effectiveSchoolId}
-              teacherId={linkedEntity?.id || profile?.teacherRef || uid}
-              teacherName={linkedEntity?.name || profile?.name || user?.name || displayName}
+              teacherId={dualRoleMatch.teacherRec?.id || linkedEntity?.id || profile?.teacherRef || uid}
+              teacherName={dualRoleMatch.teacherRec?.name || linkedEntity?.name || profile?.name || user?.name || displayName}
               onLogout={handleTeacherExit}
-              onOpenPlatformContent={onOpenPlatformContent}
-            />
-          </Suspense>
-        </PanelErrorBoundary>
-      </div>
-    );
-  }
-
-  // ── 4.5. ACCOUNTANT PANEL (FOR LOGGED-IN ACCOUNTANT USERS) ──
-  if (isAccountantRole) {
-    return (
-      <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100">
-        <PanelErrorBoundary fallbackTitle="Accountant Portal">
-          <Suspense fallback={<PanelLoadingFallback title="Accountant Portal" />}>
-            <AccountantPanel
-              schoolId={effectiveSchoolId}
-              accountantId={uid}
-              onLogout={onLogout || onBack}
               onOpenPlatformContent={onOpenPlatformContent}
             />
           </Suspense>
@@ -1615,7 +1885,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100">
+    <div className={`min-h-screen flex flex-col ${shellThemeClass}`}>
       <PanelErrorBoundary fallbackTitle="Student Portal">
         <Suspense fallback={<PanelLoadingFallback title="Student Portal" />}>
           <StudentSchoolPanel
@@ -1637,6 +1907,7 @@ export const SchoolEcosystem: React.FC<Props> = ({
               setIsQrModalOpen(true);
             }}
             onOpenPlatformContent={onOpenPlatformContent}
+            onVisitWebsite={onVisitWebsite ? () => onVisitWebsite(linkedEntity?.schoolId || effectiveSchoolId) : undefined}
             onLogout={handleStudentExit}
           />
         </Suspense>

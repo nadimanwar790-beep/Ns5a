@@ -8,12 +8,25 @@ import type { School } from "../../school-types";
 import { updateSchool } from "../../school-firebase";
 import { uploadImageToImgBB } from "../../services/imgbbService";
 
+export type DigitalSignatureTab = "principal" | "director" | "manager" | "accountant" | "exam_controller";
+
 interface Props {
   isOpen: boolean;
   onClose: () => void;
   school: School;
   schoolId: string;
-  onSignaturesUpdated?: (updated: { principalSignatureUrl?: string; directorSignatureUrl?: string }) => void;
+  initialTab?: DigitalSignatureTab;
+  onSignaturesUpdated?: (updated: {
+    principalSignatureUrl?: string;
+    directorSignatureUrl?: string;
+    directorName?: string;
+    managerSignatureUrl?: string;
+    managerName?: string;
+    accountantSignatureUrl?: string;
+    accountantName?: string;
+    examControllerSignatureUrl?: string;
+    examControllerName?: string;
+  }) => void;
 }
 
 interface Point {
@@ -26,11 +39,19 @@ export const DigitalSignatureModal: React.FC<Props> = ({
   onClose,
   school,
   schoolId,
+  initialTab = "principal",
   onSignaturesUpdated,
 }) => {
-  const [activeTab, setActiveTab] = useState<"principal" | "director">("principal");
+  const [activeTab, setActiveTab] = useState<DigitalSignatureTab>(initialTab);
   const [principalSig, setPrincipalSig] = useState<string>(school?.principalSignatureUrl || "");
   const [directorSig, setDirectorSig] = useState<string>(school?.directorSignatureUrl || "");
+  const [directorName, setDirectorName] = useState<string>(school?.directorName || "");
+  const [managerSig, setManagerSig] = useState<string>(school?.managerSignatureUrl || "");
+  const [managerName, setManagerName] = useState<string>(school?.managerName || "");
+  const [accountantSig, setAccountantSig] = useState<string>(school?.accountantSignatureUrl || "");
+  const [accountantName, setAccountantName] = useState<string>(school?.accountantName || "");
+  const [examControllerSig, setExamControllerSig] = useState<string>(school?.examControllerSignatureUrl || "");
+  const [examControllerName, setExamControllerName] = useState<string>(school?.examControllerName || "Exam Controller");
 
   // Canvas drawing state
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -49,8 +70,21 @@ export const DigitalSignatureModal: React.FC<Props> = ({
     if (school) {
       setPrincipalSig(school.principalSignatureUrl || "");
       setDirectorSig(school.directorSignatureUrl || "");
+      setDirectorName(school.directorName || "");
+      setManagerSig(school.managerSignatureUrl || "");
+      setManagerName(school.managerName || "");
+      setAccountantSig(school.accountantSignatureUrl || "");
+      setAccountantName(school.accountantName || "");
+      setExamControllerSig(school.examControllerSignatureUrl || "");
+      setExamControllerName(school.examControllerName || "Exam Controller");
     }
   }, [school]);
+
+  useEffect(() => {
+    if (isOpen && initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [isOpen, initialTab]);
 
   // Redraw canvas from strokes
   const redrawCanvas = useCallback(() => {
@@ -244,8 +278,14 @@ export const DigitalSignatureModal: React.FC<Props> = ({
     }
     if (activeTab === "principal") {
       setPrincipalSig(dataUrl);
-    } else {
+    } else if (activeTab === "director") {
       setDirectorSig(dataUrl);
+    } else if (activeTab === "manager") {
+      setManagerSig(dataUrl);
+    } else if (activeTab === "accountant") {
+      setAccountantSig(dataUrl);
+    } else {
+      setExamControllerSig(dataUrl);
     }
     handleClear();
   };
@@ -394,8 +434,14 @@ export const DigitalSignatureModal: React.FC<Props> = ({
         const transparentResult = await removeWhiteBackground(rawResult);
         if (activeTab === "principal") {
           setPrincipalSig(transparentResult);
-        } else {
+        } else if (activeTab === "director") {
           setDirectorSig(transparentResult);
+        } else if (activeTab === "manager") {
+          setManagerSig(transparentResult);
+        } else if (activeTab === "accountant") {
+          setAccountantSig(transparentResult);
+        } else {
+          setExamControllerSig(transparentResult);
         }
       }
     };
@@ -404,13 +450,25 @@ export const DigitalSignatureModal: React.FC<Props> = ({
   };
 
   const handleMakeActiveTransparent = async () => {
-    const current = activeTab === "principal" ? principalSig : directorSig;
+    const current =
+      activeTab === "principal"
+        ? principalSig
+        : activeTab === "director"
+        ? directorSig
+        : activeTab === "manager"
+        ? managerSig
+        : activeTab === "accountant"
+        ? accountantSig
+        : examControllerSig;
     if (!current) return;
     setSaving(true);
     try {
       const cleaned = await removeWhiteBackground(current);
       if (activeTab === "principal") setPrincipalSig(cleaned);
-      else setDirectorSig(cleaned);
+      else if (activeTab === "director") setDirectorSig(cleaned);
+      else if (activeTab === "manager") setManagerSig(cleaned);
+      else if (activeTab === "accountant") setAccountantSig(cleaned);
+      else setExamControllerSig(cleaned);
       setSavedSuccessMsg("✨ White background successfully removed! Signature transparent ho gaya.");
       setTimeout(() => setSavedSuccessMsg(null), 2500);
     } finally {
@@ -423,12 +481,18 @@ export const DigitalSignatureModal: React.FC<Props> = ({
     setErrorMsg(null);
     let finalPrincipal = principalSig;
     let finalDirector = directorSig;
+    let finalManager = managerSig;
+    let finalAccountant = accountantSig;
+    let finalExamController = examControllerSig;
 
     if (strokes.length > 0) {
       const drawn = exportCanvasAsPng();
       if (drawn) {
         if (activeTab === "principal") finalPrincipal = drawn;
-        else finalDirector = drawn;
+        else if (activeTab === "director") finalDirector = drawn;
+        else if (activeTab === "manager") finalManager = drawn;
+        else if (activeTab === "accountant") finalAccountant = drawn;
+        else finalExamController = drawn;
       }
     }
 
@@ -458,24 +522,79 @@ export const DigitalSignatureModal: React.FC<Props> = ({
           console.warn("[DigitalSignatureModal] Director sig CDN upload fallback:", uploadErr);
         }
       }
+      if (finalManager && finalManager.startsWith("data:image/")) {
+        try {
+          finalManager = await uploadImageToImgBB(
+            finalManager,
+            `sig_manager_${schoolId}_${Date.now()}.png`,
+            { preservePng: true }
+          );
+          setManagerSig(finalManager);
+        } catch (uploadErr) {
+          console.warn("[DigitalSignatureModal] Manager sig CDN upload fallback:", uploadErr);
+        }
+      }
+      if (finalAccountant && finalAccountant.startsWith("data:image/")) {
+        try {
+          finalAccountant = await uploadImageToImgBB(
+            finalAccountant,
+            `sig_accountant_${schoolId}_${Date.now()}.png`,
+            { preservePng: true }
+          );
+          setAccountantSig(finalAccountant);
+        } catch (uploadErr) {
+          console.warn("[DigitalSignatureModal] Accountant sig CDN upload fallback:", uploadErr);
+        }
+      }
+      if (finalExamController && finalExamController.startsWith("data:image/")) {
+        try {
+          finalExamController = await uploadImageToImgBB(
+            finalExamController,
+            `sig_exam_${schoolId}_${Date.now()}.png`,
+            { preservePng: true }
+          );
+          setExamControllerSig(finalExamController);
+        } catch (uploadErr) {
+          console.warn("[DigitalSignatureModal] Exam Controller sig CDN upload fallback:", uploadErr);
+        }
+      }
+
+      const trimmedDirectorName = (directorName || "").trim();
+      const trimmedManagerName = (managerName || "").trim();
+      const trimmedAccountantName = (accountantName || "").trim();
+      const trimmedExamName = (examControllerName || "").trim() || "Exam Controller";
 
       await updateSchool(schoolId, {
         principalSignatureUrl: finalPrincipal || "",
         directorSignatureUrl: finalDirector || "",
+        directorName: trimmedDirectorName,
+        managerSignatureUrl: finalManager || "",
+        managerName: trimmedManagerName,
+        accountantSignatureUrl: finalAccountant || "",
+        accountantName: trimmedAccountantName,
+        examControllerSignatureUrl: finalExamController || "",
+        examControllerName: trimmedExamName,
       });
 
       if (onSignaturesUpdated) {
         onSignaturesUpdated({
           principalSignatureUrl: finalPrincipal,
           directorSignatureUrl: finalDirector,
+          directorName: trimmedDirectorName,
+          managerSignatureUrl: finalManager,
+          managerName: trimmedManagerName,
+          accountantSignatureUrl: finalAccountant,
+          accountantName: trimmedAccountantName,
+          examControllerSignatureUrl: finalExamController,
+          examControllerName: trimmedExamName,
         });
       }
 
-      setSavedSuccessMsg("✅ Signature Cloud CDN par save ho gaya! Ab yeh ID Card, Fee Receipt, Certificate, Marksheet aur Admit Card par automatic lag gaya hai.");
+      setSavedSuccessMsg("✅ Sabhi Signatures (Principal, Director, Manager, Accountant, Exam Controller) save ho gaye!");
       setTimeout(() => {
         setSavedSuccessMsg(null);
         onClose();
-      }, 1600);
+      }, 1500);
     } catch (err: any) {
       console.error("Failed to save signatures:", err);
       setErrorMsg("Signature save karne mein error aaya: " + (err?.message || "Kripya dobara try karein."));
@@ -486,65 +605,116 @@ export const DigitalSignatureModal: React.FC<Props> = ({
 
   if (!isOpen) return null;
 
-  const currentActiveSig = activeTab === "principal" ? principalSig : directorSig;
+  const currentActiveSig =
+    activeTab === "principal"
+      ? principalSig
+      : activeTab === "director"
+      ? directorSig
+      : activeTab === "manager"
+      ? managerSig
+      : activeTab === "accountant"
+      ? accountantSig
+      : examControllerSig;
 
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-5 bg-slate-950/80 backdrop-blur-xs animate-in fade-in duration-200">
       <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[94vh]">
         {/* Header */}
-        <div className="px-5 py-4 bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-950 text-white flex items-center justify-between shrink-0">
+        <div className="px-5 py-4 bg-gradient-to-r from-blue-50 via-indigo-50 to-sky-50 dark:from-blue-900 dark:via-indigo-900 dark:to-slate-950 text-slate-900 dark:text-white border-b-2 border-indigo-700 dark:border-indigo-500/40 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center text-amber-300 shadow-inner">
+            <div className="w-10 h-10 rounded-2xl bg-indigo-100 dark:bg-white/10 backdrop-blur-md border border-indigo-700/40 dark:border-white/20 flex items-center justify-center text-amber-700 dark:text-amber-300 shadow-xs">
               <PenTool className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base sm:text-lg font-black leading-tight text-white flex items-center gap-2">
+              <h2 className="text-base sm:text-lg font-black leading-tight text-slate-900 dark:text-white flex items-center gap-2 flex-wrap">
                 <span>Digital Signatures Studio</span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 font-normal">
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-500/20 text-emerald-900 dark:text-emerald-300 border border-emerald-700/50 dark:border-emerald-400/30 font-bold">
                   Universal Auto-Apply
                 </span>
               </h2>
-              <p className="text-xs text-blue-200/80">
+              <p className="text-xs text-slate-700 dark:text-blue-200/80 font-medium">
                 Screen par sign karein — ID Card, Fee Receipt, Marksheet &amp; Certificates par automatic lag jayega
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-full hover:bg-white/10 text-slate-300 hover:text-white transition"
+            className="p-1.5 rounded-full hover:bg-indigo-100 dark:hover:bg-white/10 text-slate-700 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white transition"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Tab Selection: Principal vs Director */}
-        <div className="p-3 bg-slate-100 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 flex items-center gap-2">
+        {/* Tab Selection: Principal vs Director vs Manager vs Accountant vs Exam Controller */}
+        <div className="p-2.5 bg-slate-100 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 grid grid-cols-2 sm:grid-cols-5 gap-1.5 shrink-0">
           <button
             type="button"
             onClick={() => { setActiveTab("principal"); handleClear(); }}
-            className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl font-bold text-xs sm:text-sm transition-all shadow-xs ${
+            className={`flex items-center justify-center gap-1 py-2 px-2 rounded-xl font-bold text-[11px] transition-all shadow-xs cursor-pointer ${
               activeTab === "principal"
-                ? "bg-blue-600 text-white shadow-blue-500/30 scale-[1.01]"
+                ? "bg-blue-600 text-white shadow-blue-500/30"
                 : "bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-200"
             }`}
           >
-            <span className="text-base">🎓</span>
-            <span>Principal Signature</span>
-            {principalSig && <CheckCircle2 className="w-4 h-4 text-emerald-400 ml-1" />}
+            <span>🎓</span>
+            <span>Principal</span>
+            {principalSig && <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />}
           </button>
 
           <button
             type="button"
             onClick={() => { setActiveTab("director"); handleClear(); }}
-            className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl font-bold text-xs sm:text-sm transition-all shadow-xs ${
+            className={`flex items-center justify-center gap-1 py-2 px-2 rounded-xl font-bold text-[11px] transition-all shadow-xs cursor-pointer ${
               activeTab === "director"
-                ? "bg-blue-600 text-white shadow-blue-500/30 scale-[1.01]"
+                ? "bg-blue-600 text-white shadow-blue-500/30"
                 : "bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-200"
             }`}
           >
-            <span className="text-base">👔</span>
-            <span>Director / Manager Signature</span>
-            {directorSig && <CheckCircle2 className="w-4 h-4 text-emerald-400 ml-1" />}
+            <span>👔</span>
+            <span>Director</span>
+            {directorSig && <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => { setActiveTab("manager"); handleClear(); }}
+            className={`flex items-center justify-center gap-1 py-2 px-2 rounded-xl font-bold text-[11px] transition-all shadow-xs cursor-pointer ${
+              activeTab === "manager"
+                ? "bg-purple-600 text-white shadow-purple-500/30"
+                : "bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-200"
+            }`}
+          >
+            <span>🛡️</span>
+            <span>Manager</span>
+            {managerSig && <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => { setActiveTab("accountant"); handleClear(); }}
+            className={`flex items-center justify-center gap-1 py-2 px-2 rounded-xl font-bold text-[11px] transition-all shadow-xs cursor-pointer ${
+              activeTab === "accountant"
+                ? "bg-emerald-600 text-white shadow-emerald-500/30"
+                : "bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-200"
+            }`}
+          >
+            <span>🧾</span>
+            <span>Accountant</span>
+            {accountantSig && <CheckCircle2 className="w-3 h-3 text-emerald-300 shrink-0" />}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => { setActiveTab("exam_controller"); handleClear(); }}
+            className={`col-span-2 sm:col-span-1 flex items-center justify-center gap-1 py-2 px-2 rounded-xl font-bold text-[11px] transition-all shadow-xs cursor-pointer ${
+              activeTab === "exam_controller"
+                ? "bg-indigo-600 text-white shadow-indigo-500/30"
+                : "bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-200"
+            }`}
+          >
+            <span>📝</span>
+            <span>Examiner</span>
+            {examControllerSig && <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />}
           </button>
         </div>
 
@@ -563,6 +733,66 @@ export const DigitalSignatureModal: React.FC<Props> = ({
             </div>
           )}
 
+          {activeTab === "director" && (
+            <div className="p-3 bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-2xl">
+              <label className="block text-[11px] font-black text-blue-900 dark:text-blue-200 mb-1">
+                Director का नाम (Manager से अलग):
+              </label>
+              <input
+                type="text"
+                value={directorName}
+                onChange={(e) => setDirectorName(e.target.value)}
+                placeholder="e.g. Mr. R. K. Verma (Director)"
+                className="w-full px-3 py-2 rounded-xl border border-blue-300 dark:border-blue-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-900 dark:text-white"
+              />
+            </div>
+          )}
+
+          {activeTab === "manager" && (
+            <div className="p-3 bg-purple-50/70 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800 rounded-2xl">
+              <label className="block text-[11px] font-black text-purple-900 dark:text-purple-200 mb-1">
+                Manager (प्रबंधक) का नाम — Fee Receipt (जब Manager फीस लें) व Appointment Letter के लिए:
+              </label>
+              <input
+                type="text"
+                value={managerName}
+                onChange={(e) => setManagerName(e.target.value)}
+                placeholder="e.g. Mr. Rajesh Kumar (Manager)"
+                className="w-full px-3 py-2 rounded-xl border border-purple-300 dark:border-purple-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-900 dark:text-white"
+              />
+            </div>
+          )}
+
+          {activeTab === "accountant" && (
+            <div className="p-3 bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-2xl space-y-1">
+              <label className="block text-[11px] font-black text-emerald-900 dark:text-emerald-200">
+                Accountant / कैशियर का नाम (यह Signature डिफ़ॉल्ट रूप से Fee Receipt पर प्रिंट होगा):
+              </label>
+              <input
+                type="text"
+                value={accountantName}
+                onChange={(e) => setAccountantName(e.target.value)}
+                placeholder="e.g. Sunil Verma (Accountant)"
+                className="w-full px-3 py-2 rounded-xl border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-900 dark:text-white"
+              />
+            </div>
+          )}
+
+          {activeTab === "exam_controller" && (
+            <div className="p-3 bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 rounded-2xl">
+              <label className="block text-[11px] font-black text-indigo-900 dark:text-indigo-200 mb-1">
+                Exam Controller / परीक्षा नियंत्रक (Exam लेने वाले) का नाम:
+              </label>
+              <input
+                type="text"
+                value={examControllerName}
+                onChange={(e) => setExamControllerName(e.target.value)}
+                placeholder="e.g. Prof. R. K. Verma (Exam Controller)"
+                className="w-full px-3 py-2 rounded-xl border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-900 dark:text-white"
+              />
+            </div>
+          )}
+
           {/* Current Saved Signature Card */}
           <div className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row items-center justify-between gap-3">
             <div className="flex items-center gap-3">
@@ -574,8 +804,19 @@ export const DigitalSignatureModal: React.FC<Props> = ({
                 )}
               </div>
               <div>
-                <p className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                  <span>{activeTab === "principal" ? "Principal" : "Director"} Ka Active Signature:</span>
+                <p className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5 flex-wrap">
+                  <span>
+                    {activeTab === "principal"
+                      ? "Principal"
+                      : activeTab === "director"
+                      ? "Director"
+                      : activeTab === "manager"
+                      ? "Manager"
+                      : activeTab === "accountant"
+                      ? "Accountant (Fee Receipt)"
+                      : "Exam Controller (Exam लेने वाला)"}{" "}
+                    Ka Active Signature:
+                  </span>
                   {currentActiveSig ? (
                     <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.2 rounded-full font-bold">
                       Saved &amp; Active
@@ -587,8 +828,12 @@ export const DigitalSignatureModal: React.FC<Props> = ({
                   )}
                 </p>
                 <p className="text-[11px] text-slate-500">
-                  {currentActiveSig
-                    ? "Yeh signature har document par print ho raha hai."
+                  {activeTab === "accountant"
+                    ? "Accountant का signature हर Fee Receipt (A4 / 4-in-1 / POS) पर दिखेगा।"
+                    : activeTab === "manager"
+                    ? "जब Fee Collection में Manager चुना जाए और Appointment Letter पर यह sign दिखेगा।"
+                    : currentActiveSig
+                    ? "Yeh signature har official document par automatic print ho raha hai."
                     : "Neeche screen par ungli/mouse se sign karein ya image upload karein."}
                 </p>
               </div>
@@ -608,7 +853,10 @@ export const DigitalSignatureModal: React.FC<Props> = ({
                   type="button"
                   onClick={() => {
                     if (activeTab === "principal") setPrincipalSig("");
-                    else setDirectorSig("");
+                    else if (activeTab === "director") setDirectorSig("");
+                    else if (activeTab === "manager") setManagerSig("");
+                    else if (activeTab === "accountant") setAccountantSig("");
+                    else setExamControllerSig("");
                   }}
                   className="text-xs text-rose-600 hover:text-rose-700 font-bold flex items-center gap-1 px-3 py-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-rose-200 transition cursor-pointer"
                 >

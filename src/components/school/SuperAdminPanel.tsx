@@ -13,9 +13,16 @@ import {
   School as SchoolIcon, Plus, Pause, Play,
   Users, IndianRupee, Settings, X, Zap, Tag, Lock, Eye, EyeOff, Shield, Trash2, Unlock, ArrowLeft,
   CreditCard, CheckCircle, AlertCircle, Clock, ChevronRight, FileText, StickyNote, Calendar, Crown,
-  Bell, Sliders, Smartphone, Check, Sparkles
+  Bell, Sliders, Smartphone, Check, Sparkles, Camera, Upload, Code2, Globe, Loader2
 } from "lucide-react";
 import { toast } from "sonner";
+import { compressImageFileToDataUrl } from "../../utils/imageCompression";
+import {
+  DEFAULT_GLOBAL_DEVELOPER,
+  saveGlobalDeveloperConfig,
+  subscribeToGlobalDeveloperConfig,
+  type GlobalWebsiteDeveloperConfig,
+} from "../../utils/globalDeveloperConfig";
 
 interface Props {
   adminUid: string;
@@ -63,10 +70,10 @@ const SubEditor = ({
   onChange: (s: SchoolSubscription) => void;
   label?: string;
 }) => {
-  const currentTier = value.tier || (value.maxStudents === 200 ? "starter_200" : value.maxStudents === 500 ? "growth_500" : "enterprise_2000");
+  const currentTier = value.tier || (value.maxStudents === 200 ? "starter_200" : value.maxStudents === 500 ? "growth_500" : value.maxStudents >= 5000 ? "whitelabel_5000" : "enterprise_2000");
 
-  const isEliteActive = Boolean(value.isElite || value.customCurriculumEnabled);
-  const selectTier = (tier: "starter_200" | "growth_500" | "enterprise_2000") => {
+  const isEliteActive = Boolean(value.isElite || value.customCurriculumEnabled || currentTier === "whitelabel_5000");
+  const selectTier = (tier: "starter_200" | "growth_500" | "enterprise_2000" | "whitelabel_5000") => {
     const mult = isEliteActive ? 2 : 1;
     if (tier === "starter_200") {
       onChange({
@@ -92,6 +99,21 @@ const SubEditor = ({
         monthlyAmount: 1999 * mult,
         isElite: isEliteActive,
         customCurriculumEnabled: isEliteActive,
+        reading: true,
+        writing: true,
+        pdf: true,
+        mcq: true,
+        status: "active"
+      });
+    } else if (tier === "whitelabel_5000") {
+      onChange({
+        ...value,
+        tier: "whitelabel_5000",
+        maxStudents: 5000,
+        maxTeachers: 9999,
+        monthlyAmount: 19999,
+        isElite: true,
+        customCurriculumEnabled: true,
         reading: true,
         writing: true,
         pdf: true,
@@ -125,8 +147,8 @@ const SubEditor = ({
         </span>
       </div>
 
-      {/* 3 Tier Selector Tabs */}
-      <div className="grid grid-cols-3 gap-2 p-1 bg-slate-100 dark:bg-slate-700/60 rounded-xl">
+      {/* 4 Tier Selector Tabs */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 p-1 bg-slate-100 dark:bg-slate-700/60 rounded-xl">
         <button
           type="button"
           onClick={() => selectTier("starter_200")}
@@ -136,7 +158,7 @@ const SubEditor = ({
               : "text-slate-600 dark:text-slate-300 hover:text-slate-900"
           }`}
         >
-          <p className="leading-tight">Tier 1: Starter</p>
+          <p className="leading-tight">Tier 1: Basic</p>
           <span className="text-[10px] opacity-90">200 Std • ₹999</span>
         </button>
 
@@ -149,7 +171,7 @@ const SubEditor = ({
               : "text-slate-600 dark:text-slate-300 hover:text-slate-900"
           }`}
         >
-          <p className="leading-tight">Tier 2: Growth</p>
+          <p className="leading-tight">Tier 2: Standard</p>
           <span className="text-[10px] opacity-90">500 Std • ₹1,999</span>
         </button>
 
@@ -162,8 +184,21 @@ const SubEditor = ({
               : "text-slate-600 dark:text-slate-300 hover:text-slate-900"
           }`}
         >
-          <p className="leading-tight">Tier 3: Enterprise</p>
+          <p className="leading-tight">Tier 3: Pro</p>
           <span className="text-[10px] opacity-90">2000 Std • ₹3,999</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => selectTier("whitelabel_5000")}
+          className={`py-2 px-1 rounded-lg text-xs font-black transition cursor-pointer text-center ${
+            currentTier === "whitelabel_5000"
+              ? "bg-rose-600 text-white shadow-sm"
+              : "text-slate-600 dark:text-slate-300 hover:text-slate-900"
+          }`}
+        >
+          <p className="leading-tight">Tier 4: White-Label</p>
+          <span className="text-[10px] opacity-90">5000+ • ₹19,999</span>
         </button>
       </div>
 
@@ -173,44 +208,49 @@ const SubEditor = ({
           ? "bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800 text-blue-900 dark:text-blue-200"
           : currentTier === "growth_500"
           ? "bg-purple-50 dark:bg-purple-950/40 border-purple-200 dark:border-purple-800 text-purple-900 dark:text-purple-200"
+          : currentTier === "whitelabel_5000"
+          ? "bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-950 dark:text-rose-200"
           : "bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800 text-amber-950 dark:text-amber-200"
       }`}>
         <div className="flex items-center justify-between mb-1.5">
           <span className="font-black text-sm">
             {currentTier === "starter_200" || currentTier === "lite"
-              ? "📦 Tier 1: Starter Plan (Max 200 Students)"
+              ? "📦 Tier 1: Basic Plan (Max 200 Students)"
               : currentTier === "growth_500"
-              ? "🚀 Tier 2: Growth Plan (Max 500 Students)"
-              : "👑 Tier 3: Enterprise Plan (Max 2000 Students)"}
+              ? "🚀 Tier 2: Standard Plan (Max 500 Students)"
+              : currentTier === "whitelabel_5000"
+              ? "👑 Tier 4: Enterprise White-Label (5000+ Students)"
+              : "👑 Tier 3: Pro Plan (Max 2000 Students)"}
           </span>
           <span className="font-mono font-bold">
-            {currentTier === "starter_200" || currentTier === "lite" ? "₹999 / mo" : currentTier === "growth_500" ? "₹1,999 / mo" : "₹3,999 / mo"}
+            {currentTier === "starter_200" || currentTier === "lite" ? "₹999 / mo" : currentTier === "growth_500" ? "₹1,999 / mo" : currentTier === "whitelabel_5000" ? "₹19,999 / mo" : "₹3,999 / mo"}
           </span>
         </div>
         <ul className="space-y-1 text-[11px] list-disc list-inside opacity-90">
-          <li><strong>Student Capacity:</strong> {currentTier === "starter_200" || currentTier === "lite" ? "Max 200 Active Students" : currentTier === "growth_500" ? "Max 500 Active Students" : "Max 2000 Active Students"}</li>
+          <li><strong>Student Capacity:</strong> {currentTier === "starter_200" || currentTier === "lite" ? "Max 200 Active Students" : currentTier === "growth_500" ? "Max 500 Active Students" : currentTier === "whitelabel_5000" ? "5,000+ Active Students" : "Max 2000 Active Students"}</li>
           <li><strong>Faculty / Teachers:</strong> {currentTier === "starter_200" || currentTier === "lite" ? "Max 10 Teachers" : currentTier === "growth_500" ? "Max 25 Teachers" : "Unlimited Staff & Teachers"}</li>
-          <li><strong>Included Powers:</strong> {currentTier === "starter_200" || currentTier === "lite" ? "Student Management, Fees & Due Slips, Daily Attendance" : currentTier === "growth_500" ? "Everything in Tier 1 + Sub-Admins, ID Cards & Admit Card Hub" : "Everything in Tier 2 + Staff HRM Payroll, Online Admissions & School Website"}</li>
+          <li><strong>Included Powers:</strong> {currentTier === "starter_200" || currentTier === "lite" ? "Student Management, Fees & Due Slips, Default School Website" : currentTier === "growth_500" ? "Everything in Tier 1 + Sub-Admins, ID Cards & Admit Card Hub" : currentTier === "whitelabel_5000" ? "Play Store Custom App + On-Site Training + 100% Data Migration + Custom .com Website CMS" : "Everything in Tier 2 + Staff HRM Payroll, Online Admissions & Website"}</li>
         </ul>
       </div>
 
       {/* Elite Edition 2x Toggle */}
       <div className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${
-        value.isElite
+        value.isElite || currentTier === "whitelabel_5000"
           ? "bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-700"
           : "bg-slate-50 dark:bg-slate-700/40 border-slate-200 dark:border-slate-600"
       }`}>
         <div className="flex-1">
           <p className="text-xs font-black text-slate-800 dark:text-white flex items-center gap-1.5">
             <Crown size={14} className="text-amber-500" />
-            Elite Edition (2× Price) — Custom Curriculum &amp; Notes
+            Elite Edition (2× Price) — Custom Website CMS, Face ID &amp; Notes
           </p>
           <p className="text-[11px] text-slate-500 dark:text-slate-300 mt-0.5">
-            School ko Class 1-12 Notes, Video, Audio, PDF &amp; MCQ Manager aur Custom Study Rooms ka access dega.
+            Custom Website CMS (बैनर, टीचर व गैलरी फोटो), AI Face Attendance और Class 1–12 Notes अनलॉक। (Lite में केवल Default Website मिलेगा)
           </p>
         </div>
         <button
           type="button"
+          disabled={currentTier === "whitelabel_5000"}
           onClick={() => {
             const nextElite = !value.isElite;
             const baseRate = currentTier === "starter_200" || currentTier === "lite" ? 999 : currentTier === "growth_500" ? 1999 : 3999;
@@ -221,13 +261,13 @@ const SubEditor = ({
               monthlyAmount: nextElite ? baseRate * 2 : baseRate
             });
           }}
-          className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
-            value.isElite
+          className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer disabled:opacity-80 ${
+            value.isElite || currentTier === "whitelabel_5000"
               ? "bg-amber-500 text-slate-950 shadow-sm"
               : "bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-200"
           }`}
         >
-          {value.isElite ? "👑 Elite (2× Active)" : "Standard (1×)"}
+          {currentTier === "whitelabel_5000" ? "👑 White-Label Elite" : value.isElite ? "👑 Elite (2× Active)" : "⚡ Lite (Default Web)"}
         </button>
       </div>
     </div>
@@ -235,18 +275,20 @@ const SubEditor = ({
 };
 
 // ── PLAN ASSIGNER COMPONENT ───────────────────────────────────────────────────
-type PlanTier = "starter_200" | "growth_500" | "enterprise_2000";
+type PlanTier = "starter_200" | "growth_500" | "enterprise_2000" | "whitelabel_5000";
 type PlanDur  = "1_year" | "2_years" | "lifetime" | "monthly" | "weekly" | "3months" | "yearly";
 
 const PLAN_PRICES: Record<PlanTier, Record<PlanDur, number>> = {
   starter_200:     { "1_year": 9999,  "2_years": 17999, lifetime: 34999,  monthly: 999,  weekly: 299, "3months": 2699,  yearly: 9999 },
   growth_500:      { "1_year": 19999, "2_years": 35999, lifetime: 69999,  monthly: 1999, weekly: 599, "3months": 5399,  yearly: 19999 },
   enterprise_2000: { "1_year": 39999, "2_years": 69999, lifetime: 129999, monthly: 3999, weekly: 999, "3months": 10799, yearly: 39999 },
+  whitelabel_5000: { "1_year": 199999, "2_years": 349999, lifetime: 599999, monthly: 19999, weekly: 5999, "3months": 54999, yearly: 199999 },
 };
 const PLAN_SAVINGS: Record<PlanTier, Record<PlanDur, number>> = {
   starter_200:     { "1_year": 1989, "2_years": 5977,  lifetime: 24965, monthly: 0, weekly: 0, "3months": 298,  yearly: 1989 },
   growth_500:      { "1_year": 3989, "2_years": 11977, lifetime: 49965, monthly: 0, weekly: 0, "3months": 598,  yearly: 3989 },
   enterprise_2000: { "1_year": 7989, "2_years": 25977, lifetime: 99965, monthly: 0, weekly: 0, "3months": 1198, yearly: 7989 },
+  whitelabel_5000: { "1_year": 39989, "2_years": 129977, lifetime: 499999, monthly: 0, weekly: 0, "3months": 4998, yearly: 39989 },
 };
 const DURATION_DAYS: Record<PlanDur, number> = {
   "1_year": 365,
@@ -273,11 +315,12 @@ const PlanAssigner: React.FC<{
 }> = ({ school, onAssigned }) => {
   const [tier, setTier]       = useState<PlanTier>(() => {
     const st = school?.subscription?.tier;
-    if (st === "starter_200" || st === "growth_500" || st === "enterprise_2000") return st;
+    if (st === "starter_200" || st === "growth_500" || st === "enterprise_2000" || st === "whitelabel_5000") return st;
     return "enterprise_2000";
   });
   const [isElite, setIsElite] = useState<boolean>(() => {
     return Boolean(
+      school?.subscription?.tier === "whitelabel_5000" ||
       school?.subscription?.isElite ||
       (school as any)?.isElite ||
       school?.subscription?.customCurriculumEnabled ||
@@ -288,10 +331,12 @@ const PlanAssigner: React.FC<{
   const [saving, setSaving]   = useState(false);
   const [success, setSuccess] = useState(false);
 
+  const effectiveElite = tier === "whitelabel_5000" ? true : isElite;
   const rawBasePrice  = PLAN_PRICES[tier][duration] || 0;
   const rawBaseSaving = PLAN_SAVINGS[tier][duration] || 0;
-  const price   = isElite ? rawBasePrice * 2 : rawBasePrice;
-  const saving_ = isElite ? rawBaseSaving * 2 : rawBaseSaving;
+  // White-label pricing is already inclusive (not doubled by 2x multiplier)
+  const price   = tier === "whitelabel_5000" ? rawBasePrice : effectiveElite ? rawBasePrice * 2 : rawBasePrice;
+  const saving_ = tier === "whitelabel_5000" ? rawBaseSaving : effectiveElite ? rawBaseSaving * 2 : rawBaseSaving;
 
   const computeExpiry = (dur: PlanDur): string => {
     if (dur === "lifetime") {
@@ -308,10 +353,10 @@ const PlanAssigner: React.FC<{
     setSaving(true);
     setSuccess(false);
     const expiresAt = computeExpiry(duration);
-    const maxStudents = tier === "starter_200" ? 200 : tier === "growth_500" ? 500 : 2000;
+    const maxStudents = tier === "starter_200" ? 200 : tier === "growth_500" ? 500 : tier === "whitelabel_5000" ? 5000 : 2000;
     const maxTeachers = tier === "starter_200" ? 10 : tier === "growth_500" ? 25 : 9999;
     const baseMonthly = PLAN_PRICES[tier]["monthly"] || 999;
-    const monthlyAmount = isElite ? baseMonthly * 2 : baseMonthly;
+    const monthlyAmount = tier === "whitelabel_5000" ? baseMonthly : effectiveElite ? baseMonthly * 2 : baseMonthly;
 
     const newSub: SchoolSubscription = {
       ...school.subscription,
@@ -319,8 +364,8 @@ const PlanAssigner: React.FC<{
       maxStudents,
       maxTeachers,
       status:        "active",
-      isElite,
-      customCurriculumEnabled: isElite,
+      isElite:       effectiveElite,
+      customCurriculumEnabled: effectiveElite,
       expiresAt,
       paidUntil:     expiresAt,
       reading:       true,
@@ -332,12 +377,16 @@ const PlanAssigner: React.FC<{
       assignedAt:    new Date().toISOString(),
       lastPaidDate:  new Date().toISOString(),
       lastPaidAmount: price,
-      paymentNotes:  isElite ? "Elite Plan (2× Price — Class 1-12 Notes, MCQ, PDF & Video Manager Active)" : "Standard Plan Active",
+      paymentNotes:  tier === "whitelabel_5000"
+        ? "Enterprise White-Label Active (Play Store App, Custom Domain, On-Site Training & Migration)"
+        : effectiveElite
+        ? "Elite Plan (2× Price — Custom Website CMS, Face Attendance & Class 1-12 Notes Active)"
+        : "Lite Plan Active (Default Website + QR Scan Attendance)",
     };
     await updateSchool(school.id, {
       subscription: newSub,
-      isElite,
-      customCurriculumEnabled: isElite,
+      isElite: effectiveElite,
+      customCurriculumEnabled: effectiveElite,
       active: true,
     });
     onAssigned(newSub);
@@ -346,7 +395,7 @@ const PlanAssigner: React.FC<{
     setTimeout(() => setSuccess(false), 3000);
   };
 
-  const tierLabel = tier === "starter_200" ? "Basic (200)" : tier === "growth_500" ? "Standard (500)" : "Pro (2000)";
+  const tierLabel = tier === "starter_200" ? "Basic (200)" : tier === "growth_500" ? "Standard (500)" : tier === "whitelabel_5000" ? "White-Label (5000+)" : "Pro (2000)";
 
   return (
     <div className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm space-y-4">
@@ -361,85 +410,95 @@ const PlanAssigner: React.FC<{
       </div>
 
       {/* Tier selector */}
-      <div className="grid grid-cols-3 gap-2 p-1 bg-slate-100 dark:bg-slate-700 rounded-xl">
-        {(["starter_200", "growth_500", "enterprise_2000"] as PlanTier[]).map(t => (
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 p-1 bg-slate-100 dark:bg-slate-700 rounded-xl">
+        {(["starter_200", "growth_500", "enterprise_2000", "whitelabel_5000"] as PlanTier[]).map(t => (
           <button
             key={t}
-            onClick={() => setTier(t)}
+            onClick={() => {
+              setTier(t);
+              if (t === "whitelabel_5000") setIsElite(true);
+            }}
             className={`py-2 px-1 rounded-lg text-xs font-black transition-all cursor-pointer text-center ${
               tier === t
                 ? t === "starter_200"
                   ? "bg-blue-600 text-white shadow"
                   : t === "growth_500"
                   ? "bg-purple-600 text-white shadow"
+                  : t === "whitelabel_5000"
+                  ? "bg-rose-600 text-white shadow"
                   : "bg-amber-500 text-slate-950 shadow"
                 : "text-slate-500 dark:text-slate-400"
             }`}
           >
-            {t === "starter_200" ? "📦 Basic (200)" : t === "growth_500" ? "🚀 Standard (500)" : "👑 Pro (2000)"}
+            {t === "starter_200" ? "📦 Basic (200)" : t === "growth_500" ? "🚀 Standard (500)" : t === "whitelabel_5000" ? "👑 White-Label" : "👑 Pro (2000)"}
           </button>
         ))}
       </div>
 
       {/* Plan description */}
       <div className={`rounded-lg px-3 py-2 text-xs ${
-        tier === "enterprise_2000"
+        tier === "whitelabel_5000"
+          ? "bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-300"
+          : tier === "enterprise_2000"
           ? "bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300"
           : tier === "growth_500"
           ? "bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-300"
           : "bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300"
       }`}>
-        {tier === "enterprise_2000"
+        {tier === "whitelabel_5000"
+          ? "👑 Enterprise White-Label (5000+ Students): Play Store Branded App, On-Site Training, Data Migration & Custom .com Website CMS"
+          : tier === "enterprise_2000"
           ? "👑 Pro Plan (2000 Students): Unlimited Staff • Multi-Admins, Full Payroll HRM, Advance Accounts & Website"
           : tier === "growth_500"
           ? "🚀 Standard Plan (500 Students): 25 Teachers • Sub-Admins, QR ID Cards & Admit Cards"
-          : "📦 Basic Plan (200 Students): 10 Teachers • Core Management, Fees & Due Register"}
+          : "📦 Basic Plan (200 Students): 10 Teachers • Core Management, Fees & Default Website"}
       </div>
 
       {/* ── 👑 ELITE PLAN (2× PRICE) EDITION SELECTOR ───────────────────── */}
       <div className="space-y-2">
         <div className="flex items-center justify-between text-xs">
           <span className="font-bold text-slate-700 dark:text-slate-200">Plan Edition Chunein:</span>
-          {isElite && (
+          {effectiveElite && (
             <span className="bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 text-[10px] font-black px-2 py-0.5 rounded-full flex items-center gap-1">
-              <Crown size={11} /> 2× Price Active
+              <Crown size={11} /> {tier === "whitelabel_5000" ? "All Elite + White-Label Included" : "2× Price Active"}
             </span>
           )}
         </div>
         <div className="bg-slate-100 dark:bg-slate-700/60 p-1 rounded-xl grid grid-cols-2 gap-1.5">
           <button
             type="button"
+            disabled={tier === "whitelabel_5000"}
             onClick={() => setIsElite(false)}
-            className={`py-2 px-3 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-              !isElite
+            className={`py-2 px-3 rounded-lg text-xs font-black transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 ${
+              !effectiveElite
                 ? "bg-white dark:bg-slate-800 text-slate-800 dark:text-white shadow-xs"
                 : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-200"
             }`}
           >
             <Shield className="w-3.5 h-3.5" />
-            Standard Plan (1×)
+            Lite (1× · Default Web)
           </button>
           <button
             type="button"
             onClick={() => setIsElite(true)}
             className={`py-2 px-3 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-              isElite
+              effectiveElite
                 ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-xs"
                 : "text-amber-600 dark:text-amber-400 hover:text-amber-700"
             }`}
           >
             <Crown className="w-3.5 h-3.5" />
-            👑 Elite Plan (2× Price)
+            {tier === "whitelabel_5000" ? "👑 White-Label Elite" : "👑 Elite (2× · Custom Web)"}
           </button>
         </div>
 
-        {isElite && (
+        {effectiveElite && (
           <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700 rounded-xl p-3 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2.5">
             <Crown className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
             <div>
-              <p className="font-black text-amber-900 dark:text-amber-100">👑 Elite Face Attendance &amp; Curriculum Unlocked:</p>
+              <p className="font-black text-amber-900 dark:text-amber-100">👑 Elite Custom Website CMS, Face Attendance &amp; Curriculum Unlocked:</p>
               <p className="text-[11px] text-amber-800 dark:text-amber-300 mt-0.5 leading-relaxed">
-                School ke pass <strong>🤖 AI Face Attendance (0.2s Face Kiosk + Live Face ID Studio)</strong>, <strong>📷 QR Scan</strong> aur <strong>Class 1 se 12</strong> tak ke Notes, MCQs, Video Lectures व PDF Manager ka full power active rahega.
+                School ke pass <strong>🌐 Full Custom Website CMS (फ़ोटो, बैनर, टीचर व गैलरी एडिट)</strong>, <strong>🤖 AI Face Attendance</strong>, aur <strong>Class 1 se 12 Notes</strong> active rahega.
               </p>
             </div>
           </div>
@@ -450,16 +509,16 @@ const PlanAssigner: React.FC<{
       <div className="grid grid-cols-2 gap-2">
         {(["1_year", "monthly"] as PlanDur[]).map(d => {
           const rawP = PLAN_PRICES[tier][d] || 0;
-          const p = isElite ? rawP * 2 : rawP;
+          const p = tier === "whitelabel_5000" ? rawP : effectiveElite ? rawP * 2 : rawP;
           const rawS = PLAN_SAVINGS[tier][d] || 0;
-          const s = isElite ? rawS * 2 : rawS;
+          const s = tier === "whitelabel_5000" ? rawS : effectiveElite ? rawS * 2 : rawS;
           return (
             <button
               key={d}
               onClick={() => setDur(d)}
               className={`flex flex-col items-center gap-1 p-2.5 rounded-xl border-2 transition-all active:scale-95 cursor-pointer text-center ${
                 duration === d
-                  ? isElite
+                  ? effectiveElite
                     ? "border-amber-500 bg-amber-50/70 dark:bg-amber-950/30"
                     : "border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30"
                   : "border-slate-200 dark:border-slate-600 hover:border-slate-300"
@@ -467,7 +526,7 @@ const PlanAssigner: React.FC<{
             >
               <span className={`text-[11px] font-black uppercase ${
                 duration === d
-                  ? isElite
+                  ? effectiveElite
                     ? "text-amber-700 dark:text-amber-300"
                     : "text-indigo-700 dark:text-indigo-300"
                   : "text-slate-500 dark:text-slate-400"
@@ -477,7 +536,7 @@ const PlanAssigner: React.FC<{
               </span>
               <span className={`text-xs font-black ${
                 duration === d
-                  ? isElite
+                  ? effectiveElite
                     ? "text-amber-700 dark:text-amber-300"
                     : "text-indigo-600 dark:text-indigo-400"
                   : "text-slate-600 dark:text-slate-300"
@@ -499,17 +558,21 @@ const PlanAssigner: React.FC<{
         <div>
           <p className="text-xs text-slate-400">Plan</p>
           <p className="text-sm font-black text-slate-800 dark:text-white">
-            {tierLabel} Plan · {isElite ? "👑 Elite Edition (2×)" : "Standard Plan"} · {DURATION_LABEL[duration]}
+            {tierLabel} Plan · {tier === "whitelabel_5000" ? "👑 White-Label" : effectiveElite ? "👑 Elite Edition (2×)" : "⚡ Lite Plan"} · {DURATION_LABEL[duration]}
           </p>
           <p className="text-[10px] text-slate-400 mt-0.5">
             Valid till: {computeExpiry(duration)}
           </p>
-          <p className={`text-[10px] font-bold mt-1 ${isElite ? "text-amber-600 dark:text-amber-400" : "text-slate-500"}`}>
-            {isElite ? "👑 AI Face Attendance (Kiosk & Face ID) + Class 1-12 Notes, Video & MCQ Included" : "⚡ QR Code Scan Attendance + Standard Student ERP (No Face Attendance)"}
+          <p className={`text-[10px] font-bold mt-1 ${effectiveElite ? "text-amber-600 dark:text-amber-400" : "text-slate-500"}`}>
+            {tier === "whitelabel_5000"
+              ? "👑 Play Store App + Custom .com Website CMS + On-Site Training + AI Face Attendance"
+              : effectiveElite
+              ? "👑 Custom Website CMS (फ़ोटो व गैलरी) + AI Face Attendance + Class 1-12 Notes Included"
+              : "⚡ Default Website (बिना कस्टम फ़ोटो) + QR Scan Attendance (No Face Attendance)"}
           </p>
         </div>
         <div className="text-right">
-          <p className={`text-xl font-black ${isElite ? "text-amber-600 dark:text-amber-400" : "text-indigo-600 dark:text-indigo-400"}`}>
+          <p className={`text-xl font-black ${effectiveElite ? "text-amber-600 dark:text-amber-400" : "text-indigo-600 dark:text-indigo-400"}`}>
             ₹{price.toLocaleString("en-IN")}
           </p>
           {saving_ > 0 && <p className="text-[10px] text-green-600 font-bold">Save ₹{saving_.toLocaleString("en-IN")}</p>}
@@ -526,19 +589,19 @@ const PlanAssigner: React.FC<{
         onClick={handleAssign}
         disabled={saving}
         className={`w-full py-3.5 disabled:opacity-60 text-white rounded-xl text-sm font-black flex items-center justify-center gap-2 active:scale-[0.98] transition-all cursor-pointer shadow-md ${
-          isElite
+          effectiveElite
             ? "bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 shadow-amber-500/20"
             : "bg-indigo-600 hover:bg-indigo-700 shadow-indigo-500/20"
         }`}
       >
         {saving ? (
           <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-        ) : isElite ? (
+        ) : effectiveElite ? (
           <Crown className="w-4 h-4" />
         ) : (
           <Zap className="w-4 h-4" />
         )}
-        {saving ? "Assigning Plan..." : `Assign ${tierLabel} ${isElite ? "👑 Elite Plan (2×)" : "Plan"} (₹${price.toLocaleString("en-IN")})`}
+        {saving ? "Assigning Plan..." : `Assign ${tierLabel} ${tier === "whitelabel_5000" ? "👑 White-Label" : effectiveElite ? "👑 Elite Plan (2×)" : "Lite Plan"} (₹${price.toLocaleString("en-IN")})`}
       </button>
     </div>
   );
@@ -842,7 +905,62 @@ export const SuperAdminPanel: React.FC<Props> = ({ adminUid, onBack }) => {
   const [selectedSchool, setSelectedSchool] = useState<School | null>(null);
   const [directManageSchool, setDirectManageSchool] = useState<School | null>(null);
   const [saving, setSaving]             = useState(false);
-  const [dashTab, setDashTab]           = useState<"schools" | "subscriptions" | "policies">("schools");
+  const [dashTab, setDashTab]           = useState<"schools" | "subscriptions" | "policies" | "developer">("schools");
+
+  // Global Website Developer Config (Managed strictly by Life Maker Super Admin across ALL schools)
+  const [devForm, setDevForm] = useState<GlobalWebsiteDeveloperConfig>(() => ({ ...DEFAULT_GLOBAL_DEVELOPER }));
+  const [savingDev, setSavingDev] = useState(false);
+  const [uploadingDevPhoto, setUploadingDevPhoto] = useState(false);
+
+  useEffect(() => {
+    const unsub = subscribeToGlobalDeveloperConfig((cfg) => {
+      setDevForm(cfg);
+    });
+    return unsub;
+  }, []);
+
+  const handleUploadGlobalDevPhoto = async (file?: File) => {
+    if (!file) return;
+    setUploadingDevPhoto(true);
+    try {
+      const res = await compressImageFileToDataUrl(file, {
+        maxWidth: 600,
+        maxHeight: 600,
+        maxSizeBytes: 140 * 1024,
+      });
+      setDevForm((prev) => ({ ...prev, photoUrl: res.dataUrl }));
+      toast.success(`Developer photo compressed (${res.sizeKB} KB)`);
+    } catch {
+      toast.error("फोटो प्रोसेस नहीं हो पाई। कृपया दूसरी इमेज चुनें।");
+    } finally {
+      setUploadingDevPhoto(false);
+    }
+  };
+
+  const handleSaveGlobalDeveloper = async () => {
+    if (!devForm.name.trim()) {
+      toast.error("कृपया Developer का नाम लिखें।");
+      return;
+    }
+    setSavingDev(true);
+    try {
+      const saved = await saveGlobalDeveloperConfig(
+        {
+          name: devForm.name.trim(),
+          roleTitle: devForm.roleTitle.trim() || DEFAULT_GLOBAL_DEVELOPER.roleTitle,
+          organization: devForm.organization.trim() || DEFAULT_GLOBAL_DEVELOPER.organization,
+          photoUrl: (devForm.photoUrl || "").trim(),
+        },
+        adminUid || "Life Maker Super Admin"
+      );
+      setDevForm(saved);
+      toast.success("Global Developer अपडेट हो गया! अब सभी स्कूलों की वेबसाइट पर यही दिखेगा।");
+    } catch {
+      toast.error("Global Developer सेव करने में समस्या आई।");
+    } finally {
+      setSavingDev(false);
+    }
+  };
 
   // Notification Gate Bypass Policy (Default: true — "defuot me bypass rahega", managed by Super Admin)
   const [notificationGateBypass, setNotificationGateBypass] = useState<boolean>(() => {
@@ -951,8 +1069,9 @@ export const SuperAdminPanel: React.FC<Props> = ({ adminUid, onBack }) => {
     setCreateError(null);
     try {
       const id = generateId();
-      const schoolCode = (form.code.trim() || cleanName.slice(0, 6)).toUpperCase().replace(/[^A-Z0-9]/g, "_");
-      const cleanEmail = form.email.trim() || `${schoolCode.toLowerCase()}@school.internal`;
+      const schoolCode = form.code.trim() ? form.code.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "_") : "";
+      const emailSlug = (schoolCode || cleanName.slice(0, 6)).toLowerCase().replace(/[^a-z0-9]/g, "") || "school";
+      const cleanEmail = form.email.trim() || `${emailSlug}@school.internal`;
       const cleanAdminEmail = (form.adminEmail.trim() || cleanEmail).toLowerCase();
 
       // Enforce 1 Email = 1 School Rule for Super Admin allotment
@@ -1132,7 +1251,7 @@ export const SuperAdminPanel: React.FC<Props> = ({ adminUid, onBack }) => {
             <h3 className="font-semibold text-slate-700 dark:text-slate-200">School Details</h3>
             {([
               ["name",       "School Name *",                   "text"],
-              ["code",       "School Code (e.g. DPS_01 / auto)", "text"],
+              ["code",       "Registration / School Code (Optional)", "text"],
               ["email",      "School Email (optional)",          "email"],
               ["adminEmail", "Admin Email (optional)",           "email"],
               ["phone",      "Phone Number",                     "tel"],
@@ -1384,19 +1503,19 @@ export const SuperAdminPanel: React.FC<Props> = ({ adminUid, onBack }) => {
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
       {/* Header */}
-      <div className="bg-gradient-to-r from-slate-900 to-blue-900 px-4 py-5">
+      <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-sky-50 dark:from-slate-900 dark:to-blue-900 px-4 py-5 border-b-2 border-indigo-700 dark:border-indigo-500/40">
         {onBack && (
           <button
             onClick={onBack}
-            className="flex items-center gap-2 bg-gradient-to-r from-amber-400 to-amber-500 text-slate-950 px-3.5 py-2 rounded-xl text-xs font-black mb-3 shadow-lg shadow-amber-400/20 hover:brightness-110 active:scale-95 transition-all cursor-pointer ring-1 ring-amber-300"
+            className="flex items-center gap-2 bg-gradient-to-r from-amber-400 to-amber-500 text-slate-950 px-3.5 py-2 rounded-xl text-xs font-black mb-3 shadow-lg shadow-amber-400/20 hover:brightness-110 active:scale-95 transition-all cursor-pointer ring-1 ring-amber-600/40 dark:ring-amber-300"
           >
             <ArrowLeft className="w-4 h-4" />
             <span>← NSTA Master Admin Console Par Wapas Jayein</span>
           </button>
         )}
-        <p className="text-blue-300 text-xs font-medium uppercase tracking-wider mb-1">Super Admin</p>
-        <h1 className="text-2xl font-bold text-white">IIC×NSTA Control Panel</h1>
-        <p className="text-slate-400 text-sm mt-1">Manage all schools in the ecosystem</p>
+        <p className="text-indigo-700 dark:text-blue-300 text-xs font-black uppercase tracking-wider mb-1">Super Admin</p>
+        <h1 className="text-2xl font-black text-slate-900 dark:text-white">IIC×NSTA Control Panel</h1>
+        <p className="text-slate-700 dark:text-slate-400 text-sm font-medium mt-1">Manage all schools in the ecosystem</p>
       </div>
 
       <div className="p-4 space-y-3 max-w-2xl mx-auto">
@@ -1450,10 +1569,10 @@ export const SuperAdminPanel: React.FC<Props> = ({ adminUid, onBack }) => {
         </div>
 
         {/* Tab switcher */}
-        <div className="flex gap-1 p-1 bg-white dark:bg-slate-800 rounded-xl shadow-sm">
+        <div className="grid grid-cols-2 sm:flex gap-1 p-1 bg-white dark:bg-slate-800 rounded-xl shadow-sm">
           <button
             onClick={() => setDashTab("schools")}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-bold transition-all ${
+            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer ${
               dashTab === "schools" ? "bg-blue-600 text-white shadow" : "text-slate-500 dark:text-slate-400 hover:text-slate-700"
             }`}
           >
@@ -1461,7 +1580,7 @@ export const SuperAdminPanel: React.FC<Props> = ({ adminUid, onBack }) => {
           </button>
           <button
             onClick={() => setDashTab("subscriptions")}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-bold transition-all relative ${
+            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all relative cursor-pointer ${
               dashTab === "subscriptions" ? "bg-indigo-600 text-white shadow" : "text-slate-500 dark:text-slate-400 hover:text-slate-700"
             }`}
           >
@@ -1474,7 +1593,7 @@ export const SuperAdminPanel: React.FC<Props> = ({ adminUid, onBack }) => {
           </button>
           <button
             onClick={() => setDashTab("policies")}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-bold transition-all relative ${
+            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all relative cursor-pointer ${
               dashTab === "policies" ? "bg-amber-600 text-white shadow" : "text-slate-500 dark:text-slate-400 hover:text-slate-700"
             }`}
           >
@@ -1482,6 +1601,14 @@ export const SuperAdminPanel: React.FC<Props> = ({ adminUid, onBack }) => {
             <span className={`text-[9px] px-1.5 py-0.2 rounded-full font-black ${notificationGateBypass ? "bg-emerald-500/20 text-emerald-400" : "bg-red-500/20 text-red-400"}`}>
               {notificationGateBypass ? "Bypass ON" : "Lock"}
             </span>
+          </button>
+          <button
+            onClick={() => setDashTab("developer")}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+              dashTab === "developer" ? "bg-slate-900 dark:bg-emerald-600 text-white shadow" : "text-slate-500 dark:text-slate-400 hover:text-slate-700"
+            }`}
+          >
+            <Code2 className="w-4 h-4" /> Developer
           </button>
         </div>
 
@@ -1620,6 +1747,135 @@ export const SuperAdminPanel: React.FC<Props> = ({ adminUid, onBack }) => {
                 >
                   <span>🔄 टेस्ट हेतु स्किप रीसेट करें</span>
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Global Website Developer Tab (Exclusive to Life Maker Super Admin) */}
+        {dashTab === "developer" && (
+          <div className="space-y-4 animate-in fade-in duration-200">
+            <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-5 shadow-sm space-y-5">
+              <div className="flex items-start gap-3.5 pb-4 border-b border-slate-100 dark:border-slate-700/60">
+                <div className="w-12 h-12 rounded-2xl bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 border border-indigo-500/30">
+                  <Code2 className="w-6 h-6" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-base font-black text-slate-800 dark:text-white">
+                      Global Website Developer (Life Maker Only)
+                    </h3>
+                    <span className="text-[11px] font-black px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700">
+                      Applies to All Schools ({schools.length})
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+                    डिफ़ॉल्ट रूप से हर स्कूल की वेबसाइट पर यही <strong>Developer Name व Photo</strong> दिखेगा। कोई भी स्कूल एडमिन इसे नहीं बदल सकता — केवल <strong>Life Maker (Super Admin)</strong> यहाँ से बदल सकते हैं और यह सभी स्कूलों में एक साथ अपडेट हो जाएगा।
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-start text-xs">
+                {/* Photo Upload Column */}
+                <div className="md:col-span-4 flex flex-col items-center p-4 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 space-y-3">
+                  <div className="w-24 h-24 rounded-2xl overflow-hidden bg-slate-200 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 flex items-center justify-center">
+                    {devForm.photoUrl ? (
+                      <img src={devForm.photoUrl} alt={devForm.name} className="w-full h-full object-cover" />
+                    ) : (
+                      <span className="text-2xl font-black text-indigo-600 dark:text-amber-400">
+                        {(devForm.name || "DV").slice(0, 2).toUpperCase()}
+                      </span>
+                    )}
+                  </div>
+                  <label className="w-full py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer">
+                    {uploadingDevPhoto ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Camera className="w-3.5 h-3.5" />}
+                    <span>{uploadingDevPhoto ? "Processing..." : "Upload Developer Pic"}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => handleUploadGlobalDevPhoto(e.target.files?.[0])}
+                    />
+                  </label>
+                  {devForm.photoUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setDevForm((prev) => ({ ...prev, photoUrl: "" }))}
+                      className="text-[11px] font-bold text-rose-600 dark:text-rose-400 hover:underline cursor-pointer"
+                    >
+                      Remove Photo
+                    </button>
+                  )}
+                </div>
+
+                {/* Form Fields Column */}
+                <div className="md:col-span-8 space-y-3">
+                  <div>
+                    <label className="font-bold text-slate-600 dark:text-slate-300 block mb-1">
+                      Developer Name *
+                    </label>
+                    <input
+                      type="text"
+                      value={devForm.name}
+                      onChange={(e) => setDevForm((prev) => ({ ...prev, name: e.target.value }))}
+                      placeholder="e.g. Nadim Anwar"
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white font-bold"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="font-bold text-slate-600 dark:text-slate-300 block mb-1">
+                        Role / Designation
+                      </label>
+                      <input
+                        type="text"
+                        value={devForm.roleTitle}
+                        onChange={(e) => setDevForm((prev) => ({ ...prev, roleTitle: e.target.value }))}
+                        placeholder="Platform Developer & Architect"
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-600 dark:text-slate-300 block mb-1">
+                        Organization / Brand
+                      </label>
+                      <input
+                        type="text"
+                        value={devForm.organization}
+                        onChange={(e) => setDevForm((prev) => ({ ...prev, organization: e.target.value }))}
+                        placeholder="Life Maker"
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-600 dark:text-slate-300 block mb-1">
+                      Developer Photo URL (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={devForm.photoUrl}
+                      onChange={(e) => setDevForm((prev) => ({ ...prev, photoUrl: e.target.value }))}
+                      placeholder="https://..."
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                  <div className="pt-2 flex flex-wrap items-center justify-between gap-3">
+                    <span className="text-[11px] text-slate-500 flex items-center gap-1">
+                      <Globe className="w-3.5 h-3.5 text-emerald-500" />
+                      Live across every school website automatically
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleSaveGlobalDeveloper}
+                      disabled={savingDev}
+                      className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-black inline-flex items-center gap-2 shadow-sm cursor-pointer"
+                    >
+                      {savingDev ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                      <span>{savingDev ? "Updating All Schools..." : "Save Global Developer"}</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>

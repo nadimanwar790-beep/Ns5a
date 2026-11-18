@@ -9,19 +9,29 @@ import {
   AlertCircle,
   FileText,
   Filter,
-  Check,
   Loader2,
-  Printer,
   Sparkles,
   Phone,
-  ShieldCheck,
-  ReceiptText,
+  Percent,
+  IndianRupee,
+  Minus,
+  Plus,
+  Save,
+  Trash2,
+  Calendar,
 } from "lucide-react";
-import type { School, SchoolStudent, SchoolClass, MonthlyFee } from "../../school-types";
+import type { School, SchoolStudent, SchoolClass, MonthlyFee, FeeDiscountSlab } from "../../school-types";
 import { formatMonthLabel } from "../../utils/feeFifoAllocation";
 import { sendSchoolPushNotification } from "../../utils/schoolPushClient";
 import { autoSendFeeSlipToSchoolDesk } from "../../school-firebase";
-import { printDpsReceipts4in1, type DpsReceiptData } from "./feeReceiptUtils";
+import {
+  getSchoolFeeDiscountSlabs,
+  saveSchoolFeeDiscountSlabs,
+  normalizeFeeDiscountSlabs,
+  computeSlabDiscountAmount,
+  resolveSlabForDay,
+  formatSlabsHeadline,
+} from "../../utils/feeDiscountSlabs";
 
 export interface ClassFeeAlertBroadcastModalProps {
   isOpen: boolean;
@@ -54,6 +64,18 @@ export const ClassFeeAlertBroadcastModal: React.FC<ClassFeeAlertBroadcastModalPr
   const [includeA6Slip, setIncludeA6Slip] = useState(true);
   const [customRemark, setCustomRemark] = useState("");
 
+  // Multi-Tier Date-Limited Fee Discount Slabs (Only applied when paid within date!)
+  const [discountSlabs, setDiscountSlabs] = useState<FeeDiscountSlab[]>(() =>
+    getSchoolFeeDiscountSlabs(school?.id, school)
+  );
+  const [savingSlabs, setSavingSlabs] = useState(false);
+
+  React.useEffect(() => {
+    if (isOpen) {
+      setDiscountSlabs(getSchoolFeeDiscountSlabs(school?.id, school));
+    }
+  }, [isOpen, school?.id]);
+
   const monthLabel = useMemo(() => formatMonthLabel(currentMonth), [currentMonth]);
 
   // Map of class names
@@ -75,7 +97,6 @@ export const ClassFeeAlertBroadcastModal: React.FC<ClassFeeAlertBroadcastModalPr
       totalDue: number;
     }> = [];
 
-    // All classes summary
     const allDueStudents = fees.filter((f) => {
       const bal = Number(f.balanceDue !== undefined ? f.balanceDue : (f.amount || 0) - Number(f.paidAmount || 0));
       return !f.paid || bal > 0;
@@ -176,6 +197,52 @@ export const ClassFeeAlertBroadcastModal: React.FC<ClassFeeAlertBroadcastModalPr
     );
   };
 
+  const normalizedSlabs = normalizeFeeDiscountSlabs(discountSlabs);
+  const slabsHeadline = formatSlabsHeadline(normalizedSlabs);
+
+  const handleAddSlab = () => {
+    const maxDay = discountSlabs.reduce((m, s) => Math.max(m, Number(s.uptoDay) || 0), 0);
+    const nextDay = maxDay === 0 ? 1 : maxDay < 5 ? 5 : maxDay < 10 ? 10 : Math.min(31, maxDay + 5);
+    const lastVal = discountSlabs.length > 0 ? discountSlabs[discountSlabs.length - 1].discountValue : 10;
+    const nextVal = discountSlabs.length === 0 ? 10 : Math.max(1, Math.round(lastVal / 2));
+    setDiscountSlabs((prev) => [
+      ...prev,
+      {
+        id: `slab_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        uptoDay: nextDay,
+        discountType: "percent",
+        discountValue: nextVal,
+      },
+    ]);
+  };
+
+  const handleUpdateSlab = (id: string, patch: Partial<FeeDiscountSlab>) => {
+    setDiscountSlabs((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+  };
+
+  const handleRemoveSlab = (id: string) => {
+    setDiscountSlabs((prev) => prev.filter((s) => s.id !== id));
+  };
+
+  const handleSaveSlabsOnly = async () => {
+    setSavingSlabs(true);
+    setBroadcastSuccessMsg(null);
+    try {
+      const saved = await saveSchoolFeeDiscountSlabs(school?.id || "default", discountSlabs);
+      setDiscountSlabs(saved);
+      const summary = formatSlabsHeadline(saved);
+      const msg = summary
+        ? `✅ Discount Date Rules Save ho gaye: ${summary} (अंतिम तिथि के बाद पूरा भुगतान देय होगा)`
+        : `✅ Discount Offers band kar diye gaye (Ab sabhi students se poora fee liya jayega).`;
+      setBroadcastSuccessMsg(msg);
+      if (onSuccess) onSuccess(msg);
+    } catch (err: any) {
+      setBroadcastSuccessMsg(`❌ Rule save karne me samasya: ${err?.message || "Punah prayas karein"}`);
+    } finally {
+      setSavingSlabs(false);
+    }
+  };
+
   // Execute Class-Wise Broadcast with Lock-screen Push & In-App Channel Message
   const handleExecuteBroadcast = async () => {
     if (selectedStudentIds.length === 0) return;
@@ -183,16 +250,18 @@ export const ClassFeeAlertBroadcastModal: React.FC<ClassFeeAlertBroadcastModalPr
     setBroadcastSuccessMsg(null);
 
     try {
+      // Save the configured date slabs so Payment Counter & Online Slips enforce the exact same dates!
+      const savedSlabs = await saveSchoolFeeDiscountSlabs(school?.id || "default", discountSlabs);
+      setDiscountSlabs(savedSlabs);
+
       const targetClassName =
         selectedClassId === "all" ? "Sabhi Classes" : (currentClassObj?.name || "Class");
       const schoolTitle = school?.name || "DPS School";
 
-      // 1. Dispatch Web-Push Notification with Class-Level Filter (Lock screen push!)
-      const todayDateNum = new Date().getDate();
-      const isBeforeOrOn10th = todayDateNum <= 10;
-      const notifBody = isBeforeOrOn10th
-        ? `📢 ${monthLabel} फीस सूचना: 10 तारीख तक फीस जमा करें और चालू माह फीस पर पाएं 5% OFF! (पुराने बकाए पर छूट लागू नहीं)। A6 Fee Demand Slip देखें।`
-        : `📢 ${monthLabel} Mahine ki fees jama karne hetu A6 Fee Demand Slip jari ki gayi hai. Kripya samay par jama karein.`;
+      const slabNoticeLine = formatSlabsHeadline(savedSlabs);
+      const notifBody = slabNoticeLine
+        ? `📢 ${monthLabel} फीस सूचना: ⚡ अर्ली पेमेंट छूट: ${slabNoticeLine}। (तय तारीख के बाद स्लिप की पूरी राशि देय होगी)। A6 Fee Demand Slip देखें।`
+        : `📢 ${monthLabel} Mahine ki fees jama karne hetu A6 Fee Demand Slip jari ki gayi hai. Kripya samay par poora shulk jama karein.`;
 
       const pushResult = await sendSchoolPushNotification({
         schoolId: school?.id,
@@ -205,7 +274,6 @@ export const ClassFeeAlertBroadcastModal: React.FC<ClassFeeAlertBroadcastModalPr
         urgent: true,
       });
 
-      // 2. Persist Broadcast in Local/Shared Channel Feed for NSTA Messenger
       const broadcastEntry = {
         id: `broadcast_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         schoolId: school?.id || "school",
@@ -217,8 +285,8 @@ export const ClassFeeAlertBroadcastModal: React.FC<ClassFeeAlertBroadcastModalPr
         title: `📢 ${targetClassName} • Fee Demand Slip (${monthLabel})`,
         text:
           customRemark.trim() ||
-          (isBeforeOrOn10th
-            ? `Aadarniya Abhibhavak, ${monthLabel} mahine ki school fees hetu A6 Fee Demand Slip jari kar di gayi hai. ⚡ 10 tarikh tak jama karne par chalu mah fees par 5% ki vishesh chhoot milegi (purane bakaye par chhoot lagoo nahi). Kripya samay par jama karein.`
+          (slabNoticeLine
+            ? `Aadarniya Abhibhavak, ${monthLabel} mahine ki school fees hetu A6 Fee Demand Slip jari kar di gayi hai. ⚡ Discount Offer: ${slabNoticeLine}. Tay tarikh ke andar jama karne par hi chhoot milegi, anyatha slip par likha poora payment jama karna hoga.`
             : `Aadarniya Abhibhavak, ${monthLabel} mahine ki school fees jama karne hetu A6 Fee Demand Slip jari kar di gayi hai. Niche diye gaye link se slip dekhein ya direct UPI/WhatsApp se jama karein.`),
         slipType: "A6_DEMAND_SLIP",
         month: currentMonth,
@@ -235,16 +303,22 @@ export const ClassFeeAlertBroadcastModal: React.FC<ClassFeeAlertBroadcastModalPr
         localStorage.setItem(storageKey, JSON.stringify(list.slice(0, 50)));
       } catch {}
 
+      const todayDay = new Date().getDate();
+
       // Auto-deliver A6 Fee Demand Slip directly to student's NSTA Messenger School Desk
+      // NOTE: Full balanceDue is ALWAYS kept on the slip — discount applies ONLY if paid within slab date!
       selectedStudentIds.forEach((stId) => {
         const studentObj = students.find((s) => s.id === stId);
         const defItem = classDefaulters.find((d) => d.studentId === stId);
-        const dueBalance = Number(defItem?.pendingDue || 500);
-        const feeObj = defItem?.fee;
+        if (!defItem) return;
+        const dueBalance = Number(defItem.pendingDue || 500);
+        const feeObj = defItem.fee;
         const currentMonthFee = Number(feeObj?.monthlyAmount || feeObj?.amount || dueBalance);
         const oldArrears = Math.max(0, Number(feeObj?.previousDue || Math.max(0, dueBalance - currentMonthFee)));
-        const earlyDiscount = isBeforeOrOn10th && currentMonthFee > 0 ? Math.round(currentMonthFee * 0.05) : 0;
-        const netPayableWithDiscount = earlyDiscount > 0 ? (currentMonthFee - earlyDiscount) + oldArrears : dueBalance;
+
+        const todaySlabMatch = resolveSlabForDay(savedSlabs, todayDay, currentMonthFee);
+        const earlyDiscount = todaySlabMatch.discountAmount;
+        const netPayableIfPaidToday = earlyDiscount > 0 ? Math.max(0, dueBalance - earlyDiscount) : dueBalance;
 
         const studentClass = studentObj?.className || targetClassName || (studentObj?.classId ? `Class ${studentObj.classId}` : "Class");
         const studentRoll = studentObj?.rollNo || defItem?.rollNo || "";
@@ -267,17 +341,23 @@ export const ClassFeeAlertBroadcastModal: React.FC<ClassFeeAlertBroadcastModalPr
           monthlyAmount: currentMonthFee,
           oldArrears,
           earlyDiscount,
-          netPayableWithDiscount,
-          dueDate: isBeforeOrOn10th ? "10 तारीख तक (5% OFF)" : new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0],
-          payLink: school?.bankUpiId ? `upi://pay?pa=${school.bankUpiId}&pn=${encodeURIComponent(school?.name || "School")}&am=${netPayableWithDiscount}` : undefined
+          netPayableWithDiscount: netPayableIfPaidToday,
+          discountLabel: todaySlabMatch.label || undefined,
+          discountSlabs: savedSlabs,
+          dueDate:
+            savedSlabs.length > 0
+              ? `${savedSlabs[savedSlabs.length - 1].uptoDay} तारीख तक`
+              : new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0],
+          payLink: school?.bankUpiId
+            ? `upi://pay?pa=${school.bankUpiId}&pn=${encodeURIComponent(school?.name || "School")}&am=${netPayableIfPaidToday}`
+            : undefined,
         }).catch(() => {});
       });
 
-      const msg = `✅ ${targetClassName} ke ${selectedStudentIds.length} chhatron ke parents ko A6 Fee Demand Slip & Lock-screen Push bhej diya gaya! ${pushResult.delivered > 0 ? `(Delivered: ${pushResult.delivered})` : `(Queued on Device)`}`;
+      const msg = `✅ ${targetClassName} ke ${selectedStudentIds.length} chhatron ke parents ko A6 Fee Demand Slip & Date-Limited Discount Alert bhej diya gaya! ${pushResult.delivered > 0 ? `(Delivered: ${pushResult.delivered})` : `(Queued on Device)`}`;
       setBroadcastSuccessMsg(msg);
       if (onSuccess) onSuccess(msg);
 
-      // Auto dismiss success toast after 4s
       setTimeout(() => {
         setBroadcastSuccessMsg(null);
         onClose();
@@ -302,14 +382,14 @@ export const ClassFeeAlertBroadcastModal: React.FC<ClassFeeAlertBroadcastModalPr
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-base sm:text-lg font-black text-white leading-tight">
-                  Class Fee Alert & Broadcast
+                  Class Fee Alert &amp; Broadcast
                 </h3>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-400 text-slate-950 border border-amber-300">
                   👑 PRO PLAN
                 </span>
               </div>
               <p className="text-xs text-indigo-200 font-medium mt-0.5">
-                NSTA Messenger • Class-Wise Push & A6 Fee Demand Slips
+                NSTA Messenger • Class-Wise Push &amp; A6 Fee Demand Slips
               </p>
             </div>
           </div>
@@ -394,15 +474,15 @@ export const ClassFeeAlertBroadcastModal: React.FC<ClassFeeAlertBroadcastModalPr
                 <span className="mx-2">•</span>
                 <span>Pending Fees Wale: <strong>{currentClassObj.dueCount} Students</strong></span>
               </div>
-              <strong className="text-sm font-black text-rose-600 dark:text-rose-400">
+              <strong className="text-sm font-black text-rose-600 dark:text-rose-400 tabular-nums">
                 ₹{currentClassObj.totalDue.toLocaleString("en-IN")} Dues
               </strong>
             </div>
           </div>
 
-          {/* STEP 2: SLIP ATTACHMENT & NOTIFICATION PREVIEW */}
-          <div className="p-4 rounded-2xl bg-amber-500/10 dark:bg-amber-950/30 border border-amber-500/30 space-y-2.5">
-            <div className="flex items-center justify-between">
+          {/* STEP 2: SLIP ATTACHMENT & DATE-LIMITED DISCOUNT SLABS */}
+          <div className="p-4 rounded-2xl bg-amber-500/10 dark:bg-amber-950/30 border border-amber-500/30 space-y-3">
+            <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-2">
                 <FileText className="w-4 h-4 text-amber-600" />
                 <h4 className="text-xs font-black text-amber-950 dark:text-amber-200 uppercase tracking-wide">
@@ -420,21 +500,243 @@ export const ClassFeeAlertBroadcastModal: React.FC<ClassFeeAlertBroadcastModalPr
               </label>
             </div>
 
-            <p className="text-xs text-amber-900 dark:text-amber-300 leading-relaxed">
-              💡 Har chhatra ke parent ke phone par <strong>Lock-screen Push Notification</strong> bajega. Tapping par unhe seedha unke bache ka <strong>A6 Fee Demand Slip (A4 ka ¼)</strong> school seal, breakdown aur payment QR ke sath dikhega!
-            </p>
+            {/* Multi-Tier Date-Limited Fee Discount Builder */}
+            <div className="p-3.5 rounded-xl bg-white dark:bg-slate-900/95 border border-emerald-300 dark:border-emerald-700/60 space-y-3 shadow-xs">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="flex items-start gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0 mt-0.5">
+                    <Calendar className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h5 className="text-xs font-black text-slate-900 dark:text-white leading-tight">
+                      तारीख के अनुसार Fee Discount कम-बेसी करें (Date-Limited Offers)
+                    </h5>
+                    <p className="text-[10px] text-slate-600 dark:text-slate-400 mt-0.5 leading-snug">
+                      स्लिप पर <strong>पूरा बकाया (Full Fee)</strong> ही दिखेगा। यदि अभिभावक तय तारीख तक पेमेंट करेंगे तभी छूट मिलेगी, वरना पूरा भुगतान करना होगा।
+                    </p>
+                  </div>
+                </div>
 
-            {/* Early Payment 5% Discount Callout */}
-            <div className="p-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center gap-2.5">
-              <Sparkles className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-              <div className="text-[11px] leading-tight">
-                <span className="font-black text-emerald-800 dark:text-emerald-300">
-                  ⚡ 10 तारीख अर्ली पेमेंट ऑफर (5% OFF):
-                </span>
-                <span className="text-emerald-900 dark:text-emerald-200 ml-1">
-                  10 तारीख तक जमा करने पर केवल चालू माह शुल्क पर 5% छूट लागू होगी। (⚠️ पुराने बकाए पर कोई छूट नहीं)।
-                </span>
+                <button
+                  type="button"
+                  onClick={handleSaveSlabsOnly}
+                  disabled={savingSlabs}
+                  className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-black flex items-center gap-1 cursor-pointer disabled:opacity-50 transition shadow-xs shrink-0"
+                  title="ये तारीख व छूट नियम पेमेंट काउंटर व स्लिप के लिए सेव करें"
+                >
+                  {savingSlabs ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                  <span>Save Dates</span>
+                </button>
               </div>
+
+              {/* Quick Presets */}
+              <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                <span className="font-bold text-slate-500 dark:text-slate-400 mr-1">Quick Set:</span>
+                <button
+                  type="button"
+                  onClick={() => setDiscountSlabs([])}
+                  className={`px-2 py-1 rounded-lg font-bold border transition cursor-pointer ${
+                    discountSlabs.length === 0
+                      ? "bg-rose-600 text-white border-rose-500"
+                      : "bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100"
+                  }`}
+                >
+                  कोई छूट नहीं (0)
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDiscountSlabs([
+                      { id: `slab_10_${Date.now()}`, uptoDay: 10, discountType: "percent", discountValue: 5 },
+                    ])
+                  }
+                  className="px-2 py-1 rounded-lg font-bold border bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-emerald-50 dark:hover:bg-slate-700 transition cursor-pointer"
+                >
+                  10 तारीख तक 5%
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDiscountSlabs([
+                      { id: `slab_1_${Date.now()}`, uptoDay: 1, discountType: "percent", discountValue: 10 },
+                      { id: `slab_5_${Date.now() + 1}`, uptoDay: 5, discountType: "percent", discountValue: 5 },
+                      { id: `slab_10_${Date.now() + 2}`, uptoDay: 10, discountType: "percent", discountValue: 3 },
+                    ])
+                  }
+                  className="px-2 py-1 rounded-lg font-bold border bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-700 hover:bg-indigo-100 transition cursor-pointer"
+                >
+                  ⚡ 1 तक 10% • 5 तक 5% • 10 तक 3%
+                </button>
+              </div>
+
+              {/* Dynamic Date + Discount Slabs List */}
+              <div className="space-y-2">
+                {discountSlabs.length === 0 ? (
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-dashed border-slate-300 dark:border-slate-700 text-center text-[11px] text-slate-600 dark:text-slate-300 font-semibold">
+                    अभी कोई छूट ऑफर सक्रिय नहीं है — स्लिप पर लिखा पूरा शुल्क ही देय होगा।
+                  </div>
+                ) : (
+                  discountSlabs.map((slab, idx) => (
+                    <div
+                      key={slab.id}
+                      className="p-2.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 flex flex-wrap items-center justify-between gap-2"
+                    >
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-emerald-600 text-white tabular-nums">
+                          #{idx + 1}
+                        </span>
+
+                        {/* Day Selector (1..31) */}
+                        <div className="flex items-center gap-0.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-0.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleUpdateSlab(slab.id, { uptoDay: Math.max(1, (Number(slab.uptoDay) || 1) - 1) })
+                            }
+                            className="w-6 h-6 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-white flex items-center justify-center cursor-pointer"
+                            title="तारीख कम करें"
+                          >
+                            <Minus className="w-3 h-3" />
+                          </button>
+                          <input
+                            type="number"
+                            min={1}
+                            max={31}
+                            value={slab.uptoDay}
+                            onChange={(e) => {
+                              const d = Math.max(1, Math.min(31, Number(e.target.value) || 1));
+                              handleUpdateSlab(slab.id, { uptoDay: d });
+                            }}
+                            className="w-10 text-center text-xs font-black tabular-nums bg-transparent text-slate-900 dark:text-white focus:outline-hidden"
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleUpdateSlab(slab.id, { uptoDay: Math.min(31, (Number(slab.uptoDay) || 1) + 1) })
+                            }
+                            className="w-6 h-6 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-white flex items-center justify-center cursor-pointer"
+                            title="तारीख बढ़ाएं"
+                          >
+                            <Plus className="w-3 h-3" />
+                          </button>
+                          <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300 px-1.5">
+                            तारीख तक
+                          </span>
+                        </div>
+
+                        <span className="text-xs font-black text-slate-400">→</span>
+
+                        {/* Discount Value Stepper */}
+                        <div className="flex items-center gap-0.5 bg-white dark:bg-slate-900 border border-emerald-300 dark:border-emerald-700 rounded-lg p-0.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const step = slab.discountType === "percent" ? 1 : 50;
+                              handleUpdateSlab(slab.id, {
+                                discountValue: Math.max(0, (Number(slab.discountValue) || 0) - step),
+                              });
+                            }}
+                            className="w-6 h-6 rounded bg-slate-100 dark:bg-slate-800 hover:bg-rose-100 text-slate-800 dark:text-white flex items-center justify-center cursor-pointer"
+                            title="छूट कम करें"
+                          >
+                            <Minus className="w-3 h-3" />
+                          </button>
+                          <input
+                            type="number"
+                            min={0}
+                            max={slab.discountType === "percent" ? 100 : 100000}
+                            value={slab.discountValue}
+                            onChange={(e) => {
+                              const raw = Number(e.target.value) || 0;
+                              const clamped =
+                                slab.discountType === "percent" ? Math.max(0, Math.min(100, raw)) : Math.max(0, raw);
+                              handleUpdateSlab(slab.id, { discountValue: clamped });
+                            }}
+                            className="w-12 text-center text-xs font-black tabular-nums bg-transparent text-emerald-700 dark:text-emerald-300 focus:outline-hidden"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const step = slab.discountType === "percent" ? 1 : 50;
+                              const maxVal = slab.discountType === "percent" ? 100 : 100000;
+                              handleUpdateSlab(slab.id, {
+                                discountValue: Math.min(maxVal, (Number(slab.discountValue) || 0) + step),
+                              });
+                            }}
+                            className="w-6 h-6 rounded bg-slate-100 dark:bg-slate-800 hover:bg-emerald-100 text-slate-800 dark:text-white flex items-center justify-center cursor-pointer"
+                            title="छूट बढ़ाएं"
+                          >
+                            <Plus className="w-3 h-3" />
+                          </button>
+                        </div>
+
+                        {/* % vs ₹ Toggle per Slab */}
+                        <div className="flex items-center bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-0.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleUpdateSlab(slab.id, {
+                                discountType: "percent",
+                                discountValue: slab.discountValue > 100 ? 10 : slab.discountValue,
+                              })
+                            }
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-black cursor-pointer flex items-center ${
+                              slab.discountType === "percent"
+                                ? "bg-emerald-600 text-white"
+                                : "text-slate-600 dark:text-slate-300"
+                            }`}
+                          >
+                            <Percent className="w-2.5 h-2.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleUpdateSlab(slab.id, {
+                                discountType: "fixed",
+                                discountValue: slab.discountValue <= 20 ? 100 : slab.discountValue,
+                              })
+                            }
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-black cursor-pointer flex items-center ${
+                              slab.discountType === "fixed"
+                                ? "bg-emerald-600 text-white"
+                                : "text-slate-600 dark:text-slate-300"
+                            }`}
+                          >
+                            <IndianRupee className="w-2.5 h-2.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveSlab(slab.id)}
+                        className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/50 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 transition cursor-pointer"
+                        title="यह डेट ऑफर हटाएं"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleAddSlab}
+                  className="w-full py-2 rounded-xl border-2 border-dashed border-emerald-400 dark:border-emerald-700 bg-emerald-50/40 dark:bg-emerald-950/20 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 text-xs font-black flex items-center justify-center gap-1.5 transition cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>एक और तारीख व छूट जोड़ें (Add More Date Discount)</span>
+                </button>
+              </div>
+
+              {slabsHeadline && (
+                <div className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 border border-indigo-200 dark:border-indigo-800 text-[11px] font-bold text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                  <span>
+                    स्लिप नोटिस: <strong>{slabsHeadline}</strong> • इसके बाद पूरा बकाया देय।
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Custom Admin Note / Circular Text */}
@@ -446,7 +748,7 @@ export const ClassFeeAlertBroadcastModal: React.FC<ClassFeeAlertBroadcastModalPr
                 type="text"
                 value={customRemark}
                 onChange={(e) => setCustomRemark(e.target.value)}
-                placeholder="Jaise: Kripya 10 tarikh se pahle fees jama karein taki late fine na lage."
+                placeholder="Jaise: Kripya tay tarikh ke andar fees jama karke chhoot ka labh uthayein."
                 className="w-full px-3 py-2 text-xs rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
               />
             </div>
@@ -484,6 +786,7 @@ export const ClassFeeAlertBroadcastModal: React.FC<ClassFeeAlertBroadcastModalPr
               <div className="max-h-56 overflow-y-auto rounded-2xl border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-800 bg-white dark:bg-slate-800/50">
                 {classDefaulters.map((item) => {
                   const isChecked = selectedStudentIds.includes(item.studentId);
+                  const curMonthFee = Number(item.fee?.monthlyAmount || item.fee?.amount || item.pendingDue);
                   return (
                     <div
                       key={item.studentId}
@@ -514,15 +817,27 @@ export const ClassFeeAlertBroadcastModal: React.FC<ClassFeeAlertBroadcastModalPr
                               {item.parentPhone}
                             </p>
                           )}
+                          {normalizedSlabs.length > 0 && (
+                            <p className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold mt-0.5">
+                              {normalizedSlabs
+                                .slice(0, 3)
+                                .map((s) => {
+                                  const dAmt = computeSlabDiscountAmount(s, curMonthFee);
+                                  const net = Math.max(0, item.pendingDue - dAmt);
+                                  return `${s.uptoDay} तक: ₹${net.toLocaleString("en-IN")}`;
+                                })
+                                .join(" • ")}
+                            </p>
+                          )}
                         </div>
                       </label>
 
                       <div className="text-right shrink-0 flex items-center gap-2">
                         <div>
                           <span className="text-[9px] uppercase font-bold text-slate-400 block">
-                            Dues
+                            Slip Full Due
                           </span>
-                          <strong className="text-xs font-black text-rose-600 dark:text-rose-400">
+                          <strong className="text-xs font-black text-rose-600 dark:text-rose-400 tabular-nums">
                             ₹{item.pendingDue.toLocaleString("en-IN")}
                           </strong>
                         </div>

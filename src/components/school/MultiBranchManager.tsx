@@ -319,10 +319,10 @@ export const MultiBranchManager: React.FC<Props> = ({
             return (
               <div
                 key={b.id}
-                className={`rounded-2xl p-4 sm:p-5 border transition-all relative flex flex-col justify-between ${
+                className={`rounded-2xl p-4 sm:p-5 border-2 transition-all relative flex flex-col justify-between ${
                   isCurrent
-                    ? "bg-gradient-to-b from-indigo-950/70 to-slate-900 border-indigo-400 shadow-xl shadow-indigo-500/20 ring-2 ring-indigo-400/40"
-                    : "bg-slate-800/60 border-slate-700/80 hover:border-slate-600"
+                    ? "bg-gradient-to-b from-indigo-50 to-blue-50 dark:from-indigo-950/70 dark:to-slate-900 border-indigo-700 dark:border-indigo-400 shadow-lg ring-2 ring-indigo-500/20"
+                    : "bg-white dark:bg-slate-800/60 border-slate-300 dark:border-slate-700/80 hover:border-indigo-600 dark:hover:border-slate-600"
                 }`}
               >
                 <div>
@@ -400,43 +400,43 @@ export const MultiBranchManager: React.FC<Props> = ({
       {activeTab === "consolidated" && (
         <div className="space-y-6 animate-in fade-in duration-200">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-indigo-900/60 to-slate-900 border border-indigo-500/30 shadow-lg">
+            <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-indigo-50 to-blue-50 dark:from-indigo-900/60 dark:to-slate-900 border-2 border-indigo-700 dark:border-indigo-500/30 shadow-md">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-indigo-300 uppercase tracking-wider">
+                <span className="text-xs font-bold text-indigo-800 dark:text-indigo-300 uppercase tracking-wider">
                   Total Enrolled Students
                 </span>
-                <Users className="w-5 h-5 text-indigo-400" />
+                <Users className="w-5 h-5 text-indigo-700 dark:text-indigo-400" />
               </div>
-              <p className="text-2xl sm:text-3xl font-black text-white">
+              <p className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white">
                 {totalCombinedStudents}
               </p>
-              <p className="text-[11px] text-indigo-200/80 mt-1">Across all {branches.length} campuses</p>
+              <p className="text-[11px] text-slate-700 dark:text-indigo-200/80 font-medium mt-1">Across all {branches.length} campuses</p>
             </div>
 
-            <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-emerald-900/60 to-slate-900 border border-emerald-500/30 shadow-lg">
+            <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-900/60 dark:to-slate-900 border-2 border-emerald-700 dark:border-emerald-500/30 shadow-md">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-emerald-300 uppercase tracking-wider">
+                <span className="text-xs font-bold text-emerald-800 dark:text-emerald-300 uppercase tracking-wider">
                   Consolidated Monthly Revenue
                 </span>
-                <IndianRupee className="w-5 h-5 text-emerald-400" />
+                <IndianRupee className="w-5 h-5 text-emerald-700 dark:text-emerald-400" />
               </div>
-              <p className="text-2xl sm:text-3xl font-black text-emerald-300">
+              <p className="text-2xl sm:text-3xl font-black text-emerald-800 dark:text-emerald-300">
                 ₹{totalCombinedRevenue.toLocaleString("en-IN")}
               </p>
-              <p className="text-[11px] text-emerald-200/80 mt-1">Estimated monthly gross collections</p>
+              <p className="text-[11px] text-slate-700 dark:text-emerald-200/80 font-medium mt-1">Estimated monthly gross collections</p>
             </div>
 
-            <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-purple-900/60 to-slate-900 border border-purple-500/30 shadow-lg">
+            <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-purple-50 to-indigo-50 dark:from-purple-900/60 dark:to-slate-900 border-2 border-purple-700 dark:border-purple-500/30 shadow-md">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-purple-300 uppercase tracking-wider">
+                <span className="text-xs font-bold text-purple-800 dark:text-purple-300 uppercase tracking-wider">
                   Total Teaching &amp; Staff
                 </span>
-                <Briefcase className="w-5 h-5 text-purple-400" />
+                <Briefcase className="w-5 h-5 text-purple-700 dark:text-purple-400" />
               </div>
-              <p className="text-2xl sm:text-3xl font-black text-purple-300">
+              <p className="text-2xl sm:text-3xl font-black text-purple-900 dark:text-purple-300">
                 {totalCombinedTeachers} Staff Members
               </p>
-              <p className="text-[11px] text-purple-200/80 mt-1">Unified payroll &amp; attendance</p>
+              <p className="text-[11px] text-slate-700 dark:text-purple-200/80 font-medium mt-1">Unified payroll &amp; attendance</p>
             </div>
           </div>
 

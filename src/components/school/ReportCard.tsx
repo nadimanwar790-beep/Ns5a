@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useEffect } from "react";
-import { getStudents, getExams, getMonthlyAttendance, currentMonthStr } from "../../school-firebase";
-import type { SchoolStudent, ExamEntry } from "../../school-types";
+import { getStudents, getExams, getMonthlyAttendance, currentMonthStr, getSchool, getTeachers, getClasses } from "../../school-firebase";
+import type { School, SchoolTeacher, SchoolStudent, ExamEntry } from "../../school-types";
 import { Download, User, Award, Calendar, ChevronLeft } from "lucide-react";
 
 interface Props {
@@ -9,26 +9,38 @@ interface Props {
   classId: string;
   className: string;
   sessionId: string;
+  school?: School | null;
+  teachers?: SchoolTeacher[];
   onBack?: () => void;
 }
 
-export const ReportCard: React.FC<Props> = ({ schoolId, classId, className, sessionId, onBack }) => {
+export const ReportCard: React.FC<Props> = ({ schoolId, classId, className, sessionId, school: initialSchool, teachers: initialTeachers, onBack }) => {
   const [students, setStudents] = useState<SchoolStudent[]>([]);
   const [exams, setExams] = useState<ExamEntry[]>([]);
   const [attendanceData, setAttendanceData] = useState<any[]>([]);
   const [selectedMonth, setSelectedMonth] = useState(currentMonthStr());
   const [selectedStudent, setSelectedStudent] = useState<SchoolStudent | null>(null);
+  const [schoolInfo, setSchoolInfo] = useState<School | null>(initialSchool || null);
+  const [teachersList, setTeachersList] = useState<SchoolTeacher[]>(initialTeachers || []);
+  const [classTeacherId, setClassTeacherId] = useState<string>("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     Promise.all([
       getStudents(schoolId, classId),
       getExams(schoolId, classId),
-      getMonthlyAttendance(schoolId, classId, selectedMonth)
-    ]).then(([sts, exs, att]) => {
+      getMonthlyAttendance(schoolId, classId, selectedMonth),
+      initialSchool ? Promise.resolve(initialSchool) : getSchool(schoolId),
+      initialTeachers && initialTeachers.length > 0 ? Promise.resolve(initialTeachers) : getTeachers(schoolId),
+      getClasses(schoolId),
+    ]).then(([sts, exs, att, sch, tchs, cls]) => {
       setStudents(sts);
       setExams(exs);
       setAttendanceData(att);
+      if (sch) setSchoolInfo(sch);
+      if (tchs) setTeachersList(tchs);
+      const matched = (cls || []).find((c) => c.id === classId);
+      if (matched?.classTeacherId) setClassTeacherId(matched.classTeacherId);
       setLoading(false);
     });
   }, [schoolId, classId, selectedMonth]);
@@ -65,6 +77,20 @@ export const ReportCard: React.FC<Props> = ({ schoolId, classId, className, sess
     const overallPct = totalMax > 0 ? Math.round((totalMarks / totalMax) * 100) : 0;
     const perf = getPerformanceTag(overallPct);
 
+    const matchedTeacher =
+      teachersList.find((t) => t.id === classTeacherId) ||
+      teachersList.find((t) => Array.isArray(t.classes) && t.classes.includes(classId)) ||
+      teachersList.find((t) => Boolean(t.signatureUrl));
+    const teacherSigHtml = matchedTeacher?.signatureUrl
+      ? `<img src="${matchedTeacher.signatureUrl}" style="max-height:34px;max-width:120px;object-fit:contain;margin:0 auto 4px;display:block;" />`
+      : "";
+    const examControllerSigHtml = schoolInfo?.examControllerSignatureUrl
+      ? `<img src="${schoolInfo.examControllerSignatureUrl}" style="max-height:34px;max-width:120px;object-fit:contain;margin:0 auto 4px;display:block;" />`
+      : "";
+    const principalSigHtml = schoolInfo?.principalSignatureUrl
+      ? `<img src="${schoolInfo.principalSignatureUrl}" style="max-height:34px;max-width:120px;object-fit:contain;margin:0 auto 4px;display:block;" />`
+      : "";
+
     const examRows = marks.map(m =>
       `<tr><td>${m.subject}</td><td>${m.examName}</td><td style="text-align:center">${m.absent ? "AB" : m.marks}</td><td style="text-align:center">${m.maxMarks}</td><td style="text-align:center">${m.absent ? "-" : Math.round((m.marks! / m.maxMarks) * 100) + "%"}</td></tr>`
     ).join("");
@@ -91,12 +117,13 @@ td{padding:9px 12px;border-bottom:1px solid #e2e8f0}
 tr:last-child td{border:none}
 .badge{display:inline-block;padding:4px 12px;border-radius:99px;font-weight:700;font-size:13px}
 .footer{margin-top:32px;border-top:1px solid #e2e8f0;padding-top:16px;display:flex;justify-content:space-between;color:#94a3b8;font-size:11px}
-.signature{margin-top:40px;display:flex;justify-content:space-between}
+.signature{margin-top:36px;display:flex;justify-content:space-between;align-items:flex-end}
+.sig-wrap{text-align:center}
 .sig-line{border-top:1px solid #94a3b8;width:160px;padding-top:4px;font-size:11px;color:#64748b;text-align:center}
 </style></head>
 <body>
 <div class="header">
-  <h1>🏫 IIC×NSTA Smart School</h1>
+  <h1>${schoolInfo?.name || "Smart School"}</h1>
   <p>Student Progress Report Card &nbsp;|&nbsp; Session: ${sessionId} &nbsp;|&nbsp; Month: ${selectedMonth}</p>
 </div>
 <div class="student-info">
@@ -132,12 +159,12 @@ tr:last-child td{border:none}
 </div>
 
 <div class="signature">
-  <div class="sig-line">Class Teacher</div>
-  <div class="sig-line">School Admin</div>
-  <div class="sig-line">Principal</div>
+  <div class="sig-wrap">${teacherSigHtml}<div class="sig-line">Class Teacher</div></div>
+  <div class="sig-wrap">${examControllerSigHtml}<div class="sig-line">${schoolInfo?.examControllerName || "Exam Controller"}</div></div>
+  <div class="sig-wrap">${principalSigHtml}<div class="sig-line">Principal</div></div>
 </div>
 <div class="footer">
-  <span>IIC×NSTA Smart School System</span>
+  <span>${schoolInfo?.name || "School ERP"}</span>
   <span>Generated: ${new Date().toLocaleString()}</span>
 </div>
 </body></html>`;

@@ -4,18 +4,20 @@
 
 import type { Student, SchoolConfig } from '../../types';
 import { getSchoolCacheSync, getSchoolLogoSync } from '../../utils/schoolIndexedDb';
+import { getSchoolFeeDiscountSlabs, formatSlabsHeadline } from '../../utils/feeDiscountSlabs';
+import { buildFeeReceiptQrUrl } from '../../utils/qrVerifyUrl';
 
 export const DEFAULT_SCHOOL_CONFIG: SchoolConfig = {
-  name: "Nstz Smart Academy",
+  name: "Life Maker Public School",
   tagline: "Knowledge, Discipline & Excellence",
   affiliationNo: "CBSE/AFF/330169",
-  schoolCode: "NSTZ-01",
+  schoolCode: "LMPS-01",
   board: "CBSE, New Delhi",
   address: "Institutional Academic Campus, Educational Zone",
   cityStateZip: "Patna, Bihar 801503",
   phone: "+91 98765 43210",
-  email: "contact@nstz.app",
-  website: "www.nstz.app",
+  email: "contact@lifemaker.edu.in",
+  website: "www.lifemaker.edu.in",
   upiId: "school@upi",
   logoUrl: "",
 };
@@ -188,6 +190,9 @@ export interface DpsReceiptData {
   admissionNo: string;
   studentName: string;
   fatherName?: string;
+  motherName?: string;
+  aadhaarNo?: string;
+  maskSensitiveData?: boolean;
   studentId?: string;
   schoolId?: string;
   rollNo?: string;
@@ -228,6 +233,13 @@ export interface DpsReceiptData {
   principalTitle?: string;
   directorSignatureUrl?: string;
   directorName?: string;
+  managerSignatureUrl?: string;
+  managerName?: string;
+  accountantSignatureUrl?: string;
+  accountantName?: string;
+  collectedByRole?: "accountant" | "manager";
+  collectedByName?: string;
+  collectorSignatureUrl?: string;
   signatoryTitle?: string;
   signatoryMode?: "both" | "cashier_only" | "principal_only";
   cashierTitle?: string;
@@ -242,16 +254,33 @@ export interface StudentFeeHistorySummary {
 }
 
 /**
+ * Masks sensitive text (Mobile, Aadhaar, Father/Mother Name) to keep only the
+ * first 2 visible characters followed by "xxxx" when privacy masking is enabled.
+ * When disabled, returns the full unmasked text cleanly.
+ */
+export function maskSensitive2Chars(val?: string | number | null, enabled = true): string {
+  if (val === null || val === undefined) return "—";
+  const s = String(val).trim();
+  if (!s || s === "—" || s === "-") return "—";
+  if (!enabled) return s;
+  if (s.length <= 2) return s;
+  return `${s.slice(0, 2)}xxxx`;
+}
+
+/**
  * Formats a "YYYY-MM" string as "Oct 2026".
  */
 export function formatShortFeeMonth(ym?: string | null): string {
   if (!ym || typeof ym !== "string") return "";
-  const m = ym.trim().match(/^(\d{4})-(\d{2})/);
-  if (!m) return ym.trim();
+  const trimmed = ym.trim();
+  if (trimmed === "0000-BACK-DUE") return "Back Session Due";
+  if (trimmed === "0001-ADM-DUE") return "Admission Due";
+  const m = trimmed.match(/^(\d{4})-(\d{2})/);
+  if (!m) return trimmed;
   const year = parseInt(m[1], 10);
   const monthIdx = parseInt(m[2], 10) - 1;
   const d = new Date(year, monthIdx, 1);
-  if (isNaN(d.getTime())) return ym.trim();
+  if (isNaN(d.getTime())) return trimmed;
   return d.toLocaleDateString("en-IN", { month: "short", year: "numeric" });
 }
 
@@ -631,6 +660,35 @@ export function cleanLogoUrl(url?: string): string {
 }
 
 /**
+ * Returns the school's explicit official Registration / School Code ONLY when legitimately entered.
+ * Suppresses empty values, lock codes, "0002", placeholder codes, and auto-generated
+ * school-name-prefix slugs (e.g. "LIFE_M" generated from "LIFE MAKER...").
+ */
+export function getVisibleSchoolRegNo(
+  school?: { name?: string; code?: string; lockCode?: string; registrationNo?: string; regNo?: string } | null,
+  overrideCode?: string | null
+): string {
+  const raw = String(
+    overrideCode !== undefined && overrideCode !== null
+      ? overrideCode
+      : (school?.registrationNo || school?.regNo || school?.code || "")
+  ).trim();
+  if (!raw) return "";
+  if (school?.lockCode && raw === String(school.lockCode).trim()) return "";
+  if (raw === "0002" || raw === "SCH-REG" || raw === "SCH-001" || raw === "NSTZ-01") return "";
+
+  const sName = String(school?.name || "").trim();
+  if (sName) {
+    const autoLegacySlug = sName.slice(0, 6).toUpperCase().replace(/[^A-Z0-9]/g, "_");
+    const autoLegacySlugTrimmed = autoLegacySlug.replace(/_+$/, "");
+    if (raw === autoLegacySlug || (autoLegacySlugTrimmed && raw === autoLegacySlugTrimmed)) {
+      return "";
+    }
+  }
+  return raw;
+}
+
+/**
  * Resolves the authentic saved school logo strictly isolated per schoolId.
  * Never leaks School A's logo onto School B, and never returns the NSTA app logo.
  */
@@ -766,17 +824,21 @@ export function generateDpsReceiptHtml(
       (data.counterNo === "DUE-DEMAND" ||
         /DUE|DEMAND|बकाया/i.test(data.receiptTitle || "")));
 
-  // Auto-resolve Father's Name & Phone from IndexedDB student cache if not explicitly passed
+  // Auto-resolve Father's Name, Mother's Name, Aadhaar & Phone from IndexedDB student cache if not explicitly passed
   let resolvedFatherName = (data.fatherName || "").trim();
+  let resolvedMotherName = (data.motherName || "").trim();
+  let resolvedAadhaarNo = (data.aadhaarNo || "").trim();
   let resolvedStudentPhone = (data.phone || "")
     .replace(/\s*\([A-Za-z0-9_-]{10,}\)\s*/g, "")
     .trim();
-  if ((!resolvedFatherName || !resolvedStudentPhone) && data.schoolId && data.studentId) {
+  if ((!resolvedFatherName || !resolvedMotherName || !resolvedAadhaarNo || !resolvedStudentPhone) && data.schoolId && data.studentId) {
     const cachedStudents = getSchoolCacheSync<any[]>(`nst_school_students_${data.schoolId}`, []);
     if (Array.isArray(cachedStudents)) {
       const matchedSt = cachedStudents.find(s => s?.id === data.studentId);
       if (matchedSt) {
         if (!resolvedFatherName && matchedSt.fatherName) resolvedFatherName = String(matchedSt.fatherName).trim();
+        if (!resolvedMotherName && matchedSt.motherName) resolvedMotherName = String(matchedSt.motherName).trim();
+        if (!resolvedAadhaarNo && matchedSt.aadhaarNo) resolvedAadhaarNo = String(matchedSt.aadhaarNo).trim();
         if (!resolvedStudentPhone && (matchedSt.phone || matchedSt.whatsappNo)) {
           resolvedStudentPhone = String(matchedSt.phone || matchedSt.whatsappNo)
             .replace(/\s*\([A-Za-z0-9_-]{10,}\)\s*/g, "")
@@ -785,6 +847,12 @@ export function generateDpsReceiptHtml(
       }
     }
   }
+
+  const shouldMask = Boolean(data.maskSensitiveData);
+  const dispFatherName = resolvedFatherName ? maskSensitive2Chars(resolvedFatherName, shouldMask) : "";
+  const dispMotherName = resolvedMotherName ? maskSensitive2Chars(resolvedMotherName, shouldMask) : "";
+  const dispStudentPhone = resolvedStudentPhone ? maskSensitive2Chars(resolvedStudentPhone, shouldMask) : "";
+  const dispAadhaarNo = resolvedAadhaarNo ? maskSensitive2Chars(resolvedAadhaarNo, shouldMask) : "";
 
   // Auto-resolve Last Paid (Amount + Date) & Last Due / Previous Arrears (Amount + Date/Month)
   const arrearsItem = data.items.find(
@@ -843,26 +911,39 @@ export function generateDpsReceiptHtml(
     ? `https://api.qrserver.com/v1/create-qr-code/?size=320x320&qzone=1&margin=1&data=${encodeURIComponent(upiUri)}`
     : "";
 
-  // Generate Ultra High-Definition Vector SVG / High-Res QR Code URL with NSTA-SCHOOL prefix for instant student login
-  const cleanSchoolId = data.schoolId || 'school_campus';
-  const cleanStudentId = data.studentId || '';
-  const cleanRollNo = data.rollNo || '';
-  const cleanClassId = data.className || '';
-  const cleanStudentName = data.studentName || '';
-  const cleanAdmissionNo = data.admissionNo || '';
-  const cleanPhone = resolvedStudentPhone;
-
-  const qrLoginPrefix = `NSTA-SCHOOL:${[
-    encodeURIComponent(cleanSchoolId),
-    encodeURIComponent(cleanStudentId),
-    encodeURIComponent(cleanRollNo),
-    encodeURIComponent(cleanClassId),
-    encodeURIComponent(cleanStudentName),
-    encodeURIComponent(cleanAdmissionNo),
-    encodeURIComponent(cleanPhone)
-  ].join(":")}`;
-
-  const qrVerificationData = `${qrLoginPrefix}\nFEE-RECEIPT\nReceiptNo: ${data.receiptNo}\nAdmNo: ${data.admissionNo}\nStudent: ${data.studentName}\nClass: ${data.className}\nSession: ${cleanSession}\nAmount: ₹${grandTotal}\nDate: ${data.receiptDate}`;
+  // Generate Chrome-clickable Fee Receipt Verification URL + embedded NSTA-SCHOOL login token
+  const qrVerificationData = buildFeeReceiptQrUrl({
+    receiptNo: data.receiptNo,
+    receiptTitle: isDemandNote ? "FEE DEMAND SLIP" : (data.receiptTitle || "OFFICIAL FEE RECEIPT"),
+    isDueDemand: isDemandNote,
+    schoolId: data.schoolId || 'school_campus',
+    schoolName: data.schoolName || '',
+    schoolAddress: data.schoolAddress || '',
+    schoolPhone: effectiveSchoolPhone || '',
+    studentId: data.studentId || '',
+    studentName: data.studentName || '',
+    fatherName: data.fatherName || '',
+    motherName: data.motherName || '',
+    className: data.className || '',
+    rollNo: data.rollNo || '',
+    admissionNo: data.admissionNo || '',
+    session: cleanSession,
+    receiptDate: data.receiptDate || '',
+    receiptTime: '',
+    paymentMode: data.payModeInfo?.payMode || 'Cash / Counter',
+    grandTotal,
+    totalPaid,
+    balanceDue: isDemandNote ? Math.max(0, netPayable - totalPaid) : calculatedBalDue,
+    totalConcession,
+    lastPaidAmount: effectiveLastPaidAmount || 0,
+    lastPaidDate: effectiveLastPaidDate || '',
+    previousDueAmount: effectiveLastDueAmount || 0,
+    previousDueMonth: effectiveLastDueDate || '',
+    items: data.items,
+    upiId: effectiveUpiId,
+    signatoryTitle: data.signatoryTitle || '',
+    phone: resolvedStudentPhone,
+  });
   const qrSvgUrl = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&format=svg&qzone=1&margin=1&data=${encodeURIComponent(qrVerificationData)}`;
   const qrHighResPngUrl = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&qzone=1&margin=1&data=${encodeURIComponent(qrVerificationData)}`;
 
@@ -906,18 +987,28 @@ export function generateDpsReceiptHtml(
       ${copyTitle ? `<span class="dps-copy-tag">[ ${escapeHtml(copyTitle)} ]</span>` : ""}
     </div>
 
-    <!-- 5% Early Bird Special Offer Notice / Applied Concession Ribbon -->
-    ${isDemandNote ? `
-    <div class="dps-early-bird-strip" style="background:#ecfdf5;border:1px solid #10b981;border-radius:4px;padding:3px 8px;margin:2px 0 3px 0;display:flex;align-items:center;justify-content:space-between;font-size:9.5px;color:#065f46;font-weight:700;">
-      <span>⚡ <strong>10 तारीख के पहले जमा करें और पाएं 5% OFF!</strong> (चालू माह ट्यूशन फीस पर विशेष छूट)</span>
-      <span style="background:#059669;color:#ffffff;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:800;white-space:nowrap;">10 तारीख तक 5% OFF</span>
-    </div>
-    ` : (data.earlyDiscount && data.earlyDiscount > 0) || totalConcession > 0 ? `
-    <div class="dps-early-bird-strip" style="background:#ecfdf5;border:1px solid #10b981;border-radius:4px;padding:3px 8px;margin:2px 0 3px 0;display:flex;align-items:center;justify-content:space-between;font-size:9.5px;color:#065f46;font-weight:700;">
-      <span>✓ <strong>${data.items.some(it => /sibling|भाई-बहन|नि:शुल्क|free/i.test(it.description)) ? "भाई-बहन रियायत / नि:शुल्क शिक्षा स्वीकृत" : "5% अर्ली बर्ड छूट स्वीकृत"} (बचत: ₹${(data.earlyDiscount || totalConcession).toLocaleString("en-IN")})</strong> • विशेष छूट</span>
-      <span style="background:#059669;color:#ffffff;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:800;white-space:nowrap;">${data.items.some(it => /sibling|भाई-बहन|नि:शुल्क|free/i.test(it.description)) ? "SIBLING CONCESSION" : "5% OFF APPLIED"}</span>
-    </div>
-    ` : ""}
+    <!-- Date-Limited Early Bird Offer Notice / Applied Concession Ribbon -->
+    ${(() => {
+      const configuredSlabs = getSchoolFeeDiscountSlabs(data.schoolId);
+      const slabHeadline = formatSlabsHeadline(configuredSlabs);
+      if (isDemandNote) {
+        if (!slabHeadline) return "";
+        return `
+    <div class="dps-early-bird-strip" style="background:#ecfdf5;border:1px solid #10b981;border-radius:4px;padding:4px 8px;margin:2px 0 3px 0;display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:9px;line-height:1.38;color:#065f46;font-weight:700;">
+      <span style="line-height:1.38;">⚡ <strong>${escapeHtml(slabHeadline)}</strong> (तय तिथि के बाद पूरा भुगतान देय)</span>
+      <span style="display:inline-block;background:#059669;color:#ffffff;padding:2px 6px;border-radius:3px;font-size:8px;line-height:1.25;font-weight:800;white-space:nowrap;flex-shrink:0;vertical-align:middle;">LIMITED DATE OFFER</span>
+    </div>`;
+      }
+      if ((data.earlyDiscount && data.earlyDiscount > 0) || totalConcession > 0) {
+        const isSibling = data.items.some(it => /sibling|भाई-बहन|नि:शुल्क|free/i.test(it.description));
+        return `
+    <div class="dps-early-bird-strip" style="background:#ecfdf5;border:1px solid #10b981;border-radius:4px;padding:4px 8px;margin:2px 0 3px 0;display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:9.2px;line-height:1.38;color:#065f46;font-weight:700;">
+      <span style="line-height:1.38;">✓ <strong>${isSibling ? "भाई-बहन रियायत / नि:शुल्क शिक्षा स्वीकृत" : "अर्ली पेमेंट छूट स्वीकृत"} (बचत: ₹${(data.earlyDiscount || totalConcession).toLocaleString("en-IN")})</strong> • विशेष छूट</span>
+      <span style="display:inline-block;background:#059669;color:#ffffff;padding:2px 6px;border-radius:3px;font-size:8.5px;line-height:1.25;font-weight:800;white-space:nowrap;flex-shrink:0;vertical-align:middle;">${isSibling ? "SIBLING CONCESSION" : "OFFER APPLIED"}</span>
+    </div>`;
+      }
+      return "";
+    })()}
 
     <!-- Student & Slip Metadata Grid (Clear, High-Contrast 2-Column Layout) -->
     <div class="dps-meta-grid">
@@ -928,11 +1019,18 @@ export function generateDpsReceiptHtml(
           <span class="dps-colon">:</span>
           <span class="dps-val uppercase font-bold dps-student-name-val">${escapeHtml(data.studentName)}</span>
         </div>
-        ${resolvedFatherName ? `
+        ${dispFatherName ? `
         <div class="dps-meta-row">
           <span class="dps-label">Father</span>
           <span class="dps-colon">:</span>
-          <span class="dps-val uppercase font-semibold">${escapeHtml(resolvedFatherName)}</span>
+          <span class="dps-val ${shouldMask ? "" : "uppercase"} font-semibold">${escapeHtml(dispFatherName)}</span>
+        </div>
+        ` : ""}
+        ${dispMotherName ? `
+        <div class="dps-meta-row">
+          <span class="dps-label">Mother</span>
+          <span class="dps-colon">:</span>
+          <span class="dps-val ${shouldMask ? "" : "uppercase"} font-semibold">${escapeHtml(dispMotherName)}</span>
         </div>
         ` : ""}
         <div class="dps-meta-row">
@@ -965,10 +1063,17 @@ export function generateDpsReceiptHtml(
           <span class="dps-val uppercase font-bold">${escapeHtml(data.installment)}</span>
         </div>
         <div class="dps-meta-row">
-          <span class="dps-label">${resolvedStudentPhone ? "Mobile" : "Session"}</span>
+          <span class="dps-label">${dispStudentPhone ? "Mobile" : "Session"}</span>
           <span class="dps-colon">:</span>
-          <span class="dps-val font-bold dps-tabular">${escapeHtml(resolvedStudentPhone || cleanSession)}</span>
+          <span class="dps-val font-bold dps-tabular">${escapeHtml(dispStudentPhone || cleanSession)}</span>
         </div>
+        ${dispAadhaarNo ? `
+        <div class="dps-meta-row">
+          <span class="dps-label">Aadhaar</span>
+          <span class="dps-colon">:</span>
+          <span class="dps-val font-bold dps-tabular">${escapeHtml(dispAadhaarNo)}</span>
+        </div>
+        ` : ""}
       </div>
     </div>
 
@@ -1075,8 +1180,12 @@ export function generateDpsReceiptHtml(
           <span class="dps-pay-val uppercase">${escapeHtml(data.payModeInfo.bank || "SCHOOL COUNTER")}</span>
         </div>
         <div class="dps-pay-field text-right">
-          <span class="dps-pay-label">Ref No</span>
-          <span class="dps-pay-val dps-tabular">${escapeHtml(data.payModeInfo.number || "—")}</span>
+          <span class="dps-pay-label">Collected By</span>
+          <span class="dps-pay-val">${escapeHtml(
+            data.collectedByRole === "manager"
+              ? `Manager${data.collectedByName || data.managerName ? ` (${data.collectedByName || data.managerName})` : ""}`
+              : `Accountant${data.collectedByName || data.accountantName ? ` (${data.collectedByName || data.accountantName})` : ""}`
+          )}${data.payModeInfo.number && data.payModeInfo.number !== "—" ? ` • Ref: ${escapeHtml(data.payModeInfo.number)}` : ""}</span>
         </div>
       </div>
     </div>
@@ -1178,17 +1287,33 @@ export function generateDpsReceiptHtml(
       ` : ""}
 
       <div class="dps-footer-right">
-        ${(data.signatoryMode === "both" || data.signatoryMode === "cashier_only") ? `
-          <div class="dps-sign-block" style="margin-right: 12px;">
-            ${data.showDigitalSignature && (data.directorSignatureUrl || data.cashierSignatureUrl) ? `
-              <img src="${escapeHtml(data.directorSignatureUrl || data.cashierSignatureUrl)}" alt="Cashier Sign" class="dps-sign-img" />
+        ${(() => {
+          const isManagerCollector = data.collectedByRole === "manager";
+          const showCollectorBlock =
+            data.signatoryMode === "both" ||
+            data.signatoryMode === "cashier_only" ||
+            (!isDemandNote && data.signatoryMode !== "principal_only");
+          if (!showCollectorBlock) return "";
+          const collectorRoleText = isManagerCollector ? "Manager" : "Accountant";
+          const collectorTitleText = isManagerCollector
+            ? (data.collectedByName || data.managerName || "Manager")
+            : (data.collectedByName || data.accountantName || data.cashierTitle || "Accountant");
+          const collectorSigImg = isManagerCollector
+            ? (data.collectorSignatureUrl || data.managerSignatureUrl || "")
+            : (data.collectorSignatureUrl || data.accountantSignatureUrl || data.cashierSignatureUrl || "");
+          const hasSigImg = Boolean(collectorSigImg && (data.showDigitalSignature !== false));
+          return `
+          <div class="dps-sign-block" style="margin-right: 10px;">
+            ${hasSigImg ? `
+              <img src="${escapeHtml(collectorSigImg)}" alt="${escapeHtml(collectorRoleText)} Sign" class="dps-sign-img" />
             ` : `
               <div class="dps-sign-manual-space"></div>
             `}
-            <span class="dps-sign-title">${escapeHtml(data.cashierTitle || "Cashier / Clerk")}</span>
-            <span class="dps-sign-role">Accounts</span>
+            <span class="dps-sign-title">${escapeHtml(collectorTitleText)}</span>
+            <span class="dps-sign-role">${escapeHtml(collectorRoleText)}</span>
           </div>
-        ` : ""}
+          `;
+        })()}
         ${(data.signatoryMode !== "cashier_only") ? `
           <div class="dps-sign-block">
             ${data.showDigitalSignature && data.principalSignatureUrl ? `
@@ -1291,7 +1416,7 @@ export function generateSingleA6SlipHtml(
 
   return `
     <div class="dps-a6-standalone-wrapper">
-      <div class="dps-4in1-cell dps-a6-card" style="width: 105mm; min-height: 148.5mm; max-height: 148.5mm; margin: 0 auto; box-sizing: border-box; overflow: hidden; background: #ffffff; border: 1.5px solid #000000; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">
+      <div class="dps-4in1-cell dps-a6-card" style="width: 105mm; min-height: 148.5mm; height: auto; margin: 0 auto; box-sizing: border-box; overflow: visible; background: #ffffff; border: 1.5px solid #000000; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); display: flex; flex-direction: column;">
         ${generateDpsReceiptHtml(data, {
           layout: "compact",
           copyTitle: options?.copyTitle || defaultTitle,
@@ -1605,24 +1730,24 @@ export const DPS_RECEIPT_CSS = `
     background-color: #e2e8f0 !important;
     border-top: 1.4px solid #0f172a;
     border-bottom: 1.4px solid #0f172a;
-    padding: 4px 10px;
+    padding: 5px 10px;
     text-align: center;
     font-weight: 900;
     font-size: 11px;
-    letter-spacing: 0.5px;
+    line-height: 1.42;
+    letter-spacing: 0.4px;
     color: #0f172a;
     text-transform: uppercase;
     font-family: Arial, Helvetica, sans-serif;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
+    display: block;
   }
   .dps-copy-tag {
+    display: inline;
+    margin-left: 5px;
     font-size: 10px;
     font-weight: 900;
     color: #1e293b;
-    letter-spacing: 0.4px;
+    letter-spacing: 0.35px;
   }
 
   /* Metadata Grid: 2 Balanced Columns */
@@ -2141,10 +2266,21 @@ export const DPS_RECEIPT_CSS = `
     max-height: 143.5mm;
     border: 1.3px solid #0f172a;
     font-size: 9.2px;
-    line-height: 1.25;
+    line-height: 1.28;
     display: flex;
     flex-direction: column;
     overflow: hidden;
+  }
+  .dps-a6-card {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  .dps-a6-card > .dps-receipt-card.is-compact {
+    flex: 1 1 auto;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
   }
   .is-compact .dps-header {
     padding: 5px 8px 4px;
@@ -2166,17 +2302,18 @@ export const DPS_RECEIPT_CSS = `
     font-size: 15px;
     margin: 0 0 2px 0;
     font-weight: 900;
-    line-height: 1.12;
+    line-height: 1.15;
   }
   .is-compact .dps-school-address {
     font-size: 8.5px;
-    line-height: 1.2;
+    line-height: 1.25;
     font-weight: 600;
   }
   .is-compact .dps-banner {
-    padding: 3px 6px;
-    font-size: 8.8px;
-    letter-spacing: 0.35px;
+    padding: 4px 6px;
+    font-size: 8.6px;
+    line-height: 1.42;
+    letter-spacing: 0.3px;
     border-top-width: 1.1px;
     border-bottom-width: 1.1px;
   }
@@ -2341,8 +2478,9 @@ export const DPS_RECEIPT_CSS = `
     border-bottom-width: 1.2px;
   }
   .is-compact .dps-footer {
-    padding: 4px 8px 5px;
+    padding: 5px 8px 6px;
     gap: 6px;
+    flex-shrink: 0;
   }
   .is-compact .dps-qr-code {
     width: 42px;
@@ -2375,23 +2513,33 @@ export const DPS_RECEIPT_CSS = `
   .is-compact .dps-upi-id {
     font-size: 6.6px;
   }
+  .is-compact .dps-footer-right {
+    gap: 4px;
+    flex-wrap: nowrap;
+    flex-shrink: 0;
+  }
   .is-compact .dps-sign-block {
-    min-width: 62px;
+    min-width: 64px;
+    margin-right: 0 !important;
   }
   .is-compact .dps-sign-img {
-    height: 20px;
-    max-width: 68px;
+    height: 18px;
+    max-width: 58px;
   }
   .is-compact .dps-sign-manual-space {
-    width: 58px;
-    height: 16px;
+    width: 54px;
+    height: 15px;
     margin-bottom: 2px;
   }
   .is-compact .dps-sign-title {
-    font-size: 8px;
+    font-size: 7.4px;
+    line-height: 1.25;
+    white-space: nowrap;
   }
   .is-compact .dps-sign-role {
-    font-size: 6.8px;
+    font-size: 6.4px;
+    line-height: 1.3;
+    white-space: nowrap;
   }
 
   /* ════════════════════════════════════════════════════════════════════
@@ -3053,25 +3201,38 @@ export function generatePosSlipHtml(
   const isPartial = !isFullPaid && totalPaid > 0;
 
   const cleanSchoolId = data.schoolId || 'school_campus';
-  const cleanStudentId = data.studentId || '';
-  const cleanRollNo = data.rollNo || '';
-  const cleanClassId = data.className || '';
-  const cleanStudentName = data.studentName || '';
-  const cleanAdmissionNo = data.admissionNo || '';
-  const cleanPhone = data.phone || '';
-
-  const qrLoginPrefix = `NSTA-SCHOOL:${[
-    encodeURIComponent(cleanSchoolId),
-    encodeURIComponent(cleanStudentId),
-    encodeURIComponent(cleanRollNo),
-    encodeURIComponent(cleanClassId),
-    encodeURIComponent(cleanStudentName),
-    encodeURIComponent(cleanAdmissionNo),
-    encodeURIComponent(cleanPhone)
-  ].join(":")}`;
-
   const cleanSession = formatAcademicSession(data.session);
-  const qrVerificationData = `${qrLoginPrefix}\nFEE-RECEIPT\nReceiptNo: ${data.receiptNo}\nAdmNo: ${data.admissionNo}\nStudent: ${data.studentName}\nClass: ${data.className}\nSession: ${cleanSession}\nTotalPaid: ₹${grandTotal}\nDate: ${data.receiptDate}`;
+  const qrVerificationData = buildFeeReceiptQrUrl({
+    receiptNo: data.receiptNo,
+    receiptTitle: data.receiptTitle || "OFFICIAL FEE PAYMENT RECEIPT",
+    isDueDemand: totalPaid === 0 && grandTotal > 0,
+    schoolId: data.schoolId || 'school_campus',
+    schoolName: data.schoolName || '',
+    schoolAddress: data.schoolAddress || '',
+    schoolPhone: data.schoolPhone || '',
+    studentId: data.studentId || '',
+    studentName: data.studentName || '',
+    fatherName: data.fatherName || '',
+    motherName: data.motherName || '',
+    className: data.className || '',
+    rollNo: data.rollNo || '',
+    admissionNo: data.admissionNo || '',
+    session: cleanSession,
+    receiptDate: data.receiptDate || '',
+    receiptTime: '',
+    paymentMode: data.payModeInfo?.payMode || 'Cash / Counter',
+    grandTotal,
+    totalPaid,
+    balanceDue: calculatedBalDue,
+    totalConcession,
+    lastPaidAmount: data.lastPaidAmount || 0,
+    lastPaidDate: data.lastPaidDate || '',
+    previousDueAmount: data.lastDueAmount || 0,
+    previousDueMonth: data.lastDueDate || '',
+    items: data.items,
+    signatoryTitle: data.signatoryTitle || '',
+    phone: data.phone || '',
+  });
   const qrSvgUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&format=svg&qzone=1&margin=1&data=${encodeURIComponent(qrVerificationData)}`;
   const qrHighResPngUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&qzone=1&margin=1&data=${encodeURIComponent(qrVerificationData)}`;
 
@@ -3112,15 +3273,25 @@ export function generatePosSlipHtml(
         </span>
       </div>
 
-      ${totalPaid === 0 ? `
-      <div style="text-align:center;font-size:9px;font-weight:900;border:1px dashed #000;padding:1mm;margin:1mm 0;background:#f4fdf8;">
-        ⚡ 10 तारीख के पहले जमा करें और पाएं 5% OFF!
-      </div>
-      ` : (data.earlyDiscount && data.earlyDiscount > 0) || totalConcession > 0 ? `
+      ${(() => {
+        const posSlabs = getSchoolFeeDiscountSlabs(data.schoolId);
+        const posHeadline = formatSlabsHeadline(posSlabs);
+        if (totalPaid === 0) {
+          if (!posHeadline) return "";
+          return `
+      <div style="text-align:center;font-size:8.5px;font-weight:900;border:1px dashed #000;padding:1mm;margin:1mm 0;background:#f4fdf8;">
+        ⚡ ${escapeHtml(posHeadline)} (बाद में पूरा देय)
+      </div>`;
+        }
+        if ((data.earlyDiscount && data.earlyDiscount > 0) || totalConcession > 0) {
+          const isSibling = data.items.some(it => /sibling|भाई-बहन|नि:शुल्क|free/i.test(it.description));
+          return `
       <div style="text-align:center;font-size:8.5px;font-weight:900;border:1px solid #10b981;padding:1mm;margin:1mm 0;background:#ecfdf5;color:#065f46;">
-        ✓ ${data.items.some(it => /sibling|भाई-बहन|नि:शुल्क|free/i.test(it.description)) ? "भाई-बहन रियायत / नि:शुल्क शिक्षा" : "5% अर्ली बर्ड छूट"} स्वीकृत (-₹${(data.earlyDiscount || totalConcession).toLocaleString("en-IN")})
-      </div>
-      ` : ""}
+        ✓ ${isSibling ? "भाई-बहन रियायत / नि:शुल्क शिक्षा" : "अर्ली पेमेंट छूट"} स्वीकृत (-₹${(data.earlyDiscount || totalConcession).toLocaleString("en-IN")})
+      </div>`;
+        }
+        return "";
+      })()}
 
       <div class="pos-divider-single"></div>
 
@@ -3141,14 +3312,69 @@ export function generatePosSlipHtml(
         <span class="pos-meta-label">Pay Mode:</span>
         <span class="pos-meta-val">${escapeHtml(totalPaid === 0 ? "Payment Pending" : (data.payModeInfo.payMode || "Cash"))}</span>
       </div>
+      ${totalPaid > 0 ? `
+      <div class="pos-meta-row">
+        <span class="pos-meta-label">Collected By:</span>
+        <span class="pos-meta-val">${escapeHtml(
+          data.collectedByRole === "manager"
+            ? `Manager${data.collectedByName || data.managerName ? ` (${data.collectedByName || data.managerName})` : ""}`
+            : `Accountant${data.collectedByName || data.accountantName ? ` (${data.collectedByName || data.accountantName})` : ""}`
+        )}</span>
+      </div>
+      ` : ""}
 
       <div class="pos-divider-single"></div>
 
       <!-- Student Details -->
+      ${(() => {
+        let posFather = (data.fatherName || "").trim();
+        let posMother = (data.motherName || "").trim();
+        let posAadhaar = (data.aadhaarNo || "").trim();
+        let posPhone = (data.phone || "").replace(/\s*\([A-Za-z0-9_-]{10,}\)\s*/g, "").trim();
+        if ((!posFather || !posMother || !posAadhaar || !posPhone) && data.schoolId && data.studentId) {
+          const cachedStudents = getSchoolCacheSync<any[]>(`nst_school_students_${data.schoolId}`, []);
+          const matchedSt = Array.isArray(cachedStudents) ? cachedStudents.find(s => s?.id === data.studentId) : null;
+          if (matchedSt) {
+            if (!posFather && matchedSt.fatherName) posFather = String(matchedSt.fatherName).trim();
+            if (!posMother && matchedSt.motherName) posMother = String(matchedSt.motherName).trim();
+            if (!posAadhaar && matchedSt.aadhaarNo) posAadhaar = String(matchedSt.aadhaarNo).trim();
+            if (!posPhone && (matchedSt.phone || matchedSt.whatsappNo)) {
+              posPhone = String(matchedSt.phone || matchedSt.whatsappNo).replace(/\s*\([A-Za-z0-9_-]{10,}\)\s*/g, "").trim();
+            }
+          }
+        }
+        const posMask = Boolean(data.maskSensitiveData);
+        const dispPosFather = posFather ? maskSensitive2Chars(posFather, posMask) : "";
+        const dispPosMother = posMother ? maskSensitive2Chars(posMother, posMask) : "";
+        const dispPosPhone = posPhone ? maskSensitive2Chars(posPhone, posMask) : "";
+        const dispPosAadhaar = posAadhaar ? maskSensitive2Chars(posAadhaar, posMask) : "";
+        return `
       <div class="pos-meta-row">
         <span class="pos-meta-label">Student:</span>
         <span class="pos-meta-val uppercase" style="font-size:11px;">${escapeHtml(data.studentName)}</span>
       </div>
+      ${dispPosFather ? `
+      <div class="pos-meta-row">
+        <span class="pos-meta-label">Father:</span>
+        <span class="pos-meta-val ${posMask ? "" : "uppercase"}">${escapeHtml(dispPosFather)}</span>
+      </div>` : ""}
+      ${dispPosMother ? `
+      <div class="pos-meta-row">
+        <span class="pos-meta-label">Mother:</span>
+        <span class="pos-meta-val ${posMask ? "" : "uppercase"}">${escapeHtml(dispPosMother)}</span>
+      </div>` : ""}
+      ${dispPosPhone ? `
+      <div class="pos-meta-row">
+        <span class="pos-meta-label">Mobile:</span>
+        <span class="pos-meta-val">${escapeHtml(dispPosPhone)}</span>
+      </div>` : ""}
+      ${dispPosAadhaar ? `
+      <div class="pos-meta-row">
+        <span class="pos-meta-label">Aadhaar:</span>
+        <span class="pos-meta-val">${escapeHtml(dispPosAadhaar)}</span>
+      </div>` : ""}
+        `;
+      })()}
       <div class="pos-meta-row">
         <span class="pos-meta-label">Class &amp; Roll:</span>
         <span class="pos-meta-val">${escapeHtml(data.className)} | Roll: ${escapeHtml(data.rollNo || "—")}</span>
@@ -3271,12 +3497,31 @@ export function generatePosSlipHtml(
       <div class="pos-divider-double"></div>
 
       <!-- Signatory & Disclaimer -->
-      <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-top:2mm;font-size:9px;">
-        <span style="font-size:8px;">Type: ${escapeHtml(totalPaid === 0 ? "DUE-SLIP" : (data.counterNo || "POS"))}</span>
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-top:2.5mm;font-size:9px;gap:6px;">
+        ${totalPaid > 0 ? (() => {
+          const isManagerCollector = data.collectedByRole === "manager";
+          const colRole = isManagerCollector ? "Manager" : "Accountant";
+          const colName = isManagerCollector
+            ? (data.collectedByName || data.managerName || "Manager")
+            : (data.collectedByName || data.accountantName || data.cashierTitle || "Accountant");
+          const colSig = isManagerCollector
+            ? (data.collectorSignatureUrl || data.managerSignatureUrl || "")
+            : (data.collectorSignatureUrl || data.accountantSignatureUrl || data.cashierSignatureUrl || "");
+          return `
+          <div style="text-align:left;">
+            ${colSig ? `
+              <img src="${escapeHtml(colSig)}" alt="${escapeHtml(colRole)} Sign" style="height:18px;max-width:60px;object-fit:contain;display:block;margin-right:auto;margin-bottom:2px;" />
+            ` : `<div style="height:16px;"></div>`}
+            <span style="font-weight:800;border-top:1px solid #000000;display:inline-block;padding-top:1px;">
+              ${escapeHtml(colName)} (${escapeHtml(colRole)})
+            </span>
+          </div>
+          `;
+        })() : `<span style="font-size:8px;">Type: DUE-SLIP</span>`}
         <div style="text-align:right;">
           ${data.showDigitalSignature && data.principalSignatureUrl ? `
-            <img src="${escapeHtml(data.principalSignatureUrl)}" alt="Signature" style="height:18px;max-width:60px;object-fit:contain;display:block;margin-left:auto;" />
-          ` : ""}
+            <img src="${escapeHtml(data.principalSignatureUrl)}" alt="Signature" style="height:18px;max-width:60px;object-fit:contain;display:block;margin-left:auto;margin-bottom:2px;" />
+          ` : `<div style="height:16px;"></div>`}
           <span style="font-weight:800;border-top:1px solid #000000;display:inline-block;padding-top:1px;">
             ${escapeHtml(data.principalName || "Principal")}
           </span>

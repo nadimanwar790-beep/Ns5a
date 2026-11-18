@@ -550,6 +550,7 @@ interface Props {
   onRecoverData?: () => void;
   onUpdateSettings?: (s: SystemSettings) => void;
   onOpenSchool?: () => void;
+  onVisitWebsite?: () => void;
   onOpenCoaching?: () => void;
   onOpenMcqAnalysis?: (result: import('../types').MCQResult) => void;
   onUpdateUser?: (u: User) => void;
@@ -789,6 +790,7 @@ export const StudentDashboard: React.FC<Props> = ({
   onRecoverData,
   onUpdateSettings,
   onOpenSchool,
+  onVisitWebsite,
   onOpenCoaching,
   onOpenMcqAnalysis,
   onUpdateUser,
@@ -17452,6 +17454,32 @@ export const StudentDashboard: React.FC<Props> = ({
               <ChevronRight size={16} style={{ color: _pTxtMutedColor }} className="shrink-0" />
             </button>
 
+            {onVisitWebsite && (
+              <button
+                type="button"
+                onClick={() => {
+                  hapticStrong();
+                  onVisitWebsite();
+                }}
+                className={`w-full px-4 py-3.5 flex items-center gap-3.5 ${_pHovCls} transition-all cursor-pointer`}
+                style={{ borderBottom: _pSep }}
+              >
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 shadow-sm" style={{
+                  background: _light ? 'rgba(59,130,246,0.12)' : 'rgba(59,130,246,0.18)',
+                  border: '1px solid rgba(59,130,246,0.35)',
+                }}>
+                  <Globe size={18} className={_light ? "text-blue-600" : "text-sky-400"} />
+                </div>
+                <div className="flex-1 text-left min-w-0">
+                  <p className={`text-sm font-black ${_pTxt}`}>School Website</p>
+                  <p className={`text-[10px] ${_pTxtSub} truncate mt-0.5`}>
+                    Switch to public school website &amp; admission portal
+                  </p>
+                </div>
+                <ChevronRight size={16} style={{ color: _pTxtMutedColor }} className="shrink-0" />
+              </button>
+            )}
+
             {/* ── Settings Button ── */}
             <button
               onClick={() => setShowProfileSettings(v => !v)}
@@ -20166,6 +20194,14 @@ export const StudentDashboard: React.FC<Props> = ({
                               setShowDownloadsHub(true);
                             },
                           },
+                          ...(onVisitWebsite ? [{
+                            label: '🌐 School Website',
+                            right: 'Public',
+                            action: () => {
+                              setShowDotsMenu(false);
+                              onVisitWebsite();
+                            },
+                          }] : []),
                           ...(isPedroUnlocked ? [{
                             label: 'Pedro Guide 🤖',
                             action: () => {

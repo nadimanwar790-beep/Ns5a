@@ -164,6 +164,10 @@ service cloud.firestore {
         allow read, write: if true;
       }
 
+      match /public_test_attempts/{attemptId} {
+        allow read, write: if true;
+      }
+
       match /inventory/{itemId} {
         allow read: if true;
         allow write: if isSuperAdmin() || isAuthenticated();

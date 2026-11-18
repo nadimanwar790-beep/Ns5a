@@ -1,8 +1,8 @@
 // Demo Data Engine for School Management System
 // 1-Year Comprehensive Academic & Administrative Dataset
-// - 13 Classes (Nursery, KG 1, KG 2, Class 1-10)
-// - 70 Students per Class: Section A (35 students), Section B (35 students) -> Total 910 Students
-// - Teacher-Student Ratio: 1/35 -> 26 Section Teachers (Salaries: ₹5,000 - ₹15,000) + 1 Principal (₹25,000)
+// - 19 Class-Grade/Stream Configurations (Nursery, KG 1, KG 2, Class 1-10 + Class 11/12 Streams)
+// - Max 40 Students per Class across 2 Sections: Section A (20 students), Section B (20 students) -> 760 Students/Session
+// - Teacher-Student Ratio: 1:20 -> 38 Section Teachers (1 per 20 students, Salaries: ₹6,500 - ₹15,000) + 1 Principal (₹25,000)
 // - Teacher Late Entry Rule: 3 Days Late = 1 Day Salary Cut!
 // - 1-Year Attendance with Present, Absent, Late, Leave, Bunked
 // - Festival Holidays Calendar + Power to Add Custom Holidays
@@ -41,7 +41,7 @@ import { getSchoolCacheSync, setSchoolCacheSync } from "../../utils/schoolIndexe
 
 export const DEMO_SESSION_ID = "demo_session_2026_27";
 export const DEMO_SESSION_NAME = "Session 2026-27 (Current Active Academic Year)";
-export const DEMO_STORAGE_KEY = "nst_demo_school_all_sessions_dataset_v7";
+export const DEMO_STORAGE_KEY = "nst_demo_school_all_sessions_dataset_v8";
 export const DEMO_DATA_TOGGLE_KEY = "nst_demo_data_enabled";
 
 // Multi-Session Academic Roadmap (All sessions filled with complete A to Z dummy data)
@@ -306,7 +306,7 @@ const LAST_NAMES = [
   "Saxena", "Chauhan", "Bhardwaj", "Tripathi", "Srivastava", "Rajput"
 ];
 
-// 26 Teachers (1 per 35 students across 26 sections) + 1 Principal
+// 38 Teachers (1 per 20 students across 38 sections -> Exact 1:20 ratio) + 1 Principal
 export const DEMO_STAFF_MEMBERS = [
   // Principal: Salary exactly ₹25,000
   {
@@ -320,7 +320,7 @@ export const DEMO_STAFF_MEMBERS = [
     qualification: "M.A., M.Ed, Ph.D. in Education",
     isPrincipal: true,
   },
-  // 26 Section Teachers: Salaries between ₹5,000 and ₹15,000
+  // 38 Section Teachers (1 per 20-student section, 2 per 40-student class): Salaries between ₹6,500 and ₹15,000
   // Nursery Section A & B
   { name: "Poonam Aggarwal", classKey: "nur", section: "A", subject: "Pre-Primary Foundation", salary: 6500, designation: "Montessori PRT Teacher", email: "poonam.nur.a@school.in", phone: "9820011001" },
   { name: "Sunita Deshmukh", classKey: "nur", section: "B", subject: "Pre-Primary Foundation", salary: 6800, designation: "Montessori PRT Teacher", email: "sunita.nur.b@school.in", phone: "9820011002" },
@@ -360,6 +360,24 @@ export const DEMO_STAFF_MEMBERS = [
   // Class 10 Section A & B
   { name: "Vikramaditya Bose", classKey: "c10", section: "A", subject: "Board Mathematics (Std)", salary: 15000, designation: "Senior PGT Board Faculty", email: "vikram.c10.a@school.in", phone: "9820011025" },
   { name: "Dr. Alaka Mukherjee", classKey: "c10", section: "B", subject: "Secondary Science Board", salary: 15000, designation: "Senior PGT Board Faculty", email: "alaka.c10.b@school.in", phone: "9820011026" },
+  // Class 11 Science Section A & B
+  { name: "Prof. Nitin Kulkarni", classKey: "c11_sci", section: "A", subject: "Senior Physics", salary: 14800, designation: "PGT Physics Faculty", email: "nitin.c11sci.a@school.in", phone: "9820011027" },
+  { name: "Dr. Ritu Malhotra", classKey: "c11_sci", section: "B", subject: "Senior Chemistry", salary: 14800, designation: "PGT Chemistry Faculty", email: "ritu.c11sci.b@school.in", phone: "9820011028" },
+  // Class 11 Commerce Section A & B
+  { name: "CA Anurag Bansal", classKey: "c11_com", section: "A", subject: "Accountancy", salary: 14200, designation: "PGT Commerce Faculty", email: "anurag.c11com.a@school.in", phone: "9820011029" },
+  { name: "Seema Khanna", classKey: "c11_com", section: "B", subject: "Business Studies & Eco", salary: 14000, designation: "PGT Economics Faculty", email: "seema.c11com.b@school.in", phone: "9820011030" },
+  // Class 11 Arts Section A & B
+  { name: "Dr. Pankaj Verma", classKey: "c11_arts", section: "A", subject: "History & Pol Science", salary: 13800, designation: "PGT Humanities Faculty", email: "pankaj.c11arts.a@school.in", phone: "9820011031" },
+  { name: "Nandini Iyer", classKey: "c11_arts", section: "B", subject: "Geography & Sociology", salary: 13600, designation: "PGT Humanities Faculty", email: "nandini.c11arts.b@school.in", phone: "9820011032" },
+  // Class 12 Science Section A & B
+  { name: "Er. Siddharth Menon", classKey: "c12_sci", section: "A", subject: "Board Mathematics & CS", salary: 15000, designation: "Senior PGT Maths Faculty", email: "siddharth.c12sci.a@school.in", phone: "9820011033" },
+  { name: "Dr. Kavita Nair", classKey: "c12_sci", section: "B", subject: "Board Biology & Chem", salary: 15000, designation: "Senior PGT Biology Faculty", email: "kavita.c12sci.b@school.in", phone: "9820011034" },
+  // Class 12 Commerce Section A & B
+  { name: "Rajiv Choudhary", classKey: "c12_com", section: "A", subject: "Corporate Accountancy", salary: 14600, designation: "Senior PGT Commerce", email: "rajiv.c12com.a@school.in", phone: "9820011035" },
+  { name: "Priyanka Kapoor", classKey: "c12_com", section: "B", subject: "Macro Economics & B.St", salary: 14500, designation: "Senior PGT Economics", email: "priyanka.c12com.b@school.in", phone: "9820011036" },
+  // Class 12 Arts Section A & B
+  { name: "Devendra Dubey", classKey: "c12_arts", section: "A", subject: "Indian & World History", salary: 14200, designation: "Senior PGT Humanities", email: "devendra.c12arts.a@school.in", phone: "9820011037" },
+  { name: "Anjali Srivastava", classKey: "c12_arts", section: "B", subject: "Political Science & Eco", salary: 14200, designation: "Senior PGT Humanities", email: "anjali.c12arts.b@school.in", phone: "9820011038" },
 ];
 
 // Pre-seeded 1-Year Notices (12 Months, filtered by month)
@@ -517,25 +535,17 @@ export const INITIAL_ANNUAL_NOTICES: SchoolNotice[] = [
 // Helper to determine defaulter months pending for a student:
 // User specified: "ushme bhi kuchh student ka 8 10 12 6 4 5 7 3 month ke baki rahenge fee"
 export function getStudentDueMonthsCount(classIndex: number, section: "A" | "B", studentIndex: number): number {
-  // We want a predictable, diverse distribution across each 35-student section:
-  // - Some students have 12 months pending (complete defaulters)
-  // - Some have 10 months pending
-  // - Some have 8 months pending
-  // - Some have 7 months pending
-  // - Some have 6 months pending
-  // - Some have 5 months pending
-  // - Some have 4 months pending
-  // - Some have 3 months pending
-  // - Majority (e.g. 25+ out of 35) are completely paid up (0 months due)
-  const key = (classIndex * 7 + (section === "B" ? 17 : 3) + studentIndex) % 35;
-  if (key === 1) return 12; // 12 months due
-  if (key === 4) return 10; // 10 months due
-  if (key === 8) return 8;  // 8 months due
-  if (key === 12) return 7; // 7 months due
-  if (key === 16) return 6; // 6 months due
-  if (key === 20) return 5; // 5 months due
-  if (key === 24) return 4; // 4 months due
-  if (key === 28) return 3; // 3 months due
+  // Predictable, diverse distribution across each 20-student section (40 max per class):
+  // - 12, 10, 8, 7, 6, 5, 4, 3 months pending defaulters + majority paid up (0 due)
+  const key = (classIndex * 7 + (section === "B" ? 11 : 3) + studentIndex) % 20;
+  if (key === 1) return 12;  // 12 months due
+  if (key === 3) return 10;  // 10 months due
+  if (key === 6) return 8;   // 8 months due
+  if (key === 9) return 7;   // 7 months due
+  if (key === 11) return 6;  // 6 months due
+  if (key === 14) return 5;  // 5 months due
+  if (key === 16) return 4;  // 4 months due
+  if (key === 18) return 3;  // 3 months due
   return 0; // Completely paid!
 }
 
@@ -692,8 +702,9 @@ export function generateFull1YearDemoDataset(schoolId: string = "demo_school", a
   );
 
   // 2. Generate Classes for ALL 4 Sessions ("hàr session dummy se bhara hua rahega a to z")
+  const SECTION_TEACHERS_ONLY = DEMO_STAFF_MEMBERS.filter(m => !(m as any).isPrincipal);
   sessions.forEach((sess) => {
-    let teacherCounter = 1;
+    let teacherCounter = 0;
     const isPrimarySession = sess.id === DEMO_SESSION_ID;
 
     DEMO_CLASS_DEFINITIONS.forEach((classDef, classIndex) => {
@@ -709,7 +720,7 @@ export function generateFull1YearDemoDataset(schoolId: string = "demo_school", a
           ? `${classDef.name} (${streamName}) - Section ${section}`
           : `${classDef.name} - Section ${section}`;
 
-        const assignedTeacherProfile = DEMO_STAFF_MEMBERS[teacherCounter % DEMO_STAFF_MEMBERS.length] || {
+        const assignedTeacherProfile = SECTION_TEACHERS_ONLY[teacherCounter % SECTION_TEACHERS_ONLY.length] || {
           name: `Teacher ${classDef.name} ${section}`,
           salary: 10000,
           designation: "Class Teacher",
@@ -791,9 +802,9 @@ export function generateFull1YearDemoDataset(schoolId: string = "demo_school", a
           return sub;
         });
 
-        // 3. Students for this Section (Roll No 1 to 10)
+        // 3. Students for this Section (Roll No 1 to 20 -> Max 40 Students per Class across 2 Sections, 1:20 Teacher Ratio)
         const sectionStudents: SchoolStudent[] = [];
-        for (let sIdx = 1; sIdx <= 10; sIdx++) {
+        for (let sIdx = 1; sIdx <= 20; sIdx++) {
           const rollStr = String(sIdx).padStart(2, "0");
           const studentId = `demo_std_${sess.id}_${classKey}_${section.toLowerCase()}_${rollStr}`;
           const isBoy = sIdx % 2 === 1;
@@ -820,7 +831,7 @@ export function generateFull1YearDemoDataset(schoolId: string = "demo_school", a
             admissionNo,
             fatherName,
             motherName,
-            phone: `98765${String(classIndex).padStart(2, "0")}${rollStr}`,
+            phone: `98${String(10 + classIndex).padStart(2, "0")}550${section === "A" ? "1" : "2"}${rollStr}`,
             dateOfBirth: dob,
             bloodGroup: ["A+", "B+", "O+", "AB+"][sIdx % 4],
             address: `House No. ${10 + sIdx}, Sector ${classIndex + 1}, School Enclave`,
@@ -852,7 +863,7 @@ export function generateFull1YearDemoDataset(schoolId: string = "demo_school", a
             { code: `${sessStartYear + 1}-03`, name: `March ${sessStartYear + 1}`, short: "Mar" },
           ];
 
-          const dueMonthsCount = isPrimarySession ? getStudentDueMonthsCount(classIndex, section, sIdx) : (sIdx === 10 ? 2 : 0);
+          const dueMonthsCount = isPrimarySession ? getStudentDueMonthsCount(classIndex, section, sIdx) : (sIdx === 20 ? 2 : 0);
           const paidMonthsThreshold = 12 - dueMonthsCount;
 
           sessMonths.forEach((academicMonth, mIdx) => {
@@ -914,7 +925,7 @@ export function generateFull1YearDemoDataset(schoolId: string = "demo_school", a
             sectionStudents.forEach((student, sIdx) => {
               const seedVal = (classIndex * 13 + sIdx * 7 + subj.name.length * 3 + examCycle.name.length) % 100;
               let earnedMarks = 0;
-              const isAbsent = sIdx === 10 && examCycle.id === "pa3";
+              const isAbsent = (sIdx === 18 || sIdx === 19) && examCycle.id === "pa3";
 
               if (examCycle.maxMarks === 40) {
                 earnedMarks = Math.min(40, Math.max(16, 22 + Math.floor((seedVal / 100) * 18)));
@@ -1604,24 +1615,24 @@ export function generateFull1YearDemoDataset(schoolId: string = "demo_school", a
         let stayDuration = "6h 42m";
         let note: string | undefined = undefined;
 
-        if (sIdx === 8) {
+        if (sIdx === 16) {
           status = "late";
           inTime = "08:35:10 AM";
           stayDuration = "5h 55m";
           note = "Late entry due to bus traffic delay";
-        } else if (sIdx === 9) {
+        } else if (sIdx === 19) {
           status = "absent";
           inTime = undefined as any;
           outTime = undefined as any;
           stayDuration = "0h 0m";
           note = "Unexcused absent without prior notice";
-        } else if (sIdx === 7) {
+        } else if (sIdx === 17) {
           status = "leave";
           inTime = undefined as any;
           outTime = undefined as any;
           stayDuration = "0h 0m";
           note = "Approved medical leave - Viral fever";
-        } else if (sIdx === 6 && dateStr.endsWith("12")) {
+        } else if (sIdx === 18 && dateStr.endsWith("12")) {
           status = "bunk";
           inTime = "07:50:00 AM";
           outTime = "11:30:00 AM";
@@ -1780,10 +1791,10 @@ export function generateFull1YearDemoDataset(schoolId: string = "demo_school", a
   const attendanceSummary: Record<string, { present: number; absent: number; late: number; leave: number; bunk: number }> = {};
   classes.forEach(c => {
     attendanceSummary[c.id] = {
-      present: 28,
-      absent: 2,
-      late: 2,
-      leave: 2,
+      present: 16,
+      absent: 1,
+      late: 1,
+      leave: 1,
       bunk: 1,
     };
   });
@@ -1897,9 +1908,24 @@ export const EMPTY_DEMO_DATASET: FullDemoSchoolDataset = {
 };
 
 // Get Cached Dataset (Loads from memory or localStorage, or initializes on demand)
-// When Demo Data is switched OFF by user, returns completely empty dataset so real school data shines!
-export function getDemoSchoolDataset(): FullDemoSchoolDataset {
-  if (!isDemoDataEnabled()) {
+// When Demo Data is switched OFF by user (and not in an active Demo Session), returns empty dataset
+export function getDemoSchoolDataset(forceDemo = false): FullDemoSchoolDataset {
+  let hasActiveDemoSession = false;
+  try {
+    if (typeof localStorage !== "undefined") {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith("nst_active_session_")) {
+          const val = (localStorage.getItem(k) || "").toLowerCase();
+          if (val === DEMO_SESSION_ID || val.startsWith("demo_")) {
+            hasActiveDemoSession = true;
+            break;
+          }
+        }
+      }
+    }
+  } catch {}
+  if (!forceDemo && !isDemoDataEnabled() && !hasActiveDemoSession) {
     return EMPTY_DEMO_DATASET;
   }
   if (inMemoryDataset) return inMemoryDataset;

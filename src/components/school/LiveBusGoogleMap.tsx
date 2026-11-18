@@ -608,32 +608,54 @@ export const LiveBusGoogleMap: React.FC<LiveBusGoogleMapProps> = ({
   }
 
   if (!apiKey) {
+    if (selectedBus && hasValidCoords(selectedBus)) {
+      const lat = Number(selectedBus.latitude);
+      const lng = Number(selectedBus.longitude);
+      const pad = 0.012;
+      const bbox = `${(lng - pad).toFixed(6)},${(lat - pad).toFixed(6)},${(lng + pad).toFixed(6)},${(lat + pad).toFixed(6)}`;
+      const osmEmbedUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(
+        bbox
+      )}&layer=mapnik&marker=${lat},${lng}`;
+      return (
+        <div className={`relative w-full ${heightClass} rounded-2xl overflow-hidden border border-slate-700 bg-slate-900`}>
+          <iframe
+            title={`Live Map - ${selectedBus.busNumber}`}
+            src={osmEmbedUrl}
+            className="w-full h-full border-0"
+            loading="lazy"
+          />
+          <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between gap-2 pointer-events-none">
+            <div className="px-2.5 py-1 rounded-xl bg-slate-950/90 border border-slate-700 text-[11px] font-bold text-white shadow-lg pointer-events-auto truncate">
+              <span className="text-emerald-400 mr-1.5">●</span>
+              {selectedBus.busNumber} ({lat.toFixed(4)}, {lng.toFixed(4)})
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                safeOpenExternalUrl(`https://www.google.com/maps?q=${lat},${lng}`)
+              }
+              className="px-2.5 py-1 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[11px] flex items-center gap-1 shadow-lg cursor-pointer pointer-events-auto shrink-0"
+            >
+              <ExternalLink size={12} /> Google Maps
+            </button>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div
-        className={`w-full ${heightClass} rounded-2xl bg-slate-900 border border-amber-500/40 flex flex-col items-center justify-center p-5 text-center space-y-3`}
+        className={`w-full ${heightClass} rounded-2xl bg-slate-900 border border-amber-500/40 flex flex-col items-center justify-center p-5 text-center space-y-2.5`}
       >
-        <AlertTriangle className="w-8 h-8 text-amber-400" />
+        <AlertTriangle className="w-7 h-7 text-amber-400" />
         <div>
           <p className="text-sm font-black text-white">
-            Google Maps API Key uplabdh nahi hai
+            लाइव लोकेशन की प्रतीक्षा है
           </p>
           <p className="text-xs text-slate-400 mt-1 max-w-sm">
-            Google Maps API key configure hone ke baad real map yahin dikhne lagega. Tab tak aap external Google Maps link use kar sakte hain.
+            "यात्रा शुरू करें" या "1-Tap Live GPS" दबाएं अथवा Google Maps Share Link अटैच करें — लाइव मैप यहीं दिखेगा।
           </p>
         </div>
-        {selectedBus && hasValidCoords(selectedBus) && (
-          <button
-            type="button"
-            onClick={() =>
-              safeOpenExternalUrl(
-                `https://www.google.com/maps?q=${selectedBus.latitude},${selectedBus.longitude}`
-              )
-            }
-            className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-1.5 cursor-pointer"
-          >
-            <ExternalLink size={14} /> Open in Google Maps
-          </button>
-        )}
       </div>
     );
   }
